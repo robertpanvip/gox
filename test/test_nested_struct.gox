@@ -1,0 +1,48 @@
+package main
+
+// 嵌套结构体
+public struct Address {
+    public city: string
+    public street: string
+}
+
+public struct Person {
+    public name: string
+    public age: int
+    public address: Address
+}
+
+public struct Company {
+    public name: string
+    public ceo: Person
+    public location: Address
+}
+
+// 函数参数使用嵌套结构体
+public func showPerson(p: Person) {
+    println("Name: " + p.name)
+}
+
+public func showCompany(c: Company) {
+    println("Company: " + c.name)
+}
+
+public func Main() {
+    // 嵌套匿名结构体
+    showPerson({
+        name: "Alice",
+        age: 30,
+        address: {city: "Beijing", street: "Main St"}
+    })
+    
+    // 更深的嵌套
+    showCompany({
+        name: "Tech Corp",
+        ceo: {
+            name: "Bob",
+            age: 50,
+            address: {city: "Shanghai", street: "Wall St"}
+        },
+        location: {city: "Shenzhen", street: "Tech Park"}
+    })
+}

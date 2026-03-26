@@ -1,0 +1,29 @@
+package main
+
+import go "fmt"
+
+public struct Point {
+    public x: int
+    public y: int
+}
+
+public func (p: Point) String(): string {
+    return fmt.Sprintf("Point(%d, %d)", p.x, p.y)
+}
+
+public func Main() {
+    let p = Point{x: 100, y: 200}
+    fmt.println(p.String())
+    
+    let numbers = [1, 2, 3, 4, 5]
+    fmt.println("Array length: 5")
+    
+    let score = 85
+    if score >= 80 {
+        fmt.println("Grade: B or higher")
+    } else {
+        fmt.println("Grade: C or lower")
+    }
+    
+    fmt.println("Gox compiler working!")
+}

@@ -1,0 +1,81 @@
+package main
+
+import go "fmt"
+import go "image/color"
+
+public struct Color {
+    public r: uint8
+    public g: uint8
+    public b: uint8
+    public a: uint8
+}
+
+public func (c: Color) ToRGBA() color.RGBA {
+    return color.RGBA{R: c.r, G: c.g, B: c.b, A: c.a}
+}
+
+public struct Point {
+    public x: int
+    public y: int
+}
+
+public func (p: Point) String(): string {
+    return fmt.Sprintf("Point(%d, %d)", p.x, p.y)
+}
+
+public struct Rectangle {
+    public x: int
+    public y: int
+    public width: int
+    public height: int
+}
+
+public func (r: Rectangle) Area(): int {
+    return r.width * r.height
+}
+
+public func Main() {
+    // 测试 Color 结构体
+    let c = Color{r: 255, g: 100, b: 50, a: 255}
+    let rgba = c.ToRGBA()
+    fmt.println("Color RGBA: " + fmt.Sprintf("%+v", rgba))
+    
+    // 测试 Point 结构体
+    let p = Point{x: 100, y: 200}
+    fmt.println(p.String())
+    
+    // 测试 Rectangle 结构体
+    let rect = Rectangle{x: 0, y: 0, width: 800, height: 600}
+    fmt.println("Rectangle area: " + fmt.Sprintf("%d", rect.Area()))
+    
+    // 测试数组
+    let numbers = [1, 2, 3, 4, 5]
+    fmt.print("Numbers: ")
+    for n in numbers {
+        fmt.print(fmt.Sprintf("%d ", n))
+    }
+    fmt.println("")
+    
+    // 测试条件语句
+    let score = 85
+    if score >= 90 {
+        fmt.println("Grade: A")
+    } else if score >= 80 {
+        fmt.println("Grade: B")
+    } else if score >= 70 {
+        fmt.println("Grade: C")
+    } else {
+        fmt.println("Grade: D")
+    }
+    
+    // 测试循环
+    fmt.println("Countdown:")
+    let i = 10
+    while i > 0 {
+        fmt.print(fmt.Sprintf("%d ", i))
+        i = i - 1
+    }
+    fmt.println("Blast off!")
+    
+    fmt.println("\nAll Gox features working correctly!")
+}

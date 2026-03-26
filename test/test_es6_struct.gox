@@ -1,0 +1,36 @@
+package main
+
+// ES6 风格模板字符串测试
+let name = "Alice"
+let age = 25
+let greeting = `Hello, ${name}!`
+let message = `I am ${age} years old`
+
+// 结构体定义
+public struct User {
+    public name: string
+    private age: int
+}
+
+// 结构体方法（Go receiver 风格）
+public func (u: User) GetName(): string {
+    return u.name
+}
+
+public func (u: User) GetAge(): int {
+    return u.age
+}
+
+public func (u: User) SetAge(newAge: int) {
+    u.age = newAge
+}
+
+// 普通函数
+public func createUser(name: string, age: int): User {
+    return User{name: name, age: age}
+}
+
+// 使用 print/println
+println(greeting)
+println(message)
+println(`User: ${name}, Age: ${age}`)

@@ -1,0 +1,17 @@
+package main
+
+public struct Inner {
+    public x: int
+}
+
+public struct Outer {
+    public inner: Inner
+}
+
+public func test(o: Outer) {
+    println("test")
+}
+
+public func Main() {
+    test({inner: {x: 10}})
+}

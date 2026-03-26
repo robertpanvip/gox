@@ -1,0 +1,61 @@
+package main
+
+// 定义 Props 结构体
+public struct ViewProps {
+    public id: string
+    public class: string
+    public style: string?
+}
+
+public struct TextProps {
+    public style: string
+    public bold: bool
+}
+
+public struct ButtonProps {
+    public onClick: func()
+    public disabled: bool
+}
+
+public struct HeaderProps {
+    public title: string
+}
+
+// TSX 使用示例
+let app = (
+    <View id="app" class="main">
+        <Header title="My Application" />
+        <View class="content">
+            <Text style="heading" bold={true}>
+                Welcome
+            </Text>
+            <Text style="body">
+                This is a TSX example
+            </Text>
+            <Button onClick={handleClick} disabled={false}>
+                Click Me
+            </Button>
+        </View>
+    </View>
+)
+
+// 自闭合标签
+let emptyView = <View />
+let input = <Input disabled />
+
+// 表达式插值
+let name = "World"
+let greeting = <Text>Hello, {name}!</Text>
+
+// 嵌套表达式
+let items = ["Item 1", "Item 2", "Item 3"]
+let list = (
+    <View class="list">
+        {items.map(item => 
+            <Text>{item}</Text>
+        )}
+    </View>
+)
+
+// 打印测试
+println("TSX Example")

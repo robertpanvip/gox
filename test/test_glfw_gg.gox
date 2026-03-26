@@ -1,0 +1,72 @@
+package main
+
+import go "fmt"
+import go "github.com/go-gl/glfw/v3.3/glfw"
+import go "github.com/fogleman/gg"
+import go "image"
+import go "image/draw"
+
+public func Main() {
+    // 初始化 GLFW
+    err := glfw.Init()
+    if err != nil {
+        panic(err)
+    }
+    defer glfw.Terminate()
+    
+    // 创建窗口
+    window, err := glfw.CreateWindow(800, 600, "Gox + GLFW + gg Demo", nil, nil)
+    if err != nil {
+        panic(err)
+    }
+    window.MakeContextCurrent()
+    
+    // 设置输入回调
+    window.SetKeyCallback(onKey)
+    
+    fmt.println("Window created! Press ESC to exit.")
+    
+    // 主循环
+    for !window.ShouldClose() {
+        // 使用 gg 绘图
+        let dc = gg.NewContext(800, 600)
+        
+        // 清屏（深蓝色背景）
+        dc.SetRGB(0.1, 0.1, 0.3)
+        dc.Clear()
+        
+        // 绘制一些图形
+        dc.SetRGB(1, 0, 0)
+        dc.DrawCircle(400, 300, 50)
+        dc.Fill()
+        
+        dc.SetRGB(0, 1, 0)
+        dc.DrawRectangle(200, 200, 100, 100)
+        dc.Fill()
+        
+        dc.SetRGB(0, 0, 1)
+        dc.DrawEllipse(600, 400, 80, 40)
+        dc.Fill()
+        
+        dc.SetRGB(1, 1, 1)
+        dc.DrawString("Hello from Gox + GLFW + gg!", 50, 50)
+        
+        // 获取 gg 生成的图像
+        let img = dc.Image()
+        
+        // 这里需要将图像渲染到 OpenGL
+        // 简化版本：只演示 gg 绘图，实际渲染需要 OpenGL 代码
+        fmt.println("Frame rendered!")
+        
+        window.SwapBuffers()
+        glfw.PollEvents()
+    }
+    
+    fmt.println("Window closed.")
+}
+
+public func onKey(window: glfw.Window, key: int, scancode: int, action: glfw.Action, mods: glfw.ModifierKey) {
+    if key == int(glfw.KeyEscape) && action == int(glfw.Press) {
+        window.SetShouldClose(true)
+    }
+}

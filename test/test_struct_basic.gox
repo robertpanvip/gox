@@ -1,0 +1,11 @@
+package main
+
+public struct Point {
+    public x: int
+    public y: int
+}
+
+public func Main() {
+    let p = Point{x: 10, y: 20}
+    println("Point")
+}

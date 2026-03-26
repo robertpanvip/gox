@@ -1,0 +1,73 @@
+package main
+
+import go "fmt"
+import go "github.com/gox-lang/gox/gui"
+
+public func Main() {
+    // 创建应用
+    let app = gui.NewApp("Gox GUI - TSX Style", 800, 600)
+    
+    // 设置根容器
+    app.Root.BgColor = gui.NewColor(240, 240, 240, 255)
+    
+    // TSX 风格的组件树结构
+    // 类似：
+    // <Container bg={Color(240,240,240)}>
+    //   <Label text="Welcome to Gox GUI!" size={24} color={ColorBlue} />
+    //   <Label text="Counter: 0" size={18} />
+    //   <Button text="Click Me" onClick={handleClick} />
+    //   <Button text="Reset" onClick={handleReset} />
+    //   <Label text="Hover over buttons" size={14} color={ColorGray} />
+    // </Container>
+    
+    // 标题
+    let titleLabel = gui.NewLabel("Welcome to Gox GUI!")
+    titleLabel.FontSize = 24
+    titleLabel.TextColor = gui.ColorBlue
+    app.Root.AddChild(titleLabel)
+    
+    // 计数器显示
+    let counterLabel = gui.NewLabel("Counter: 0")
+    counterLabel.FontSize = 18
+    app.Root.AddChild(counterLabel)
+    
+    // 增加按钮
+    let clickButton = gui.NewButton("Click Me +")
+    clickButton.OnClickFunc = func() {
+        app.Counter = app.Counter + 1
+        counterLabel.Text = fmt.Sprintf("Counter: %d", app.Counter)
+        fmt.println("Clicked! Counter: " + fmt.Sprintf("%d", app.Counter))
+    }
+    app.Root.AddChild(clickButton)
+    
+    // 减少按钮
+    let decButton = gui.NewButton("Click Me -")
+    decButton.OnClickFunc = func() {
+        app.Counter = app.Counter - 1
+        counterLabel.Text = fmt.Sprintf("Counter: %d", app.Counter)
+    }
+    app.Root.AddChild(decButton)
+    
+    // 重置按钮
+    let resetButton = gui.NewButton("Reset")
+    resetButton.OnClickFunc = func() {
+        app.Counter = 0
+        counterLabel.Text = "Counter: 0"
+        fmt.println("Reset!")
+    }
+    app.Root.AddChild(resetButton)
+    
+    // 提示信息
+    let infoLabel = gui.NewLabel("Move mouse over buttons to see hover effect")
+    infoLabel.FontSize = 14
+    infoLabel.TextColor = gui.ColorGray
+    app.Root.AddChild(infoLabel)
+    
+    // 运行应用
+    fmt.println("Starting Gox GUI application...")
+    let err = app.Run()
+    
+    if err != nil {
+        fmt.println("Error: " + err.Error())
+    }
+}

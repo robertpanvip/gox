@@ -1,0 +1,46 @@
+package main
+
+// 定义结构体
+public struct ViewProps {
+    public id: string
+    public class: string
+    public style: string
+}
+
+public struct Config {
+    public name: string
+    public value: int
+}
+
+// 函数参数使用结构体
+public func render(props: ViewProps) {
+    println("Rendering: " + props.id)
+}
+
+public func setup(config: Config) {
+    println("Setup: " + config.name)
+}
+
+// 多个参数，其中一些是结构体
+public func create(item: Config, title: string, settings: ViewProps) {
+    println("Create: " + title)
+}
+
+// 测试函数
+public func Main() {
+    // 直接使用对象字面量，省略结构体名称
+    render({id: "app", class: "main", style: "flex"})
+    
+    // 另一个测试
+    setup({name: "test", value: 42})
+    
+    // 混合使用
+    create(
+        {name: "item1", value: 100},
+        "My Title",
+        {id: "view1", class: "container", style: "bold"}
+    )
+    
+    // 也可以显式使用结构体名称（保持兼容）
+    render(ViewProps{id: "explicit", class: "test", style: "none"})
+}

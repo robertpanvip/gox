@@ -1,0 +1,77 @@
+package main
+
+// 带括号的 if 语句
+if (x > 10) {
+    println("big")
+} else if (x > 5) {
+    println("medium")
+} else {
+    println("small")
+}
+
+// 带括号的 while 循环
+while (i < 5) {
+    println(`i is ${i}`)
+    i = i + 1
+}
+
+// 带括号的 for 循环
+for (i < 10) {
+    if (i == 7) {
+        break
+    }
+    if (i % 2 == 0) {
+        i = i + 1
+        continue
+    }
+    println(`i is ${i}`)
+    i = i + 1
+}
+
+// 带括号的 switch
+switch (day) {
+    case 1: {
+        println("Monday")
+    }
+    case 2: {
+        println("Tuesday")
+    }
+    case 3: {
+        println("Wednesday")
+    }
+}
+
+// 带括号的 when
+when (grade) {
+    case "A": {
+        println("Excellent")
+    }
+    case "B": {
+        println("Good")
+    }
+}
+
+// 不带括号的版本（也支持）
+if x > 10 {
+    println("big")
+}
+
+while i < 5 {
+    i = i + 1
+}
+
+for i < 10 {
+    i = i + 1
+}
+
+switch x {
+    case 1: {
+        println("one")
+    }
+}
+
+when y {
+    case 2: {
+        println("two")
+    }
+}

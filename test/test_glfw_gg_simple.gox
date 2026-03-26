@@ -1,0 +1,90 @@
+package main
+
+import go "fmt"
+import go "github.com/go-gl/glfw/v3.3/glfw"
+import go "github.com/fogleman/gg"
+import go "image"
+import go "image/color"
+
+// 简单的像素绘制示例
+public func Main() {
+    // 初始化 GLFW
+    err := glfw.Init()
+    if err != nil {
+        panic(err)
+    }
+    defer glfw.Terminate()
+    
+    // 创建窗口
+    window, err := glfw.CreateWindow(800, 600, "Gox + GLFW + gg", nil, nil)
+    if err != nil {
+        panic(err)
+    }
+    window.MakeContextCurrent()
+    
+    fmt.println("=== Gox + GLFW + gg Demo ===")
+    fmt.println("Window: 800x600")
+    fmt.println("Press ESC to exit")
+    fmt.println("")
+    
+    // 使用 gg 创建图像
+    let dc = gg.NewContext(800, 600)
+    
+    // 绘制背景
+    dc.SetRGB(0.95, 0.95, 0.95)
+    dc.Clear()
+    
+    // 绘制红色圆形
+    dc.SetRGB(1, 0, 0)
+    dc.DrawCircle(200, 300, 80)
+    dc.Fill()
+    
+    // 绘制绿色矩形
+    dc.SetRGB(0, 1, 0)
+    dc.DrawRectangle(350, 250, 150, 100)
+    dc.Fill()
+    
+    // 绘制蓝色椭圆
+    dc.SetRGB(0, 0, 1)
+    dc.DrawEllipse(600, 300, 100, 60)
+    dc.Fill()
+    
+    // 绘制文字
+    dc.SetRGB(0, 0, 0)
+    dc.DrawString("Hello from Gox!", 50, 50)
+    dc.DrawString("GLFW + gg = Awesome!", 50, 80)
+    
+    // 获取图像像素
+    let img = dc.Image()
+    let bounds = img.Bounds()
+    
+    fmt.println("Image created:")
+    fmt.println("  Width: " + fmt.Sprintf("%d", bounds.Dx()))
+    fmt.println("  Height: " + fmt.Sprintf("%d", bounds.Dy()))
+    fmt.println("")
+    
+    // 演示读取像素颜色
+    let c = img.At(200, 300)
+    let r, g, b, a = c.RGBA()
+    fmt.println("Pixel at (200, 300):")
+    fmt.println("  R: " + fmt.Sprintf("%d", r))
+    fmt.println("  G: " + fmt.Sprintf("%d", g))
+    fmt.println("  B: " + fmt.Sprintf("%d", b))
+    fmt.println("  A: " + fmt.Sprintf("%d", a))
+    fmt.println("")
+    
+    // 保存为文件（演示用）
+    dc.SavePNG("glfw_gg_demo.png")
+    fmt.println("Image saved to: glfw_gg_demo.png")
+    fmt.println("")
+    
+    // 注意：完整的 OpenGL 渲染需要更多代码
+    // 这里演示 gg + GLFW 的基础用法
+    fmt.println("Note: Full OpenGL rendering requires additional setup.")
+    fmt.println("See glfw_opengl_demo.go for complete example.")
+    
+    // 保持窗口打开直到按 ESC
+    for !window.ShouldClose() {
+        glfw.WaitEvents()
+    }
+}

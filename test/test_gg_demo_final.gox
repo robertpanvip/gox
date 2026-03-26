@@ -1,0 +1,49 @@
+package main
+
+import go "fmt"
+import go "github.com/fogleman/gg"
+
+public func Main() {
+    fmt.println("=== Gox + gg Demo ===")
+    
+    // 使用 gg 绘图
+    let dc = gg.NewContext(800, 600)
+    
+    // 背景
+    dc.SetRGB(1, 1, 1)
+    dc.Clear()
+    
+    // 红色圆形
+    dc.SetRGB(1, 0, 0)
+    dc.DrawCircle(400, 300, 100)
+    dc.Fill()
+    
+    // 绿色矩形
+    dc.SetRGB(0, 1, 0)
+    dc.DrawRectangle(200, 200, 150, 150)
+    dc.Fill()
+    
+    // 蓝色椭圆
+    dc.SetRGB(0, 0, 1)
+    dc.DrawEllipse(600, 400, 120, 60)
+    dc.Fill()
+    
+    // 文字
+    dc.SetRGB(0, 0, 0)
+    dc.DrawString("Hello from Gox!", 50, 50)
+    dc.DrawString("gg library works!", 50, 80)
+    
+    // 保存图片
+    dc.SavePNG("demo.png")
+    
+    fmt.println("Image created: demo.png")
+    fmt.println("")
+    fmt.println("To display in a window, you have two options:")
+    fmt.println("")
+    fmt.println("Option 1: Open with image viewer")
+    fmt.println("  Windows: start demo.png")
+    fmt.println("")
+    fmt.println("Option 2: Use Ebiten (see documentation)")
+    fmt.println("  1. Install: go get github.com/hajimehoshi/ebiten/v2")
+    fmt.Println("  2. See doc/ebiten_gg_guide.md for complete example")
+}

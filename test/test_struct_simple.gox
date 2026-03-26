@@ -1,0 +1,8 @@
+package main
+
+public struct Point {
+    public x: int
+}
+
+public func Main() {
+}

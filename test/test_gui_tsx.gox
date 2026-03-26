@@ -1,0 +1,61 @@
+package main
+
+import go "fmt"
+import go "github.com/gox-lang/gox/gui"
+
+// TSX 风格的 GUI 示例
+// 类似 React/JSX 的声明式语法
+public func Main() {
+    // 创建应用
+    let app = gui.NewApp("Gox GUI - TSX Style", 800, 600)
+    
+    // TSX 风格的组件树
+    // <Container bg={gui.NewColor(240,240,240)}>
+    //   <Label text="Welcome to Gox GUI!" size={24} color={gui.ColorBlue} />
+    //   <Label text="Counter: 0" size={18} />
+    //   <Button text="Click Me +" onClick={handleClick} />
+    //   <Button text="Click Me -" onClick={handleDec} />
+    //   <Button text="Reset" onClick={handleReset} />
+    //   <Label text="Hover over buttons" size={14} color={gui.ColorGray} />
+    // </Container>
+    
+    // 标题
+    let titleLabel = <Label text="Welcome to Gox GUI!" size={24} color={gui.ColorBlue} />
+    app.Root.AddChild(titleLabel)
+    
+    // 计数器标签
+    let counterLabel = <Label text="Counter: 0" size={18} />
+    app.Root.AddChild(counterLabel)
+    
+    // 增加按钮
+    let clickButton = <Button text="Click Me +" />
+    clickButton.OnClickFunc = func() {
+        app.Counter = app.Counter + 1
+        counterLabel.Text = fmt.Sprintf("Counter: %d", app.Counter)
+    }
+    app.Root.AddChild(clickButton)
+    
+    // 减少按钮
+    let decButton = <Button text="Click Me -" />
+    decButton.OnClickFunc = func() {
+        app.Counter = app.Counter - 1
+        counterLabel.Text = fmt.Sprintf("Counter: %d", app.Counter)
+    }
+    app.Root.AddChild(decButton)
+    
+    // 重置按钮
+    let resetButton = <Button text="Reset" />
+    resetButton.OnClickFunc = func() {
+        app.Counter = 0
+        counterLabel.Text = "Counter: 0"
+    }
+    app.Root.AddChild(resetButton)
+    
+    // 提示信息
+    let infoLabel = <Label text="Move mouse over buttons to see hover effect" size={14} color={gui.ColorGray} />
+    app.Root.AddChild(infoLabel)
+    
+    // 运行应用
+    fmt.println("Starting Gox GUI application...")
+    app.Run()
+}

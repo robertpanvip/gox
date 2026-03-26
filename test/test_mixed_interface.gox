@@ -1,0 +1,78 @@
+package main
+
+// 结构体组合（mixed）测试
+public struct Base {
+    public value: int
+}
+
+public func (b: Base) GetValue(): int {
+    return b.value
+}
+
+public func (b: Base) SetValue(v: int) {
+    b.value = v
+}
+
+// 使用 mixed 嵌入 Base
+public struct Derived mixed Base {
+    public name: string
+    public age: int
+}
+
+public func (d: Derived) GetName(): string {
+    return d.name
+}
+
+// 接口测试
+public interface Writer {
+    public func Write(data: string): int
+    public func Close()
+}
+
+public interface Reader {
+    public func Read(): string
+}
+
+// 组合接口
+public interface ReadWriter {
+    mixed Writer
+    mixed Reader
+}
+
+// 实现接口的结构体
+public struct FileWriter {
+    public path: string
+    mixed Writer
+}
+
+public func (fw: FileWriter) Write(data: string): int {
+    println(`Writing to ${fw.path}: ${data}`)
+    return len(data)
+}
+
+public func (fw: FileWriter) Close() {
+    println(`Closing ${fw.path}`)
+}
+
+public func (fw: FileWriter) Read(): string {
+    return "content from " + fw.path
+}
+
+// 使用示例
+public func main() {
+    let base = Base{value: 10}
+    let derived = Derived{
+        Base: Base{value: 20},
+        name: "Alice",
+        age: 25
+    }
+    
+    println(`Base value: ${base.GetValue()}`)
+    println(`Derived name: ${derived.GetName()}`)
+    println(`Derived base value: ${derived.GetValue()}`)
+    
+    // 使用接口
+    let writer: Writer = FileWriter{path: "test.txt"}
+    writer.Write("Hello")
+    writer.Close()
+}

@@ -1,0 +1,82 @@
+package main
+
+// if/else 测试
+let x = 15
+if x > 10 {
+    println("x is big")
+} else if x > 5 {
+    println("x is medium")
+} else {
+    println("x is small")
+}
+
+// while 循环
+let i = 0
+while i < 5 {
+    println(`i is ${i}`)
+    i = i + 1
+}
+
+// for 循环
+for i < 10 {
+    if i == 7 {
+        break
+    }
+    if i % 2 == 0 {
+        i = i + 1
+        continue
+    }
+    println(`i is ${i}`)
+    i = i + 1
+}
+
+// switch 语句
+let day = 3
+switch day {
+    case 1: {
+        println("Monday")
+    }
+    case 2: {
+        println("Tuesday")
+    }
+    case 3: {
+        println("Wednesday")
+    }
+    default: {
+        println("Other day")
+    }
+}
+
+// when 表达式（类似 Kotlin）
+let grade = "A"
+when grade {
+    case "A": {
+        println("Excellent")
+    }
+    case "B": {
+        println("Good")
+    }
+    case "C": {
+        println("Fair")
+    }
+    default: {
+        println("Unknown")
+    }
+}
+
+// 嵌套控制流
+let n = 10
+for n > 0 {
+    if n % 2 == 0 {
+        println(`Even: ${n}`)
+    } else {
+        println(`Odd: ${n}`)
+    }
+    
+    if n == 5 {
+        println("Reached 5, breaking")
+        break
+    }
+    
+    n = n - 1
+}

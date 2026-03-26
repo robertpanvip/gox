@@ -1,0 +1,27 @@
+package main
+
+import go "fmt"
+
+public func Main() {
+    fmt.println("gg library introduction")
+    fmt.println("GitHub: github.com/fogleman/gg")
+    fmt.println("")
+    fmt.println("Install command:")
+    fmt.println("go get github.com/fogleman/gg")
+    fmt.println("")
+    fmt.println("Features:")
+    fmt.println("Pure Go implementation")
+    fmt.println("Zero external dependencies")
+    fmt.println("Simple and intuitive API")
+    fmt.println("Lightweight and fast")
+    fmt.println("")
+    fmt.println("Drawing capabilities:")
+    fmt.println("Shapes: rectangle, circle, ellipse, polygon")
+    fmt.println("Paths and curves")
+    fmt.println("Text rendering")
+    fmt.println("Image loading")
+    fmt.println("Color fill and stroke")
+    fmt.println("Transformations")
+    fmt.println("Anti-aliased rendering")
+    fmt.println("Save as PNG file")
+}
