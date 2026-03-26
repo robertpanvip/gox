@@ -1,10 +1,9 @@
 *.exe
+*.bak
+.vscode/
+.idea/
+**/bin/
+**/pkg/
 test/*.go
 gui/go.mod
 test/go.mod
-**/bin/
-**/pkg/
-.vscode/
-.idea/
-*.bak
-/runtime/
