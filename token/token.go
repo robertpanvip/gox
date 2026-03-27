@@ -172,3 +172,8 @@ func (t Token) String() string {
 		return t.Literal
 	}
 }
+
+type Visibility struct {
+	Public  bool
+	Private bool
+}

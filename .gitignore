@@ -7,3 +7,4 @@
 test/*.go
 gui/go.mod
 test/go.mod
+/runtime/
