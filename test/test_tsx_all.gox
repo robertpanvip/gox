@@ -1,0 +1,34 @@
+package main
+
+import "github.com/gox-lang/gox/gui"
+
+func Main() {
+    app := gui.NewApp("TSX Complete Test", 800, 600)
+    
+    let label1 = <Label text="Test 1: Basic Label" size={20} />
+    app.Root.AddChild(label1)
+    
+    let label2 = <Label text="Test 2: Colored Label" size={18} color={gui.ColorRed} />
+    app.Root.AddChild(label2)
+    
+    let label3 = <Label text="Test 3: Blue Label" size={16} color={gui.ColorBlue} />
+    app.Root.AddChild(label3)
+    
+    let btn1 = <Button text="Test 4: Basic Button" />
+    btn1.OnClick = func() {
+        println("Button 1 clicked!")
+    }
+    app.Root.AddChild(btn1)
+    
+    let btn2 = <Button text="Test 5: Colored Button" />
+    btn2.OnClick = func() {
+        println("Button 2 clicked!")
+    }
+    app.Root.AddChild(btn2)
+    
+    let x = 100
+    let label4 = <Label text="Test 6: Dynamic Value" size={x} />
+    app.Root.AddChild(label4)
+    
+    app.Run()
+}

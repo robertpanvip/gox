@@ -1,0 +1,9 @@
+package main
+import "github.com/gox-lang/gox/gui"
+func Main() {
+    let fontSize = 20
+    let labelText = "Dynamic"
+    let label1 = <Label text={labelText} size={fontSize} />
+    let size = 24
+    let label2 = <Label text="Another" size={size} />
+}

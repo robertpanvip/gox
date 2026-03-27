@@ -1,0 +1,9 @@
+package main
+import "github.com/gox-lang/gox/gui"
+func Main() {
+    let btn1 = <Button text="Click Me" />
+    let btn2 = <Button text="Submit" />
+    btn1.OnClick = func() {
+        println("Clicked!")
+    }
+}

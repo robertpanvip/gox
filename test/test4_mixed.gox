@@ -1,0 +1,8 @@
+package main
+import "github.com/gox-lang/gox/gui"
+func Main() {
+    let title = <Label text="Title" size={24} />
+    let desc = <Label text="Description" size={16} />
+    let okBtn = <Button text="OK" />
+    let cancelBtn = <Button text="Cancel" />
+}

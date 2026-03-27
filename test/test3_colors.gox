@@ -1,0 +1,7 @@
+package main
+import "github.com/gox-lang/gox/gui"
+func Main() {
+    let label1 = <Label text="Red Text" size={20} color={gui.ColorRed} />
+    let label2 = <Label text="Blue Text" size={18} color={gui.ColorBlue} />
+    let btn1 = <Button text="Green Button" />
+}

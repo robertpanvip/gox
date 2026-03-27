@@ -1,0 +1,18 @@
+package main
+
+import "github.com/gox-lang/gox/gui"
+
+func Main() {
+    app := gui.NewApp("Gox TSX Demo", 800, 600)
+    
+    let title = <Label text="Welcome to Gox GUI!" size={24} color={gui.ColorBlue} />
+    app.Root.AddChild(title)
+    
+    let button = <Button text="Click Me!" />
+    button.OnClick = func() {
+        println("Button clicked!")
+    }
+    app.Root.AddChild(button)
+    
+    app.Run()
+}
