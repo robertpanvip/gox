@@ -34,7 +34,7 @@ public func Main() {
 	tfm := New()
 	result := tfm.Transform(prog)
 
-	if !strings.Contains(result, `render(ViewProps{ID: "app", Class: "main"})`) {
+	if !strings.Contains(result, `render(ViewProps{Id: "app", Class: "main"})`) {
 		t.Error("expected struct literal shorthand to be expanded, got:", result)
 	}
 }
@@ -57,7 +57,7 @@ public func create(item: Config, title: string, settings: ViewProps) {
 }
 
 public func Main() {
-	create({name: "test", value: 42}, "My Title", {id: "view1"})
+	create(Config{name: "test", value: 42}, "My Title", ViewProps{id: "view1"})
 }
 `
 	p := parser.New(src)
@@ -70,7 +70,7 @@ public func Main() {
 	tfm := New()
 	result := tfm.Transform(prog)
 
-	if !strings.Contains(result, `create(Config{Name: "test", Value: 42}, "My Title", ViewProps{ID: "view1"})`) {
+	if !strings.Contains(result, `create(Config{Name: "test", Value: 42}, "My Title", ViewProps{Id: "view1"})`) {
 		t.Error("expected multiple struct literal shorthands to be expanded, got:", result)
 	}
 }

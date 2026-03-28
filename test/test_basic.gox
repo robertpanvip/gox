@@ -8,6 +8,6 @@ public func Main() {
     fmt.println("Println test")
     
     // 测试字符串拼接
-    name := "World"
+    let name = "World"
     fmt.println("Hello " + name)
 }

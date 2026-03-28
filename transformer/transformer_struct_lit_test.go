@@ -104,10 +104,15 @@ let r = Rect{x: x, y: y, width: x + 100, height: y + 50}`
 }
 
 func TestTransformer_StructLitEmpty(t *testing.T) {
-	src := `public struct Empty {
+	src := `package main
+
+public struct Empty {
 }
 
-let e = Empty{}`
+public func Main() {
+	let e = Empty{}
+}
+`
 	p := parser.New(src)
 	prog := p.ParseProgram()
 

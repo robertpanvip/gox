@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/gox-lang/gox/ast"
 	"github.com/gox-lang/gox/parser"
 )
 

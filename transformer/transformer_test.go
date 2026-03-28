@@ -145,7 +145,7 @@ let adder = func(y: int): int { return x + y }`
 		t.Error("expected x := 10 in output, got:", result)
 	}
 	if !strings.Contains(result, "adder := func(y int) int") {
-		t.Error("expected closure with capture in output, got:", result)
+		t.Error("expected closure with captured variable, got:", result)
 	}
 	if !strings.Contains(result, "return x + y") {
 		t.Error("expected return x + y in output, got:", result)

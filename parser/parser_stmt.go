@@ -1,8 +1,9 @@
 package parser
 
 import (
-"github.com/gox-lang/gox/ast"
-"github.com/gox-lang/gox/token"
+	"fmt"
+	"github.com/gox-lang/gox/ast"
+	"github.com/gox-lang/gox/token"
 )
 
 func (p *Parser) parseStmt() ast.Stmt {
@@ -32,7 +33,7 @@ return &ast.ContinueStmt{}
 case token.LBRACE:
 return p.parseBlockStmt()
 default:
-if p.curTok.Kind == token.IDENT || p.curTok.Kind == token.SELF {
+if p.curTok.Kind == token.IDENT || p.curTok.Kind == token.SELF || p.curTok.Kind == token.LESS {
 expr := p.parseExpr()
 if p.curTok.Kind == token.ASSIGN {
 p.nextToken()
@@ -135,13 +136,22 @@ func (p *Parser) parseSwitchStmt() ast.Stmt {
 p.nextToken()
 
 var cond ast.Expr
-if p.curTok.Kind != token.LBRACE {
+// Require parentheses around switch condition
+if p.curTok.Kind == token.LPAREN {
+p.nextToken()
 cond = p.parseExpr()
+p.expect(token.RPAREN)
 }
 
-p.expect(token.LBRACE)
+// Consume LBRACE
+if p.curTok.Kind != token.LBRACE {
+p.errors = append(p.errors, fmt.Sprintf("expected '{' after switch condition, got %v", p.curTok.Kind))
+return &ast.SwitchStmt{Cond: cond, Cases: nil}
+}
+p.nextToken()
 
 cases := make([]*ast.SwitchCase, 0)
+// Parse cases
 for p.curTok.Kind != token.RBRACE && p.curTok.Kind != token.EOF {
 if p.curTok.Kind == token.NEWLINE {
 p.nextToken()
@@ -151,17 +161,57 @@ continue
 if p.curTok.Kind == token.CASE {
 p.nextToken()
 caseCond := p.parseExpr()
-p.expect(token.COLON)
-caseBody := p.parseBlock()
-cases = append(cases, &ast.SwitchCase{Cond: caseCond, Body: caseBody})
+if p.curTok.Kind != token.COLON {
+p.errors = append(p.errors, fmt.Sprintf("expected ':' after case condition, got %v", p.curTok.Kind))
 } else {
+p.nextToken()
+}
+// Parse statements until next case/default or }
+caseBody := p.parseSwitchCaseBody()
+cases = append(cases, &ast.SwitchCase{Cond: caseCond, Body: caseBody})
+} else if p.curTok.Kind == token.DEFAULT {
+p.nextToken()
+if p.curTok.Kind != token.COLON {
+p.errors = append(p.errors, fmt.Sprintf("expected ':' after default, got %v", p.curTok.Kind))
+} else {
+p.nextToken()
+}
+// Parse statements until next case/default or }
+caseBody := p.parseSwitchCaseBody()
+// default case has nil Cond
+cases = append(cases, &ast.SwitchCase{Cond: nil, Body: caseBody})
+} else {
+// Skip unexpected token
 p.nextToken()
 }
 }
 
-p.expect(token.RBRACE)
+if p.curTok.Kind != token.RBRACE {
+p.errors = append(p.errors, fmt.Sprintf("expected '}}' to close switch, got %v", p.curTok.Kind))
+} else {
+p.nextToken()
+}
 
 return &ast.SwitchStmt{Cond: cond, Cases: cases}
+}
+
+// parseSwitchCaseBody parses statements until next case/default or }
+func (p *Parser) parseSwitchCaseBody() *ast.BlockStmt {
+stmts := make([]ast.Stmt, 0)
+for p.curTok.Kind != token.RBRACE && p.curTok.Kind != token.EOF &&
+p.curTok.Kind != token.CASE && p.curTok.Kind != token.DEFAULT {
+if p.curTok.Kind == token.NEWLINE {
+p.nextToken()
+continue
+}
+stmt := p.parseStmt()
+if stmt != nil {
+stmts = append(stmts, stmt)
+} else {
+p.nextToken()
+}
+}
+return &ast.BlockStmt{List: stmts}
 }
 
 func (p *Parser) parseWhenStmt() ast.Stmt {

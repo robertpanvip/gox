@@ -1,0 +1,24 @@
+package main
+
+import go "fmt"
+
+// 简单泛型函数
+public func identity[T](x: T): T {
+    return x
+}
+
+public func printValue[T](x: T) {
+    fmt.Println(x)
+}
+
+public func Main() {
+    // 使用泛型函数
+    let num = identity[int](42)
+    let str = identity[string]("hello")
+    
+    fmt.Println(num)
+    fmt.Println(str)
+    
+    printValue[int](100)
+    printValue[string]("world")
+}

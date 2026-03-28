@@ -1,7 +1,0 @@
-package main
-
-import "github.com/gox-lang/gox/gui"
-
-func Main() {
-    let label = <Label text="Hello" />
-}

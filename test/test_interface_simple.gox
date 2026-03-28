@@ -1,0 +1,31 @@
+package main
+
+import go "fmt"
+
+public interface Writer {
+    public Write(data: string): int
+    public Close()
+}
+
+public interface Reader {
+    public Read(): string
+}
+
+public struct FileWriter {
+    public path: string
+}
+
+public func (fw: FileWriter) Write(data: string): int {
+    fmt.Println(`Writing to ${fw.path}: ${data}`)
+    return len(data)
+}
+
+public func (fw: FileWriter) Close() {
+    fmt.Println(`Closing ${fw.path}`)
+}
+
+public func Main() {
+    let writer: Writer = FileWriter{path: "test.txt"}
+    writer.Write("Hello")
+    writer.Close()
+}

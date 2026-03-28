@@ -3,7 +3,7 @@ package main
 import "github.com/gox-lang/gox/gui"
 
 func Main() {
-    app := gui.NewApp("TSX Complete Test", 800, 600)
+    let app = gui.NewApp("TSX Complete Test", 800, 600)
     
     let label1 = <Label text="Test 1: Basic Label" size={20} />
     app.Root.AddChild(label1)

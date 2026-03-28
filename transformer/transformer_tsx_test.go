@@ -8,7 +8,11 @@ import (
 )
 
 func TestTransformer_TSXBasic(t *testing.T) {
-	src := `<View />`
+	src := `package main
+public func Main() {
+<View />
+}
+`
 	p := parser.New(src)
 	prog := p.ParseProgram()
 
@@ -25,7 +29,11 @@ func TestTransformer_TSXBasic(t *testing.T) {
 }
 
 func TestTransformer_TSXWithAttributes(t *testing.T) {
-	src := `<View id="1" class="container" />`
+	src := `package main
+public func Main() {
+<View id="1" class="container" />
+}
+`
 	p := parser.New(src)
 	prog := p.ParseProgram()
 
@@ -36,15 +44,19 @@ func TestTransformer_TSXWithAttributes(t *testing.T) {
 	tfm := New()
 	result := tfm.Transform(prog)
 
-	if !strings.Contains(result, `View(ViewProps{ID: "1", Class: "container"})`) {
+	if !strings.Contains(result, `View(ViewProps{Id: "1", Class: "container"})`) {
 		t.Error("expected TSX with attributes, got:", result)
 	}
 }
 
 func TestTransformer_TSXWithChildren(t *testing.T) {
-	src := `<View>
+	src := `package main
+public func Main() {
+<View>
     <Text>Hello</Text>
-</View>`
+</View>
+}
+`
 	p := parser.New(src)
 	prog := p.ParseProgram()
 
@@ -64,12 +76,16 @@ func TestTransformer_TSXWithChildren(t *testing.T) {
 }
 
 func TestTransformer_TSXNested(t *testing.T) {
-	src := `<View id="app">
+	src := `package main
+public func Main() {
+<View id="app">
     <Header title="My App" />
     <Content>
         <Text>Hello</Text>
     </Content>
-</View>`
+</View>
+}
+`
 	p := parser.New(src)
 	prog := p.ParseProgram()
 
@@ -80,7 +96,7 @@ func TestTransformer_TSXNested(t *testing.T) {
 	tfm := New()
 	result := tfm.Transform(prog)
 
-	if !strings.Contains(result, `View(ViewProps{ID: "app"}`) {
+	if !strings.Contains(result, `View(ViewProps{Id: "app"}`) {
 		t.Error("expected nested View, got:", result)
 	}
 	if !strings.Contains(result, `Header(HeaderProps{Title: "My App"})`) {
@@ -92,8 +108,12 @@ func TestTransformer_TSXNested(t *testing.T) {
 }
 
 func TestTransformer_TSXWithExpression(t *testing.T) {
-	src := `let name = "World"
-<View>{name}</View>`
+	src := `package main
+public func Main() {
+let name = "World"
+<View>{name}</View>
+}
+`
 	p := parser.New(src)
 	prog := p.ParseProgram()
 
@@ -105,12 +125,16 @@ func TestTransformer_TSXWithExpression(t *testing.T) {
 	result := tfm.Transform(prog)
 
 	if !strings.Contains(result, `View(ViewProps{}, name)`) {
-		t.Error("expected TSX with expression, got:", result)
+		t.Errorf("expected TSX with expression, got: %s", result)
 	}
 }
 
 func TestTransformer_TSXBooleanAttribute(t *testing.T) {
-	src := `<Input disabled />`
+	src := `package main
+public func Main() {
+<Input disabled />
+}
+`
 	p := parser.New(src)
 	prog := p.ParseProgram()
 

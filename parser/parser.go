@@ -89,6 +89,10 @@ func (p *Parser) check(kind token.TokenKind) bool {
 return p.curTok.Kind == kind
 }
 
+func (p *Parser) peekToken() token.Token {
+return p.peekTok
+}
+
 func (p *Parser) expect(kind token.TokenKind) token.Token {
 if p.curTok.Kind != kind {
 p.errors = append(p.errors, fmt.Sprintf("expected token %v, got %v", kind, p.curTok.Kind))

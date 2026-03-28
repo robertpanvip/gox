@@ -25,7 +25,11 @@ func TestTransformer_ArrayLiteral(t *testing.T) {
 }
 
 func TestTransformer_EmptyArray(t *testing.T) {
-	src := `let arr: int[] = []`
+	src := `package main
+public func Main() {
+let arr: int[] = []
+}
+`
 	p := parser.New(src)
 	prog := p.ParseProgram()
 
@@ -42,11 +46,15 @@ func TestTransformer_EmptyArray(t *testing.T) {
 }
 
 func TestTransformer_ArrayExtension(t *testing.T) {
-	src := `extend int[] {
+	src := `package main
+extend int[] {
     public func map(fn: func(int): int): int[] {
         return self
     }
-}`
+}
+public func Main() {
+}
+`
 	p := parser.New(src)
 	prog := p.ParseProgram()
 
@@ -63,8 +71,12 @@ func TestTransformer_ArrayExtension(t *testing.T) {
 }
 
 func TestTransformer_ArrayMethodCall(t *testing.T) {
-	src := `let numbers: int[] = []
-let result = numbers.map(func(x: int): int => x * 2)`
+	src := `package main
+public func Main() {
+let numbers: int[] = []
+let result = numbers.map(func(x: int): int => x * 2)
+}
+`
 	p := parser.New(src)
 	prog := p.ParseProgram()
 
@@ -84,14 +96,18 @@ let result = numbers.map(func(x: int): int => x * 2)`
 }
 
 func TestTransformer_CompleteArrayExample(t *testing.T) {
-	src := `extend int[] {
+	src := `package main
+extend int[] {
     public func map(fn: func(int): int): int[] {
         return self
     }
 }
 
+public func Main() {
 let numbers = [1, 2, 3]
-let doubled = numbers.map(func(x: int): int => x * 2)`
+let doubled = numbers.map(func(x: int): int => x * 2)
+}
+`
 	p := parser.New(src)
 	prog := p.ParseProgram()
 
@@ -111,7 +127,11 @@ let doubled = numbers.map(func(x: int): int => x * 2)`
 }
 
 func TestTransformer_ArrayWithString(t *testing.T) {
-	src := `let names = ["Alice", "Bob", "Charlie"]`
+	src := `package main
+public func Main() {
+let names = ["Alice", "Bob", "Charlie"]
+}
+`
 	p := parser.New(src)
 	prog := p.ParseProgram()
 
@@ -128,7 +148,11 @@ func TestTransformer_ArrayWithString(t *testing.T) {
 }
 
 func TestTransformer_NestedArrayLiteral(t *testing.T) {
-	src := `let matrix = [[1, 2], [3, 4]]`
+	src := `package main
+public func Main() {
+let matrix = [[1, 2], [3, 4]]
+}
+`
 	p := parser.New(src)
 	prog := p.ParseProgram()
 

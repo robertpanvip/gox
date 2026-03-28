@@ -1,6 +1,7 @@
 package lexer
 
 import (
+	"fmt"
 	"unicode"
 	"unicode/utf8"
 
@@ -221,17 +222,39 @@ func (l *Lexer) readNumber() token.Token {
 }
 
 func (l *Lexer) readString() token.Token {
-	l.next()
-	for l.peekByte() != '"' && l.pos < len(l.src) {
-		if l.peekByte() == '\\' {
+	l.next() // consume opening "
+	hasTemplate := false
+	for l.pos < len(l.src) {
+		c := l.peekByte()
+		if c == '"' {
+			break
+		}
+		if c == '\\' {
 			l.next()
 			l.next()
 		} else {
+			// Check for ${ pattern
+			if c == '$' && l.pos+1 < len(l.src) {
+				nextChar := l.src[l.pos+1]
+				if nextChar == '{' {
+					hasTemplate = true
+					fmt.Printf("DEBUG lexer: Found ${ at pos %d\n", l.pos)
+				}
+			}
 			l.next()
 		}
 	}
-	l.next()
+	l.next() // consume closing "
 	lit := string(l.src[l.start:l.pos])
+	
+	fmt.Printf("DEBUG lexer: readString returns hasTemplate=%v, lit=%q\n", hasTemplate, lit)
+	
+	fmt.Printf("DEBUG lexer: Before if, hasTemplate=%v\n", hasTemplate)
+	if hasTemplate {
+		fmt.Printf("DEBUG lexer: Returning TEMPLATE token\n")
+		return token.Token{Kind: token.TEMPLATE, Literal: lit, Pos: l.start, Line: l.line, Col: l.col}
+	}
+	fmt.Printf("DEBUG lexer: Returning STRING token\n")
 	return token.Token{Kind: token.STRING, Literal: lit, Pos: l.start, Line: l.line, Col: l.col}
 }
 

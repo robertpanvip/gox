@@ -1,0 +1,8 @@
+package main
+
+import go "fmt"
+
+public func Main() {
+    let name = "Alice"
+    println("Hello, ${name}!")
+}

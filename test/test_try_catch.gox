@@ -1,0 +1,39 @@
+package main
+
+import go "fmt"
+import go "errors"
+
+public func mayFail(shouldFail: bool): string? throws {
+    if shouldFail {
+        throw errors.New("something failed")
+    }
+    return "success"
+}
+
+public func testTryCatch() {
+    try {
+        let result = mayFail(false)
+        fmt.println(result)
+    } catch {
+        fmt.println("Error caught:", error)
+    }
+}
+
+public func testNullable() {
+    let value: string? = nil
+    let name: string? = "Alice"
+    
+    // 测试 null 检查
+    if value != nil {
+        fmt.println(value)
+    }
+    
+    // 测试 ?? 操作符
+    let safeValue = name ?? "default"
+    fmt.println(safeValue)
+}
+
+public func Main() {
+    testTryCatch()
+    testNullable()
+}

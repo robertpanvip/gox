@@ -1,0 +1,28 @@
+package main
+
+import go "fmt"
+
+public func Main() {
+    // 简单箭头函数
+    let add = (a, b) => a + b
+    fmt.Println(add(3, 5))
+    
+    // 单参数箭头函数
+    let double = n => n * 2
+    fmt.Println(double(21))
+    
+    // 闭包捕获变量
+    let x = 10
+    let addToX = n => x + n
+    fmt.Println(addToX(5))
+    
+    // 计数器闭包
+    let count = 0
+    let increment = () => {
+        count = count + 1
+        return count
+    }
+    fmt.Println(increment())
+    fmt.Println(increment())
+    fmt.Println(increment())
+}

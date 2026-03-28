@@ -73,7 +73,7 @@ public func Main() {
     ebiten.SetWindowTitle("Gox + gg + Ebiten")
     
     // 4. 运行游戏循环
-    err := ebiten.RunGame(&Game{
+    let err = ebiten.RunGame(&Game{
         img: ebitenImg,
         width: width,
         height: height,

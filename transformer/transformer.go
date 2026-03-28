@@ -41,7 +41,8 @@ func (t *Transformer) parseTemplateString(s string) (format string, exprs []stri
 			break
 		}
 		
-		format += content[:idx]
+		// Escape % in the content before ${
+		format += strings.ReplaceAll(content[:idx], "%", "%%")
 		content = content[idx+2:]
 		
 		endIdx := strings.Index(content, "}")
@@ -57,8 +58,8 @@ func (t *Transformer) parseTemplateString(s string) (format string, exprs []stri
 		exprs = append(exprs, exprStr)
 	}
 	
-	// Escape % in format string
-	format = strings.ReplaceAll(format, "%", "%%")
+	// Escape % in remaining content
+	format += strings.ReplaceAll(content, "%", "%%")
 	return
 }
 
@@ -168,7 +169,21 @@ func (t *Transformer) transformStruct(s *ast.StructDecl) string {
 		name = strings.ToLower(name)
 	}
 
-	sb.WriteString(fmt.Sprintf("type %s struct {\n", name))
+	// Add type parameters [T any, U any, ...]
+	typeParams := ""
+	if len(s.TypeParams) > 0 {
+		var params []string
+		for _, tp := range s.TypeParams {
+			constraint := "any"
+			if tp.Constraint != nil {
+				constraint = t.transformType(tp.Constraint)
+			}
+			params = append(params, fmt.Sprintf("%s %s", tp.Name, constraint))
+		}
+		typeParams = "[" + strings.Join(params, ", ") + "]"
+	}
+
+	sb.WriteString(fmt.Sprintf("type %s%s struct {\n", name, typeParams))
 
 	// Add embedded structs (mixed) first
 	for _, mixed := range s.Mixed {
@@ -507,9 +522,13 @@ func (t *Transformer) transformStmt(stmt ast.Stmt, isFuncThrows bool) string {
 		t.indent++
 		for _, c := range s.Cases {
 			sb.WriteString(indentStr)
-			sb.WriteString("case ")
-			sb.WriteString(t.transformExpr(c.Cond))
-			sb.WriteString(":\n")
+			if c.Cond != nil {
+				sb.WriteString("case ")
+				sb.WriteString(t.transformExpr(c.Cond))
+				sb.WriteString(":\n")
+			} else {
+				sb.WriteString("default:\n")
+			}
 			t.indent++
 			for _, stmt := range c.Body.List {
 				sb.WriteString(t.transformStmt(stmt, isFuncThrows))
@@ -614,9 +633,14 @@ func (t *Transformer) transformType(expr ast.Expr) string {
 		return "func(" + strings.Join(params, ", ") + ")" + ret
 	case *ast.ParenExpr:
 		return "(" + t.transformType(e.X) + ")"
+	case *ast.IndexExpr:
+		// Handle generic types like Container[T]
+		obj := t.transformType(e.X)
+		index := t.transformType(e.Index)
+		return obj + "[" + index + "]"
 	case *ast.MemberExpr:
 		// Handle pkg.Type syntax for struct literals
-		obj := t.transformExpr(e.X)
+		obj := t.transformType(e.X)
 		return obj + "." + e.Name
 	default:
 		return "interface{}"
@@ -646,10 +670,13 @@ func (t *Transformer) transformExpr(expr ast.Expr) string {
 		format := ""
 		args := make([]string, 0)
 		for i, part := range e.Parts {
-			format += strings.ReplaceAll(part, "%", "%%") // Escape %
 			if i < len(e.Exprs) {
+				format += strings.ReplaceAll(part, "%", "%%") // Escape %
 				format += "%v"
 				args = append(args, t.transformExpr(e.Exprs[i]))
+			} else {
+				// Last part (after all expressions)
+				format += strings.ReplaceAll(part, "%", "%%")
 			}
 		}
 		return fmt.Sprintf(`fmt.Sprintf("%s", %s)`, format, strings.Join(args, ", "))
@@ -719,10 +746,13 @@ func (t *Transformer) transformExpr(expr ast.Expr) string {
 							format := ""
 							tArgs := make([]string, 0)
 							for i, part := range ts.Parts {
-								format += strings.ReplaceAll(part, "%", "%%")
 								if i < len(ts.Exprs) {
+									format += strings.ReplaceAll(part, "%", "%%")
 									format += "%v"
 									tArgs = append(tArgs, t.transformExpr(ts.Exprs[i]))
+								} else {
+									// Last part (after all expressions)
+									format += strings.ReplaceAll(part, "%", "%%")
 								}
 							}
 							finalArgs = append(finalArgs, fmt.Sprintf(`fmt.Sprintf("%s", %s)`, format, strings.Join(tArgs, ", ")))
@@ -816,8 +846,10 @@ func (t *Transformer) transformExpr(expr ast.Expr) string {
 			return obj + "." + strings.Title(e.Name)
 		}
 		
-		// Gox package or local - keep original
-		return obj + "." + e.Name
+		// For struct fields and methods, apply visibility transformation
+		// Capitalize first letter for public access
+		transformedName := strings.Title(e.Name)
+		return obj + "." + transformedName
 
 	case *ast.IndexExpr:
 		obj := t.transformExpr(e.X)
@@ -864,7 +896,22 @@ func (t *Transformer) transformExpr(expr ast.Expr) string {
 				if len(fieldName) > 0 && fieldName[0] >= 'a' && fieldName[0] <= 'z' {
 					fieldName = strings.Title(fieldName)
 				}
-				fields = append(fields, fmt.Sprintf("%s: %s", fieldName, t.transformExpr(field.Value)))
+				
+				// Check if field value is a struct literal that needs type inference
+				fieldValue := field.Value
+				if sl, ok := fieldValue.(*ast.StructLit); ok && sl.Type == nil && e.Type != nil {
+					// Infer nested struct type from field name
+					// Try to find field type from the parent struct type
+					if _, ok := e.Type.(*ast.Ident); ok {
+						// For simple struct types, we can infer the nested struct type
+						// This is a simplified inference - in real implementation, we would need
+						// to look up the struct definition to get the field type
+						sl.Type = &ast.Ident{Name: strings.Title(field.Name)}
+						fieldValue = sl
+					}
+				}
+				
+				fields = append(fields, fmt.Sprintf("%s: %s", fieldName, t.transformExpr(fieldValue)))
 			} else {
 				// Positional field
 				fields = append(fields, t.transformExpr(field.Value))
@@ -897,9 +944,19 @@ func (t *Transformer) transformExpr(expr ast.Expr) string {
 			propsStr = fmt.Sprintf("%s{}", propsTypeName)
 		}
 		
+		// Transform children
+		childrenStr := ""
+		if len(e.Children) > 0 {
+			children := make([]string, 0)
+			for _, child := range e.Children {
+				children = append(children, t.transformExpr(child))
+			}
+			childrenStr = ", " + strings.Join(children, ", ")
+		}
+		
 		// Generate constructor call
 		constructorName := fmt.Sprintf("gui.New%s", componentName)
-		return fmt.Sprintf("%s(%s)", constructorName, propsStr)
+		return fmt.Sprintf("%s(%s%s)", constructorName, propsStr, childrenStr)
 	
 	case *ast.CompositeLit:
 		elts := make([]string, 0)

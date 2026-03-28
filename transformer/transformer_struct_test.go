@@ -74,8 +74,8 @@ func TestTransformer_StructWithMultipleFields(t *testing.T) {
 	if !strings.Contains(result, `type Product struct`) {
 		t.Error("expected Product struct, got:", result)
 	}
-	if !strings.Contains(result, `ID int`) {
-		t.Error("expected ID field, got:", result)
+	if !strings.Contains(result, `Id int`) {
+		t.Error("expected Id field, got:", result)
 	}
 	if !strings.Contains(result, `Name string`) {
 		t.Error("expected Name field, got:", result)

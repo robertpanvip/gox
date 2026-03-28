@@ -1,0 +1,29 @@
+package main
+
+import go "fmt"
+
+public func testTemplate() {
+    // 测试模板字符串
+    let name: string = "World"
+    let age: int = 25
+    
+    let greeting = `Hello, ${name}!`
+    let info = `Name: ${name}, Age: ${age}`
+    
+    fmt.println(greeting)
+    fmt.println(info)
+}
+
+public func testArray() {
+    // 测试数组字面量
+    let numbers: int[] = [1, 2, 3, 4, 5]
+    let names: string[] = ["Alice", "Bob", "Charlie"]
+    
+    fmt.println(numbers[0])
+    fmt.println(names[1])
+}
+
+public func Main() {
+    testTemplate()
+    testArray()
+}

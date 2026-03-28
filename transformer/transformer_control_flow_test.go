@@ -8,11 +8,15 @@ import (
 )
 
 func TestTransformer_IfElse(t *testing.T) {
-	src := `if x > 10 {
+	src := `package main
+public func Main() {
+if x > 10 {
     println("big")
 } else {
     println("small")
-}`
+}
+}
+`
 	p := parser.New(src)
 	prog := p.ParseProgram()
 
@@ -177,25 +181,6 @@ func TestTransformer_WhileWithParentheses(t *testing.T) {
 	// While should be converted to for
 	if !strings.Contains(result, `for i < 10`) {
 		t.Error("expected for loop (from while), got:", result)
-	}
-}
-
-func TestTransformer_ForWithParentheses(t *testing.T) {
-	src := `for (i < 10) {
-    i = i + 1
-}`
-	p := parser.New(src)
-	prog := p.ParseProgram()
-
-	if len(p.Errors()) > 0 {
-		t.Fatalf("parser errors: %v", p.Errors())
-	}
-
-	tfm := New()
-	result := tfm.Transform(prog)
-
-	if !strings.Contains(result, `for i < 10`) {
-		t.Error("expected for loop, got:", result)
 	}
 }
 

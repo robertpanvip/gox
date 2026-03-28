@@ -42,8 +42,12 @@ func TestTransformer_PrintlnBasic(t *testing.T) {
 }
 
 func TestTransformer_PrintlnTemplateString(t *testing.T) {
-	src := `let name = "Alice"
-println("Hello, ${name}!")`
+	src := `package main
+public func Main() {
+let name = "Alice"
+println("Hello, ${name}!")
+}
+`
 	p := parser.New(src)
 	prog := p.ParseProgram()
 

@@ -1,0 +1,30 @@
+package main
+
+import go "fmt"
+
+// 泛型结构体
+public struct Container[T] {
+    public value: T
+}
+
+public func (c: Container[T]) GetValue(): T {
+    return c.value
+}
+
+public func (c: Container[T]) SetValue(value: T) {
+    c.value = value
+}
+
+public func Main() {
+    // 测试泛型结构体
+    let intContainer = Container[int]{value: 100}
+    fmt.Println(intContainer.GetValue())
+    
+    let strContainer = Container[string]{value: "hello"}
+    fmt.Println(strContainer.GetValue())
+    
+    // 修改值
+    let mutContainer = Container[int]{value: 50}
+    mutContainer.SetValue(200)
+    fmt.Println(mutContainer.GetValue())
+}

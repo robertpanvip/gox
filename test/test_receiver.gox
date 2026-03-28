@@ -1,0 +1,22 @@
+package main
+
+import go "fmt"
+
+public struct User {
+    public name: string
+    private age: int
+}
+
+public func (u: User) getName(): string {
+    return u.name
+}
+
+public func (u: User) getAge(): int {
+    return u.age
+}
+
+public func Main() {
+    let user = User{name: "Alice", age: 25}
+    fmt.println(user.getName())
+    fmt.println(user.getAge())
+}

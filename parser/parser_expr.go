@@ -1,4 +1,4 @@
-﻿package parser
+package parser
 
 import (
 "fmt"
@@ -170,7 +170,39 @@ func (p *Parser) parsePrimary() ast.Expr {
 switch p.curTok.Kind {
 case token.IDENT:
 name := p.curTok.Literal
+pos := p.curTok
 p.nextToken()
+
+// Check if this is a single-parameter arrow function: param => body
+if p.curTok.Kind == token.ARROW {
+p.nextToken()
+// Parse body
+if p.curTok.Kind == token.LBRACE {
+block := p.parseBlock()
+return &ast.FunctionLiteral{
+Params: []*ast.FuncParam{{Name: name}},
+Body: block,
+IsArrow: true,
+P: ast.Position{Line: pos.Line, Col: pos.Col},
+}
+} else {
+body := p.parseExpr()
+return &ast.FunctionLiteral{
+Params: []*ast.FuncParam{{Name: name}},
+Body: &ast.BlockStmt{List: []ast.Stmt{&ast.ReturnStmt{Result: body}}},
+IsArrow: true,
+P: ast.Position{Line: pos.Line, Col: pos.Col},
+}
+}
+}
+
+// Check if this is a struct literal: Type{}
+if p.curTok.Kind == token.LBRACE {
+p.nextToken()
+fields := p.parseStructFields()
+return &ast.StructLit{Type: &ast.Ident{Name: name}, Fields: fields}
+}
+
 return &ast.Ident{Name: name}
 case token.INT:
 var val int64
@@ -183,13 +215,16 @@ fmt.Sscanf(p.curTok.Literal, "%f", &val)
 p.nextToken()
 return &ast.FloatLit{Value: val}
 case token.STRING:
-val := p.curTok.Literal
-p.nextToken()
-return &ast.StringLit{Value: strings.Trim(val, `"`)}
-case token.TEMPLATE:
-val := p.curTok.Literal
-p.nextToken()
-return p.parseTemplateString(val)
+		val := p.curTok.Literal
+		p.nextToken()
+		return &ast.StringLit{Value: strings.Trim(val, `"`)}
+	case token.TEMPLATE:
+		fmt.Printf("DEBUG parseExpr TEMPLATE: About to call parseTemplateString with %q\n", p.curTok.Literal)
+		val := p.curTok.Literal
+		p.nextToken()
+		result := p.parseTemplateString(val)
+		fmt.Printf("DEBUG parseExpr TEMPLATE: parseTemplateString returned %T\n", result)
+		return result
 case token.TRUE, token.FALSE:
 val := p.curTok.Kind == token.TRUE
 p.nextToken()
@@ -219,7 +254,15 @@ return &ast.ArrayLit{Elements: elts}
 }
 return &ast.ArrayLit{Elements: elts}
 case token.LPAREN:
+// Could be parenthesized expression or arrow function (params) => body
 p.nextToken()
+
+// Check if this is an arrow function by looking for params followed by =>
+if p.isArrowFunction() {
+return p.parseArrowFunction()
+}
+
+// Otherwise it's a parenthesized expression
 x := p.parseExpr()
 p.expect(token.RPAREN)
 return &ast.ParenExpr{X: x}
@@ -230,11 +273,11 @@ return &ast.StructLit{Type: nil, Fields: fields}
 case token.FUNC:
 return p.parseFunctionLiteral()
 case token.LESS:
-if p.peekTok.Kind == token.IDENT {
-p.nextToken()
-return p.parseTSXElement()
-}
-fallthrough
+		if p.peekTok.Kind == token.IDENT {
+			p.nextToken()
+			return p.parseTSXElement()
+		}
+		fallthrough
 default:
 p.errors = append(p.errors, fmt.Sprintf("unexpected token in expression: %v", p.curTok.Kind))
 p.nextToken()
@@ -398,6 +441,79 @@ break
 return args
 }
 
+// isArrowFunction checks if we have an arrow function syntax: (params) => body
+func (p *Parser) isArrowFunction() bool {
+// Save current lexer state
+savedPos := p.pos
+savedCurTok := p.curTok
+savedPeekTok := p.peekTok
+
+// Try to find matching ) and check if next token is =>
+parenCount := 1
+for p.curTok.Kind != token.EOF {
+if p.curTok.Kind == token.LPAREN {
+parenCount++
+} else if p.curTok.Kind == token.RPAREN {
+parenCount--
+if parenCount == 0 {
+// Found matching ), check next token
+p.nextToken()
+isArrow := p.curTok.Kind == token.ARROW
+// Restore lexer state
+p.pos = savedPos
+p.curTok = savedCurTok
+p.peekTok = savedPeekTok
+return isArrow
+}
+}
+p.nextToken()
+}
+
+// Restore lexer state
+p.pos = savedPos
+p.curTok = savedCurTok
+p.peekTok = savedPeekTok
+return false
+}
+
+// parseArrowFunction parses arrow function: (params) => body
+func (p *Parser) parseArrowFunction() ast.Expr {
+pos := ast.Position{Line: p.curTok.Line, Col: p.curTok.Col}
+
+// Parse params (we're already after the opening paren)
+params := p.parseFuncParams()
+
+// Expect )
+if p.curTok.Kind != token.RPAREN {
+p.expect(token.RPAREN)
+} else {
+p.nextToken()
+}
+
+// Expect arrow
+if p.curTok.Kind != token.ARROW {
+p.errors = append(p.errors, fmt.Sprintf("expected =>, got %v", p.curTok.Kind))
+} else {
+p.nextToken()
+}
+
+// Check if body is expression or block
+if p.curTok.Kind == token.LBRACE {
+// Block body
+block := p.parseBlock()
+return &ast.FunctionLiteral{Params: params, Body: block, IsArrow: true, P: pos}
+} else {
+// Expression body
+body := p.parseExpr()
+return &ast.FunctionLiteral{
+Params: params,
+Body: &ast.BlockStmt{List: []ast.Stmt{&ast.ReturnStmt{Result: body}}},
+IsArrow: true,
+P: pos,
+}
+}
+}
+
 func (p *Parser) parseStructFields() []*ast.StructField {
 fields := make([]*ast.StructField, 0)
 
@@ -433,36 +549,86 @@ break
 }
 }
 
+// Handle empty struct literal: Type{}
+if p.curTok.Kind == token.RBRACE {
+p.nextToken()
+}
+
 return fields
 }
 
 func (p *Parser) parseTemplateString(val string) ast.Expr {
+	fmt.Printf("DEBUG parseTemplateString: val=%q\n", val)
+debugTemplateString(val)
 parts := make([]string, 0)
 exprs := make([]ast.Expr, 0)
 
-content := strings.Trim(val, "`")
+// Remove surrounding quotes (both backtick and double quote)
+content := strings.Trim(val, "`\"")
 
+// Parse template string
+start := 0
 for {
-idx := strings.Index(content, "${")
+idx := strings.Index(content[start:], "${")
 if idx == -1 {
-parts = append(parts, content)
+// Add remaining content
+if start < len(content) {
+parts = append(parts, content[start:])
+}
 break
 }
 
-parts = append(parts, content[:idx])
-content = content[idx+2:]
+// Add content before ${
+parts = append(parts, content[start:start+idx])
 
-endIdx := strings.Index(content, "}")
+// Find closing }
+exprStart := start + idx + 2
+endIdx := strings.Index(content[exprStart:], "}")
 if endIdx == -1 {
-parts = append(parts, "${"+content)
+// No closing }, treat as literal
+parts = append(parts, "${"+content[exprStart:])
 break
 }
 
-exprStr := content[:endIdx]
-content = content[endIdx+1:]
-
+// Extract expression
+exprStr := content[exprStart : exprStart+endIdx]
 exprs = append(exprs, &ast.Ident{Name: strings.TrimSpace(exprStr)})
+
+// Move start position
+start = exprStart + endIdx + 1
 }
 
 return &ast.TemplateString{Parts: parts, Exprs: exprs}
+}
+
+// Debug function to print template string parsing
+func debugTemplateString(val string) {
+	content := strings.Trim(val, "`\"")
+	parts := make([]string, 0)
+	start := 0
+	for {
+		idx := strings.Index(content[start:], "${")
+		if idx == -1 {
+			if start < len(content) {
+				parts = append(parts, content[start:])
+			}
+			break
+		}
+		parts = append(parts, content[start:start+idx])
+		exprStart := start + idx + 2
+		endIdx := strings.Index(content[exprStart:], "}")
+		if endIdx == -1 {
+			parts = append(parts, "${"+content[exprStart:])
+			break
+		}
+		exprStr := content[exprStart : exprStart+endIdx]
+		_ = exprStr
+		start = exprStart + endIdx + 1
+	}
+	fmt.Printf("DEBUG: Template %q -> Parts=%v\n", val, parts)
+}
+
+func init() {
+	// Enable debug by calling debugTemplateString
+	_ = debugTemplateString
 }

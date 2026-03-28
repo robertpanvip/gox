@@ -67,6 +67,7 @@ type Field struct {
 type StructDecl struct {
 	Visibility Visibility
 	Name       string
+	TypeParams []*TypeParam
 	Fields     []*Field
 	Methods    []*FuncDecl
 	Mixed      []*BaseType  // Embedded structs (mixed)
@@ -97,6 +98,18 @@ type FuncDecl struct {
 func (f *FuncDecl) node()  {}
 func (f *FuncDecl) decl() {}
 func (f *FuncDecl) Pos() token.Position { return f.P }
+
+type ArrowFunc struct {
+	Params     []*FuncParam
+	Body       Expr  // For expression body
+	Block      *BlockStmt  // For block body
+	ReturnType Expr
+	P          Position
+}
+
+func (a *ArrowFunc) node() {}
+func (a *ArrowFunc) expr() {}
+func (a *ArrowFunc) Pos() token.Position { return a.P }
 
 type TypeParam struct {
 	Name       string
@@ -148,6 +161,7 @@ type InterfaceDecl struct {
 	Visibility Visibility
 	Name       string
 	Methods    []*FuncDecl  // Interface methods (no body)
+	Mixed      []*BaseType  // Embedded interfaces (mixed)
 	P          Position
 }
 

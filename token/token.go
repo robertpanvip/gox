@@ -72,6 +72,7 @@ const (
 	WHILE
 	SWITCH
 	CASE
+	DEFAULT
 	WHEN
 	BREAK
 	CONTINUE
@@ -116,6 +117,7 @@ var keywords = map[string]TokenKind{
 	"while":     WHILE,
 	"switch":    SWITCH,
 	"case":      CASE,
+	"default":   DEFAULT,
 	"when":      WHEN,
 	"break":     BREAK,
 	"continue":  CONTINUE,

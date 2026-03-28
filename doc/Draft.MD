@@ -356,11 +356,11 @@ public struct User {
 }
 
 // 在结构体外部定义方法
-public func (u: User) GetName(): string {
+public func (u: User) getName(): string {
     return u.name
 }
 
-public func (u: User) SetAge(age: int) {
+public func (u: User) setAge(age: int) {
     u.age = age
 }
 ```
@@ -384,9 +384,9 @@ func (u User) SetAge(age int) {
 
 ### 7.3.2 说明
 
-* Receiver 语法：`func (receiver: Type) MethodName(...)`
+* Receiver 语法：`func (receiver: Type) methodName(...)`
 * Receiver 在函数定义的最前面，用括号包裹
-* 方法名会转换为大写（如果是 public）
+* 方法名遵循 visibility 规则（public 首字母大写，private 首字母小写）
 * Receiver 变量可以在方法体内访问结构体字段
 
 ---
