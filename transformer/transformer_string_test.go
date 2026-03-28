@@ -101,7 +101,7 @@ public func Main() {
 func TestTransformer_StringComparison(t *testing.T) {
 	code := `
 package main
-import go "fmt"
+import "fmt"
 public func Main() {
     let a = "hello"
     let b = "world"

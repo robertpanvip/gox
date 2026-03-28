@@ -102,7 +102,9 @@ case *ast.ImportDecl:
 			sb.WriteString("\n")
 		case *ast.ExtendDecl:
 			if d.Type != nil {
-				t.extendFuncs[d.Type.Name] = d.Methods
+				// Get type name for extend declaration (supports array types like int[])
+				typeName := t.getTypeName(d.Type)
+				t.extendFuncs[typeName] = d.Methods
 			}
 		}
 	}
@@ -114,7 +116,10 @@ case *ast.ImportDecl:
 		for _, method := range methods {
 			genName := typeName + strings.Title(method.Name)
 			method.Name = genName
-			sb.WriteString(t.transformExtendFunc(method, typeName))
+			// Convert type identifier back to actual type for self parameter
+			// ArrayInt -> []int, ArrayString -> []string, etc.
+			actualType := t.identifierToType(typeName)
+			sb.WriteString(t.transformExtendFunc(method, actualType))
 			sb.WriteString("\n\n")
 		}
 	}
@@ -341,6 +346,29 @@ func (t *Transformer) transformFunc(f *ast.FuncDecl) string {
 	return sb.String()
 }
 
+func (t *Transformer) getTypeName(expr ast.Expr) string {
+	switch e := expr.(type) {
+	case *ast.BaseType:
+		return e.Name
+	case *ast.ArrayType:
+		// For array types, generate a valid identifier: []int -> ArrayInt
+		elementName := t.getTypeName(e.Element)
+		return "Array" + strings.Title(elementName)
+	default:
+		return ""
+	}
+}
+
+func (t *Transformer) identifierToType(identifier string) string {
+	// Convert type identifier back to actual type
+	// ArrayInt -> []int, ArrayString -> []string, etc.
+	if strings.HasPrefix(identifier, "Array") {
+		elementType := strings.ToLower(identifier[5:])
+		return "[]" + elementType
+	}
+	return identifier
+}
+
 func (t *Transformer) transformExtendFunc(f *ast.FuncDecl, typeName string) string {
 	var sb strings.Builder
 
@@ -519,7 +547,12 @@ func (t *Transformer) transformStmt(stmt ast.Stmt, isFuncThrows bool) string {
 		sb.WriteString(indentStr)
 		sb.WriteString("switch ")
 		if s.Cond != nil {
-			sb.WriteString(t.transformExpr(s.Cond))
+			// Remove parentheses from condition if it's a ParenExpr
+			cond := t.transformExpr(s.Cond)
+			if paren, ok := s.Cond.(*ast.ParenExpr); ok {
+				cond = t.transformExpr(paren.X)
+			}
+			sb.WriteString(cond)
 		}
 		sb.WriteString(" {\n")
 		t.indent++
@@ -546,7 +579,12 @@ func (t *Transformer) transformStmt(stmt ast.Stmt, isFuncThrows bool) string {
 		sb.WriteString(indentStr)
 		sb.WriteString("switch ")
 		if s.Cond != nil {
-			sb.WriteString(t.transformExpr(s.Cond))
+			// Remove parentheses from condition if it's a ParenExpr
+			cond := t.transformExpr(s.Cond)
+			if paren, ok := s.Cond.(*ast.ParenExpr); ok {
+				cond = t.transformExpr(paren.X)
+			}
+			sb.WriteString(cond)
 		}
 		sb.WriteString(" {\n")
 		t.indent++

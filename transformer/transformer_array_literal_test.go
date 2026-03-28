@@ -90,7 +90,7 @@ let result = numbers.map(func(x: int): int => x * 2)
 	if !strings.Contains(result, "numbers := []interface{}{}") {
 		t.Error("expected empty array in output, got:", result)
 	}
-	if !strings.Contains(result, "result := numbers.map(func(x int) int { return x * 2 })") {
+	if !strings.Contains(result, "result := numbers.Map(func(x int) int { return x * 2 })") {
 		t.Error("expected method call in output, got:", result)
 	}
 }
@@ -121,7 +121,7 @@ let doubled = numbers.map(func(x: int): int => x * 2)
 	if !strings.Contains(result, "numbers := []interface{}{1, 2, 3}") {
 		t.Error("expected array literal in output, got:", result)
 	}
-	if !strings.Contains(result, "doubled := numbers.map(func(x int) int { return x * 2 })") {
+	if !strings.Contains(result, "doubled := numbers.Map(func(x int) int { return x * 2 })") {
 		t.Error("expected method call in output, got:", result)
 	}
 }

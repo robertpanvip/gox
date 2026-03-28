@@ -89,7 +89,7 @@ for i < 10 {
 
 func TestTransformer_Switch(t *testing.T) {
 	src := `public func Main() {
-switch x {
+switch (x) {
     case 1: {
         println("one")
     }
@@ -121,7 +121,7 @@ switch x {
 
 func TestTransformer_When(t *testing.T) {
 	src := `public func Main() {
-when x {
+when (x) {
     case 1: {
         println("one")
     }

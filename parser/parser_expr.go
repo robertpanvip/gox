@@ -380,6 +380,11 @@ func (p *Parser) parseFunctionLiteral() ast.Expr {
 pos := ast.Position{Line: p.curTok.Line, Col: p.curTok.Col}
 p.nextToken()
 
+// Expect opening paren
+if p.curTok.Kind == token.LPAREN {
+p.nextToken()
+}
+
 params := p.parseFuncParams()
 
 if p.curTok.Kind == token.RPAREN {

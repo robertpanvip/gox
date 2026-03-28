@@ -126,7 +126,15 @@ return &ast.ForStmt{Cond: cond, Body: body}
 func (p *Parser) parseWhileStmt() ast.Stmt {
 p.nextToken()
 
-cond := p.parseExpr()
+// Support both while x {} and while (x) {}
+var cond ast.Expr
+if p.curTok.Kind == token.LPAREN {
+p.nextToken()
+cond = p.parseExpr()
+p.expect(token.RPAREN)
+} else {
+cond = p.parseExpr()
+}
 body := p.parseBlock()
 
 return &ast.WhileStmt{Cond: cond, Body: body}
@@ -136,11 +144,14 @@ func (p *Parser) parseSwitchStmt() ast.Stmt {
 p.nextToken()
 
 var cond ast.Expr
-// Require parentheses around switch condition
+// Support both switch x {} and switch (x) {}
 if p.curTok.Kind == token.LPAREN {
 p.nextToken()
 cond = p.parseExpr()
 p.expect(token.RPAREN)
+} else {
+// No parentheses, parse expression directly
+cond = p.parseExpr()
 }
 
 // Consume LBRACE

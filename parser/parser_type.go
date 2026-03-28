@@ -37,10 +37,10 @@ p.nextToken()
 }
 
 if p.curTok.Kind == token.ARROW {
-// It's a function type, restore and parse properly
+// It's a function type with arrow syntax, restore and parse properly
 p.curTok = savedCur
 p.peekTok = savedPeek
-return p.parseFunctionType()
+return p.parseFuncType()
 }
 
 // Not a function type, restore position
@@ -49,34 +49,6 @@ p.peekTok = savedPeek
 }
 
 return typ
-}
-
-func (p *Parser) parseFunctionType() *ast.FuncType {
-// Parse params
-p.expect(token.LPAREN)
-params := make([]*ast.FuncParam, 0)
-for p.curTok.Kind != token.RPAREN && p.curTok.Kind != token.EOF {
-if p.curTok.Kind == token.COMMA {
-p.nextToken()
-continue
-}
-name := p.expect(token.IDENT).Literal
-var typ ast.Expr
-if p.curTok.Kind == token.COLON {
-p.nextToken()
-typ = p.parseType()
-}
-params = append(params, &ast.FuncParam{Name: name, Type: typ})
-}
-p.expect(token.RPAREN)
-
-// Expect arrow
-p.expect(token.ARROW)
-
-// Parse return type
-returnType := p.parseType()
-
-return &ast.FuncType{Params: params, ReturnType: returnType}
 }
 
 func (p *Parser) parseArrayOrBaseType() ast.Expr {
@@ -98,8 +70,46 @@ return typ
 }
 
 func (p *Parser) parseFuncType() *ast.FuncType {
+p.nextToken() // consume 'func'
+
+// Expect opening paren
+p.expect(token.LPAREN)
+
+params := make([]*ast.FuncParam, 0)
+
+// Parse function type parameters: func(paramType1, paramType2): returnType
+// or func(name1: Type1, name2: Type2): returnType
+for p.curTok.Kind != token.RPAREN && p.curTok.Kind != token.EOF && p.curTok.Kind != token.COLON {
+if p.curTok.Kind == token.COMMA {
 p.nextToken()
-params := p.parseFuncParams()
+continue
+}
+
+// Try to parse name: Type or just Type
+if p.curTok.Kind == token.IDENT {
+// Look ahead to check if it's name: Type or just Type (like int in func(int))
+if p.peekToken().Kind == token.COLON {
+// It's name: Type
+name := p.curTok.Literal
+p.nextToken()
+p.expect(token.COLON)
+typ := p.parseType()
+params = append(params, &ast.FuncParam{Name: name, Type: typ})
+} else if p.peekToken().Kind == token.COMMA || p.peekToken().Kind == token.RPAREN {
+// It's just a type (like int in func(int))
+typ := p.parseType()
+params = append(params, &ast.FuncParam{Name: "", Type: typ})
+} else {
+// Default case - parse as type
+typ := p.parseType()
+params = append(params, &ast.FuncParam{Name: "", Type: typ})
+}
+} else {
+// Parse type directly (for function types like func(int): int)
+typ := p.parseType()
+params = append(params, &ast.FuncParam{Name: "", Type: typ})
+}
+}
 
 if p.curTok.Kind == token.RPAREN {
 p.nextToken()
@@ -109,6 +119,8 @@ var returnType ast.Expr
 if p.curTok.Kind == token.COLON {
 p.nextToken()
 returnType = p.parseType()
+} else {
+// No return type specified
 }
 
 return &ast.FuncType{Params: params, ReturnType: returnType}

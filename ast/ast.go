@@ -149,7 +149,7 @@ func (c *ConstDecl) stmt() {}
 func (c *ConstDecl) Pos() token.Position { return c.P }
 
 type ExtendDecl struct {
-	Type    *BaseType
+	Type    Expr
 	Methods []*FuncDecl
 	P       Position
 }

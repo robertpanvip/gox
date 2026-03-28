@@ -172,13 +172,37 @@ if p.curTok.Kind == token.RPAREN || p.curTok.Kind == token.EOF {
 break
 }
 
-name := p.expect(token.IDENT).Literal
+// Check if we have a type without name (for function types)
+var name string
 var typ ast.Expr
+
+// Try to parse name: Type or just Type
+if p.curTok.Kind == token.IDENT {
+// Look ahead to check if it's name: Type or just Type (like int in func(int))
+if p.peekToken().Kind == token.COLON {
+// It's name: Type
+name = p.curTok.Literal
+p.nextToken()
+p.expect(token.COLON)
+typ = p.parseType()
+} else if p.peekToken().Kind == token.COMMA || p.peekToken().Kind == token.RPAREN {
+// It's just a type (like int in func(int))
+typ = p.parseType()
+name = ""
+} else {
+// Default to name: Type
+name = p.curTok.Literal
+p.nextToken()
 if p.curTok.Kind == token.COLON {
 p.nextToken()
 typ = p.parseType()
 }
-// If no colon, typ remains nil (for arrow functions without type annotations)
+}
+} else {
+// Parse type directly (for function types like func(int): int)
+typ = p.parseType()
+name = ""
+}
 
 params = append(params, &ast.FuncParam{Name: name, Type: typ})
 }
@@ -297,9 +321,9 @@ typeParams = append(typeParams, &ast.TypeParam{Name: typeName, Constraint: const
 p.expect(token.RBRACK)
 }
 
-// Check for 'mixed' keyword
+// Check for 'mixed' keyword (supports multiple mixed)
 var mixed []*ast.BaseType
-if p.curTok.Kind == token.MIXED {
+for p.curTok.Kind == token.MIXED {
 p.nextToken()
 mixedName := p.expect(token.IDENT).Literal
 mixed = append(mixed, &ast.BaseType{Name: mixedName})
@@ -314,12 +338,15 @@ p.nextToken()
 continue
 }
 
-// Check for mixed inside struct body
-if p.curTok.Kind == token.MIXED {
+// Check for mixed inside struct body (supports multiple mixed)
+for p.curTok.Kind == token.MIXED {
 p.nextToken()
 mixedName := p.expect(token.IDENT).Literal
 mixed = append(mixed, &ast.BaseType{Name: mixedName})
-continue
+}
+
+if p.curTok.Kind == token.RBRACE {
+break
 }
 
 fieldVis := p.parseVisibility()
@@ -360,7 +387,17 @@ continue
 }
 
 // Skip visibility keywords in interface
-if p.curTok.Kind == token.PUBLIC || p.curTok.Kind == token.PRIVATE {
+methodVis := ast.Visibility{}
+if p.curTok.Kind == token.PUBLIC {
+p.nextToken()
+methodVis.Public = true
+} else if p.curTok.Kind == token.PRIVATE {
+p.nextToken()
+methodVis.Private = true
+}
+
+// Check for func keyword
+if p.curTok.Kind == token.FUNC {
 p.nextToken()
 }
 
@@ -375,7 +412,7 @@ p.nextToken()
 returnType = p.parseType()
 }
 
-methods = append(methods, &ast.FuncDecl{Name: methodName, Params: params, ReturnType: returnType})
+methods = append(methods, &ast.FuncDecl{Visibility: methodVis, Name: methodName, Params: params, ReturnType: returnType})
 }
 
 p.expect(token.RBRACE)
@@ -386,7 +423,17 @@ return &ast.InterfaceDecl{Visibility: vis, Name: name, Methods: methods, Mixed: 
 func (p *Parser) parseExtendDecl(vis ast.Visibility) *ast.ExtendDecl {
 p.nextToken()
 
+// Parse type (can be simple type like 'int' or array type like 'int[]')
 typeName := p.expect(token.IDENT).Literal
+var extendType ast.Expr
+extendType = &ast.BaseType{Name: typeName}
+
+// Check if it's an array type: Type[]
+if p.curTok.Kind == token.LBRACK {
+p.nextToken()
+p.expect(token.RBRACK)
+extendType = &ast.ArrayType{Element: extendType}
+}
 
 p.expect(token.LBRACE)
 
@@ -407,5 +454,5 @@ p.nextToken()
 
 p.expect(token.RBRACE)
 
-return &ast.ExtendDecl{Type: &ast.BaseType{Name: typeName}, Methods: methods}
+return &ast.ExtendDecl{Type: extendType, Methods: methods}
 }
