@@ -1,1 +1,5 @@
+package main
+
+public func Main() {
 let add = func(a: int, b: int): int { return a + b }
+}

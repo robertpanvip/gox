@@ -105,6 +105,18 @@ return tok
 func (p *Parser) ParseProgram() *ast.Program {
 prog := &ast.Program{Decls: make([]ast.Decl, 0)}
 
+// Check if the source code starts with a package declaration
+if p.curTok.Kind == token.PACKAGE {
+p.nextToken() // consume 'package'
+if p.curTok.Kind == token.IDENT {
+prog.Package = &ast.PackageClause{Name: p.curTok.Literal}
+p.nextToken()
+}
+} else {
+// If no package declaration, add "package main" automatically
+prog.Package = &ast.PackageClause{Name: "main"}
+}
+
 for p.curTok.Kind != token.EOF {
 if p.curTok.Kind == token.NEWLINE {
 p.nextToken()

@@ -27,7 +27,8 @@ type Decl interface {
 }
 
 type Program struct {
-	Decls []Decl
+	Package *PackageClause
+	Decls   []Decl
 }
 
 func (p *Program) node()   {}

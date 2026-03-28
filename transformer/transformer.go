@@ -64,22 +64,25 @@ func (t *Transformer) parseTemplateString(s string) (format string, exprs []stri
 }
 
 func (t *Transformer) Transform(prog *ast.Program) string {
-	var sb strings.Builder
+var sb strings.Builder
 
-	// First pass: collect function type information
-	for _, decl := range prog.Decls {
-		if fn, ok := decl.(*ast.FuncDecl); ok {
-			key := fn.Name
-			t.funcTypes[key] = fn.Params
-		}
-	}
+// Write package clause first
+if prog.Package != nil {
+sb.WriteString(fmt.Sprintf("package %s\n\n", prog.Package.Name))
+}
 
-	// Second pass: transform
-	for _, decl := range prog.Decls {
-		switch d := decl.(type) {
-		case *ast.PackageClause:
-			sb.WriteString(fmt.Sprintf("package %s\n\n", d.Name))
-		case *ast.ImportDecl:
+// First pass: collect function type information
+for _, decl := range prog.Decls {
+if fn, ok := decl.(*ast.FuncDecl); ok {
+key := fn.Name
+t.funcTypes[key] = fn.Params
+}
+}
+
+// Second pass: transform
+for _, decl := range prog.Decls {
+switch d := decl.(type) {
+case *ast.ImportDecl:
 			sb.WriteString(fmt.Sprintf("import %s\n", d.Path))
 			t.addImport(strings.Trim(d.Path, `"`), d.SourceType)
 		case *ast.StructDecl:
