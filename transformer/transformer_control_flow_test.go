@@ -36,8 +36,10 @@ if x > 10 {
 }
 
 func TestTransformer_While(t *testing.T) {
-	src := `while i < 10 {
+	src := `public func Main() {
+while i < 10 {
     i = i + 1
+}
 }`
 	p := parser.New(src)
 	prog := p.ParseProgram()
@@ -56,7 +58,8 @@ func TestTransformer_While(t *testing.T) {
 }
 
 func TestTransformer_BreakContinue(t *testing.T) {
-	src := `for i < 10 {
+	src := `public func Main() {
+for i < 10 {
     if i == 5 {
         break
     }
@@ -64,6 +67,7 @@ func TestTransformer_BreakContinue(t *testing.T) {
         continue
     }
     i = i + 1
+}
 }`
 	p := parser.New(src)
 	prog := p.ParseProgram()
@@ -84,13 +88,15 @@ func TestTransformer_BreakContinue(t *testing.T) {
 }
 
 func TestTransformer_Switch(t *testing.T) {
-	src := `switch x {
+	src := `public func Main() {
+switch x {
     case 1: {
         println("one")
     }
     case 2: {
         println("two")
     }
+}
 }`
 	p := parser.New(src)
 	prog := p.ParseProgram()
@@ -114,13 +120,15 @@ func TestTransformer_Switch(t *testing.T) {
 }
 
 func TestTransformer_When(t *testing.T) {
-	src := `when x {
+	src := `public func Main() {
+when x {
     case 1: {
         println("one")
     }
     case 2: {
         println("two")
     }
+}
 }`
 	p := parser.New(src)
 	prog := p.ParseProgram()
@@ -141,10 +149,12 @@ func TestTransformer_When(t *testing.T) {
 }
 
 func TestTransformer_IfWithParentheses(t *testing.T) {
-	src := `if (x > 10) {
+	src := `public func Main() {
+if (x > 10) {
     println("big")
 } else {
     println("small")
+}
 }`
 	p := parser.New(src)
 	prog := p.ParseProgram()
@@ -165,8 +175,10 @@ func TestTransformer_IfWithParentheses(t *testing.T) {
 }
 
 func TestTransformer_WhileWithParentheses(t *testing.T) {
-	src := `while (i < 10) {
+	src := `public func Main() {
+while (i < 10) {
     i = i + 1
+}
 }`
 	p := parser.New(src)
 	prog := p.ParseProgram()
@@ -185,10 +197,12 @@ func TestTransformer_WhileWithParentheses(t *testing.T) {
 }
 
 func TestTransformer_SwitchWithParentheses(t *testing.T) {
-	src := `switch (x) {
+	src := `public func Main() {
+switch (x) {
     case 1: {
         println("one")
     }
+}
 }`
 	p := parser.New(src)
 	prog := p.ParseProgram()

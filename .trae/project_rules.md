@@ -10,19 +10,6 @@
 2. 按类型拆分 - 不同类型的代码（如 parser、transformer、lexer）应分离
 3. 按职责拆分 - 单一职责原则，每个文件专注于一个功能领域
 
-**示例**:
-- `parser/` 目录应包含：
-  - `parser.go` - 主解析器逻辑
-  - `parser_expr.go` - 表达式解析
-  - `parser_stmt.go` - 语句解析
-  - `parser_decl.go` - 声明解析
-  - `parser_type.go` - 类型解析
-
-- `transformer/` 目录应包含：
-  - `transformer.go` - 主转换逻辑
-  - `transformer_expr.go` - 表达式转换
-  - `transformer_stmt.go` - 语句转换
-
 ### 代码组织最佳实践
 
 1. **单一职责**: 每个文件应该有明确的单一职责
@@ -31,29 +18,6 @@
 4. **依赖管理**: 减少循环依赖，保持清晰的依赖层次
 
 ## 语法规范
-
-### Switch 语句
-Switch 语句的条件必须用括号包裹：
-```gox
-switch (x) {
-case 1:
-    println("one")
-case 2:
-    println("two")
-default:
-    println("other")
-}
-```
-
-### 控制流语句
-所有控制流语句必须在函数内部：
-```gox
-public func Main() {
-    if x > 5 {
-        println("big")
-    }
-}
-```
 
 ## 测试准则
 
