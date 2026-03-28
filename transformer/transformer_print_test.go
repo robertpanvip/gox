@@ -8,7 +8,11 @@ import (
 )
 
 func TestTransformer_PrintBasic(t *testing.T) {
-	src := `print("Hello")`
+	src := `package main
+public func Main() {
+print("Hello")
+}
+`
 	p := parser.New(src)
 	prog := p.ParseProgram()
 
@@ -25,7 +29,11 @@ func TestTransformer_PrintBasic(t *testing.T) {
 }
 
 func TestTransformer_PrintlnBasic(t *testing.T) {
-	src := `println("World")`
+	src := `package main
+public func Main() {
+println("World")
+}
+`
 	p := parser.New(src)
 	prog := p.ParseProgram()
 
@@ -68,8 +76,12 @@ println("Hello, ${name}!")
 }
 
 func TestTransformer_PrintTemplateString(t *testing.T) {
-	src := `let age = 25
-print("Age: ${age}")`
+	src := `package main
+public func Main() {
+let age = 25
+print("Age: ${age}")
+}
+`
 	p := parser.New(src)
 	prog := p.ParseProgram()
 
@@ -90,9 +102,13 @@ print("Age: ${age}")`
 }
 
 func TestTransformer_PrintlnMultipleTemplateStrings(t *testing.T) {
-	src := `let x = 100
+	src := `package main
+public func Main() {
+let x = 100
 let y = 200
-println("X: ${x}", "Y: ${y}")`
+println("X: ${x}", "Y: ${y}")
+}
+`
 	p := parser.New(src)
 	prog := p.ParseProgram()
 
@@ -116,9 +132,13 @@ println("X: ${x}", "Y: ${y}")`
 }
 
 func TestTransformer_PrintlnMixedArgs(t *testing.T) {
-	src := `let name = "Bob"
+	src := `package main
+public func Main() {
+let name = "Bob"
 let age = 25
-println("User:", name, "is ${age} years old")`
+println("User:", name, "is ${age} years old")
+}
+`
 	p := parser.New(src)
 	prog := p.ParseProgram()
 
@@ -145,7 +165,11 @@ println("User:", name, "is ${age} years old")`
 }
 
 func TestTransformer_PrintlnAddsImport(t *testing.T) {
-	src := `println("Hello, ${name}!")`
+	src := `package main
+public func Main() {
+println("Hello, ${name}!")
+}
+`
 	p := parser.New(src)
 	prog := p.ParseProgram()
 
