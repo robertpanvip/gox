@@ -103,7 +103,10 @@ return tok
 }
 
 func (p *Parser) ParseProgram() *ast.Program {
-prog := &ast.Program{Decls: make([]ast.Decl, 0)}
+prog := &ast.Program{
+Decls: make([]ast.Decl, 0),
+Stmts: make([]ast.Stmt, 0),
+}
 
 // Check if the source code starts with a package declaration
 if p.curTok.Kind == token.PACKAGE {
@@ -123,9 +126,20 @@ p.nextToken()
 continue
 }
 
+// Try to parse declaration first
 decl := p.parseDecl()
 if decl != nil {
 prog.Decls = append(prog.Decls, decl)
+continue
+}
+
+// If not a declaration, try to parse as statement
+stmt := p.parseStmt()
+if stmt != nil {
+prog.Stmts = append(prog.Stmts, stmt)
+} else {
+// Skip unknown token
+p.nextToken()
 }
 }
 

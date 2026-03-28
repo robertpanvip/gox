@@ -1,8 +1,6 @@
 package parser
 
 import (
-"fmt"
-
 "github.com/gox-lang/gox/ast"
 "github.com/gox-lang/gox/token"
 )
@@ -58,8 +56,7 @@ return p.parseExtendDecl(ast.Visibility{})
 case token.LET:
 return p.parseLetDecl()
 default:
-p.errors = append(p.errors, fmt.Sprintf("unexpected token: %v", p.curTok.Kind))
-p.nextToken()
+// Not a declaration, let parseStmt handle it
 return nil
 }
 

@@ -79,7 +79,7 @@ t.funcTypes[key] = fn.Params
 }
 }
 
-// Second pass: transform
+// Second pass: transform declarations
 for _, decl := range prog.Decls {
 switch d := decl.(type) {
 case *ast.ImportDecl:
@@ -95,8 +95,8 @@ case *ast.ImportDecl:
 			sb.WriteString(t.transformFunc(d))
 			sb.WriteString("\n\n")
 		case *ast.VarDecl:
-			sb.WriteString(t.transformVarDecl(d))
-			sb.WriteString("\n")
+			// Skip global var declarations, they will be in init()
+			// Only output var declarations inside functions
 		case *ast.ConstDecl:
 			sb.WriteString(t.transformConstDecl(d))
 			sb.WriteString("\n")
@@ -107,6 +107,33 @@ case *ast.ImportDecl:
 				t.extendFuncs[typeName] = d.Methods
 			}
 		}
+	}
+
+	// Transform global variable declarations and statements in init()
+	hasGlobalVars := false
+	for _, decl := range prog.Decls {
+		if _, ok := decl.(*ast.VarDecl); ok {
+			hasGlobalVars = true
+			break
+		}
+	}
+	if hasGlobalVars || len(prog.Stmts) > 0 {
+		sb.WriteString("\n// Global initialization\n")
+		sb.WriteString("func init() {\n")
+		t.indent++
+		// Transform global variable declarations
+		for _, decl := range prog.Decls {
+			if v, ok := decl.(*ast.VarDecl); ok {
+				sb.WriteString(t.transformVarDecl(v))
+				sb.WriteString("\n")
+			}
+		}
+		// Transform global statements
+		for _, stmt := range prog.Stmts {
+			sb.WriteString(t.transformStmt(stmt, false))
+		}
+		t.indent--
+		sb.WriteString("}\n\n")
 	}
 
 	// Note: imports are already added in the first pass

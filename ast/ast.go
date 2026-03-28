@@ -29,6 +29,7 @@ type Decl interface {
 type Program struct {
 	Package *PackageClause
 	Decls   []Decl
+	Stmts   []Stmt  // Global statements
 }
 
 func (p *Program) node()   {}
