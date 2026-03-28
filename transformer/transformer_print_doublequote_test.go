@@ -8,8 +8,10 @@ import (
 )
 
 func TestTransformer_PrintlnDoubleQuoteTemplate(t *testing.T) {
-	src := `let name = "Alice"
-println("Hello, ${name}!")`
+	src := `public func Main() {
+let name = "Alice"
+println("Hello, ${name}!")
+}`
 	p := parser.New(src)
 	prog := p.ParseProgram()
 

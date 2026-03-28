@@ -126,9 +126,9 @@
 - ✅ TestTransformer_StringTemplate
 
 ### 其他需要修复
-- ❌ TestTransformer_StructLitEmpty - 空结构体字面量（已修复 ✅）
-- ❌ TestTransformer_StructWithMultipleFields - 字段解析问题（已修复 ✅）
-- ❌ TestTransformer_NestedStructLiteral - 嵌套结构体（已修复 ✅）
+- ✅ TestTransformer_StructLitEmpty - 空结构体字面量（已修复 ✅）
+- ✅ TestTransformer_StructWithMultipleFields - 字段解析问题（已修复 ✅）
+- ✅ TestTransformer_NestedStructLiteral - 嵌套结构体（已修复 ✅）
 
 ## 测试覆盖率
 
