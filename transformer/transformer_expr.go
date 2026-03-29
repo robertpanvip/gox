@@ -158,6 +158,31 @@ func (t *Transformer) transformStyleValue(value string) string {
 	// Otherwise, return as-is (might be a constant or expression)
 	return value
 }
+
+// mapTSXTagsToComponent maps lowercase TSX tags to Go component names
+func (t *Transformer) mapTSXTagsToComponent(tagName string) string {
+	// Map common HTML tags to Go components
+	switch tagName {
+	case "div":
+		return "Div"
+	case "label":
+		return "Label"
+	case "button":
+		return "Button"
+	case "span":
+		return "Span"
+	case "input":
+		return "Input"
+	case "img":
+		return "Image"
+	case "a":
+		return "Link"
+	default:
+		// If not in the map, use Title case (for custom components)
+		return strings.Title(tagName)
+	}
+}
+
 func (t *Transformer) transformExpr(expr ast.Expr) string {
 	switch e := expr.(type) {
 	case *ast.Ident:
@@ -436,7 +461,8 @@ func (t *Transformer) transformExpr(expr ast.Expr) string {
 
 	case *ast.TSXElement:
 		// Transform TSX to function call with props: Component(ComponentProps{Field1: val1, Field2: val2})
-		componentName := strings.Title(e.TagName)
+		// Map lowercase HTML tags to Go component names
+		componentName := t.mapTSXTagsToComponent(e.TagName)
 		propsTypeName := fmt.Sprintf("%sProps", componentName)
 		
 		// Check if there's a "style" attribute with object literal
