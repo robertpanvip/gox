@@ -1,5 +1,9 @@
 package gui
 
+import (
+	"github.com/hajimehoshi/ebiten/v2"
+)
+
 // TemplatePart 模板片段（类似 lit-html 的 Part）
 type TemplatePart interface {
 	Update()

@@ -104,49 +104,110 @@ Copy-Item gox.exe test\ -Force
 
 ### 完整测试用例运行流程
 
-**步骤 1: 准备环境**
+#### 步骤 1: 准备环境
 ```powershell
-# 进入项目目录
+# 1. 进入项目目录
 cd e:\Soft\JetBrains\WebStorm WorkSpace\go-ts
 
-# 编译 gox 编译器
+# 2. 编译 gox 编译器
 .\runtime\go\bin\go.exe build -o gox.exe cmd/gox/main.go
 
-# 复制 gox.exe 到 test 目录
+# 3. 复制 gox.exe 到 test 目录
 Copy-Item gox.exe test\ -Force
-```
 
-**步骤 2: 运行测试用例**
-```powershell
-# 进入 test 目录
+# 4. 进入 test 目录
 cd test
-
-# 运行测试（会输出 token 序列、AST、生成的 Go 代码）
-.\gox.exe test_fx_assignment.gox
 ```
 
-**步骤 3: 查看输出**
+#### 步骤 2: 运行测试用例（查看输出）
 ```powershell
-# 输出包括：
-# 1. Tokens - 词法分析结果
-# 2. AST - 抽象语法树
-# 3. Generated Go Code - 生成的 Go 代码
+# 运行测试用例（会输出 token 序列、AST、生成的 Go 代码）
+.\gox.exe test_fx_assignment.gox
 
-# 保存到文件以便查看
+# 或运行完整的 FX 组件示例
+.\gox.exe demo_counter.gox
+```
+
+**输出说明**：
+- `=== Tokens ===` - 词法分析结果（每个 token 一行）
+- `=== AST ===` - 抽象语法树（显示解析后的结构）
+- `=== Generated Go Code ===` - 生成的 Go 代码
+
+#### 步骤 3: 生成 Go 文件
+```powershell
+# 使用 -o 参数生成 Go 文件
+.\gox.exe -o demo_counter.go demo_counter.gox
+
+# 查看生成的代码
+Get-Content demo_counter.go
+
+# 或保存到文本文件
 .\gox.exe test_fx_assignment.gox > output.txt
 notepad output.txt
 ```
 
-**步骤 4: 编译和运行生成的 Go 代码**
+#### 步骤 4: 编译生成的 Go 代码
 ```powershell
-# 生成 Go 文件
-.\gox.exe -o test_fx_assignment.go test_fx_assignment.gox
-
 # 编译 Go 程序
-..\runtime\go\bin\go.exe build test_fx_assignment.go
+..\runtime\go\bin\go.exe build demo_counter.go
 
-# 运行程序
-.\test_fx_assignment.exe
+# Windows 会生成 .exe 文件
+# demo_counter.exe
+```
+
+#### 步骤 5: 运行程序
+```powershell
+# 运行编译后的程序
+.\demo_counter.exe
+
+# 如果是 GUI 程序，会弹出窗口显示界面
+```
+
+### 快速运行脚本
+
+**一键运行测试（批处理）**:
+```powershell
+# 使用批处理脚本（如果存在）
+.\run_fx_simple2_test.bat
+```
+
+**一键运行 GUI 程序**:
+```powershell
+# 在项目根目录运行
+cd e:\Soft\JetBrains\WebStorm WorkSpace\go-ts
+.\runtime\go\bin\go.exe run run_tsx_gui.go
+```
+
+### 实际运行示例
+
+**示例 1: 运行简单的 FX 组件测试**
+```powershell
+# 完整流程
+cd e:\Soft\JetBrains\WebStorm WorkSpace\go-ts
+.\runtime\go\bin\go.exe build -o gox.exe cmd/gox/main.go
+Copy-Item gox.exe test\ -Force
+cd test
+.\gox.exe test_fx_assignment.gox
+```
+
+**示例 2: 运行完整的计数器应用**
+```powershell
+# 完整流程
+cd e:\Soft\JetBrains\WebStorm WorkSpace\go-ts
+.\runtime\go\bin\go.exe build -o gox.exe cmd/gox/main.go
+Copy-Item gox.exe test\ -Force
+cd test
+.\gox.exe -o demo_counter.go demo_counter.gox
+..\runtime\go\bin\go.exe build demo_counter.go
+.\demo_counter.exe
+```
+
+**示例 3: 查看生成的代码**
+```powershell
+# 只生成代码，不运行
+cd e:\Soft\JetBrains\WebStorm WorkSpace\go-ts\test
+.\gox.exe -o output.go demo_counter.gox
+Get-Content output.go
 ```
 
 ### GUI 测试用例运行示例

@@ -58,7 +58,7 @@ func NewCounter() *Counter {
 	c.countPart.Update()
 	
 	// 添加事件处理器
-	c.button.OnClick(func() {
+	c.button.SetOnClick(func() {
 		c.count++
 		c.RequestUpdate() // 触发更新
 	})
