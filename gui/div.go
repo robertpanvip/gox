@@ -12,12 +12,19 @@ type DivProps struct {
 	FlexDirection  string
 	JustifyContent string
 	AlignItems     string
+	AlignSelf      string
+	FlexWrap       string
 	FlexGrow       float32
 	FlexShrink     float32
+	FlexBasis      string
 	
 	// 尺寸
-	Width  string
-	Height string
+	Width      string
+	Height     string
+	MinWidth   string
+	MinHeight  string
+	MaxWidth   string
+	MaxHeight  string
 	
 	// 间距
 	Padding      string
@@ -26,9 +33,23 @@ type DivProps struct {
 	PaddingBottom string
 	PaddingLeft  string
 	
+	Margin      string
+	MarginTop   string
+	MarginRight string
+	MarginBottom string
+	MarginLeft  string
+	
+	// 定位
+	Position string
+	Left     string
+	Right    string
+	Top      string
+	Bottom   string
+	
 	// 边框
 	BorderWidth  string
 	BorderColor  string
+	BorderStyle  string
 	BorderRadius string
 	
 	// 背景
@@ -58,17 +79,35 @@ func NewDiv(props interface{}, children ...Component) *Div {
 			FlexDirection:   p.FlexDirection,
 			JustifyContent:  p.JustifyContent,
 			AlignItems:      p.AlignItems,
+			AlignSelf:       p.AlignSelf,
+			FlexWrap:        p.FlexWrap,
 			FlexGrow:        p.FlexGrow,
 			FlexShrink:      p.FlexShrink,
+			FlexBasis:       p.FlexBasis,
 			Width:           p.Width,
 			Height:          p.Height,
+			MinWidth:        p.MinWidth,
+			MinHeight:       p.MinHeight,
+			MaxWidth:        p.MaxWidth,
+			MaxHeight:       p.MaxHeight,
 			Padding:         p.Padding,
 			PaddingTop:      p.PaddingTop,
 			PaddingRight:    p.PaddingRight,
 			PaddingBottom:   p.PaddingBottom,
 			PaddingLeft:     p.PaddingLeft,
+			Margin:          p.Margin,
+			MarginTop:       p.MarginTop,
+			MarginRight:     p.MarginRight,
+			MarginBottom:    p.MarginBottom,
+			MarginLeft:      p.MarginLeft,
+			Position:        p.Position,
+			Left:            p.Left,
+			Right:           p.Right,
+			Top:             p.Top,
+			Bottom:          p.Bottom,
 			BorderWidth:     p.BorderWidth,
 			BorderColor:     p.BorderColor,
+			BorderStyle:     p.BorderStyle,
 			BorderRadius:    p.BorderRadius,
 			BackgroundColor: p.BackgroundColor,
 		}

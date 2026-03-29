@@ -87,7 +87,7 @@ type Style struct {
 	TextAlign       string  // "left" | "center" | "right"
 }
 
-// CSS 创建样式（链式调用）
+// CSS 创建样式（CSS 风格）
 func CSS(properties map[string]interface{}) *Style {
 	style := &Style{}
 	
@@ -114,13 +114,31 @@ func CSS(properties map[string]interface{}) *Style {
 			if v, ok := value.(string); ok {
 				style.AlignSelf = v
 			}
+		case "flexWrap":
+			if v, ok := value.(string); ok {
+				style.FlexWrap = v
+			}
 		case "flexGrow":
-			if v, ok := value.(float32); ok {
+			switch v := value.(type) {
+			case float32:
 				style.FlexGrow = v
+			case int:
+				style.FlexGrow = float32(v)
+			case float64:
+				style.FlexGrow = float32(v)
 			}
 		case "flexShrink":
-			if v, ok := value.(float32); ok {
+			switch v := value.(type) {
+			case float32:
 				style.FlexShrink = v
+			case int:
+				style.FlexShrink = float32(v)
+			case float64:
+				style.FlexShrink = float32(v)
+			}
+		case "flexBasis":
+			if v, ok := value.(string); ok {
+				style.FlexBasis = v
 			}
 			
 		// 尺寸
@@ -131,6 +149,22 @@ func CSS(properties map[string]interface{}) *Style {
 		case "height":
 			if v, ok := value.(string); ok {
 				style.Height = v
+			}
+		case "minWidth":
+			if v, ok := value.(string); ok {
+				style.MinWidth = v
+			}
+		case "minHeight":
+			if v, ok := value.(string); ok {
+				style.MinHeight = v
+			}
+		case "maxWidth":
+			if v, ok := value.(string); ok {
+				style.MaxWidth = v
+			}
+		case "maxHeight":
+			if v, ok := value.(string); ok {
+				style.MaxHeight = v
 			}
 			
 		// 间距
@@ -154,6 +188,48 @@ func CSS(properties map[string]interface{}) *Style {
 			if v, ok := value.(string); ok {
 				style.PaddingLeft = v
 			}
+		case "margin":
+			if v, ok := value.(string); ok {
+				style.Margin = v
+			}
+		case "marginTop":
+			if v, ok := value.(string); ok {
+				style.MarginTop = v
+			}
+		case "marginRight":
+			if v, ok := value.(string); ok {
+				style.MarginRight = v
+			}
+		case "marginBottom":
+			if v, ok := value.(string); ok {
+				style.MarginBottom = v
+			}
+		case "marginLeft":
+			if v, ok := value.(string); ok {
+				style.MarginLeft = v
+			}
+			
+		// 定位
+		case "position":
+			if v, ok := value.(string); ok {
+				style.Position = v
+			}
+		case "left":
+			if v, ok := value.(string); ok {
+				style.Left = v
+			}
+		case "right":
+			if v, ok := value.(string); ok {
+				style.Right = v
+			}
+		case "top":
+			if v, ok := value.(string); ok {
+				style.Top = v
+			}
+		case "bottom":
+			if v, ok := value.(string); ok {
+				style.Bottom = v
+			}
 			
 		// 边框
 		case "borderWidth":
@@ -163,6 +239,10 @@ func CSS(properties map[string]interface{}) *Style {
 		case "borderColor":
 			if v, ok := value.(string); ok {
 				style.BorderColor = v
+			}
+		case "borderStyle":
+			if v, ok := value.(string); ok {
+				style.BorderStyle = v
 			}
 		case "borderRadius":
 			if v, ok := value.(string); ok {
