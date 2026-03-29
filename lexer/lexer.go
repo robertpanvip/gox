@@ -238,7 +238,6 @@ func (l *Lexer) readString() token.Token {
 				nextChar := l.src[l.pos+1]
 				if nextChar == '{' {
 					hasTemplate = true
-					fmt.Printf("DEBUG lexer: Found ${ at pos %d\n", l.pos)
 				}
 			}
 			l.next()
@@ -247,14 +246,9 @@ func (l *Lexer) readString() token.Token {
 	l.next() // consume closing "
 	lit := string(l.src[l.start:l.pos])
 	
-	fmt.Printf("DEBUG lexer: readString returns hasTemplate=%v, lit=%q\n", hasTemplate, lit)
-	
-	fmt.Printf("DEBUG lexer: Before if, hasTemplate=%v\n", hasTemplate)
 	if hasTemplate {
-		fmt.Printf("DEBUG lexer: Returning TEMPLATE token\n")
 		return token.Token{Kind: token.TEMPLATE, Literal: lit, Pos: l.start, Line: l.line, Col: l.col}
 	}
-	fmt.Printf("DEBUG lexer: Returning STRING token\n")
 	return token.Token{Kind: token.STRING, Literal: lit, Pos: l.start, Line: l.line, Col: l.col}
 }
 
