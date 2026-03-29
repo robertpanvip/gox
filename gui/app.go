@@ -28,6 +28,14 @@ func NewApp(title string, width, height int) *App {
 	return app
 }
 
+// SetRootComponent 设置根组件
+func (a *App) SetRootComponent(component Component) {
+	if a.Root != nil {
+		a.Root.Children = make([]Component, 0)
+		a.Root.AddChild(component)
+	}
+}
+
 // Update Ebiten update loop
 func (a *App) Update() error {
 	// 获取鼠标位置

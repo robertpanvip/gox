@@ -210,14 +210,14 @@ func (t *Transformer) transformStmtWithStatePrefix(stmt ast.Stmt, stateVars []Fx
 						sb.WriteString(fmt.Sprintf("    %s%s%s\n", prefix, op, fieldName))
 					}
 				} else {
-					// 不是状态变量，正常转换
-					sb.WriteString(fmt.Sprintf("    %s\n", t.transformExpr(s.X)))
+					// 不是状态变量，使用状态前缀转换
+					sb.WriteString(fmt.Sprintf("    %s\n", t.transformExprWithStatePrefix(s.X, stateVars, prefix)))
 				}
 			} else {
-				sb.WriteString(fmt.Sprintf("    %s\n", t.transformExpr(s.X)))
+				sb.WriteString(fmt.Sprintf("    %s\n", t.transformExprWithStatePrefix(s.X, stateVars, prefix)))
 			}
 		} else {
-			sb.WriteString(fmt.Sprintf("    %s\n", t.transformExpr(s.X)))
+			sb.WriteString(fmt.Sprintf("    %s\n", t.transformExprWithStatePrefix(s.X, stateVars, prefix)))
 		}
 		
 	case *ast.BlockStmt:
@@ -276,6 +276,15 @@ func (t *Transformer) transformExprWithStatePrefix(expr ast.Expr, stateVars []Fx
 			return x + op
 		}
 		return op + x
+		
+	case *ast.CallExpr:
+		// 函数调用，递归处理参数
+		args := make([]string, len(e.Args))
+		for i, arg := range e.Args {
+			args[i] = t.transformExprWithStatePrefix(arg, stateVars, prefix)
+		}
+		funcName := t.transformExprWithStatePrefix(e.Fun, stateVars, prefix)
+		return fmt.Sprintf("%s(%s)", funcName, strings.Join(args, ", "))
 		
 	case *ast.TemplateString:
 		// 模板字符串：`Hello ${name}!`
