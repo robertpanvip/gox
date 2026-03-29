@@ -9,6 +9,9 @@ type LayoutEngine struct {
 	PaddingRight    int
 	PaddingBottom   int
 	PaddingLeft     int
+	Gap             int
+	RowGap          int
+	ColumnGap       int
 	Children        []*LayoutEngine
 	Parent          *LayoutEngine
 	X               int
@@ -54,6 +57,23 @@ func (l *LayoutEngine) SetPadding(top, right, bottom, left int) {
 	l.PaddingLeft = left
 }
 
+// SetGap 设置间距
+func (l *LayoutEngine) SetGap(gap int) {
+	l.Gap = gap
+	l.RowGap = gap
+	l.ColumnGap = gap
+}
+
+// SetRowGap 设置行间距
+func (l *LayoutEngine) SetRowGap(rowGap int) {
+	l.RowGap = rowGap
+}
+
+// SetColumnGap 设置列间距
+func (l *LayoutEngine) SetColumnGap(columnGap int) {
+	l.ColumnGap = columnGap
+}
+
 // AddChild 添加子节点
 func (l *LayoutEngine) AddChild(child *LayoutEngine) {
 	l.Children = append(l.Children, child)
@@ -88,8 +108,15 @@ func (l *LayoutEngine) calculateRowLayout(x, y, width, height int) {
 		return
 	}
 
+	// 计算总 gap 宽度
+	totalGap := 0
+	if numChildren > 1 {
+		totalGap = l.ColumnGap * (numChildren - 1)
+	}
+
 	// 计算每个子组件的宽度（简单平均分配）
-	childWidth := width / numChildren
+	availableWidth := width - totalGap
+	childWidth := availableWidth / numChildren
 	childHeight := height
 
 	startX := x
@@ -113,7 +140,7 @@ func (l *LayoutEngine) calculateRowLayout(x, y, width, height int) {
 			childY = y + height - childHeight
 		}
 
-		child.ComputedX = startX + i*childWidth
+		child.ComputedX = startX + i*(childWidth+l.ColumnGap)
 		child.ComputedY = childY
 		child.ComputedWidth = childWidth
 		child.ComputedHeight = childHeight
@@ -127,8 +154,15 @@ func (l *LayoutEngine) calculateColumnLayout(x, y, width, height int) {
 		return
 	}
 
+	// 计算总 gap 高度
+	totalGap := 0
+	if numChildren > 1 {
+		totalGap = l.RowGap * (numChildren - 1)
+	}
+
 	// 计算每个子组件的高度（简单平均分配）
-	childHeight := height / numChildren
+	availableHeight := height - totalGap
+	childHeight := availableHeight / numChildren
 	childWidth := width
 
 	startY := y
@@ -153,7 +187,7 @@ func (l *LayoutEngine) calculateColumnLayout(x, y, width, height int) {
 		}
 
 		child.ComputedX = childX
-		child.ComputedY = startY + i*childHeight
+		child.ComputedY = startY + i*(childHeight+l.RowGap)
 		child.ComputedWidth = childWidth
 		child.ComputedHeight = childHeight
 	}

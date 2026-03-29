@@ -18,6 +18,11 @@ type DivProps struct {
 	FlexShrink     float32
 	FlexBasis      string
 	
+	// 间距（gap）
+	Gap          string
+	RowGap       string
+	ColumnGap    string
+	
 	// 尺寸
 	Width      string
 	Height     string
@@ -84,6 +89,9 @@ func NewDiv(props interface{}, children ...Component) *Div {
 			FlexGrow:        p.FlexGrow,
 			FlexShrink:      p.FlexShrink,
 			FlexBasis:       p.FlexBasis,
+			Gap:             p.Gap,
+			RowGap:          p.RowGap,
+			ColumnGap:       p.ColumnGap,
 			Width:           p.Width,
 			Height:          p.Height,
 			MinWidth:        p.MinWidth,
@@ -186,6 +194,20 @@ func (d *Div) applyStyleToLayout() {
 	if d.Style.Padding != "" {
 		top, right, bottom, left := parsePadding(d.Style.Padding)
 		d.Layout.SetPadding(top, right, bottom, left)
+	}
+	
+	// 解析并设置 gap
+	if d.Style.Gap != "" {
+		gap := parseSize(d.Style.Gap)
+		d.Layout.SetGap(gap)
+	}
+	if d.Style.RowGap != "" {
+		rowGap := parseSize(d.Style.RowGap)
+		d.Layout.SetRowGap(rowGap)
+	}
+	if d.Style.ColumnGap != "" {
+		columnGap := parseSize(d.Style.ColumnGap)
+		d.Layout.SetColumnGap(columnGap)
 	}
 }
 

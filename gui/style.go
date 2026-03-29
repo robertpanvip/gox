@@ -42,6 +42,11 @@ type Style struct {
 	FlexShrink      float32
 	FlexBasis       string  // e.g., "100px", "auto"
 	
+	// 间距（gap）
+	Gap           string  // e.g., "10px", "1rem"
+	RowGap        string  // 行间距
+	ColumnGap     string  // 列间距
+	
 	// 尺寸
 	Width           string  // e.g., "100px", "50%", "auto"
 	Height          string
@@ -141,6 +146,20 @@ func CSS(properties map[string]interface{}) *Style {
 		case "flexBasis":
 			if v, ok := value.(string); ok {
 				style.FlexBasis = v
+			}
+			
+		// 间距（gap）
+		case "gap":
+			if v, ok := value.(string); ok {
+				style.Gap = v
+			}
+		case "rowGap":
+			if v, ok := value.(string); ok {
+				style.RowGap = v
+			}
+		case "columnGap":
+			if v, ok := value.(string); ok {
+				style.ColumnGap = v
 			}
 			
 		// 尺寸
