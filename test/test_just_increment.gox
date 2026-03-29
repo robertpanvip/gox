@@ -1,4 +1,0 @@
-func test() {
-    let x = 0
-    x++
-}

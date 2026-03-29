@@ -4,11 +4,11 @@ fx func Counter() {
     let count = 0
     
     return <button text="Click" onClick={() => {
-        count++
+        count = count + 1
     }} />
 }
 
 func Main() {
     let counter = NewCounter()
-    println("Test")
+    println("FX Component Test")
 }

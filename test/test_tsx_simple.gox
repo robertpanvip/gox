@@ -1,6 +1,0 @@
-package main
-public func Main() {
-<View>
-    <Text>Hello</Text>
-</View>
-}

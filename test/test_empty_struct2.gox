@@ -1,6 +1,0 @@
-package main
-public struct Empty {
-}
-public func Main() {
-let e = Empty{}
-}

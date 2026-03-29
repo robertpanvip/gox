@@ -1,8 +1,0 @@
-func Main() {
-    let count = 0
-    let increment = () => {
-        count++
-    }
-    increment()
-    println(count)
-}

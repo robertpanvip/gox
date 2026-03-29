@@ -1,5 +1,0 @@
-func Main() {
-    let count = 0
-    count++
-    println(count)
-}

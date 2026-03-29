@@ -1,5 +1,0 @@
-package main
-public func Main() {
-let name = "test"
-println("X${name}Y")
-}
