@@ -124,36 +124,77 @@ func (l *LayoutEngine) calculateRowLayout(x, y, width, height int) {
 		totalGap = l.ColumnGap * (numChildren - 1)
 	}
 
-	// 计算每个子组件的宽度（简单平均分配）
-	availableWidth := width - totalGap
-	childWidth := availableWidth / numChildren
-	childHeight := height
-
-	startX := x
-	switch l.JustifyContent {
-	case JustifyCenter:
-		startX = x + width/4
-	case JustifyFlexEnd:
-		startX = x + width/2
-	case JustifySpaceAround:
-		startX = x + childWidth/2
-	case JustifySpaceBetween:
-		startX = x
+	// 检查是否有子组件设置了自己的宽度
+	hasFixedWidth := false
+	fixedTotalWidth := 0
+	for _, child := range l.Children {
+		if child.Width > 0 {
+			hasFixedWidth = true
+			fixedTotalWidth += child.Width
+		}
 	}
 
-	for i, child := range l.Children {
-		childY := y
-		switch l.AlignItems {
-		case AlignCenter:
-			childY = y + (height-childHeight)/2
-		case AlignFlexEnd:
-			childY = y + height - childHeight
+	startX := x
+	if hasFixedWidth {
+		// 使用固定宽度
+		currentX := x
+		for _, child := range l.Children {
+			childY := y
+			childW := child.Width
+			if childW == 0 {
+				// 如果没有设置宽度，使用默认值或剩余空间
+				childW = 100 // 默认宽度
+			}
+			childH := child.Height
+			if childH == 0 {
+				childH = height
+			}
+			
+			switch l.AlignItems {
+			case AlignCenter:
+				childY = y + (height-childH)/2
+			case AlignFlexEnd:
+				childY = y + height - childH
+			}
+
+			child.ComputedX = currentX
+			child.ComputedY = childY
+			child.ComputedWidth = childW
+			child.ComputedHeight = childH
+			
+			currentX += childW + l.ColumnGap
+		}
+	} else {
+		// 平均分配宽度
+		availableWidth := width - totalGap
+		childWidth := availableWidth / numChildren
+		childHeight := height
+
+		switch l.JustifyContent {
+		case JustifyCenter:
+			startX = x + width/4
+		case JustifyFlexEnd:
+			startX = x + width/2
+		case JustifySpaceAround:
+			startX = x + childWidth/2
+		case JustifySpaceBetween:
+			startX = x
 		}
 
-		child.ComputedX = startX + i*(childWidth+l.ColumnGap)
-		child.ComputedY = childY
-		child.ComputedWidth = childWidth
-		child.ComputedHeight = childHeight
+		for i, child := range l.Children {
+			childY := y
+			switch l.AlignItems {
+			case AlignCenter:
+				childY = y + (height-childHeight)/2
+			case AlignFlexEnd:
+				childY = y + height - childHeight
+			}
+
+			child.ComputedX = startX + i*(childWidth+l.ColumnGap)
+			child.ComputedY = childY
+			child.ComputedWidth = childWidth
+			child.ComputedHeight = childHeight
+		}
 	}
 }
 

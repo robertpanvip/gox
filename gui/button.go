@@ -5,6 +5,7 @@ import (
 	"github.com/hajimehoshi/ebiten/v2/text"
 	"github.com/hajimehoshi/ebiten/v2/vector"
 	"golang.org/x/image/font/basicfont"
+	"image/color"
 )
 
 // ButtonProps Button 组件的属性（继承 DivProps 的所有属性）
@@ -49,6 +50,14 @@ func NewButton(props ButtonProps) *Button {
 	}
 	if props.FontSize == 0 {
 		props.FontSize = 16 // 默认字体大小
+	}
+	
+	// 设置默认颜色（如果 R,G,B,A 都是 0，则使用默认色）
+	if props.TextColor.R == 0 && props.TextColor.G == 0 && props.TextColor.B == 0 && props.TextColor.A == 0 {
+		props.TextColor = ColorWhite // 默认白色文字
+	}
+	if props.BackColor.R == 0 && props.BackColor.G == 0 && props.BackColor.B == 0 && props.BackColor.A == 0 {
+		props.BackColor = ColorBlue // 默认蓝色背景
 	}
 	
 	// 创建 Div 作为基类
