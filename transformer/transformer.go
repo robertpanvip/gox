@@ -77,20 +77,43 @@ func (t *Transformer) Transform(prog *ast.Program) string {
 		sb.WriteString(fmt.Sprintf("package %s\n\n", prog.Package.Name))
 	}
 
-	// First pass: collect function type information
+	// First pass: collect function type information and imports
+	sourceImports := make([]string, 0)
 	for _, decl := range prog.Decls {
 		if fn, ok := decl.(*ast.FuncDecl); ok {
 			key := fn.Name
 			t.funcTypes[key] = fn.Params
 		}
+		if imp, ok := decl.(*ast.ImportDecl); ok {
+			sourceImports = append(sourceImports, strings.Trim(imp.Path, `"`))
+		}
+	}
+
+	// Collect auto-added imports (e.g., "fmt")
+	autoImports := make([]string, 0)
+	for path := range t.imports {
+		if t.imports[path] == "" {
+			autoImports = append(autoImports, path)
+		}
+	}
+
+	// Output all imports in a single block
+	if len(autoImports) > 0 || len(sourceImports) > 0 {
+		sb.WriteString("import (\n")
+		for _, path := range autoImports {
+			sb.WriteString(fmt.Sprintf("\t%q\n", path))
+		}
+		for _, path := range sourceImports {
+			sb.WriteString(fmt.Sprintf("\t%q\n", path))
+		}
+		sb.WriteString(")\n\n")
 	}
 
 	// Second pass: transform declarations
 	for _, decl := range prog.Decls {
 		switch d := decl.(type) {
 		case *ast.ImportDecl:
-			sb.WriteString(fmt.Sprintf("import %s\n", d.Path))
-			t.addImport(strings.Trim(d.Path, `"`), d.SourceType)
+			// Already handled in first pass
 		case *ast.StructDecl:
 			sb.WriteString(t.transformStruct(d))
 			sb.WriteString("\n\n")
@@ -153,17 +176,7 @@ func (t *Transformer) Transform(prog *ast.Program) string {
 		sb.WriteString("}\n\n")
 	}
 
-	// Output dynamically added imports (not in source code)
-	// These are imports added by the transformer itself (e.g., "fmt")
-	if len(t.imports) > 0 {
-		// Check which imports were not already output
-		for path := range t.imports {
-			// Only output if it's an auto-added import (source type is empty)
-			if t.imports[path] == "" {
-				sb.WriteString(fmt.Sprintf("import %q\n", path))
-			}
-		}
-	}
+	// Note: dynamic imports are now output at the beginning
 
 	for typeName, methods := range t.extendFuncs {
 		for _, method := range methods {
