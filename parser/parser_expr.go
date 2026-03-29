@@ -368,31 +368,18 @@ func (p *Parser) parseTSXElement() ast.Expr {
 	return &ast.TSXElement{TagName: tagName, Attributes: attributes, Children: children, SelfClosing: selfClosing, P: pos}
 }
 
-// parseTSXAttributeExpression 使用栈解析 TSX 属性中的 {expression}
+// parseTSXAttributeExpression 解析 TSX 属性中的 {expression}
+// 非常简单：消耗 {，调用 parseExpr()，消耗 }
 func (p *Parser) parseTSXAttributeExpression() ast.Expr {
 	// 消耗开头的 {
 	p.expect(token.LBRACE)
 	
-	// 检查是否是嵌套对象字面量 {{...}}
-	if p.curTok.Kind == token.LBRACE {
-		// 嵌套对象字面量
-		objLit := p.parseObjectLiteral()
-		// 消耗外层的 }
-		if p.curTok.Kind == token.RBRACE {
-			p.nextToken()
-		}
-		return objLit
-	}
-	
-	// 普通表达式：使用栈来匹配所有嵌套的括号
+	// 直接调用 parseExpr 解析内部表达式
+	// parseExpr 会自动处理所有嵌套的括号、箭头函数等
 	expr := p.parseExpr()
 	
 	// 消耗闭合的 }
-	if p.curTok.Kind == token.RBRACE {
-		p.nextToken()
-	} else {
-		p.errors = append(p.errors, fmt.Sprintf("expected }} to close attribute expression, got %v", p.curTok.Kind))
-	}
+	p.expect(token.RBRACE)
 	
 	return expr
 }
@@ -577,6 +564,11 @@ func (p *Parser) isArrowFunction() bool {
 // parseArrowFunction parses arrow function: (params) => body
 func (p *Parser) parseArrowFunction() ast.Expr {
 	pos := ast.Position{Line: p.curTok.Line, Col: p.curTok.Col}
+
+	// Consume opening paren if present (in case isArrowFunction restored state)
+	if p.curTok.Kind == token.LPAREN {
+		p.nextToken()
+	}
 
 	// Parse params (we're already after the opening paren)
 	params := p.parseFuncParams()
