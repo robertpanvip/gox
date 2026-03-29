@@ -26,7 +26,7 @@ println("Hello, ${name}!")
 	if !strings.Contains(result, `fmt.Sprintln`) {
 		t.Error("expected fmt.Sprintln, got:", result)
 	}
-	if !strings.Contains(result, `fmt.Sprintf("Hello, %%v!", name)`) {
+	if !strings.Contains(result, `fmt.Sprintf("Hello, %v!", name)`) {
 		t.Error("expected fmt.Sprintf for template, got:", result)
 	}
 }
@@ -47,7 +47,7 @@ print("Age: ${age}")`
 	if !strings.Contains(result, `fmt.Sprint`) {
 		t.Error("expected fmt.Sprint, got:", result)
 	}
-	if !strings.Contains(result, `fmt.Sprintf("Age: %%v", age)`) {
+	if !strings.Contains(result, `fmt.Sprintf("Age: %v", age)`) {
 		t.Error("expected fmt.Sprintf for template, got:", result)
 	}
 }
@@ -69,10 +69,10 @@ println("X: ${x}", "Y: ${y}")`
 	if !strings.Contains(result, `fmt.Sprintln`) {
 		t.Error("expected fmt.Sprintln, got:", result)
 	}
-	if !strings.Contains(result, `fmt.Sprintf("X: %%v", x)`) {
+	if !strings.Contains(result, `fmt.Sprintf("X: %v", x)`) {
 		t.Error("expected first fmt.Sprintf, got:", result)
 	}
-	if !strings.Contains(result, `fmt.Sprintf("Y: %%v", y)`) {
+	if !strings.Contains(result, `fmt.Sprintf("Y: %v", y)`) {
 		t.Error("expected second fmt.Sprintf, got:", result)
 	}
 }
@@ -100,7 +100,7 @@ println("User:", name, ` + "`is ${age} years old`" + `)`
 	if !strings.Contains(result, `name`) {
 		t.Error("expected name variable, got:", result)
 	}
-	if !strings.Contains(result, `fmt.Sprintf("is %%v years old", age)`) {
+	if !strings.Contains(result, `fmt.Sprintf("is %v years old", age)`) {
 		t.Error("expected fmt.Sprintf for backtick template, got:", result)
 	}
 }

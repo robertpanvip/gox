@@ -38,6 +38,7 @@ func (t *Transformer) parseTemplateString(s string) (format string, exprs []stri
 		idx := strings.Index(content, "${")
 		if idx == -1 {
 			format += content
+			content = ""  // Clear content to avoid double-adding
 			break
 		}
 		
@@ -48,6 +49,7 @@ func (t *Transformer) parseTemplateString(s string) (format string, exprs []stri
 		endIdx := strings.Index(content, "}")
 		if endIdx == -1 {
 			format += "${" + content
+			content = ""  // Clear content to avoid double-adding
 			break
 		}
 		
@@ -136,8 +138,16 @@ case *ast.ImportDecl:
 		sb.WriteString("}\n\n")
 	}
 
-	// Note: imports are already added in the first pass
-	_ = t.imports // suppress unused field warning
+	// Output dynamically added imports
+	if len(t.imports) > 0 {
+		importsOutput := make([]string, 0)
+		for path := range t.imports {
+			importsOutput = append(importsOutput, fmt.Sprintf(`import "%s"`, path))
+		}
+		if len(importsOutput) > 0 {
+			sb.WriteString(strings.Join(importsOutput, "\n") + "\n\n")
+		}
+	}
 
 	for typeName, methods := range t.extendFuncs {
 		for _, method := range methods {

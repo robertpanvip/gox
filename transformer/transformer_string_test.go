@@ -99,14 +99,12 @@ public func Main() {
 
 // TestTransformer_StringComparison tests string comparison operations
 func TestTransformer_StringComparison(t *testing.T) {
-	code := `
-package main
+	code := `package main
 import "fmt"
 public func Main() {
     let a = "hello"
     let b = "world"
     let c = "hello"
-    
     if a == c {
         fmt.Println("equal")
     }
