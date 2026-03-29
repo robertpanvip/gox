@@ -193,10 +193,11 @@ func (t *Transformer) transformStmtWithStatePrefix(stmt ast.Stmt, stateVars []Fx
 			if ident, ok := unary.X.(*ast.Ident); ok {
 				if containsStateVar(stateVars, ident.Name) {
 					// 是状态变量，添加前缀
+					op := t.mapOp(unary.Op)
 					if unary.Post {
-						sb.WriteString(fmt.Sprintf("    %s%s++\n", prefix, ident.Name))
+						sb.WriteString(fmt.Sprintf("    %s%s%s\n", prefix, ident.Name, op))
 					} else {
-						sb.WriteString(fmt.Sprintf("    ++%s%s\n", prefix, ident.Name))
+						sb.WriteString(fmt.Sprintf("    %s%s%s\n", prefix, op, ident.Name))
 					}
 				} else {
 					// 不是状态变量，正常转换
@@ -259,10 +260,11 @@ func (t *Transformer) transformExprWithStatePrefix(expr ast.Expr, stateVars []Fx
 		
 	case *ast.UnaryExpr:
 		x := t.transformExprWithStatePrefix(e.X, stateVars, prefix)
+		op := t.mapOp(e.Op)
 		if e.Post {
-			return x + "++"
+			return x + op
 		}
-		return t.mapOp(e.Op) + x
+		return op + x
 		
 	case *ast.TemplateString:
 		// 模板字符串：`Hello ${name}!`
