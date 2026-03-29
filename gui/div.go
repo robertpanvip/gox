@@ -209,6 +209,16 @@ func (d *Div) applyStyleToLayout() {
 		columnGap := parseSize(d.Style.ColumnGap)
 		d.Layout.SetColumnGap(columnGap)
 	}
+	
+	// 解析并设置 width 和 height
+	if d.Style.Width != "" {
+		width := parseSize(d.Style.Width)
+		d.Layout.SetWidth(width)
+	}
+	if d.Style.Height != "" {
+		height := parseSize(d.Style.Height)
+		d.Layout.SetHeight(height)
+	}
 }
 
 // SetStyle 设置样式

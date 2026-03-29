@@ -74,6 +74,16 @@ func (l *LayoutEngine) SetColumnGap(columnGap int) {
 	l.ColumnGap = columnGap
 }
 
+// SetWidth 设置宽度
+func (l *LayoutEngine) SetWidth(width int) {
+	l.Width = width
+}
+
+// SetHeight 设置高度
+func (l *LayoutEngine) SetHeight(height int) {
+	l.Height = height
+}
+
 // AddChild 添加子节点
 func (l *LayoutEngine) AddChild(child *LayoutEngine) {
 	l.Children = append(l.Children, child)

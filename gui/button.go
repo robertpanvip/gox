@@ -40,6 +40,17 @@ type Button struct {
 
 // NewButton 创建 Button 组件
 func NewButton(props ButtonProps) *Button {
+	// 设置默认样式
+	if props.Width == "" {
+		props.Width = "100px" // 默认宽度
+	}
+	if props.Height == "" {
+		props.Height = "40px" // 默认高度
+	}
+	if props.FontSize == 0 {
+		props.FontSize = 16 // 默认字体大小
+	}
+	
 	// 创建 Div 作为基类
 	div := NewDiv(props.DivProps)
 	
