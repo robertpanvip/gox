@@ -77,8 +77,16 @@ func (l *Lexer) NextToken() token.Token {
 		}
 		return token.Token{Kind: token.ASSIGN, Literal: "=", Pos: l.start, Line: l.line, Col: l.col}
 	case '+':
+		if l.peekByte() == '+' {
+			l.next()
+			return token.Token{Kind: token.INC, Literal: "++", Pos: l.start, Line: l.line, Col: l.col}
+		}
 		return token.Token{Kind: token.PLUS, Literal: "+", Pos: l.start, Line: l.line, Col: l.col}
 	case '-':
+		if l.peekByte() == '-' {
+			l.next()
+			return token.Token{Kind: token.DEC, Literal: "--", Pos: l.start, Line: l.line, Col: l.col}
+		}
 		if l.peekByte() == '>' {
 			l.next()
 			return token.Token{Kind: token.ARROW, Literal: "->", Pos: l.start, Line: l.line, Col: l.col}

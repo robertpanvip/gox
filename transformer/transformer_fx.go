@@ -92,8 +92,9 @@ func (t *Transformer) transformTSXElementWithStateCheck(e *ast.TSXElement, state
 		} else {
 			// 特殊处理事件处理器
 			if strings.HasPrefix(attr.Name, "on") {
-				if funcLit, ok := attr.Value.(*ast.FunctionLiteral); ok {
-					// 总是使用 transformEventHandler（用于调试）
+				funcLit, ok := attr.Value.(*ast.FunctionLiteral)
+				if ok {
+					// 总是使用 transformEventHandler
 					fieldName := strings.Title(attr.Name)
 					fieldValue := t.transformEventHandler(funcLit, stateVars)
 					propsFields = append(propsFields, fmt.Sprintf("%s: %s", fieldName, fieldValue))
@@ -114,7 +115,15 @@ func (t *Transformer) transformTSXElementWithStateCheck(e *ast.TSXElement, state
 	// 构建 props
 	propsStr := ""
 	if styleValue != "" {
+		// 有 style 属性，使用 style 作为第一个参数
 		propsStr = styleValue
+		// 如果还有其他 props，需要创建一个包含 style 和其他字段的 props 结构
+		if len(propsFields) > 0 {
+			// 将 style 转换为字段添加到 props 结构中
+			// 对于 Div 组件，需要创建 DivProps{Style: &gui.Style{...}, OnClick: ...}
+			allFields := append([]string{fmt.Sprintf("Style: %s", styleValue)}, propsFields...)
+			propsStr = fmt.Sprintf("%s{%s}", propsTypeName, strings.Join(allFields, ", "))
+		}
 	} else if len(propsFields) > 0 {
 		propsStr = fmt.Sprintf("%s{%s}", propsTypeName, strings.Join(propsFields, ", "))
 	} else {

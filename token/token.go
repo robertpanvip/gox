@@ -31,6 +31,9 @@ const (
 	STAR
 	SLASH
 	PERCENT
+	
+	INC  // ++
+	DEC  // --
 
 	AMP
 	PIPE

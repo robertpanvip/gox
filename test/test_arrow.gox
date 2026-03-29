@@ -1,0 +1,8 @@
+import "github.com/gox-lang/gox/gui"
+
+func Main() {
+    let f = () => {
+        println("test")
+    }
+    f()
+}

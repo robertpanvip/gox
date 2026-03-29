@@ -87,6 +87,10 @@ func (t *Transformer) mapOp(op token.TokenKind) string {
 		return ">="
 	case token.ASSIGN:
 		return "="
+	case token.INC:
+		return "++"
+	case token.DEC:
+		return "--"
 	case token.NULL_COALESCE:
 		return "??"
 	case token.SAFE_DOT:

@@ -157,12 +157,16 @@ func (p *Parser) parsePostfix() ast.Expr {
 				p.nextToken()
 				return p.parseTSXElement()
 			}
-			return x
+		case p.curTok.Kind == token.INC || p.curTok.Kind == token.DEC:
+			// 后置自增/自减运算符
+			op := p.curTok.Kind
+			p.nextToken()
+			x = &ast.UnaryExpr{Op: op, X: x, Post: true}
 		default:
 			return x
 		}
 	}
-
+	
 	return x
 }
 
@@ -283,6 +287,7 @@ func (p *Parser) parsePrimary() ast.Expr {
 	}
 }
 
+// parseTSXElement 使用栈来解析 TSX 元素
 func (p *Parser) parseTSXElement() ast.Expr {
 	pos := ast.Position{Line: p.curTok.Line, Col: p.curTok.Col}
 
@@ -290,6 +295,8 @@ func (p *Parser) parseTSXElement() ast.Expr {
 	p.nextToken()
 
 	attributes := make([]*ast.TSXAttr, 0)
+	
+	// 解析属性：使用栈来匹配 {}
 	for p.curTok.Kind != token.GREATER && p.curTok.Kind != token.SLASH && p.curTok.Kind != token.EOF {
 		if p.check(token.NEWLINE) {
 			p.nextToken()
@@ -307,18 +314,10 @@ func (p *Parser) parseTSXElement() ast.Expr {
 					attrValue = &ast.StringLit{Value: strings.Trim(p.curTok.Literal, `"`), P: pos}
 					p.nextToken()
 				} else if p.curTok.Kind == token.LBRACE {
-					// Check if it's a nested object literal {{...}}
-					p.nextToken()
-					if p.curTok.Kind == token.LBRACE {
-						// It's {{...}}, parse as object literal
-						attrValue = p.parseObjectLiteral()
-					} else {
-						// It's single {...}, parse as expression
-						attrValue = p.parseExpr()
-						if p.curTok.Kind == token.RBRACE {
-							p.nextToken()
-						}
-					}
+					// 使用栈来匹配 {} 中的表达式
+					attrValue = p.parseTSXAttributeExpression()
+				} else {
+					p.errors = append(p.errors, fmt.Sprintf("unexpected token in attribute: %v", p.curTok.Kind))
 				}
 			} else {
 				attrValue = &ast.BoolLit{Value: true, P: pos}
@@ -358,20 +357,8 @@ func (p *Parser) parseTSXElement() ast.Expr {
 			if p.curTok.Kind == token.LESS && p.peekTok.Kind == token.IDENT {
 				p.nextToken()
 				children = append(children, p.parseTSXElement())
-			} else if p.curTok.Kind == token.LBRACE {
-				p.nextToken()
-				children = append(children, p.parseExpr())
-				if p.curTok.Kind == token.RBRACE {
-					p.nextToken()
-				}
-			} else if p.curTok.Kind == token.STRING || p.curTok.Kind == token.IDENT || p.curTok.Kind == token.INT {
-				text := p.curTok.Literal
-				p.nextToken()
-				children = append(children, &ast.StringLit{Value: text, P: pos})
-			} else if p.check(token.NEWLINE) {
-				p.nextToken()
 			} else if p.curTok.Kind != token.EOF {
-				p.nextToken()
+				children = append(children, p.parseExpr())
 			} else {
 				break
 			}
@@ -379,6 +366,35 @@ func (p *Parser) parseTSXElement() ast.Expr {
 	}
 
 	return &ast.TSXElement{TagName: tagName, Attributes: attributes, Children: children, SelfClosing: selfClosing, P: pos}
+}
+
+// parseTSXAttributeExpression 使用栈解析 TSX 属性中的 {expression}
+func (p *Parser) parseTSXAttributeExpression() ast.Expr {
+	// 消耗开头的 {
+	p.expect(token.LBRACE)
+	
+	// 检查是否是嵌套对象字面量 {{...}}
+	if p.curTok.Kind == token.LBRACE {
+		// 嵌套对象字面量
+		objLit := p.parseObjectLiteral()
+		// 消耗外层的 }
+		if p.curTok.Kind == token.RBRACE {
+			p.nextToken()
+		}
+		return objLit
+	}
+	
+	// 普通表达式：使用栈来匹配所有嵌套的括号
+	expr := p.parseExpr()
+	
+	// 消耗闭合的 }
+	if p.curTok.Kind == token.RBRACE {
+		p.nextToken()
+	} else {
+		p.errors = append(p.errors, fmt.Sprintf("expected }} to close attribute expression, got %v", p.curTok.Kind))
+	}
+	
+	return expr
 }
 
 // parseObjectLiteral parses a JS-style object literal like {key: value, key2: value2}
