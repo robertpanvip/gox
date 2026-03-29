@@ -1,0 +1,9 @@
+import "github.com/gox-lang/gox/gui"
+
+fx func Counter() {
+    let count = 0
+    
+    return <button text="Click" onClick={() => {
+        count = count + 1
+    }} />
+}
