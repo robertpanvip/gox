@@ -32,7 +32,7 @@ const (
 // Style 样式结构体（CSS 风格）
 type Style struct {
 	// 布局
-	Display         string  // "flex" | "none"
+	Display         string  // "flex" (默认) | "none"
 	FlexDirection   string  // "row" | "column" | "row-reverse" | "column-reverse"
 	JustifyContent  string  // "flex-start" | "flex-end" | "center" | "space-between" | "space-around" | "space-evenly"
 	AlignItems      string  // "stretch" | "flex-start" | "flex-end" | "center" | "baseline"
@@ -89,7 +89,9 @@ type Style struct {
 
 // CSS 创建样式（CSS 风格）
 func CSS(properties map[string]interface{}) *Style {
-	style := &Style{}
+	style := &Style{
+		Display: "flex", // 默认启用 flex 布局
+	}
 	
 	for key, value := range properties {
 		switch key {

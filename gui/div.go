@@ -75,7 +75,7 @@ func NewDiv(props interface{}, children ...Component) *Div {
 	switch p := props.(type) {
 	case DivProps:
 		style = &Style{
-			Display:         p.Display,
+			Display:         "flex", // 默认启用 flex 布局
 			FlexDirection:   p.FlexDirection,
 			JustifyContent:  p.JustifyContent,
 			AlignItems:      p.AlignItems,
@@ -113,8 +113,14 @@ func NewDiv(props interface{}, children ...Component) *Div {
 		}
 	case *Style:
 		style = p
+		// 如果没有设置 display，默认为 "flex"
+		if style.Display == "" {
+			style.Display = "flex"
+		}
 	default:
-		style = &Style{}
+		style = &Style{
+			Display: "flex", // 默认启用 flex 布局
+		}
 	}
 	
 	div := &Div{
