@@ -25,12 +25,8 @@ type FxDependency struct {
 func (t *Transformer) transformFxFunc(f *ast.FuncDecl) string {
 	var sb strings.Builder
 	
-	componentName := f.Name
-	if f.Visibility.Public {
-		componentName = strings.Title(f.Name)
-	} else {
-		componentName = strings.ToLower(f.Name)
-	}
+	// 组件名总是首字母大写（导出的组件）
+	componentName := strings.Title(f.Name)
 	
 	// 1. 收集状态变量（let 声明）
 	stateVars := t.collectStateVars(f.Body)
@@ -50,11 +46,8 @@ func (t *Transformer) transformFxFunc(f *ast.FuncDecl) string {
 
 // transformTSXForFx 为 FX 组件转换 TSX 元素
 func (t *Transformer) transformTSXForFx(tsx *ast.TSXElement, context string, stateVars []FxStateVar, deps []FxDependency) string {
-	// 使用现有的 TSX 转换逻辑
-	// 这里需要复用 transformer_expr.go 中的 transformExpr 方法
-	// 但由于是私有方法，我们需要重新实现或导出
-	
-	// 简化版本：直接调用 transformExpr
+	// 直接使用 transformExpr 转换 TSX
+	// transformExpr 会自动处理 TSX 元素
 	return t.transformExpr(tsx)
 }
 
