@@ -12,7 +12,8 @@ type FxStateVar struct {
 	Name      string
 	Type      string
 	Value     string
-	IsState   bool  // 是否是响应式状态（State[T]）
+	IsState   bool  // 是否是内部状态（let 声明）
+	IsProp    bool  // 是否是 props（从参数来）
 	StateType string  // State 的内部类型，如 "int", "string"
 }
 
@@ -21,6 +22,8 @@ type FxDependency struct {
 	VarName     string   // 状态变量名
 	UsedIn      []string // 在哪些组件中使用
 	MutatedIn   []string // 在哪些事件处理器中被修改
+	NeedsUpdate bool     // 是否需要自动触发更新
+	IsProp      bool     // 是否是 props
 }
 
 // transformFxFunc 转换 FX 函数为 lit-html 风格的组件
@@ -40,17 +43,369 @@ func (t *Transformer) transformFxFunc(f *ast.FuncDecl) string {
 	sb.WriteString(t.generateFxComponentStruct(componentName, stateVars, dependencies))
 	sb.WriteString("\n\n")
 	
-	// 4. 生成构造函数
-	sb.WriteString(t.generateFxConstructor(f, componentName, stateVars, dependencies))
+	// 4. 生成构造函数（带状态修改检测）
+	sb.WriteString(t.generateFxConstructorWithMutationCheck(f, componentName, stateVars, dependencies))
 	
 	return sb.String()
 }
 
-// transformTSXForFx 为 FX 组件转换 TSX 元素
-func (t *Transformer) transformTSXForFx(tsx *ast.TSXElement, context string, stateVars []FxStateVar, deps []FxDependency) string {
-	// 直接使用 transformExpr 转换 TSX
-	// transformExpr 会自动处理 TSX 元素
-	return t.transformExpr(tsx)
+// transformTSXWithMutationCheck 为 FX 组件转换 TSX 元素（带状态修改检测）
+func (t *Transformer) transformTSXWithMutationCheck(tsx *ast.TSXElement, context string, stateVars []FxStateVar) string {
+	// 使用现有的 TSX 转换逻辑，但需要特殊处理事件处理器
+	// 当检测到事件处理器中修改了状态变量时，自动插入 c.RequestUpdate()
+	
+	// 1. 首先检查 TSX 中的事件处理器
+	t.checkTSXForMutations(tsx, stateVars)
+	
+	// 2. 转换 TSX 为普通 Go 代码（带状态变量信息）
+	goCode := t.transformExprWithStateCheck(tsx, stateVars)
+	
+	return goCode
+}
+
+// transformExprWithStateCheck 转换表达式（带状态检查，用于 FX 组件）
+func (t *Transformer) transformExprWithStateCheck(expr ast.Expr, stateVars []FxStateVar) string {
+	switch e := expr.(type) {
+	case *ast.TSXElement:
+		return t.transformTSXElementWithStateCheck(e, stateVars)
+	default:
+		// 其他表达式使用普通转换
+		return t.transformExpr(expr)
+	}
+}
+
+// transformTSXElementWithStateCheck 转换 TSX 元素（带状态检查）
+func (t *Transformer) transformTSXElementWithStateCheck(e *ast.TSXElement, stateVars []FxStateVar) string {
+	// 复用现有的 transformExpr 逻辑，但特殊处理事件处理器
+	componentName := t.mapTSXTagsToComponent(e.TagName)
+	propsTypeName := fmt.Sprintf("%sProps", componentName)
+	
+	// 检查是否有 "style" 属性
+	var styleValue string
+	propsFields := make([]string, 0)
+	
+	for _, attr := range e.Attributes {
+		if attr.Name == "style" {
+			if tmpl, ok := attr.Value.(*ast.TemplateString); ok {
+				styleValue = t.transformStyleObject(tmpl)
+			}
+		} else {
+			// 特殊处理事件处理器
+			if strings.HasPrefix(attr.Name, "on") {
+				if funcLit, ok := attr.Value.(*ast.FunctionLiteral); ok {
+					// 总是使用 transformEventHandler（用于调试）
+					fieldName := strings.Title(attr.Name)
+					fieldValue := t.transformEventHandler(funcLit, stateVars)
+					propsFields = append(propsFields, fmt.Sprintf("%s: %s", fieldName, fieldValue))
+				} else {
+					fieldName := strings.Title(attr.Name)
+					fieldValue := t.transformExpr(attr.Value)
+					propsFields = append(propsFields, fmt.Sprintf("%s: %s", fieldName, fieldValue))
+				}
+			} else {
+				// 普通属性，使用状态感知转换
+				fieldName := strings.Title(attr.Name)
+				fieldValue := t.transformExprWithStatePrefix(attr.Value, stateVars, "c.")
+				propsFields = append(propsFields, fmt.Sprintf("%s: %s", fieldName, fieldValue))
+			}
+		}
+	}
+	
+	// 构建 props
+	propsStr := ""
+	if styleValue != "" {
+		propsStr = styleValue
+	} else if len(propsFields) > 0 {
+		propsStr = fmt.Sprintf("%s{%s}", propsTypeName, strings.Join(propsFields, ", "))
+	} else {
+		propsStr = fmt.Sprintf("%s{}", propsTypeName)
+	}
+	
+	// 处理子元素（递归使用状态感知转换）
+	childrenStr := ""
+	if len(e.Children) > 0 {
+		children := make([]string, 0)
+		for _, child := range e.Children {
+			if childTSX, ok := child.(*ast.TSXElement); ok {
+				children = append(children, t.transformTSXElementWithStateCheck(childTSX, stateVars))
+			} else {
+				children = append(children, t.transformExpr(child))
+			}
+		}
+		childrenStr = ", " + strings.Join(children, ", ")
+	}
+	
+	// 生成构造函数调用
+	constructorName := fmt.Sprintf("gui.New%s", componentName)
+	return fmt.Sprintf("%s(%s%s)", constructorName, propsStr, childrenStr)
+}
+
+// transformEventHandler 转换事件处理器（带 c. 前缀和 RequestUpdate()）
+func (t *Transformer) transformEventHandler(funcLit *ast.FunctionLiteral, stateVars []FxStateVar) string {
+	var sb strings.Builder
+	
+	sb.WriteString("func() {\n")
+	
+	// 转换函数体，为状态变量添加 c. 前缀
+	if funcLit.Body != nil {
+		for _, stmt := range funcLit.Body.List {
+			sb.WriteString(t.transformStmtWithStatePrefix(stmt, stateVars, "c."))
+		}
+	}
+	
+	// 在末尾添加 RequestUpdate()
+	sb.WriteString("    c.RequestUpdate()\n")
+	
+	sb.WriteString("}")
+	
+	return sb.String()
+}
+
+// transformStmtWithStatePrefix 转换语句，为状态变量添加前缀
+func (t *Transformer) transformStmtWithStatePrefix(stmt ast.Stmt, stateVars []FxStateVar, prefix string) string {
+	var sb strings.Builder
+	
+	switch s := stmt.(type) {
+	case *ast.AssignStmt:
+		// count = 1, count += 1 等
+		if ident, ok := s.LHS.(*ast.Ident); ok {
+			if containsStateVar(stateVars, ident.Name) {
+				// 是状态变量，添加前缀
+				sb.WriteString(fmt.Sprintf("    %s%s = %s\n", prefix, ident.Name, t.transformExprWithStatePrefix(s.RHS, stateVars, prefix)))
+			} else {
+				// 不是状态变量，正常转换
+				sb.WriteString(fmt.Sprintf("    %s = %s\n", s.LHS, t.transformExpr(s.RHS)))
+			}
+		}
+		
+	case *ast.ExprStmt:
+		// count++ 等
+		if unary, ok := s.X.(*ast.UnaryExpr); ok {
+			if ident, ok := unary.X.(*ast.Ident); ok {
+				if containsStateVar(stateVars, ident.Name) {
+					// 是状态变量，添加前缀
+					if unary.Post {
+						sb.WriteString(fmt.Sprintf("    %s%s++\n", prefix, ident.Name))
+					} else {
+						sb.WriteString(fmt.Sprintf("    ++%s%s\n", prefix, ident.Name))
+					}
+				} else {
+					// 不是状态变量，正常转换
+					sb.WriteString(fmt.Sprintf("    %s\n", t.transformExpr(s.X)))
+				}
+			} else {
+				sb.WriteString(fmt.Sprintf("    %s\n", t.transformExpr(s.X)))
+			}
+		} else {
+			sb.WriteString(fmt.Sprintf("    %s\n", t.transformExpr(s.X)))
+		}
+		
+	case *ast.BlockStmt:
+		// 递归处理块中的语句
+		for _, innerStmt := range s.List {
+			sb.WriteString(t.transformStmtWithStatePrefix(innerStmt, stateVars, prefix))
+		}
+		
+	case *ast.IfStmt:
+		// if 语句
+		sb.WriteString(fmt.Sprintf("    if %s {\n", t.transformExprWithStatePrefix(s.Cond, stateVars, prefix)))
+		if s.Body != nil {
+			for _, innerStmt := range s.Body.List {
+				sb.WriteString(t.transformStmtWithStatePrefix(innerStmt, stateVars, prefix))
+			}
+		}
+		if s.Else != nil {
+			sb.WriteString("    } else {\n")
+			if elseBody, ok := s.Else.(*ast.BlockStmt); ok {
+				for _, innerStmt := range elseBody.List {
+					sb.WriteString(t.transformStmtWithStatePrefix(innerStmt, stateVars, prefix))
+				}
+			}
+			sb.WriteString("    }\n")
+		} else {
+			sb.WriteString("    }\n")
+		}
+		
+	default:
+		// 其他语句正常转换
+		sb.WriteString("    " + t.transformStmt(stmt, false) + "\n")
+	}
+	
+	return sb.String()
+}
+
+// transformExprWithStatePrefix 转换表达式，为状态变量添加前缀
+func (t *Transformer) transformExprWithStatePrefix(expr ast.Expr, stateVars []FxStateVar, prefix string) string {
+	switch e := expr.(type) {
+	case *ast.Ident:
+		if containsStateVar(stateVars, e.Name) {
+			return prefix + e.Name
+		}
+		return e.Name
+		
+	case *ast.BinaryExpr:
+		left := t.transformExprWithStatePrefix(e.X, stateVars, prefix)
+		right := t.transformExprWithStatePrefix(e.Y, stateVars, prefix)
+		return fmt.Sprintf("%s %s %s", left, t.mapOp(e.Op), right)
+		
+	case *ast.UnaryExpr:
+		x := t.transformExprWithStatePrefix(e.X, stateVars, prefix)
+		if e.Post {
+			return x + "++"
+		}
+		return t.mapOp(e.Op) + x
+		
+	case *ast.TemplateString:
+		// 模板字符串：`Hello ${name}!`
+		// Parts 是字符串部分，Exprs 是 ${} 中的表达式
+		// 需要递归处理 Exprs 中的表达式
+		
+		// 创建新的表达式列表，对每个表达式添加状态前缀
+		newExprs := make([]ast.Expr, len(e.Exprs))
+		for i, exprPart := range e.Exprs {
+			newExprs[i] = t.createStateAwareExpr(exprPart, stateVars, prefix)
+		}
+		
+		// 使用普通 transformExpr 来生成最终的 Go 代码（fmt.Sprintf）
+		// 但使用我们处理过的 Exprs
+		newTemplate := &ast.TemplateString{Parts: e.Parts, Exprs: newExprs, P: e.P}
+		return t.transformExpr(newTemplate)
+		
+	default:
+		return t.transformExpr(expr)
+	}
+}
+
+// createStateAwareExpr 创建状态感知的表达式（递归处理）
+func (t *Transformer) createStateAwareExpr(expr ast.Expr, stateVars []FxStateVar, prefix string) ast.Expr {
+	switch e := expr.(type) {
+	case *ast.Ident:
+		if containsStateVar(stateVars, e.Name) {
+			// 是状态变量，返回带前缀的新标识符
+			return &ast.Ident{Name: prefix + e.Name}
+		}
+		return e
+		
+	case *ast.BinaryExpr:
+		// 递归处理左右操作数
+		return &ast.BinaryExpr{
+			X:  t.createStateAwareExpr(e.X, stateVars, prefix),
+			Op: e.Op,
+			Y:  t.createStateAwareExpr(e.Y, stateVars, prefix),
+		}
+		
+	case *ast.UnaryExpr:
+		// 递归处理操作数
+		return &ast.UnaryExpr{
+			Op:   e.Op,
+			X:    t.createStateAwareExpr(e.X, stateVars, prefix),
+			Post: e.Post,
+		}
+		
+	default:
+		// 其他表达式保持不变
+		return expr
+	}
+}
+
+// checkTSXForMutations 检查 TSX 中的事件处理器是否修改了状态
+func (t *Transformer) checkTSXForMutations(tsx *ast.TSXElement, stateVars []FxStateVar) {
+	for _, attr := range tsx.Attributes {
+		// 检查事件处理器属性（onClick, onChange 等）
+		if strings.HasPrefix(attr.Name, "on") {
+			if funcLit, ok := attr.Value.(*ast.FunctionLiteral); ok {
+				// 检查这个回调函数是否修改了状态
+				if t.hasStateMutation(funcLit.Body, stateVars) {
+					// 标记这个回调需要插入 RequestUpdate()
+					// TODO: 在转换时处理
+				}
+			}
+		}
+	}
+	
+	// 递归检查子元素
+	for _, child := range tsx.Children {
+		if childTSX, ok := child.(*ast.TSXElement); ok {
+			t.checkTSXForMutations(childTSX, stateVars)
+		}
+	}
+}
+
+// hasStateMutation 检查函数体中是否修改了状态变量
+func (t *Transformer) hasStateMutation(body *ast.BlockStmt, stateVars []FxStateVar) bool {
+	if body == nil {
+		return false
+	}
+	
+	for _, stmt := range body.List {
+		if t.stmtMutatesState(stmt, stateVars) {
+			return true
+		}
+	}
+	
+	return false
+}
+
+// stmtMutatesState 检查语句是否修改了状态变量
+func (t *Transformer) stmtMutatesState(stmt ast.Stmt, stateVars []FxStateVar) bool {
+	switch s := stmt.(type) {
+	case *ast.AssignStmt:
+		// 检查赋值语句的左边：count = 1, count += 1 等
+		if ident, ok := s.LHS.(*ast.Ident); ok {
+			return containsStateVar(stateVars, ident.Name)
+		}
+		
+	case *ast.ExprStmt:
+		// 检查表达式语句：count++
+		if unary, ok := s.X.(*ast.UnaryExpr); ok {
+			// 检查是否是后置自增或自减（Post = true 表示后置运算符）
+			if unary.Post {
+				if ident, ok := unary.X.(*ast.Ident); ok {
+					return containsStateVar(stateVars, ident.Name)
+				}
+			}
+		}
+		
+	case *ast.BlockStmt:
+		// 递归检查块中的语句
+		for _, innerStmt := range s.List {
+			if t.stmtMutatesState(innerStmt, stateVars) {
+				return true
+			}
+		}
+		
+	case *ast.IfStmt:
+		// 检查 if 块
+		if s.Body != nil && t.stmtMutatesState(s.Body, stateVars) {
+			return true
+		}
+		// 检查 else 块
+		if s.Else != nil {
+			if elseBody, ok := s.Else.(*ast.BlockStmt); ok {
+				if t.stmtMutatesState(elseBody, stateVars) {
+					return true
+				}
+			}
+		}
+		
+	case *ast.ForStmt:
+		// 检查 for 循环体
+		if s.Body != nil && t.stmtMutatesState(s.Body, stateVars) {
+			return true
+		}
+	}
+	
+	return false
+}
+
+// containsStateVar 检查变量名是否在状态变量列表中
+func containsStateVar(stateVars []FxStateVar, name string) bool {
+	for _, sv := range stateVars {
+		if sv.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 // collectStateVars 收集函数体中的状态变量（let 声明）
@@ -66,8 +421,8 @@ func (t *Transformer) collectStateVars(body *ast.BlockStmt) []FxStateVar {
 			varName := varDecl.Name
 			varType := "interface{}"
 			varValue := "nil"
-			isState := false
-			stateType := ""
+			isState := true  // let 声明的都是状态
+			isProp := false  // 不是 props
 			
 			if varDecl.Type != nil {
 				varType = t.transformType(varDecl.Type)
@@ -75,30 +430,6 @@ func (t *Transformer) collectStateVars(body *ast.BlockStmt) []FxStateVar {
 			
 			if varDecl.Value != nil {
 				varValue = t.transformExpr(varDecl.Value)
-				
-				// 检查是否是 gui.NewState(...) 调用
-				if callExpr, ok := varDecl.Value.(*ast.CallExpr); ok {
-					if memberExpr, ok := callExpr.Fun.(*ast.MemberExpr); ok {
-						if memberExpr.Name == "NewState" {
-							isState = true
-							varType = fmt.Sprintf("*gui.State[%s]", varType)
-							
-							// 提取 State 的内部类型
-							if len(callExpr.Args) > 0 {
-								switch callExpr.Args[0].(type) {
-								case *ast.IntLit:
-									stateType = "int"
-								case *ast.StringLit:
-									stateType = "string"
-								case *ast.BoolLit:
-									stateType = "bool"
-								case *ast.FloatLit:
-									stateType = "float64"
-								}
-							}
-						}
-					}
-				}
 			}
 			
 			stateVars = append(stateVars, FxStateVar{
@@ -106,7 +437,8 @@ func (t *Transformer) collectStateVars(body *ast.BlockStmt) []FxStateVar {
 				Type:      varType,
 				Value:     varValue,
 				IsState:   isState,
-				StateType: stateType,
+				IsProp:    isProp,
+				StateType: "",
 			})
 		}
 	}
@@ -124,6 +456,7 @@ func (t *Transformer) analyzeDependencies(body *ast.BlockStmt, stateVars []FxSta
 			VarName:   sv.Name,
 			UsedIn:    make([]string, 0),
 			MutatedIn: make([]string, 0),
+			NeedsUpdate: false,
 		})
 	}
 	
@@ -137,6 +470,13 @@ func (t *Transformer) analyzeDependencies(body *ast.BlockStmt, stateVars []FxSta
 			if returnStmt.Result != nil {
 				t.analyzeTSXForDependencies(returnStmt.Result, stateVars, &dependencies)
 			}
+		}
+	}
+	
+	// 标记需要自动更新的变量
+	for i := range dependencies {
+		if len(dependencies[i].MutatedIn) > 0 {
+			dependencies[i].NeedsUpdate = true
 		}
 	}
 	
@@ -168,17 +508,15 @@ func (t *Transformer) analyzeExprForDependencies(expr ast.Expr, stateVars []FxSt
 			t.analyzeExprForDependencies(subExpr, stateVars, deps)
 		}
 		
-	case *ast.CallExpr:
-		// 检查是否是事件处理器（如 onClick）
-		if ident, ok := e.Fun.(*ast.Ident); ok {
-			if ident.Name == "RequestUpdate" {
-				// 找到了 RequestUpdate() 调用，需要分析前面的语句
-				// 这里简化处理，假设所有状态变量都可能被修改
-				for i := range *deps {
-					(*deps)[i].MutatedIn = append((*deps)[i].MutatedIn, "event_handler")
-				}
+	case *ast.FunctionLiteral:
+		// 箭头函数，检查函数体中是否修改了状态变量
+		if e.Body != nil {
+			for _, stmt := range e.Body.List {
+				t.checkMutationInStmt(stmt, stateVars, deps)
 			}
 		}
+		
+	case *ast.CallExpr:
 		// 分析参数
 		for _, arg := range e.Args {
 			t.analyzeExprForDependencies(arg, stateVars, deps)
@@ -198,6 +536,31 @@ func (t *Transformer) analyzeExprForDependencies(expr ast.Expr, stateVars []FxSt
 		
 	case *ast.UnaryExpr:
 		t.analyzeExprForDependencies(e.X, stateVars, deps)
+	}
+}
+
+// checkMutationInStmt 检查语句中是否修改了状态变量
+func (t *Transformer) checkMutationInStmt(stmt ast.Stmt, stateVars []FxStateVar, deps *[]FxDependency) {
+	switch s := stmt.(type) {
+	case *ast.AssignStmt:
+		// 检查赋值语句的左边
+		if ident, ok := s.LHS.(*ast.Ident); ok {
+			for i, sv := range stateVars {
+				if ident.Name == sv.Name {
+					(*deps)[i].MutatedIn = append((*deps)[i].MutatedIn, "assignment")
+				}
+			}
+		}
+		
+	case *ast.ExprStmt:
+		// 检查表达式语句
+		t.analyzeExprForDependencies(s.X, stateVars, deps)
+		
+	case *ast.VarDecl:
+		// 变量声明
+		if s.Value != nil {
+			t.analyzeExprForDependencies(s.Value, stateVars, deps)
+		}
 	}
 }
 
@@ -227,15 +590,15 @@ func (t *Transformer) generateFxComponentStruct(name string, stateVars []FxState
 	return sb.String()
 }
 
-// generateFxConstructor 生成 FX 组件构造函数
-func (t *Transformer) generateFxConstructor(f *ast.FuncDecl, componentName string, stateVars []FxStateVar, deps []FxDependency) string {
+// generateFxConstructorWithMutationCheck 生成 FX 组件构造函数（带状态修改检测）
+func (t *Transformer) generateFxConstructorWithMutationCheck(f *ast.FuncDecl, componentName string, stateVars []FxStateVar, deps []FxDependency) string {
 	var sb strings.Builder
 	
 	// 构造函数签名
 	sb.WriteString(fmt.Sprintf("// New%s 创建 %s 组件\n", componentName, componentName))
 	sb.WriteString(fmt.Sprintf("func New%s(", componentName))
 	
-	// 添加函数参数
+	// 添加函数参数（props）
 	params := make([]string, 0)
 	for _, param := range f.Params {
 		paramName := param.Name
@@ -268,40 +631,15 @@ func (t *Transformer) generateFxConstructor(f *ast.FuncDecl, componentName strin
 	sb.WriteString(fmt.Sprintf("%s}\n", indentStr))
 	sb.WriteString("\n")
 	
-	// 2. 生成 TSX 渲染代码
+	// 2. 生成 TSX 渲染代码（带状态修改检测）
 	if f.Body != nil {
 		for _, stmt := range f.Body.List {
 			if returnStmt, ok := stmt.(*ast.ReturnStmt); ok {
 				if returnStmt.Result != nil {
 					if tsx, ok := returnStmt.Result.(*ast.TSXElement); ok {
-						// 生成 TSX 组件创建代码
+						// 生成 TSX 组件创建代码（带状态修改检测）
 						sb.WriteString(fmt.Sprintf("%s// 创建根组件\n", indentStr))
-						sb.WriteString(fmt.Sprintf("%sc.rootComponent = %s\n", indentStr, t.transformTSXForFx(tsx, "c", stateVars, deps)))
-						sb.WriteString("\n")
-						
-						// 生成动态部分和状态订阅
-						sb.WriteString(fmt.Sprintf("%s// 创建动态部分\n", indentStr))
-						sb.WriteString(fmt.Sprintf("%sc.dynamicParts = make([]gui.TemplatePart, 0)\n", indentStr))
-						
-						// 为每个响应式状态创建订阅
-						for _, sv := range stateVars {
-							if sv.IsState {
-								sb.WriteString(fmt.Sprintf("%s%s.%s.Subscribe(func() {\n", indentStr, strings.Title(sv.Name), "Set"))
-								sb.WriteString(fmt.Sprintf("%s    // 状态 %s 变化时自动更新\n", indentStr, sv.Name))
-								sb.WriteString(fmt.Sprintf("%s    c.RequestUpdate()\n", indentStr))
-								sb.WriteString(fmt.Sprintf("%s})\n", indentStr))
-							}
-						}
-						sb.WriteString("\n")
-						
-						// 为每个依赖的状态变量创建更新函数
-						for _, dep := range deps {
-							if len(dep.UsedIn) > 0 {
-								sb.WriteString(fmt.Sprintf("%sc.dynamicParts = append(c.dynamicParts, gui.NewTextPart(nil, func() string {\n", indentStr))
-								sb.WriteString(fmt.Sprintf("%s    return fmt.Sprintf(\"%%v\", c.%s.Get())\n", indentStr, strings.Title(dep.VarName)))
-								sb.WriteString(fmt.Sprintf("%s}))\n", indentStr))
-							}
-						}
+						sb.WriteString(fmt.Sprintf("%sc.rootComponent = %s\n", indentStr, t.transformTSXWithMutationCheck(tsx, "c", stateVars)))
 						sb.WriteString("\n")
 					}
 				}
@@ -309,14 +647,27 @@ func (t *Transformer) generateFxConstructor(f *ast.FuncDecl, componentName strin
 		}
 	}
 	
-	// 3. 设置模板结果
+	// 3. 创建动态部分
+	sb.WriteString(fmt.Sprintf("%s// 创建动态部分\n", indentStr))
+	sb.WriteString(fmt.Sprintf("%sc.dynamicParts = make([]gui.TemplatePart, 0)\n", indentStr))
+	
+	for _, dep := range deps {
+		if len(dep.UsedIn) > 0 {
+			sb.WriteString(fmt.Sprintf("%sc.dynamicParts = append(c.dynamicParts, gui.NewTextPart(nil, func() string {\n", indentStr))
+			sb.WriteString(fmt.Sprintf("%s    return fmt.Sprintf(\"%%v\", c.%s)\n", indentStr, strings.Title(dep.VarName)))
+			sb.WriteString(fmt.Sprintf("%s}))\n", indentStr))
+		}
+	}
+	sb.WriteString("\n")
+	
+	// 4. 设置模板结果
 	sb.WriteString(fmt.Sprintf("%sc.SetTemplateResult(&gui.TemplateResult{\n", indentStr))
 	sb.WriteString(fmt.Sprintf("%s    StaticParts: []gui.Component{c.rootComponent},\n", indentStr))
 	sb.WriteString(fmt.Sprintf("%s    DynamicParts: c.dynamicParts,\n", indentStr))
 	sb.WriteString(fmt.Sprintf("%s})\n", indentStr))
 	sb.WriteString("\n")
 	
-	// 4. 返回组件
+	// 5. 返回组件
 	sb.WriteString(fmt.Sprintf("%sreturn c\n", indentStr))
 	
 	t.indent--

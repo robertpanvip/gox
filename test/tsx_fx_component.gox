@@ -1,17 +1,17 @@
 import "github.com/gox-lang/gox/gui"
 
 fx func Counter() {
-    let count = gui.NewState(0)      // 响应式状态
-    let name = gui.NewState("World") // 响应式状态
+    let count = 0
+    let name = "World"
     
     return <div style={{padding: "20px", flexDirection: "column"}}>
-        <label text={`Hello ${name.Get()}!`} fontSize={16} />
-        <label text={`Count: ${count.Get()}`} fontSize={16} />
+        <label text={`Hello ${name}!`} fontSize={16} />
+        <label text={`Count: ${count}`} fontSize={16} />
         <button text="Increment" onClick={() => {
-            count.Set(count.Get() + 1)  // 自动触发更新
+            count++
         }} />
         <button text="Change Name" onClick={() => {
-            name.Set("Gopher")  // 自动触发更新
+            name = "Gopher"
         }} />
     </div>
 }
