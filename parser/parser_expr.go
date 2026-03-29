@@ -219,12 +219,9 @@ case token.STRING:
 		p.nextToken()
 		return &ast.StringLit{Value: strings.Trim(val, `"`)}
 	case token.TEMPLATE:
-		fmt.Printf("DEBUG parseExpr TEMPLATE: About to call parseTemplateString with %q\n", p.curTok.Literal)
 		val := p.curTok.Literal
 		p.nextToken()
-		result := p.parseTemplateString(val)
-		fmt.Printf("DEBUG parseExpr TEMPLATE: parseTemplateString returned %T\n", result)
-		return result
+		return p.parseTemplateString(val)
 case token.TRUE, token.FALSE:
 val := p.curTok.Kind == token.TRUE
 p.nextToken()
@@ -563,8 +560,6 @@ return fields
 }
 
 func (p *Parser) parseTemplateString(val string) ast.Expr {
-	fmt.Printf("DEBUG parseTemplateString: val=%q\n", val)
-debugTemplateString(val)
 parts := make([]string, 0)
 exprs := make([]ast.Expr, 0)
 
@@ -606,34 +601,6 @@ start = exprStart + endIdx + 1
 return &ast.TemplateString{Parts: parts, Exprs: exprs}
 }
 
-// Debug function to print template string parsing
-func debugTemplateString(val string) {
-	content := strings.Trim(val, "`\"")
-	parts := make([]string, 0)
-	start := 0
-	for {
-		idx := strings.Index(content[start:], "${")
-		if idx == -1 {
-			if start < len(content) {
-				parts = append(parts, content[start:])
-			}
-			break
-		}
-		parts = append(parts, content[start:start+idx])
-		exprStart := start + idx + 2
-		endIdx := strings.Index(content[exprStart:], "}")
-		if endIdx == -1 {
-			parts = append(parts, "${"+content[exprStart:])
-			break
-		}
-		exprStr := content[exprStart : exprStart+endIdx]
-		_ = exprStr
-		start = exprStart + endIdx + 1
-	}
-	fmt.Printf("DEBUG: Template %q -> Parts=%v\n", val, parts)
-}
-
 func init() {
-	// Enable debug by calling debugTemplateString
-	_ = debugTemplateString
+	// Placeholder for future initialization
 }
