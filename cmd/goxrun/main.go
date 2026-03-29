@@ -6,7 +6,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/gox-lang/gox/lexer"
 	"github.com/gox-lang/gox/parser"
@@ -79,7 +78,8 @@ func main() {
 	// Use the same directory as the source file for build (to use existing go.mod)
 	srcDir := filepath.Dir(srcFile)
 	baseName := strings.TrimSuffix(filepath.Base(srcFile), filepath.Ext(srcFile))
-	tempFile := filepath.Join(srcDir, fmt.Sprintf("%s_gox_temp_%d.go", baseName, time.Now().UnixNano()))
+	// Use fixed temp filename to avoid accumulation (overwrite previous runs)
+	tempFile := filepath.Join(srcDir, fmt.Sprintf("%s_gox_temp.go", baseName))
 
 	err = os.WriteFile(tempFile, []byte(goCode), 0644)
 	if err != nil {
