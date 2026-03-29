@@ -197,7 +197,8 @@ P: ast.Position{Line: pos.Line, Col: pos.Col},
 }
 
 // Check if this is a struct literal: Type{}
-if p.curTok.Kind == token.LBRACE {
+// Only parse as struct literal if the type name starts with uppercase (convention)
+if p.curTok.Kind == token.LBRACE && len(name) > 0 && name[0] >= 'A' && name[0] <= 'Z' {
 p.nextToken()
 fields := p.parseStructFields()
 return &ast.StructLit{Type: &ast.Ident{Name: name}, Fields: fields}
