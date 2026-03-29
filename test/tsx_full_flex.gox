@@ -1,0 +1,139 @@
+package main
+
+import "github.com/gox-lang/gox/gui"
+
+func Main() {
+	let app = gui.NewApp("完整 Flexbox 测试", 1000, 700)
+	
+	// 测试完整的 Flexbox 属性
+	let rootDiv = <Div style={{
+		display: "flex",
+		flexDirection: "column",
+		padding: "20px",
+		backgroundColor: "#f0f0f0",
+		borderWidth: "3px",
+		borderColor: "#333333"
+	}}>
+		// 测试 flexWrap
+		<Div style={{
+			display: "flex",
+			flexDirection: "row",
+			flexWrap: "wrap",
+			justifyContent: "flex-start",
+			alignItems: "center",
+			padding: "15px",
+			backgroundColor: "#e0e0e0",
+			borderWidth: "2px",
+			borderColor: "blue",
+			marginBottom: "20px"
+		}}>
+			<Div style={{
+				width: "150px",
+				height: "50px",
+				backgroundColor: "#ff6b6b",
+				margin: "5px",
+				padding: "10px"
+			}}>
+				<Label text="Item 1" fontSize={14} textColor={gui.ColorWhite} />
+			</Div>
+			<Div style={{
+				width: "150px",
+				height: "50px",
+				backgroundColor: "#4ecdc4",
+				margin: "5px",
+				padding: "10px"
+			}}>
+				<Label text="Item 2" fontSize={14} textColor={gui.ColorWhite} />
+			</Div>
+			<Div style={{
+				width: "150px",
+				height: "50px",
+				backgroundColor: "#45b7d1",
+				margin: "5px",
+				padding: "10px"
+			}}>
+				<Label text="Item 3" fontSize={14} textColor={gui.ColorWhite} />
+			</Div>
+			<Div style={{
+				width: "150px",
+				height: "50px",
+				backgroundColor: "#96ceb4",
+				margin: "5px",
+				padding: "10px"
+			}}>
+				<Label text="Item 4" fontSize={14} textColor={gui.ColorWhite} />
+			</Div>
+		</Div>
+		
+		// 测试 justifyContent 和 alignItems
+		<Div style={{
+			display: "flex",
+			flexDirection: "row",
+			justifyContent: "space-between",
+			alignItems: "center",
+			padding: "20px",
+			backgroundColor: "#d0d0d0",
+			borderWidth: "2px",
+			borderColor: "green",
+			marginBottom: "20px"
+		}}>
+			<Div style={{
+				padding: "15px",
+				backgroundColor: "#ffcc00"
+			}}>
+				<Label text="Left" fontSize={16} textColor={gui.ColorBlack} />
+			</Div>
+			<Div style={{
+				padding: "15px",
+				backgroundColor: "#ff9900"
+			}}>
+				<Label text="Center" fontSize={16} textColor={gui.ColorBlack} />
+			</Div>
+			<Div style={{
+				padding: "15px",
+				backgroundColor: "#ff6600"
+			}}>
+				<Label text="Right" fontSize={16} textColor={gui.ColorBlack} />
+			</Div>
+		</Div>
+		
+		// 测试 flexGrow
+		<Div style={{
+			display: "flex",
+			flexDirection: "row",
+			padding: "20px",
+			backgroundColor: "#c0c0c0",
+			borderWidth: "2px",
+			borderColor: "red"
+		}}>
+			<Div style={{
+				flexGrow: 1,
+				padding: "20px",
+				backgroundColor: "#dda0dd",
+				marginRight: "10px"
+			}}>
+				<Label text="Flex 1" fontSize={14} textColor={gui.ColorWhite} />
+			</Div>
+			<Div style={{
+				flexGrow: 2,
+				padding: "20px",
+				backgroundColor: "#9370db",
+				marginRight: "10px"
+			}}>
+				<Label text="Flex 2" fontSize={14} textColor={gui.ColorWhite} />
+			</Div>
+			<Div style={{
+				flexGrow: 3,
+				padding: "20px",
+				backgroundColor: "#6a5acd"
+			}}>
+				<Label text="Flex 3" fontSize={14} textColor={gui.ColorWhite} />
+			</Div>
+		</Div>
+	</Div>
+	
+	app.Root.AddChild(rootDiv)
+	
+	println("Starting Full Flexbox Test...")
+	app.Run()
+}
