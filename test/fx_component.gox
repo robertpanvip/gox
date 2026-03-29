@@ -9,6 +9,7 @@ fx func Counter() {
 }
 
 func Main() {
-    let _counter = NewCounter()
+    let counter = NewCounter()
+    _ = counter  // 使用空白标识符避免未使用错误
     println("FX Component Test")
 }
