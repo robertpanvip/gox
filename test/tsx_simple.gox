@@ -1,0 +1,10 @@
+package main
+
+import "github.com/gox-lang/gox/gui"
+
+func Main() {
+	let app = gui.NewApp("TSX Test 1", 800, 600)
+	let label = <Label text="TSX Component Test" size={20} color={gui.ColorBlue} />
+	app.Root.AddChild(label)
+	app.Run()
+}

@@ -1,0 +1,20 @@
+package main
+
+import "github.com/gox-lang/gox/gui"
+
+func Main() {
+	// 测试用例 1: 基础 TSX 组件
+	let app = gui.NewApp("TSX Test 1: Basic Components", 800, 600)
+	
+	// 使用 TSX 语法创建组件
+	let titleLabel = <Label text="TSX Component Test" size={20} color={gui.ColorBlue} />
+	titleLabel.SetRect({X: 50, Y: 50, Width: 300, Height: 30})
+	app.Root.AddChild(titleLabel)
+	
+	let descLabel = <Label text="This is a TSX component!" size={16} color={gui.ColorGreen} />
+	descLabel.SetRect({X: 50, Y: 100, Width: 400, Height: 30})
+	app.Root.AddChild(descLabel)
+	
+	println("Running TSX Test 1...")
+	app.Run()
+}

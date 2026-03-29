@@ -1,85 +1,78 @@
 package gui
 
 import (
-    "github.com/fogleman/gg"
+	"github.com/hajimehoshi/ebiten/v2"
+	"github.com/hajimehoshi/ebiten/v2/text"
+	"github.com/hajimehoshi/ebiten/v2/vector"
+	"golang.org/x/image/font/basicfont"
 )
 
 // ButtonProps Button 组件的属性
 type ButtonProps struct {
-    Text       string
-    FontSize   float64
-    BgColor    Color
-    TextColor  Color
-    HoverColor Color
-    OnClick    func()
+	Text      string
+	FontSize  float64
+	TextColor Color
+	BackColor Color
 }
 
 // Button 按钮组件
 type Button struct {
-    BaseComponent
-    Props     ButtonProps
-    IsHovered bool
+	BaseComponent
+	Props       ButtonProps
+	Hovered     bool
+	OnClickFunc func()
 }
 
-// NewButton 创建 Button 组件 (TSX 风格)
+// NewButton 创建 Button 组件
 func NewButton(props ButtonProps) *Button {
-    button := &Button{
-        Props: props,
-        Visible: true,
-        IsHovered: false,
-    }
-    // 设置默认颜色
-    if props.BgColor.A == 0 {
-        button.Props.BgColor = ColorLightGray
-    }
-    if props.TextColor.A == 0 {
-        button.Props.TextColor = ColorBlack
-    }
-    if props.HoverColor.A == 0 {
-        button.Props.HoverColor = NewColor(200, 200, 200, 255)
-    }
-    return button
+	return &Button{
+		Props: props,
+		BaseComponent: BaseComponent{
+			Visible: true,
+		},
+		Hovered: false,
+	}
 }
 
-func (b *Button) Render(dc *gg.Context) {
-    if !b.Visible {
-        return
-    }
-    
-    // 绘制背景
-    if b.IsHovered {
-        dc.SetColor(b.Props.HoverColor.ToGoColor())
-    } else {
-        dc.SetColor(b.Props.BgColor.ToGoColor())
-    }
-    dc.DrawRectangle(float64(b.Rect.X), float64(b.Rect.Y), float64(b.Rect.Width), float64(b.Rect.Height))
-    dc.Fill()
-    
-    // 绘制边框
-    dc.SetColor(ColorBlack.ToGoColor())
-    dc.SetLineWidth(1)
-    dc.DrawRectangle(float64(b.Rect.X), float64(b.Rect.Y), float64(b.Rect.Width), float64(b.Rect.Height))
-    dc.Stroke()
-    
-    // 绘制文字
-    dc.SetColor(b.Props.TextColor.ToGoColor())
-    dc.LoadFontFace("Arial", b.Props.FontSize)
-    
-    // 文字居中
-    textWidth, _ := dc.MeasureString(b.Props.Text)
-    textX := float64(b.Rect.X) + float64(b.Rect.Width)/2 - textWidth/2
-    textY := float64(b.Rect.Y) + float64(b.Rect.Height)/2 + b.Props.FontSize/3
-    dc.DrawString(b.Props.Text, textX, textY)
+// SetOnClick 设置点击事件处理函数
+func (b *Button) SetOnClick(handler func()) {
+	b.OnClickFunc = handler
 }
 
+// Render 渲染按钮
+func (b *Button) Render(screen *ebiten.Image) {
+	if !b.IsVisible() {
+		return
+	}
+
+	// 绘制按钮背景
+	bgColor := b.Props.BackColor
+	if b.Hovered {
+		// 悬停时变亮
+		bgColor = ColorLightGray
+	}
+	vector.DrawFilledRect(screen, float32(b.Rect.X), float32(b.Rect.Y), float32(b.Rect.Width), float32(b.Rect.Height), bgColor.ToGoColor(), true)
+
+	// 绘制按钮文字
+	textX := b.Rect.X + 5
+	textY := b.Rect.Y + int(b.Props.FontSize) + 5
+	text.Draw(screen, b.Props.Text, basicfont.Face7x13, textX, textY, b.Props.TextColor.ToGoColor())
+}
+
+// OnClick 处理点击事件
 func (b *Button) OnClick(x, y int) {
-    if b.Props.OnClick != nil {
-        b.Props.OnClick()
-    }
+	if b.OnClickFunc != nil {
+		b.OnClickFunc()
+	}
 }
 
+// OnMouseMove 处理鼠标移动事件
 func (b *Button) OnMouseMove(x, y int) {
-    // 检查鼠标是否在按钮上
-    b.IsHovered = (x >= b.Rect.X && x <= b.Rect.X+b.Rect.Width &&
-                   y >= b.Rect.Y && y <= b.Rect.Y+b.Rect.Height)
+	// 检查鼠标是否在按钮上
+	if x >= b.Rect.X && x <= b.Rect.X+b.Rect.Width &&
+		y >= b.Rect.Y && y <= b.Rect.Y+b.Rect.Height {
+		b.Hovered = true
+	} else {
+		b.Hovered = false
+	}
 }
