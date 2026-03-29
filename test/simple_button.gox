@@ -1,0 +1,17 @@
+import "github.com/gox-lang/gox/gui"
+
+func Main() {
+    // 创建应用
+    let app = gui.NewApp("Simple Button Test", 800, 600)
+    
+    // 直接创建 Button
+    let button = gui.NewButton(gui.ButtonProps{
+        Text: "Click Me"
+    })
+    
+    // 添加到根组件
+    app.Root.AddChild(button)
+    
+    // 运行
+    app.Run()
+}

@@ -219,6 +219,8 @@ func (t *Transformer) transformExpr(expr ast.Expr) string {
 				format += strings.ReplaceAll(part, "%", "%%")
 			}
 		}
+		// Add fmt import when using fmt.Sprintf
+		t.addImport("fmt", "")
 		return fmt.Sprintf(`fmt.Sprintf("%s", %s)`, format, strings.Join(args, ", "))
 
 	case *ast.BoolLit:

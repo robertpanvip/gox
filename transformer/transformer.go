@@ -16,16 +16,13 @@ type Transformer struct {
 }
 
 func New() *Transformer {
-	t := &Transformer{
+	return &Transformer{
 		indent:      0,
 		extendFuncs: make(map[string][]*ast.FuncDecl),
 		imports:     make(map[string]string),
 		funcTypes:   make(map[string][]*ast.FuncParam),
 		fxFuncs:     make([]*ast.FuncDecl, 0),
 	}
-	// Always add fmt package as it's used for string formatting
-	t.addImport("fmt", "")
-	return t
 }
 
 func (t *Transformer) addImport(path, sourceType string) {
