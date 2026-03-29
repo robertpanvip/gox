@@ -4,7 +4,42 @@ import (
 	"github.com/hajimehoshi/ebiten/v2"
 )
 
-// FxComponent fx 组件接口（类似 lit-html 的 LitElement）
+// State 响应式状态包装器（类似 Solid.js 的 signal）
+type State[T any] struct {
+	value    T
+	updaters []func()
+}
+
+// NewState 创建响应式状态
+func NewState[T any](initialValue T) *State[T] {
+	return &State[T]{
+		value:    initialValue,
+		updaters: make([]func(), 0),
+	}
+}
+
+// Get 获取状态值（并注册依赖）
+func (s *State[T]) Get() T {
+	// TODO: 这里需要记录当前正在执行的更新函数
+	// 以便在 Set 时触发它
+	return s.value
+}
+
+// Set 设置状态值并触发更新
+func (s *State[T]) Set(newValue T) {
+	s.value = newValue
+	// 触发所有依赖这个状态的更新函数
+	for _, updater := range s.updaters {
+		updater()
+	}
+}
+
+// Subscribe 订阅状态变化
+func (s *State[T]) Subscribe(updater func()) {
+	s.updaters = append(s.updaters, updater)
+}
+
+// FxComponent fx 组件接口
 type FxComponent interface {
 	Component
 	RequestUpdate()
@@ -14,19 +49,15 @@ type FxComponent interface {
 // BaseFxComponent fx 组件基类
 type BaseFxComponent struct {
 	BaseComponent
-	templateResult *TemplateResult
+	templateResult  *TemplateResult
 	updateCallbacks []func()
 }
 
-// RequestUpdate 请求更新（类似 lit-html 的 requestUpdate）
-// 当状态变化时调用此方法，会触发所有动态部分的更新
+// RequestUpdate 请求更新
 func (b *BaseFxComponent) RequestUpdate() {
-	// 更新模板中的所有动态部分
 	if b.templateResult != nil {
 		b.templateResult.Update()
 	}
-	
-	// 调用所有更新回调
 	for _, cb := range b.updateCallbacks {
 		cb()
 	}
@@ -52,8 +83,6 @@ func (b *BaseFxComponent) Render(screen *ebiten.Image) {
 	if !b.IsVisible() {
 		return
 	}
-	
-	// 渲染模板结果
 	if b.templateResult != nil {
 		b.templateResult.Render(screen)
 	}

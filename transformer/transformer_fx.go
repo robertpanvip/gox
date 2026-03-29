@@ -9,9 +9,11 @@ import (
 
 // FxStateVar 状态变量
 type FxStateVar struct {
-	Name  string
-	Type  string
-	Value string
+	Name      string
+	Type      string
+	Value     string
+	IsState   bool  // 是否是响应式状态（State[T]）
+	StateType string  // State 的内部类型，如 "int", "string"
 }
 
 // FxDependency 依赖关系
@@ -61,10 +63,11 @@ func (t *Transformer) collectStateVars(body *ast.BlockStmt) []FxStateVar {
 	
 	for _, stmt := range body.List {
 		if varDecl, ok := stmt.(*ast.VarDecl); ok {
-			// 收集 let 声明的变量
 			varName := varDecl.Name
 			varType := "interface{}"
 			varValue := "nil"
+			isState := false
+			stateType := ""
 			
 			if varDecl.Type != nil {
 				varType = t.transformType(varDecl.Type)
@@ -72,12 +75,38 @@ func (t *Transformer) collectStateVars(body *ast.BlockStmt) []FxStateVar {
 			
 			if varDecl.Value != nil {
 				varValue = t.transformExpr(varDecl.Value)
+				
+				// 检查是否是 gui.NewState(...) 调用
+				if callExpr, ok := varDecl.Value.(*ast.CallExpr); ok {
+					if memberExpr, ok := callExpr.Fun.(*ast.MemberExpr); ok {
+						if memberExpr.Name == "NewState" {
+							isState = true
+							varType = fmt.Sprintf("*gui.State[%s]", varType)
+							
+							// 提取 State 的内部类型
+							if len(callExpr.Args) > 0 {
+								switch callExpr.Args[0].(type) {
+								case *ast.IntLit:
+									stateType = "int"
+								case *ast.StringLit:
+									stateType = "string"
+								case *ast.BoolLit:
+									stateType = "bool"
+								case *ast.FloatLit:
+									stateType = "float64"
+								}
+							}
+						}
+					}
+				}
 			}
 			
 			stateVars = append(stateVars, FxStateVar{
-				Name:  varName,
-				Type:  varType,
-				Value: varValue,
+				Name:      varName,
+				Type:      varType,
+				Value:     varValue,
+				IsState:   isState,
+				StateType: stateType,
 			})
 		}
 	}
@@ -250,17 +279,27 @@ func (t *Transformer) generateFxConstructor(f *ast.FuncDecl, componentName strin
 						sb.WriteString(fmt.Sprintf("%sc.rootComponent = %s\n", indentStr, t.transformTSXForFx(tsx, "c", stateVars, deps)))
 						sb.WriteString("\n")
 						
-						// 生成动态部分
+						// 生成动态部分和状态订阅
 						sb.WriteString(fmt.Sprintf("%s// 创建动态部分\n", indentStr))
-						sb.WriteString(fmt.Sprintf("%sc.dynamicParts = t.make([]gui.TemplatePart, 0)\n", indentStr))
+						sb.WriteString(fmt.Sprintf("%sc.dynamicParts = make([]gui.TemplatePart, 0)\n", indentStr))
+						
+						// 为每个响应式状态创建订阅
+						for _, sv := range stateVars {
+							if sv.IsState {
+								sb.WriteString(fmt.Sprintf("%s%s.%s.Subscribe(func() {\n", indentStr, strings.Title(sv.Name), "Set"))
+								sb.WriteString(fmt.Sprintf("%s    // 状态 %s 变化时自动更新\n", indentStr, sv.Name))
+								sb.WriteString(fmt.Sprintf("%s    c.RequestUpdate()\n", indentStr))
+								sb.WriteString(fmt.Sprintf("%s})\n", indentStr))
+							}
+						}
+						sb.WriteString("\n")
 						
 						// 为每个依赖的状态变量创建更新函数
-						for i, dep := range deps {
+						for _, dep := range deps {
 							if len(dep.UsedIn) > 0 {
 								sb.WriteString(fmt.Sprintf("%sc.dynamicParts = append(c.dynamicParts, gui.NewTextPart(nil, func() string {\n", indentStr))
-								sb.WriteString(fmt.Sprintf("%s    return fmt.Sprintf(\"%%v\", c.%s)\n", indentStr, strings.Title(dep.VarName)))
+								sb.WriteString(fmt.Sprintf("%s    return fmt.Sprintf(\"%%v\", c.%s.Get())\n", indentStr, strings.Title(dep.VarName)))
 								sb.WriteString(fmt.Sprintf("%s}))\n", indentStr))
-								_ = i // avoid unused variable warning
 							}
 						}
 						sb.WriteString("\n")
