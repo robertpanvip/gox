@@ -46,6 +46,9 @@ func (a *App) Update() error {
 
 // Draw Ebiten draw loop
 func (a *App) Draw(screen *ebiten.Image) {
+	// 执行布局计算（在每次渲染前）
+	a.Root.DoLayout()
+	
 	// 清空屏幕（白色背景）
 	screen.Fill(ColorWhite.ToGoColor())
 

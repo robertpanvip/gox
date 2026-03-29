@@ -307,10 +307,17 @@ func (p *Parser) parseTSXElement() ast.Expr {
 					attrValue = &ast.StringLit{Value: strings.Trim(p.curTok.Literal, `"`), P: pos}
 					p.nextToken()
 				} else if p.curTok.Kind == token.LBRACE {
+					// Check if it's a nested object literal {{...}}
 					p.nextToken()
-					attrValue = p.parseExpr()
-					if p.curTok.Kind == token.RBRACE {
-						p.nextToken()
+					if p.curTok.Kind == token.LBRACE {
+						// It's {{...}}, parse as object literal
+						attrValue = p.parseObjectLiteral()
+					} else {
+						// It's single {...}, parse as expression
+						attrValue = p.parseExpr()
+						if p.curTok.Kind == token.RBRACE {
+							p.nextToken()
+						}
 					}
 				}
 			} else {
@@ -372,6 +379,78 @@ func (p *Parser) parseTSXElement() ast.Expr {
 	}
 
 	return &ast.TSXElement{TagName: tagName, Attributes: attributes, Children: children, SelfClosing: selfClosing, P: pos}
+}
+
+// parseObjectLiteral parses a JS-style object literal like {key: value, key2: value2}
+func (p *Parser) parseObjectLiteral() ast.Expr {
+	pos := ast.Position{Line: p.curTok.Line, Col: p.curTok.Col}
+	
+	// We're already at the second LBRACE {{...}
+	// Skip the second LBRACE
+	if p.curTok.Kind == token.LBRACE {
+		p.nextToken()
+	}
+	
+	// Collect all tokens until we hit the matching RBRACE
+	parts := make([]string, 0)
+	for p.curTok.Kind != token.RBRACE && p.curTok.Kind != token.EOF {
+		// Skip the inner LBRACE if present
+		if p.curTok.Kind == token.LBRACE {
+			p.nextToken()
+			continue
+		}
+		
+		// Collect field: value pairs
+		if p.curTok.Kind == token.IDENT {
+			fieldName := p.curTok.Literal
+			p.nextToken()
+			
+			// Expect colon
+			if p.curTok.Kind == token.COLON {
+				p.nextToken()
+			}
+			
+			// Get value
+			value := ""
+			if p.curTok.Kind == token.STRING {
+				value = p.curTok.Literal
+				p.nextToken()
+			} else if p.curTok.Kind == token.INT || p.curTok.Kind == token.FLOAT {
+				value = p.curTok.Literal
+				p.nextToken()
+			} else if p.curTok.Kind == token.IDENT {
+				value = p.curTok.Literal
+				p.nextToken()
+			}
+			
+			// Add to parts
+			parts = append(parts, fmt.Sprintf("%s: %s", fieldName, value))
+			
+			// Skip comma if present
+			if p.curTok.Kind == token.COMMA {
+				p.nextToken()
+			}
+		} else if p.curTok.Kind == token.COMMA {
+			p.nextToken()
+		} else if p.curTok.Kind == token.NEWLINE {
+			p.nextToken()
+		} else {
+			p.nextToken()
+		}
+	}
+	
+	// Skip the closing RBRACE
+	if p.curTok.Kind == token.RBRACE {
+		p.nextToken()
+	}
+	
+	// Skip the outer closing RBRACE (the one that closes the JSX expression)
+	if p.curTok.Kind == token.RBRACE {
+		p.nextToken()
+	}
+	
+	// Store the object literal as a TemplateString
+	return &ast.TemplateString{Parts: parts, P: pos}
 }
 
 func (p *Parser) parseFunctionLiteral() ast.Expr {

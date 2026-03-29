@@ -64,6 +64,14 @@ func main() {
 					case *ast.VarDecl:
 						fmt.Fprintf(os.Stderr, "            -> VarDecl: name=%s, Value=%T\n", v.Name, v.Value)
 						switch val := v.Value.(type) {
+						case *ast.TSXElement:
+							fmt.Fprintf(os.Stderr, "               TSXElement: tag=%s, Children=%d\n", val.TagName, len(val.Children))
+							for k, child := range val.Children {
+								fmt.Fprintf(os.Stderr, "                 Child[%d]: %T\n", k, child)
+								if childTSX, ok := child.(*ast.TSXElement); ok {
+									fmt.Fprintf(os.Stderr, "                   TSXElement: tag=%s, Children=%d\n", childTSX.TagName, len(childTSX.Children))
+								}
+							}
 						case *ast.TemplateString:
 							fmt.Fprintf(os.Stderr, "               TemplateString: Parts=%v, Exprs=%d\n", val.Parts, len(val.Exprs))
 						case *ast.StringLit:
@@ -71,23 +79,19 @@ func main() {
 						default:
 							fmt.Fprintf(os.Stderr, "               Other: %T\n", val)
 						}
-					default:
-						fmt.Fprintf(os.Stderr, "            -> Not VarDecl: %T\n", v)
-						// Check if it's ExprStmt with CallExpr
-						if es, ok := v.(*ast.ExprStmt); ok {
-							fmt.Fprintf(os.Stderr, "               ExprStmt: %T\n", es.X)
-							if ce, ok := es.X.(*ast.CallExpr); ok {
-								fmt.Fprintf(os.Stderr, "               CallExpr with %d args\n", len(ce.Args))
-								for k, arg := range ce.Args {
-									fmt.Fprintf(os.Stderr, "                 Arg %d: %T\n", k, arg)
-									if ts, ok := arg.(*ast.TemplateString); ok {
-										fmt.Fprintf(os.Stderr, "                   TemplateString: Parts=%v\n", ts.Parts)
-									} else if sl, ok := arg.(*ast.StringLit); ok {
-										fmt.Fprintf(os.Stderr, "                   StringLit: %s\n", sl.Value)
-									}
+					case *ast.ExprStmt:
+						fmt.Fprintf(os.Stderr, "            -> ExprStmt: %T\n", v.X)
+						if call, ok := v.X.(*ast.CallExpr); ok {
+							fmt.Fprintf(os.Stderr, "               CallExpr: Func=%T, Args=%d\n", call.Fun, len(call.Args))
+							for k, arg := range call.Args {
+								fmt.Fprintf(os.Stderr, "                 Arg[%d]: %T\n", k, arg)
+								if tsx, ok := arg.(*ast.TSXElement); ok {
+									fmt.Fprintf(os.Stderr, "                   TSXElement: tag=%s, Children=%d\n", tsx.TagName, len(tsx.Children))
 								}
 							}
 						}
+					default:
+						fmt.Fprintf(os.Stderr, "            -> Not VarDecl: %T\n", v)
 					}
 				}
 			}

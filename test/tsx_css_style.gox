@@ -1,0 +1,115 @@
+package main
+
+import "github.com/gox-lang/gox/gui"
+
+func Main() {
+	let app = gui.NewApp("TSX CSS Style Test", 900, 600)
+	
+	// 使用 TSX + CSS 风格样式
+	let rootDiv = <Div
+		style={gui.CSS({
+			"display": "flex",
+			"flexDirection": "column",
+			"padding": "10px",
+			"backgroundColor": "#f0f0f0",
+			"borderWidth": "3px",
+			"borderColor": "red"
+		})}
+	/>
+	rootDiv.SetRect({X: 0, Y: 0, Width: 900, Height: 600})
+	
+	// Header
+	let header = <Div
+		style={gui.CSS({
+			"display": "flex",
+			"flexDirection": "row",
+			"justifyContent": "center",
+			"padding": "15px",
+			"backgroundColor": "#ffffc8",
+			"borderWidth": "2px",
+			"borderColor": "blue"
+		})}
+	>
+		<Label text="HEADER" size={18} color={gui.ColorBlue} />
+	</Div>
+	rootDiv.AddChild(header)
+	
+	// 内容区域
+	let content = <Div
+		style={gui.CSS({
+			"display": "flex",
+			"flexDirection": "row",
+			"justifyContent": "space-around",
+			"padding": "10px",
+			"flexGrow": 1.0,
+			"backgroundColor": "#dcffe0",
+			"borderWidth": "2px",
+			"borderColor": "green"
+		})}
+	>
+		// 左侧面板
+		let left = <Div
+			style={gui.CSS({
+				"padding": "10px",
+				"flexGrow": 1.0,
+				"backgroundColor": "#ffdcef",
+				"borderWidth": "2px",
+				"borderColor": "purple"
+			})}
+		>
+			<Label text="LEFT (flex: 1)" size={14} color={gui.ColorPurple} />
+		</Div>
+		
+		// 中间面板
+		let center = <Div
+			style={gui.CSS({
+				"padding": "10px",
+				"flexGrow": 2.0,
+				"backgroundColor": "#ffebc8",
+				"borderWidth": "2px",
+				"borderColor": "orange"
+			})}
+		>
+			<Label text="CENTER (flex: 2)" size={14} color={gui.ColorOrange} />
+		</Div>
+		
+		// 右侧面板
+		let right = <Div
+			style={gui.CSS({
+				"padding": "10px",
+				"flexGrow": 1.0,
+				"backgroundColor": "#c8ffff",
+				"borderWidth": "2px",
+				"borderColor": "cyan"
+			})}
+		>
+			<Label text="RIGHT (flex: 1)" size={14} color={gui.ColorCyan} />
+		</Div>
+		
+		content.AddChild(left)
+		content.AddChild(center)
+		content.AddChild(right)
+	</Div>
+	rootDiv.AddChild(content)
+	
+	// Footer
+	let footer = <Div
+		style={gui.CSS({
+			"display": "flex",
+			"flexDirection": "row",
+			"justifyContent": "center",
+			"padding": "15px",
+			"backgroundColor": "#ffffdc",
+			"borderWidth": "2px",
+			"borderColor": "orange"
+		})}
+	>
+		<Label text="FOOTER" size={16} color={gui.ColorOrange} />
+	</Div>
+	rootDiv.AddChild(footer)
+	
+	app.Root.AddChild(rootDiv)
+	
+	println("Starting TSX CSS Style Test...")
+	app.Run()
+}

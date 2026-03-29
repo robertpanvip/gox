@@ -30,6 +30,11 @@ var (
 	ColorLightGray   = NewColor(220, 220, 220, 255)
 	ColorDarkGray    = NewColor(64, 64, 64, 255)
 	ColorTransparent = NewColor(0, 0, 0, 0)
+	ColorOrange      = NewColor(255, 165, 0, 255)
+	ColorPurple      = NewColor(128, 0, 128, 255)
+	ColorCyan        = NewColor(0, 255, 255, 255)
+	ColorYellow      = NewColor(255, 255, 0, 255)
+	ColorPink        = NewColor(255, 192, 203, 255)
 )
 
 // Rect 矩形区域
@@ -54,6 +59,12 @@ type BaseComponent struct {
 	Visible  bool
 	Children []Component
 	Parent   Component
+	
+	// Yoga 布局属性
+	Layout     *LayoutEngine
+	UseYoga    bool
+	FlexGrow   float32
+	FlexShrink float32
 }
 
 func (b *BaseComponent) GetRect() Rect {

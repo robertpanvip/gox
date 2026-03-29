@@ -1,0 +1,106 @@
+package main
+
+import "github.com/gox-lang/gox/gui"
+
+func Main() {
+	// 创建应用
+	let app = gui.NewApp("TSX Flex Test", 900, 600)
+	
+	// 根容器 - 垂直布局
+	let rootDiv = <Div 
+		style={gui.DefaultStyle().
+			SetFlexDirection(gui.FlexColumn).
+			SetPaddingAll(10).
+			SetBackgroundColor(gui.NewColor(240, 240, 240, 255)).
+			SetBorderWidth(3).
+			SetBorderColor(gui.ColorRed)}
+	/>
+	rootDiv.SetRect({X: 0, Y: 0, Width: 900, Height: 600})
+	
+	// Header
+	let header = <Div
+		style={gui.DefaultStyle().
+			SetFlexDirection(gui.FlexRow).
+			SetJustifyContent(gui.JustifyCenter).
+			SetPaddingAll(15).
+			SetBackgroundColor(gui.NewColor(255, 255, 200, 255)).
+			SetBorderWidth(2).
+			SetBorderColor(gui.ColorBlue)}
+	>
+		<Label text="HEADER (FlexRow)" size={18} color={gui.ColorBlue} />
+	</Div>
+	rootDiv.AddChild(header)
+	
+	// 内容区域 - 水平布局
+	let content = <Div
+		style={gui.DefaultStyle().
+			SetFlexDirection(gui.FlexRow).
+			SetJustifyContent(gui.JustifySpaceAround).
+			SetPaddingAll(10).
+			SetFlexGrow(1).
+			SetBackgroundColor(gui.NewColor(220, 255, 220, 255)).
+			SetBorderWidth(2).
+			SetBorderColor(gui.ColorGreen)}
+	>
+		// 左侧面板
+		let left = <Div
+			style={gui.DefaultStyle().
+				SetPaddingAll(10).
+				SetFlexGrow(1).
+				SetBackgroundColor(gui.NewColor(255, 220, 255, 255)).
+				SetBorderWidth(2).
+				SetBorderColor(gui.ColorPurple)}
+		>
+			<Label text="LEFT (FlexGrow=1)" size={14} color={gui.ColorPurple} />
+		</Div>
+		
+		// 中间面板
+		let center = <Div
+			style={gui.DefaultStyle().
+				SetPaddingAll(10).
+				SetFlexGrow(2).
+				SetBackgroundColor(gui.NewColor(255, 235, 200, 255)).
+				SetBorderWidth(2).
+				SetBorderColor(gui.ColorOrange)}
+		>
+			<Label text="CENTER (FlexGrow=2)" size={14} color={gui.ColorOrange} />
+		</Div>
+		
+		// 右侧面板
+		let right = <Div
+			style={gui.DefaultStyle().
+				SetPaddingAll(10).
+				SetFlexGrow(1).
+				SetBackgroundColor(gui.NewColor(200, 255, 255, 255)).
+				SetBorderWidth(2).
+				SetBorderColor(gui.ColorCyan)}
+		>
+			<Label text="RIGHT (FlexGrow=1)" size={14} color={gui.ColorCyan} />
+		</Div>
+		
+		content.AddChild(left)
+		content.AddChild(center)
+		content.AddChild(right)
+	</Div>
+	rootDiv.AddChild(content)
+	
+	// Footer
+	let footer = <Div
+		style={gui.DefaultStyle().
+			SetFlexDirection(gui.FlexRow).
+			SetJustifyContent(gui.JustifyCenter).
+			SetPaddingAll(15).
+			SetBackgroundColor(gui.NewColor(255, 255, 220, 255)).
+			SetBorderWidth(2).
+			SetBorderColor(gui.ColorOrange)}
+	>
+		<Label text="FOOTER (FlexRow)" size={16} color={gui.ColorOrange} />
+	</Div>
+	rootDiv.AddChild(footer)
+	
+	// 添加到应用
+	app.Root.AddChild(rootDiv)
+	
+	println("Starting TSX Flex Test...")
+	app.Run()
+}

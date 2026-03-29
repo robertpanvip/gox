@@ -2,6 +2,7 @@ package transformer
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/gox-lang/gox/ast"
@@ -93,6 +94,69 @@ func (t *Transformer) mapOp(op token.TokenKind) string {
 	default:
 		return ""
 	}
+}
+
+// transformStyleObject transforms a style object literal into &Style{...}
+func (t *Transformer) transformStyleObject(tmpl *ast.TemplateString) string {
+	// Parse the object fields from the template string parts
+	fields := make([]string, 0)
+	
+	// The template string contains the object fields
+	// Each field is like: display: "flex", flexDirection: "column", etc.
+	for i, part := range tmpl.Parts {
+		// Skip empty parts and braces
+		part = strings.TrimSpace(part)
+		if part == "" || part == "{" || part == "}" || part == "," {
+			continue
+		}
+		
+		// Parse field: value pairs
+		// Format: fieldName: value
+		parts := strings.SplitN(part, ":", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		
+		fieldName := strings.TrimSpace(parts[0])
+		fieldValue := strings.TrimSpace(parts[1])
+		
+		// Remove trailing comma from value
+		fieldValue = strings.TrimSuffix(fieldValue, ",")
+		fieldValue = strings.TrimSpace(fieldValue)
+		
+		// Convert camelCase to PascalCase for Go struct field
+		goFieldName := strings.Title(fieldName)
+		
+		// Transform the value (could be string, number, etc.)
+		goValue := t.transformStyleValue(fieldValue)
+		
+		fields = append(fields, fmt.Sprintf("%s: %s", goFieldName, goValue))
+		
+		_ = i // avoid unused variable warning
+	}
+	
+	return fmt.Sprintf("&gui.Style{%s}", strings.Join(fields, ", "))
+}
+
+// transformStyleValue transforms a style value to Go syntax
+func (t *Transformer) transformStyleValue(value string) string {
+	value = strings.TrimSpace(value)
+	
+	// If it's a string literal, keep it as-is
+	if strings.HasPrefix(value, "\"") && strings.HasSuffix(value, "\"") {
+		return value
+	}
+	
+	// If it's a number, keep it as-is
+	if _, err := strconv.Atoi(value); err == nil {
+		return value
+	}
+	if _, err := strconv.ParseFloat(value, 32); err == nil {
+		return value
+	}
+	
+	// Otherwise, return as-is (might be a constant or expression)
+	return value
 }
 func (t *Transformer) transformExpr(expr ast.Expr) string {
 	switch e := expr.(type) {
@@ -374,23 +438,44 @@ func (t *Transformer) transformExpr(expr ast.Expr) string {
 		// Transform TSX to function call with props: Component(ComponentProps{Field1: val1, Field2: val2})
 		componentName := strings.Title(e.TagName)
 		propsTypeName := fmt.Sprintf("%sProps", componentName)
-
-		// Build props struct fields
+		
+		// Check if there's a "style" attribute with object literal
+		var styleValue string
 		propsFields := make([]string, 0)
 		for _, attr := range e.Attributes {
-			fieldName := strings.Title(attr.Name)
-			fieldValue := t.transformExpr(attr.Value)
-			propsFields = append(propsFields, fmt.Sprintf("%s: %s", fieldName, fieldValue))
+			if attr.Name == "style" {
+				// Check if it's an object literal {{...}}
+				if tmpl, ok := attr.Value.(*ast.TemplateString); ok && len(tmpl.Exprs) == 0 {
+					// Parse the object literal inside {{...}}
+					// The parts should contain the object fields
+					styleValue = t.transformStyleObject(tmpl)
+				} else {
+					// Not an object literal, use as-is
+					styleValue = t.transformExpr(attr.Value)
+				}
+			} else {
+				fieldName := strings.Title(attr.Name)
+				fieldValue := t.transformExpr(attr.Value)
+				propsFields = append(propsFields, fmt.Sprintf("%s: %s", fieldName, fieldValue))
+			}
 		}
-
-		// Generate props struct
+		
+		// Generate props struct or use style
 		propsStr := ""
-		if len(propsFields) > 0 {
+		if styleValue != "" {
+			// Use style directly as first parameter
+			propsStr = styleValue
+			// If there are other props, we need to merge them
+			if len(propsFields) > 0 {
+				// For now, just use style and ignore other props
+				// TODO: Support merging style with other props
+			}
+		} else if len(propsFields) > 0 {
 			propsStr = fmt.Sprintf("%s{%s}", propsTypeName, strings.Join(propsFields, ", "))
 		} else {
 			propsStr = fmt.Sprintf("%s{}", propsTypeName)
 		}
-
+		
 		// Transform children
 		childrenStr := ""
 		if len(e.Children) > 0 {
@@ -400,7 +485,7 @@ func (t *Transformer) transformExpr(expr ast.Expr) string {
 			}
 			childrenStr = ", " + strings.Join(children, ", ")
 		}
-
+		
 		// Generate constructor call
 		constructorName := fmt.Sprintf("gui.New%s", componentName)
 		return fmt.Sprintf("%s(%s%s)", constructorName, propsStr, childrenStr)
