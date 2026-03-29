@@ -92,17 +92,8 @@ func (t *Transformer) transformTSXElementWithStateCheck(e *ast.TSXElement, state
 		} else {
 			// 特殊处理事件处理器
 			if strings.HasPrefix(attr.Name, "on") {
-				funcLit, ok := attr.Value.(*ast.FunctionLiteral)
-				if ok {
-					// 总是使用 transformEventHandler
-					fieldName := strings.Title(attr.Name)
-					fieldValue := t.transformEventHandler(funcLit, stateVars)
-					propsFields = append(propsFields, fmt.Sprintf("%s: %s", fieldName, fieldValue))
-				} else {
-					fieldName := strings.Title(attr.Name)
-					fieldValue := t.transformExpr(attr.Value)
-					propsFields = append(propsFields, fmt.Sprintf("%s: %s", fieldName, fieldValue))
-				}
+				// 事件处理器不添加到 propsFields 中，会在后面通过 setter 方法处理
+				continue
 			} else {
 				// 普通属性，使用状态感知转换
 				fieldName := strings.Title(attr.Name)
@@ -114,6 +105,7 @@ func (t *Transformer) transformTSXElementWithStateCheck(e *ast.TSXElement, state
 	
 	// 构建 props
 	propsStr := ""
+	guiPrefix := "gui."  // Props 类型和构造函数都在 gui 包中
 	if styleValue != "" {
 		// 有 style 属性，使用 style 作为第一个参数
 		propsStr = styleValue
@@ -122,12 +114,12 @@ func (t *Transformer) transformTSXElementWithStateCheck(e *ast.TSXElement, state
 			// 将 style 转换为字段添加到 props 结构中
 			// 对于 Div 组件，需要创建 DivProps{Style: &gui.Style{...}, OnClick: ...}
 			allFields := append([]string{fmt.Sprintf("Style: %s", styleValue)}, propsFields...)
-			propsStr = fmt.Sprintf("%s{%s}", propsTypeName, strings.Join(allFields, ", "))
+			propsStr = fmt.Sprintf("%s%s{%s}", guiPrefix, propsTypeName, strings.Join(allFields, ", "))
 		}
 	} else if len(propsFields) > 0 {
-		propsStr = fmt.Sprintf("%s{%s}", propsTypeName, strings.Join(propsFields, ", "))
+		propsStr = fmt.Sprintf("%s%s{%s}", guiPrefix, propsTypeName, strings.Join(propsFields, ", "))
 	} else {
-		propsStr = fmt.Sprintf("%s{}", propsTypeName)
+		propsStr = fmt.Sprintf("%s{}", guiPrefix+propsTypeName)
 	}
 	
 	// 处理子元素（递归使用状态感知转换）
@@ -146,7 +138,23 @@ func (t *Transformer) transformTSXElementWithStateCheck(e *ast.TSXElement, state
 	
 	// 生成构造函数调用
 	constructorName := fmt.Sprintf("gui.New%s", componentName)
-	return fmt.Sprintf("%s(%s%s)", constructorName, propsStr, childrenStr)
+	result := fmt.Sprintf("%s(%s%s)", constructorName, propsStr, childrenStr)
+	
+	// 如果有事件处理器，需要生成额外的代码来设置它们
+	// 对于 Button 组件，使用 SetOnClick 方法
+	for _, attr := range e.Attributes {
+		if strings.HasPrefix(attr.Name, "on") {
+			if funcLit, ok := attr.Value.(*ast.FunctionLiteral); ok {
+				// 生成 SetOnClick 调用（方法名总是包含 On）
+				eventHandlerName := strings.TrimPrefix(attr.Name, "on")
+				setterName := fmt.Sprintf("SetOn%s", eventHandlerName)
+				handlerCode := t.transformEventHandler(funcLit, stateVars)
+				result = fmt.Sprintf("func() *gui.%s { b := %s; b.%s(%s); return b }()", componentName, result, setterName, handlerCode)
+			}
+		}
+	}
+	
+	return result
 }
 
 // transformEventHandler 转换事件处理器（带 c. 前缀和 RequestUpdate()）
@@ -179,8 +187,8 @@ func (t *Transformer) transformStmtWithStatePrefix(stmt ast.Stmt, stateVars []Fx
 		// count = 1, count += 1 等
 		if ident, ok := s.LHS.(*ast.Ident); ok {
 			if containsStateVar(stateVars, ident.Name) {
-				// 是状态变量，添加前缀
-				sb.WriteString(fmt.Sprintf("    %s%s = %s\n", prefix, ident.Name, t.transformExprWithStatePrefix(s.RHS, stateVars, prefix)))
+				// 是状态变量，添加前缀（使用大写字段名）
+				sb.WriteString(fmt.Sprintf("    %s%s = %s\n", prefix, strings.Title(ident.Name), t.transformExprWithStatePrefix(s.RHS, stateVars, prefix)))
 			} else {
 				// 不是状态变量，正常转换
 				sb.WriteString(fmt.Sprintf("    %s = %s\n", s.LHS, t.transformExpr(s.RHS)))
@@ -440,6 +448,9 @@ func (t *Transformer) collectStateVars(body *ast.BlockStmt) []FxStateVar {
 			
 			if varDecl.Type != nil {
 				varType = t.transformType(varDecl.Type)
+			} else if varDecl.Value != nil {
+				// 根据初始值推断类型
+				varType = t.inferTypeFromExpr(varDecl.Value)
 			}
 			
 			if varDecl.Value != nil {
@@ -458,6 +469,22 @@ func (t *Transformer) collectStateVars(body *ast.BlockStmt) []FxStateVar {
 	}
 	
 	return stateVars
+}
+
+// inferTypeFromExpr 根据表达式推断类型
+func (t *Transformer) inferTypeFromExpr(expr ast.Expr) string {
+	switch expr.(type) {
+	case *ast.IntLit:
+		return "int"
+	case *ast.FloatLit:
+		return "float64"
+	case *ast.StringLit:
+		return "string"
+	case *ast.BoolLit:
+		return "bool"
+	default:
+		return "interface{}"
+	}
 }
 
 // analyzeDependencies 分析 TSX 中的变量依赖

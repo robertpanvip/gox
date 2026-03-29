@@ -16,13 +16,16 @@ type Transformer struct {
 }
 
 func New() *Transformer {
-	return &Transformer{
+	t := &Transformer{
 		indent:      0,
 		extendFuncs: make(map[string][]*ast.FuncDecl),
 		imports:     make(map[string]string),
 		funcTypes:   make(map[string][]*ast.FuncParam),
 		fxFuncs:     make([]*ast.FuncDecl, 0),
 	}
+	// Always add fmt package as it's used for string formatting
+	t.addImport("fmt", "")
+	return t
 }
 
 func (t *Transformer) addImport(path, sourceType string) {
@@ -150,14 +153,15 @@ func (t *Transformer) Transform(prog *ast.Program) string {
 		sb.WriteString("}\n\n")
 	}
 
-	// Output dynamically added imports
+	// Output dynamically added imports (not in source code)
+	// These are imports added by the transformer itself (e.g., "fmt")
 	if len(t.imports) > 0 {
-		importsOutput := make([]string, 0)
+		// Check which imports were not already output
 		for path := range t.imports {
-			importsOutput = append(importsOutput, fmt.Sprintf(`import "%s"`, path))
-		}
-		if len(importsOutput) > 0 {
-			sb.WriteString(strings.Join(importsOutput, "\n") + "\n\n")
+			// Only output if it's an auto-added import (source type is empty)
+			if t.imports[path] == "" {
+				sb.WriteString(fmt.Sprintf("import %q\n", path))
+			}
 		}
 	}
 
