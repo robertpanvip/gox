@@ -105,10 +105,10 @@ public func Main() {
     let a = "hello"
     let b = "world"
     let c = "hello"
-    if a == c {
+    if (a == c) {
         fmt.Println("equal")
     }
-    if a != b {
+    if (a != b) {
         fmt.Println("not equal")
     }
 }
