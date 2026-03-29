@@ -3,7 +3,7 @@ import "github.com/gox-lang/gox/gui"
 fx func Counter() {
     let count = 0
     
-    return <button text="Click" onClick={function() {
+    return <button text="Click" onClick={func() {
         count++
     }} />
 }

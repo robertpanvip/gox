@@ -544,6 +544,8 @@ func (p *Parser) isArrowFunction() bool {
 				// Found matching ), check next token
 				p.nextToken()
 				isArrow := p.curTok.Kind == token.ARROW
+				// Debug output
+				fmt.Printf("DEBUG isArrowFunction: found ), next token is %v (%d), isArrow=%t\n", p.curTok.Kind, p.curTok.Kind, isArrow)
 				// Restore lexer state
 				p.pos = savedPos
 				p.curTok = savedCurTok
@@ -564,37 +566,42 @@ func (p *Parser) isArrowFunction() bool {
 // parseArrowFunction parses arrow function: (params) => body
 func (p *Parser) parseArrowFunction() ast.Expr {
 	pos := ast.Position{Line: p.curTok.Line, Col: p.curTok.Col}
-
+	
+	fmt.Printf("DEBUG parseArrowFunction: start, curTok=%v (%d)\n", p.curTok.Kind, p.curTok.Kind)
+	
 	// Consume opening paren if present (in case isArrowFunction restored state)
 	if p.curTok.Kind == token.LPAREN {
+		fmt.Printf("DEBUG parseArrowFunction: consuming LPAREN\n")
 		p.nextToken()
 	}
-
+ 
 	// Parse params (we're already after the opening paren)
+	fmt.Printf("DEBUG parseArrowFunction: calling parseFuncParams, curTok=%v\n", p.curTok.Kind)
 	params := p.parseFuncParams()
-
+	fmt.Printf("DEBUG parseArrowFunction: after parseFuncParams, curTok=%v\n", p.curTok.Kind)
+ 
 	// Expect )
-	if p.curTok.Kind != token.RPAREN {
-		p.expect(token.RPAREN)
-	} else {
-		p.nextToken()
-	}
-
+	fmt.Printf("DEBUG parseArrowFunction: expecting RPAREN, curTok=%v\n", p.curTok.Kind)
+	p.expect(token.RPAREN)
+	fmt.Printf("DEBUG parseArrowFunction: after RPAREN, curTok=%v\n", p.curTok.Kind)
+ 
 	// Expect arrow
-	if p.curTok.Kind != token.ARROW {
-		p.errors = append(p.errors, fmt.Sprintf("expected =>, got %v", p.curTok.Kind))
-	} else {
-		p.nextToken()
-	}
-
+	fmt.Printf("DEBUG parseArrowFunction: expecting ARROW, curTok=%v\n", p.curTok.Kind)
+	p.expect(token.ARROW)
+	fmt.Printf("DEBUG parseArrowFunction: after ARROW, curTok=%v\n", p.curTok.Kind)
+ 
 	// Check if body is expression or block
 	if p.curTok.Kind == token.LBRACE {
 		// Block body
+		fmt.Printf("DEBUG parseArrowFunction: parsing block body\n")
 		block := p.parseBlock()
+		fmt.Printf("DEBUG parseArrowFunction: after block body, curTok=%v\n", p.curTok.Kind)
 		return &ast.FunctionLiteral{Params: params, Body: block, IsArrow: true, P: pos}
 	} else {
 		// Expression body
+		fmt.Printf("DEBUG parseArrowFunction: parsing expression body\n")
 		body := p.parseExpr()
+		fmt.Printf("DEBUG parseArrowFunction: after expression body, curTok=%v\n", p.curTok.Kind)
 		return &ast.FunctionLiteral{
 			Params:  params,
 			Body:    &ast.BlockStmt{List: []ast.Stmt{&ast.ReturnStmt{Result: body}}},
