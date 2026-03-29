@@ -1,0 +1,14 @@
+import "github.com/gox-lang/gox/gui"
+
+func Main() {
+	app := gui.NewApp("Lit-Style FX Component Test", 800, 600)
+	
+	// 创建 counter 组件
+	counter := gui.NewCounter()
+	counter.SetRect(gui.Rect{X: 0, Y: 0, Width: 800, Height: 600})
+	
+	app.Root.AddChild(counter)
+	
+	println("Starting Lit-Style FX Component Test...")
+	app.Run()
+}

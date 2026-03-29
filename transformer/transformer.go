@@ -12,6 +12,7 @@ type Transformer struct {
 	extendFuncs map[string][]*ast.FuncDecl
 	imports     map[string]string           // package path -> source type ("go", "gox", or "")
 	funcTypes   map[string][]*ast.FuncParam // Store function parameter types: "FuncName" -> [params]
+	fxFuncs     []*ast.FuncDecl             // FX functions to process
 }
 
 func New() *Transformer {
@@ -20,6 +21,7 @@ func New() *Transformer {
 		extendFuncs: make(map[string][]*ast.FuncDecl),
 		imports:     make(map[string]string),
 		funcTypes:   make(map[string][]*ast.FuncParam),
+		fxFuncs:     make([]*ast.FuncDecl, 0),
 	}
 }
 
@@ -93,8 +95,13 @@ func (t *Transformer) Transform(prog *ast.Program) string {
 			sb.WriteString(t.transformInterface(d))
 			sb.WriteString("\n\n")
 		case *ast.FuncDecl:
-			sb.WriteString(t.transformFunc(d))
-			sb.WriteString("\n\n")
+			if d.IsFx {
+				// Collect FX functions for later processing
+				t.fxFuncs = append(t.fxFuncs, d)
+			} else {
+				sb.WriteString(t.transformFunc(d))
+				sb.WriteString("\n\n")
+			}
 		case *ast.VarDecl:
 			// Skip global var declarations, they will be in init()
 			// Only output var declarations inside functions
@@ -108,6 +115,12 @@ func (t *Transformer) Transform(prog *ast.Program) string {
 				t.extendFuncs[typeName] = d.Methods
 			}
 		}
+	}
+	
+	// Process FX functions after all other declarations
+	for _, fxFunc := range t.fxFuncs {
+		sb.WriteString(t.transformFxFunc(fxFunc))
+		sb.WriteString("\n\n")
 	}
 
 	// Transform global variable declarations and statements in init()

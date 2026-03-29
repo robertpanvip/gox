@@ -93,6 +93,7 @@ type FuncDecl struct {
 	Params      []*FuncParam
 	ReturnType  Expr
 	Throws      bool
+	IsFx        bool        // FX function (lit-html style)
 	Body        *BlockStmt
 	P           Position
 }

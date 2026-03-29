@@ -1,0 +1,26 @@
+import "github.com/gox-lang/gox/gui"
+
+fx func Counter() {
+    let count = 0
+    let name = "World"
+    
+    return <div style={{padding: "20px", flexDirection: "column"}}>
+        <label text={`Hello ${name}!`} fontSize={16} />
+        <label text={`Count: ${count}`} fontSize={16} />
+        <button text="Increment" onClick={() => {
+            count++
+            RequestUpdate()
+        }} />
+    </div>
+}
+
+func Main() {
+    let app = gui.NewApp("FX Component Test", 800, 600)
+    
+    let counter = NewCounter()
+    counter.SetRect(gui.Rect{X: 0, Y: 0, Width: 800, Height: 600})
+    app.Root.AddChild(counter)
+    
+    println("FX Component Test starting...")
+    app.Run()
+}

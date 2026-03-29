@@ -57,6 +57,7 @@ const (
 	CONST
 	VAR
 
+	FX
 	FUNC
 	STRUCT
 	MIXED
@@ -103,6 +104,7 @@ var keywords = map[string]TokenKind{
 	"let":       LET,
 	"const":     CONST,
 	"var":       VAR,
+	"fx":        FX,
 	"func":      FUNC,
 	"struct":    STRUCT,
 	"mixed":     MIXED,
