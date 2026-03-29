@@ -27,14 +27,14 @@ fx func Counter() {
 	tfm := New()
 	result := tfm.Transform(prog)
 
-	// 检查生成的代码是否包含 count++
-	if !strings.Contains(result, "count++") {
-		t.Error("expected 'count++' in output, got:", result)
+	// 检查生成的代码是否包含 Count++（大写 C，因为是结构体字段）
+	if !strings.Contains(result, "Count++") {
+		t.Error("expected 'Count++' in output, got:", result)
 	}
 	
 	// 确保没有错误的格式（如 count++ 被错误转换）
-	if strings.Contains(result, "count++++") {
-		t.Error("incorrect transformation, got 'count++++':", result)
+	if strings.Contains(result, "Count++++") {
+		t.Error("incorrect transformation, got 'Count++++':", result)
 	}
 }
 
@@ -58,14 +58,14 @@ fx func Counter() {
 	tfm := New()
 	result := tfm.Transform(prog)
 
-	// 检查生成的代码是否包含 count--
-	if !strings.Contains(result, "count--") {
-		t.Error("expected 'count--' in output, got:", result)
+	// 检查生成的代码是否包含 Count--（大写 C，因为是结构体字段）
+	if !strings.Contains(result, "Count--") {
+		t.Error("expected 'Count--' in output, got:", result)
 	}
 	
 	// 确保没有错误的格式
-	if strings.Contains(result, "count----") {
-		t.Error("incorrect transformation, got 'count----':", result)
+	if strings.Contains(result, "Count----") {
+		t.Error("incorrect transformation, got 'Count----':", result)
 	}
 }
 
@@ -94,12 +94,12 @@ fx func Counter() {
 	tfm := New()
 	result := tfm.Transform(prog)
 
-	// 检查生成的代码是否同时包含 count++ 和 count--
-	if !strings.Contains(result, "count++") {
-		t.Error("expected 'count++' in output, got:", result)
+	// 检查生成的代码是否同时包含 Count++ 和 Count--（大写 C，因为是结构体字段）
+	if !strings.Contains(result, "Count++") {
+		t.Error("expected 'Count++' in output, got:", result)
 	}
-	if !strings.Contains(result, "count--") {
-		t.Error("expected 'count--' in output, got:", result)
+	if !strings.Contains(result, "Count--") {
+		t.Error("expected 'Count--' in output, got:", result)
 	}
 	
 	// 验证生成的代码中状态变量有正确的前缀

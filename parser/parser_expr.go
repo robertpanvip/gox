@@ -56,6 +56,11 @@ func (p *Parser) parseEquality() ast.Expr {
 func (p *Parser) parseRelational() ast.Expr {
 	x := p.parseAdditive()
 	for p.curTok.Kind == token.LESS || p.curTok.Kind == token.LESS_EQUAL || p.curTok.Kind == token.GREATER || p.curTok.Kind == token.GREATER_EQUAL {
+		// 如果是 < 且后面是 IDENT，说明这是 TSX 元素，不是小于运算符
+		if p.curTok.Kind == token.LESS && p.peekTok.Kind == token.IDENT {
+			return x
+		}
+		
 		op := p.curTok.Kind
 		p.nextToken()
 		y := p.parseAdditive()
@@ -153,10 +158,9 @@ func (p *Parser) parsePostfix() ast.Expr {
 			fields := p.parseStructFields()
 			x = &ast.StructLit{Type: typeExpr, Fields: fields}
 		case p.curTok.Kind == token.LESS:
-			if p.peekTok.Kind == token.IDENT {
-				p.nextToken()
-				return p.parseTSXElement()
-			}
+			// TSX 元素应该在语句级别处理，不在 postfix 中处理
+			// 这里直接返回，避免误解析 < 运算符
+			return x
 		case p.curTok.Kind == token.INC || p.curTok.Kind == token.DEC:
 			// 后置自增/自减运算符
 			op := p.curTok.Kind
@@ -342,8 +346,20 @@ func (p *Parser) parseTSXElement() ast.Expr {
 	children := make([]ast.Expr, 0)
 	if !selfClosing {
 		for {
+			// 检查结束标签：</TagName> 或单独的 /TagName>
 			if p.curTok.Kind == token.LESS && p.peekTok.Kind == token.SLASH {
+				// </TagName> 格式
 				p.nextToken()
+				p.nextToken()
+				if p.curTok.Kind == token.IDENT {
+					p.nextToken()
+				}
+				if p.check(token.GREATER) {
+					p.nextToken()
+				}
+				break
+			} else if p.curTok.Kind == token.SLASH && p.peekTok.Kind == token.IDENT {
+				// /TagName> 格式（自闭合标签的结束部分）
 				p.nextToken()
 				if p.curTok.Kind == token.IDENT {
 					p.nextToken()
@@ -355,10 +371,23 @@ func (p *Parser) parseTSXElement() ast.Expr {
 			}
 
 			if p.curTok.Kind == token.LESS && p.peekTok.Kind == token.IDENT {
+				// 子元素
 				p.nextToken()
 				children = append(children, p.parseTSXElement())
-			} else if p.curTok.Kind != token.EOF {
+			} else if p.curTok.Kind == token.LBRACE {
+				// 表达式子节点 {expression}
+				children = append(children, p.parseTSXAttributeExpression())
+			} else if p.curTok.Kind == token.IDENT {
+				// 文本内容（标识符）- 作为字符串字面量处理
+				name := p.curTok.Literal
+				p.nextToken()
+				children = append(children, &ast.StringLit{Value: name})
+			} else if p.curTok.Kind == token.STRING || p.curTok.Kind == token.INT || p.curTok.Kind == token.FLOAT {
+				// 文本内容（字面量）
 				children = append(children, p.parseExpr())
+			} else if p.curTok.Kind != token.EOF {
+				// 其他情况跳过
+				p.nextToken()
 			} else {
 				break
 			}

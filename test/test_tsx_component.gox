@@ -1,0 +1,106 @@
+import "github.com/gox-lang/gox/gui"
+
+// 测试 1: 基础 TSX 组件
+fx func BasicComponent() {
+    return <View id="app" class="container">
+        <Text>Hello TSX!</Text>
+    </View>
+}
+
+// 测试 2: 带状态和事件的组件
+fx func Counter() {
+    let count = 0
+    let label = "Count"
+    
+    return <View class="counter">
+        <Text>{label}: {count}</Text>
+        <button text="Increment" onClick={func() {
+            count++
+        }} />
+        <button text="Decrement" onClick={func() {
+            count--
+        }} />
+    </View>
+}
+
+// 测试 3: 嵌套组件
+fx func NestedComponent() {
+    let title = "My App"
+    let showHeader = true
+    
+    return <View id="root">
+        <Header title={title} visible={showHeader} />
+        <Content>
+            <View class="inner">
+                <Text>Nested Content</Text>
+                <Image src="logo.png" />
+            </View>
+        </Content>
+        <Footer text="Copyright 2026" />
+    </View>
+}
+
+// 测试 4: 列表渲染
+fx func ListComponent() {
+    let items = []
+    let itemName = "Item"
+    
+    return <View class="list">
+        <Text>Item List</Text>
+        <View class="item" data-name={itemName} />
+        <View class="item" data-name="Static" />
+    </View>
+}
+
+// 测试 5: 条件渲染和复杂表达式
+fx func ConditionalComponent() {
+    let isVisible = true
+    let count = 10
+    let message = "Hello"
+    
+    return <View>
+        {isVisible && <Text>Visible Content</Text>}
+        <Text>Count: {count}</Text>
+        <Text>Message: {message}</Text>
+        <button disabled={false} onClick={func() {
+            count++
+            isVisible = !isVisible
+        }} />
+    </View>
+}
+
+// 测试 6: 表单组件
+fx func FormComponent() {
+    let username = "User"
+    let email = "user@example.com"
+    let isSubmitting = false
+    
+    return <View class="form">
+        <Input placeholder="Username" value={username} />
+        <Input placeholder="Email" value={email} type="email" />
+        <button 
+            text="Submit" 
+            disabled={isSubmitting}
+            onClick={func() {
+                isSubmitting = true
+            }} 
+        />
+    </View>
+}
+
+// 测试 7: 多子元素和混合内容
+fx func MixedContentComponent() {
+    let count = 5
+    let prefix = "Count is"
+    
+    return <View>
+        <Text>Start</Text>
+        {prefix}
+        <Text>{count}</Text>
+        <Text>End</Text>
+        <View class="separator" />
+        <button text="Reset" onClick={func() {
+            count = 0
+        }} />
+    </View>
+}

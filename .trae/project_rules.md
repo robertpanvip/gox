@@ -69,12 +69,16 @@ cd e:\Soft\JetBrains\WebStorm WorkSpace\go-ts
 Get-Content test\demo_counter.go
 ```
 
-**3. 运行 GUI 示例**:
-```powershell
-# 方式 1: 使用自动化脚本
-.\runtime\go\bin\go.exe run run_tsx_gui.go
+**3. 运行 GUI 示例（显示窗口）**:
 
-# 方式 2: 手动步骤
+**方式 1: 使用自动化脚本（推荐）**:
+```powershell
+# 一键运行：解析 -> 转换 -> 编译 -> 运行 GUI
+.\runtime\go\bin\go.exe run run_tsx_gui.go
+```
+
+**方式 2: 手动步骤**:
+```powershell
 # Step 1: 转换 Gox 为 Go
 .\gox.exe -o test\tsx_gui_demo.go test\tsx_gui_demo.gox
 
@@ -82,7 +86,7 @@ Get-Content test\demo_counter.go
 cd test
 ..\runtime\go\bin\go.exe build tsx_gui_demo.go
 
-# Step 3: 运行 GUI 程序
+# Step 3: 运行 GUI 程序（会弹出窗口）
 .\tsx_gui_demo.exe
 ```
 
@@ -96,6 +100,79 @@ Copy-Item gox.exe test\ -Force
 .\gox.exe test\test_basic.gox
 .\gox.exe test\test_fx_assignment.gox
 .\gox.exe test\tsx_fx_component.gox
+```
+
+### 完整测试用例运行流程
+
+**步骤 1: 准备环境**
+```powershell
+# 进入项目目录
+cd e:\Soft\JetBrains\WebStorm WorkSpace\go-ts
+
+# 编译 gox 编译器
+.\runtime\go\bin\go.exe build -o gox.exe cmd/gox/main.go
+
+# 复制 gox.exe 到 test 目录
+Copy-Item gox.exe test\ -Force
+```
+
+**步骤 2: 运行测试用例**
+```powershell
+# 进入 test 目录
+cd test
+
+# 运行测试（会输出 token 序列、AST、生成的 Go 代码）
+.\gox.exe test_fx_assignment.gox
+```
+
+**步骤 3: 查看输出**
+```powershell
+# 输出包括：
+# 1. Tokens - 词法分析结果
+# 2. AST - 抽象语法树
+# 3. Generated Go Code - 生成的 Go 代码
+
+# 保存到文件以便查看
+.\gox.exe test_fx_assignment.gox > output.txt
+notepad output.txt
+```
+
+**步骤 4: 编译和运行生成的 Go 代码**
+```powershell
+# 生成 Go 文件
+.\gox.exe -o test_fx_assignment.go test_fx_assignment.gox
+
+# 编译 Go 程序
+..\runtime\go\bin\go.exe build test_fx_assignment.go
+
+# 运行程序
+.\test_fx_assignment.exe
+```
+
+### GUI 测试用例运行示例
+
+**运行 TSX GUI 演示**:
+```powershell
+# 方式 1: 自动运行（推荐）
+cd e:\Soft\JetBrains\WebStorm WorkSpace\go-ts
+.\runtime\go\bin\go.exe run run_tsx_gui.go
+
+# 方式 2: 手动运行
+cd test
+..\gox.exe -o tsx_gui_demo.go tsx_gui_demo.gox
+..\runtime\go\bin\go.exe build tsx_gui_demo.go
+.\tsx_gui_demo.exe
+```
+
+**运行 FX 组件示例**:
+```powershell
+# 编译 FX 组件
+cd test
+..\gox.exe -o demo_counter.go demo_counter.gox
+
+# 编译并运行（需要 GUI 库支持）
+..\runtime\go\bin\go.exe build demo_counter.go
+.\demo_counter.exe
 ```
 
 ### 常见问题

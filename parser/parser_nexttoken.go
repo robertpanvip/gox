@@ -63,10 +63,20 @@ func (p *Parser) nextToken() {
 			tok.Literal = "="
 		}
 	case '+':
-		tok.Kind = token.PLUS
-		tok.Literal = "+"
+		if p.peekByte() == '+' {
+			p.nextByte()
+			tok.Kind = token.INC
+			tok.Literal = "++"
+		} else {
+			tok.Kind = token.PLUS
+			tok.Literal = "+"
+		}
 	case '-':
-		if p.peekByte() == '>' {
+		if p.peekByte() == '-' {
+			p.nextByte()
+			tok.Kind = token.DEC
+			tok.Literal = "--"
+		} else if p.peekByte() == '>' {
 			p.nextByte()
 			tok.Kind = token.ARROW
 			tok.Literal = "->"
