@@ -1,0 +1,17 @@
+package main
+
+import "fmt"
+
+func Counter() {
+	sig count = 0
+	
+	return <button text={count} onClick={() => count = count + 1} />
+}
+
+func App() {
+	return <Counter />
+}
+
+func main() {
+	fmt.Println("TSX Component Test")
+}

@@ -474,23 +474,20 @@ func (t *Transformer) transformExpr(expr ast.Expr) string {
 		}
 
 	case *ast.TSXElement:
-		// Transform TSX to function call with props: Component(ComponentProps{Field1: val1, Field2: val2})
-		// Map lowercase HTML tags to Go component names
+		// Transform TSX to function call with props
+		// Check if it's a custom component (starts with uppercase)
 		componentName := t.mapTSXTagsToComponent(e.TagName)
-		propsTypeName := fmt.Sprintf("%sProps", componentName)
+		isCustom := len(e.TagName) > 0 && e.TagName[0] >= 'A' && e.TagName[0] <= 'Z'
 		
-		// Check if there's a "style" attribute with object literal
+		// Build props
 		var styleValue string
 		propsFields := make([]string, 0)
 		for _, attr := range e.Attributes {
 			if attr.Name == "style" {
 				// Check if it's an object literal {{...}}
 				if tmpl, ok := attr.Value.(*ast.TemplateString); ok && len(tmpl.Exprs) == 0 {
-					// Parse the object literal inside {{...}}
-					// The parts should contain the object fields
 					styleValue = t.transformStyleObject(tmpl)
 				} else {
-					// Not an object literal, use as-is
 					styleValue = t.transformExpr(attr.Value)
 				}
 			} else {
@@ -501,15 +498,10 @@ func (t *Transformer) transformExpr(expr ast.Expr) string {
 		}
 		
 		// Generate props struct or use style
+		propsTypeName := fmt.Sprintf("%sProps", componentName)
 		propsStr := ""
 		if styleValue != "" {
-			// Use style directly as first parameter
 			propsStr = styleValue
-			// If there are other props, we need to merge them
-			if len(propsFields) > 0 {
-				// For now, just use style and ignore other props
-				// TODO: Support merging style with other props
-			}
 		} else if len(propsFields) > 0 {
 			propsStr = fmt.Sprintf("%s{%s}", propsTypeName, strings.Join(propsFields, ", "))
 		} else {
@@ -526,9 +518,17 @@ func (t *Transformer) transformExpr(expr ast.Expr) string {
 			childrenStr = ", " + strings.Join(children, ", ")
 		}
 		
-		// Generate constructor call
-		constructorName := fmt.Sprintf("gui.New%s", componentName)
-		return fmt.Sprintf("%s(%s%s)", constructorName, propsStr, childrenStr)
+		// Generate component call
+		var result string
+		if isCustom {
+			// Custom component: direct function call
+			result = fmt.Sprintf("%s(%s%s)", componentName, propsStr, childrenStr)
+		} else {
+			// Built-in component: gui.NewXxx()
+			constructorName := fmt.Sprintf("gui.New%s", componentName)
+			result = fmt.Sprintf("%s(%s%s)", constructorName, propsStr, childrenStr)
+		}
+		return result
 
 	case *ast.CompositeLit:
 		elts := make([]string, 0)

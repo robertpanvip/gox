@@ -142,6 +142,13 @@ func (t *Transformer) transformInterface(i *ast.InterfaceDecl) string {
 }
 
 func (t *Transformer) transformFunc(f *ast.FuncDecl) string {
+	// Check if this function contains TSX - use lit-html style transformation
+	if t.containsTSX(f) {
+		// Use lit-html style transformation for TSX functions
+		litTfm := NewLitHTML()
+		return litTfm.TransformFunc(f)
+	}
+	
 	var sb strings.Builder
 
 	name := f.Name
@@ -224,4 +231,57 @@ func (t *Transformer) transformFunc(f *ast.FuncDecl) string {
 
 	sb.WriteString("}")
 	return sb.String()
+}
+
+// containsTSX checks if a function contains TSX elements
+func (t *Transformer) containsTSX(f *ast.FuncDecl) bool {
+	if f.Body == nil {
+		return false
+	}
+	return t.containsTSXInStmts(f.Body.List)
+}
+
+func (t *Transformer) containsTSXInStmts(stmts []ast.Stmt) bool {
+	for _, stmt := range stmts {
+		if t.containsTSXInStmt(stmt) {
+			return true
+		}
+	}
+	return false
+}
+
+func (t *Transformer) containsTSXInStmt(stmt ast.Stmt) bool {
+	switch s := stmt.(type) {
+	case *ast.ReturnStmt:
+		if s.Result != nil {
+			return t.containsTSXInExpr(s.Result)
+		}
+	case *ast.BlockStmt:
+		return t.containsTSXInStmts(s.List)
+	case *ast.IfStmt:
+		if s.Body != nil && t.containsTSXInStmts(s.Body.List) {
+			return true
+		}
+		if s.Else != nil {
+			if elseBlock, ok := s.Else.(*ast.BlockStmt); ok {
+				return t.containsTSXInStmts(elseBlock.List)
+			}
+		}
+	case *ast.ForStmt:
+		if s.Body != nil && t.containsTSXInStmts(s.Body.List) {
+			return true
+		}
+	}
+	return false
+}
+
+func (t *Transformer) containsTSXInExpr(expr ast.Expr) bool {
+	if _, ok := expr.(*ast.TSXElement); ok {
+		return true
+	}
+	// Check nested expressions (e.g., parenthesized expressions)
+	if paren, ok := expr.(*ast.ParenExpr); ok {
+		return t.containsTSXInExpr(paren.X)
+	}
+	return false
 }
