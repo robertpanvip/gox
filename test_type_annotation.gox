@@ -1,0 +1,18 @@
+package main
+
+// 测试类型注解
+func test() {
+    // 变量类型注解
+    let x: int = 42
+    let name: string = "GoX"
+    let flag: bool = true
+    
+    // 函数参数和返回类型注解
+    let result = add(10, 20)
+    result
+}
+
+// 带类型注解的函数
+func add(a: int, b: int): int {
+    return a + b
+}

@@ -404,11 +404,23 @@ func (i *IncDecStmt) Pos() token.Position { return i.P }
 
 type BaseType struct {
 	Name string
+	P    Position
 }
 
 func (b *BaseType) node() {}
 func (b *BaseType) expr() {}
-func (b *BaseType) Pos() token.Position { return token.Position{} }
+func (b *BaseType) Pos() token.Position { return b.P }
+
+// GenericType 泛型类型（如 Array<T>, Option<int>）
+type GenericType struct {
+	Name     string
+	TypeArgs []Expr
+	P        Position
+}
+
+func (g *GenericType) node() {}
+func (g *GenericType) expr() {}
+func (g *GenericType) Pos() token.Position { return g.P }
 
 type ArrayType struct {
 	Element Expr
