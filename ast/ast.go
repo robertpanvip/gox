@@ -268,23 +268,6 @@ func (s *StructLit) node() {}
 func (s *StructLit) expr() {}
 func (s *StructLit) Pos() token.Position { return s.P }
 
-// ObjectLit 对象字面量 {key: value}
-type ObjectLit struct {
-	Fields []*ObjectField
-	P      Position
-}
-
-// ObjectField 对象字段
-type ObjectField struct {
-	Name  string
-	Value Expr
-	P     Position
-}
-
-func (o *ObjectLit) node() {}
-func (o *ObjectLit) expr() {}
-func (o *ObjectLit) Pos() token.Position { return o.P }
-
 func (f *StructField) node() {}
 func (f *StructField) Pos() token.Position { return f.P }
 

@@ -416,16 +416,16 @@ func (p *Parser) parseTSXAttributeExpression() ast.Expr {
 func (p *Parser) parseObjectLiteral() ast.Expr {
 	pos := ast.Position{Line: p.curTok.Line, Col: p.curTok.Col}
 	
-	// We're already at the second LBRACE {{...}
-	// Skip the second LBRACE
+	// We're already at the LBRACE {...}
+	// Skip the LBRACE
 	if p.curTok.Kind == token.LBRACE {
 		p.nextToken()
 	}
 	
-	fields := make([]*ast.ObjectField, 0)
+	fields := make([]*ast.StructField, 0)
 	
 	for p.curTok.Kind != token.RBRACE && p.curTok.Kind != token.EOF {
-		// Skip commas和换行
+		// Skip commas 和换行
 		if p.curTok.Kind == token.COMMA || p.curTok.Kind == token.NEWLINE {
 			p.nextToken()
 			continue
@@ -446,7 +446,7 @@ func (p *Parser) parseObjectLiteral() ast.Expr {
 			value := p.parseExpr()
 			
 			// 创建字段
-			field := &ast.ObjectField{
+			field := &ast.StructField{
 				Name:  fieldName,
 				Value: value,
 				P:     fieldPos,
@@ -468,8 +468,9 @@ func (p *Parser) parseObjectLiteral() ast.Expr {
 		p.nextToken()
 	}
 	
-	// 返回对象字面量
-	return &ast.ObjectLit{
+	// 返回结构体字面量（这样 transformer 可以转换为 Go 结构体）
+	return &ast.StructLit{
+		Type:   nil, // 类型推断
 		Fields: fields,
 		P:      pos,
 	}
