@@ -36,6 +36,26 @@ func (a *App) SetRootComponent(component Component) {
 	}
 }
 
+// SetRootComponentFunc 设置根组件为函数式组件（支持高阶组件）
+func (a *App) SetRootComponentFunc(componentFunc func() TemplateResult) {
+	if a.Root != nil {
+		a.Root.Children = make([]Component, 0)
+		wrapper := NewFxWrapper(componentFunc)
+		a.Root.AddChild(wrapper)
+	}
+}
+
+// SetRootComponentFuncHO 设置根组件为高阶组件
+func (a *App) SetRootComponentFuncHO(componentFunc func() func() TemplateResult) {
+	if a.Root != nil {
+		a.Root.Children = make([]Component, 0)
+		// 调用高阶组件函数，获取 func() TemplateResult
+		actualFunc := componentFunc()
+		wrapper := NewFxWrapper(actualFunc)
+		a.Root.AddChild(wrapper)
+	}
+}
+
 // Update Ebiten update loop
 func (a *App) Update() error {
 	// 获取鼠标位置

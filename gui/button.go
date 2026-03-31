@@ -1,42 +1,35 @@
 package gui
 
 import (
+	"fmt"
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/hajimehoshi/ebiten/v2/text"
 	"github.com/hajimehoshi/ebiten/v2/vector"
 	"golang.org/x/image/font/basicfont"
-	"image/color"
 )
 
-// ButtonProps Button 组件的属性（继承 DivProps 的所有属性）
+// ButtonProps Button 组件的属性
 type ButtonProps struct {
-	// 继承 Div 的所有属性
-	DivProps
-	
-	// Button 特有属性
 	Text      string
-	FontSize  float64
+	Width     string
+	Height    string
+	FontSize  int
 	TextColor Color
 	BackColor Color
-	
-	// 事件处理器（统一使用 on 前缀）
-	OnClick    func()
-	OnMouseEnter func()
-	OnMouseLeave func()
+	OnClick   func()
 }
 
-// Button 按钮组件（继承自 Div）
+// Button Button 组件
 type Button struct {
-	*Div
+	BaseComponent
+	Props       ButtonProps
 	Text        string
-	FontSize    float64
+	FontSize    int
 	TextColor   Color
 	BackColor   Color
 	Hovered     bool
 	HoveredLast bool
 	ClickFunc   func()
-	MouseEnterFunc func()
-	MouseLeaveFunc func()
 }
 
 // NewButton 创建 Button 组件
@@ -52,54 +45,50 @@ func NewButton(props ButtonProps) *Button {
 		props.FontSize = 16 // 默认字体大小
 	}
 	
-	// 设置默认颜色（如果 R,G,B,A 都是 0，则使用默认色）
-	if props.TextColor.R == 0 && props.TextColor.G == 0 && props.TextColor.B == 0 && props.TextColor.A == 0 {
+	// 设置默认颜色（如果 R,G,B 都是 0，则使用默认色）
+	if props.TextColor.R == 0 && props.TextColor.G == 0 && props.TextColor.B == 0 {
 		props.TextColor = ColorWhite // 默认白色文字
 	}
-	if props.BackColor.R == 0 && props.BackColor.G == 0 && props.BackColor.B == 0 && props.BackColor.A == 0 {
+	if props.BackColor.R == 0 && props.BackColor.G == 0 && props.BackColor.B == 0 {
 		props.BackColor = ColorBlue // 默认蓝色背景
 	}
 	
-	// 创建 Div 作为基类
-	div := NewDiv(props.DivProps)
-	
 	button := &Button{
-		Div:         div,
+		Props:       props,
 		Text:        props.Text,
 		FontSize:    props.FontSize,
 		TextColor:   props.TextColor,
 		BackColor:   props.BackColor,
 		Hovered:     false,
 		HoveredLast: false,
-	}
-	
-	// 设置事件处理器
-	if props.OnClick != nil {
-		button.ClickFunc = props.OnClick
-	}
-	if props.OnMouseEnter != nil {
-		button.MouseEnterFunc = props.OnMouseEnter
-	}
-	if props.OnMouseLeave != nil {
-		button.MouseLeaveFunc = props.OnMouseLeave
+		ClickFunc:   props.OnClick,
 	}
 	
 	return button
 }
 
-// SetOnClick 设置点击事件处理函数
+// SetOnClick 设置点击事件处理器
 func (b *Button) SetOnClick(handler func()) {
 	b.ClickFunc = handler
 }
 
-// SetOnMouseEnter 设置鼠标进入事件处理函数
-func (b *Button) SetOnMouseEnter(handler func()) {
-	b.MouseEnterFunc = handler
-}
-
-// SetOnMouseLeave 设置鼠标离开事件处理函数
-func (b *Button) SetOnMouseLeave(handler func()) {
-	b.MouseLeaveFunc = handler
+// Update 更新按钮状态
+func (b *Button) Update() {
+	// 获取鼠标位置
+	mx, my := b.GetApp().CursorPos()
+	
+	// 检查鼠标是否在按钮上
+	b.Hovered = mx >= b.Rect.X && mx <= b.Rect.X+b.Rect.Width &&
+		my >= b.Rect.Y && my <= b.Rect.Y+b.Rect.Height
+	
+	// 检测点击
+	if b.Hovered && !b.HoveredLast && b.GetApp().IsMouseButtonPressed(MouseButtonLeft) {
+		if b.ClickFunc != nil {
+			b.ClickFunc()
+		}
+	}
+	
+	b.HoveredLast = b.Hovered
 }
 
 // Render 渲染按钮
@@ -112,7 +101,7 @@ func (b *Button) Render(screen *ebiten.Image) {
 	bgColor := b.BackColor
 	if b.Hovered {
 		// 悬停时变亮
-		bgColor = ColorLightGray
+		bgColor = Color{R: 200, G: 200, B: 200, A: 255}
 	}
 	vector.DrawFilledRect(screen, float32(b.Rect.X), float32(b.Rect.Y), float32(b.Rect.Width), float32(b.Rect.Height), bgColor.ToGoColor(), true)
 
@@ -120,41 +109,18 @@ func (b *Button) Render(screen *ebiten.Image) {
 	textX := b.Rect.X + 5
 	textY := b.Rect.Y + int(b.FontSize) + 5
 	text.Draw(screen, b.Text, basicfont.Face7x13, textX, textY, b.TextColor.ToGoColor())
-	
-	// 调用基类的 Render 来渲染子组件
-	b.Div.Render(screen)
 }
 
-// OnClick 处理点击事件
-func (b *Button) OnClick(x, y int) {
-	if b.ClickFunc != nil {
-		b.ClickFunc()
-	}
-}
-
-// OnMouseMove 处理鼠标移动事件
-func (b *Button) OnMouseMove(x, y int) {
-	// 检查鼠标是否在按钮上
-	if x >= b.Rect.X && x <= b.Rect.X+b.Rect.Width &&
-		y >= b.Rect.Y && y <= b.Rect.Y+b.Rect.Height {
-		if !b.HoveredLast {
-			// 刚刚进入
-			b.Hovered = true
-			if b.MouseEnterFunc != nil {
-				b.MouseEnterFunc()
-			}
-		}
-	} else {
-		if b.HoveredLast {
-			// 刚刚离开
-			b.Hovered = false
-			if b.MouseLeaveFunc != nil {
-				b.MouseLeaveFunc()
-			}
+// ButtonHO 高阶 Button 组件（返回 func() TemplateResult）
+func ButtonHO(props ButtonProps) func() TemplateResult {
+	return func() TemplateResult {
+		return TemplateResult{
+			StaticCode: fmt.Sprintf(`<button text="%s">`, props.Text),
+			Static: []func() Component{
+				func() Component {
+					return NewButton(props)
+				},
+			},
 		}
 	}
-	b.HoveredLast = b.Hovered
-	
-	// 调用基类的 OnMouseMove
-	b.Div.OnMouseMove(x, y)
 }

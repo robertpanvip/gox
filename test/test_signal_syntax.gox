@@ -1,0 +1,24 @@
+package main
+
+import "fmt"
+
+func Counter() {
+    // 测试 sig 语法
+    sig count = 0
+    sig name = "World"
+    
+    // 使用 Signal（应该自动转换为 .Get()）
+    fmt.Println("Initial count:", count)
+    fmt.Println("Hello", name)
+    
+    // 更新 Signal（应该自动转换为 .Set()）
+    count = count + 1
+    name = "GoX"
+    
+    fmt.Println("Updated count:", count)
+    fmt.Println("Hello", name)
+}
+
+func main() {
+    Counter()
+}

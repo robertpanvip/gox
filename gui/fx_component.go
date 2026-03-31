@@ -4,108 +4,127 @@ import (
 	"github.com/hajimehoshi/ebiten/v2"
 )
 
-// State 响应式状态包装器（类似 Solid.js 的 signal）
-type State[T any] struct {
-	value    T
-	updaters []func()
+// 当前 FxWrapper（用于编译器注入）
+var currentWrapper *FxWrapper
+
+// GetCurrentWrapper 获取当前 FxWrapper（由编译器调用）
+func GetCurrentWrapper() *FxWrapper {
+	return currentWrapper
 }
 
-// NewState 创建响应式状态
-func NewState[T any](initialValue T) *State[T] {
-	return &State[T]{
-		value:    initialValue,
-		updaters: make([]func(), 0),
+// TemplateResult 模板结果（lit-html 风格）
+type TemplateResult struct {
+	StaticCode string        // 静态代码标识（用于比较模板）
+	Dynamic    []interface{} // 动态值数组（用于比较变化）
+	Factory    func() (Component, []Part) // 工厂函数：返回 Root 组件和 Parts 数组
+}
+
+// Render 渲染模板结果（第一次渲染）
+func (t *TemplateResult) Render(screen *ebiten.Image) {
+	if t.Factory != nil {
+		root, _ := t.Factory()
+		if root != nil && root.IsVisible() {
+			root.Render(screen)
+		}
 	}
 }
 
-// Get 获取状态值（并注册依赖）
-func (s *State[T]) Get() T {
-	// TODO: 这里需要记录当前正在执行的更新函数
-	// 以便在 Set 时触发它
-	return s.value
-}
-
-// Set 设置状态值并触发更新
-func (s *State[T]) Set(newValue T) {
-	s.value = newValue
-	// 触发所有依赖这个状态的更新函数
-	for _, updater := range s.updaters {
-		updater()
+// Update 从新的 TemplateResult 更新（比较并更新变化的部分）
+func (t *TemplateResult) Update(new TemplateResult, parts []Part) {
+	// 比较 Dynamic 数组
+	for i, newValue := range new.Dynamic {
+		if i < len(t.Dynamic) {
+			oldValue := t.Dynamic[i]
+			
+			// 值变化了，更新对应的 Part
+			if newValue != oldValue && i < len(parts) {
+				parts[i].Update(newValue)
+			}
+		}
 	}
+	
+	// 更新 Dynamic 数组
+	t.Dynamic = new.Dynamic
 }
 
-// Subscribe 订阅状态变化
-func (s *State[T]) Subscribe(updater func()) {
-	s.updaters = append(s.updaters, updater)
-}
-
-// FxComponent fx 组件接口
-type FxComponent interface {
-	Component
-	RequestUpdate()
-	GetTemplateResult() *TemplateResult
-}
-
-// BaseFxComponent fx 组件基类
-type BaseFxComponent struct {
+// FxWrapper 函数式组件包装器（lit-html 风格）
+type FxWrapper struct {
 	BaseComponent
-	templateResult  *TemplateResult
-	updateCallbacks []func()
+	componentFunc func() TemplateResult
+	lastTemplate  *TemplateResult  // 上次的 TemplateResult
+	parts         []Part           // Parts 数组引用
+	root          Component        // 根组件
 }
 
-// RequestUpdate 请求更新
-func (b *BaseFxComponent) RequestUpdate() {
-	if b.templateResult != nil {
-		b.templateResult.Update()
+// NewFxWrapper 创建函数式组件包装器
+func NewFxWrapper(componentFunc func() TemplateResult) *FxWrapper {
+	return &FxWrapper{
+		componentFunc: componentFunc,
 	}
-	for _, cb := range b.updateCallbacks {
-		cb()
-	}
 }
 
-// SetTemplateResult 设置模板结果
-func (b *BaseFxComponent) SetTemplateResult(result *TemplateResult) {
-	b.templateResult = result
-}
-
-// GetTemplateResult 获取模板结果
-func (b *BaseFxComponent) GetTemplateResult() *TemplateResult {
-	return b.templateResult
-}
-
-// AddUpdateCallback 添加更新回调
-func (b *BaseFxComponent) AddUpdateCallback(cb func()) {
-	b.updateCallbacks = append(b.updateCallbacks, cb)
-}
-
-// Render 渲染 fx 组件
-func (b *BaseFxComponent) Render(screen *ebiten.Image) {
-	if !b.IsVisible() {
+// Render 渲染函数式组件
+func (f *FxWrapper) Render(screen *ebiten.Image) {
+	if !f.IsVisible() {
 		return
 	}
-	if b.templateResult != nil {
-		b.templateResult.Render(screen)
-	}
-}
-
-// OnClick 默认点击处理
-func (b *BaseFxComponent) OnClick(x, y int) {
-	if b.templateResult != nil {
-		for _, part := range b.templateResult.StaticParts {
-			if part != nil && part.IsVisible() {
-				part.OnClick(x, y)
+	
+	// 设置当前 wrapper（用于编译器注入的触发更新）
+	currentWrapper = f
+	defer func() { currentWrapper = nil }()
+	
+	// 执行组件函数，获取 TemplateResult
+	newTemplate := f.componentFunc()
+	
+	// 检查是否有上次的 TemplateResult
+	if f.lastTemplate != nil {
+		// 比较 StaticCode
+		if newTemplate.StaticCode == f.lastTemplate.StaticCode {
+			// 模板相同，比较并更新 Dynamic
+			f.lastTemplate.Update(newTemplate, f.parts)
+		} else {
+			// 模板不同，重新创建组件树
+			root, parts := newTemplate.Factory()
+			f.root = root
+			f.parts = parts
+			
+			// 初始化 Dynamic 值
+			for i, value := range newTemplate.Dynamic {
+				if i < len(parts) {
+					parts[i].Update(value)
+				}
+			}
+		}
+	} else {
+		// 第一次渲染，创建组件树
+		root, parts := newTemplate.Factory()
+		f.root = root
+		f.parts = parts
+		
+		// 初始化 Dynamic 值
+		for i, value := range newTemplate.Dynamic {
+			if i < len(parts) {
+				parts[i].Update(value)
 			}
 		}
 	}
+	
+	// 保存当前的 TemplateResult
+	f.lastTemplate = &newTemplate
+	
+	// 渲染根组件
+	if f.root != nil {
+		f.root.Render(screen)
+	}
 }
 
-// OnMouseMove 默认鼠标移动处理
-func (b *BaseFxComponent) OnMouseMove(x, y int) {
-	if b.templateResult != nil {
-		for _, part := range b.templateResult.StaticParts {
-			if part != nil && part.IsVisible() {
-				part.OnMouseMove(x, y)
-			}
-		}
-	}
+// RequestUpdate 请求重新渲染（由编译器自动调用）
+func (f *FxWrapper) RequestUpdate() {
+	// TODO: 通知 App 触发重绘
+	// 暂时标记需要更新
+}
+
+// WrapTemplateResult 将 TemplateResult 包装为 Component
+func WrapTemplateResult(componentFunc func() TemplateResult) Component {
+	return NewFxWrapper(componentFunc)
 }

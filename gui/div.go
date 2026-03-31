@@ -2,358 +2,182 @@ package gui
 
 import (
 	"github.com/hajimehoshi/ebiten/v2"
-	"github.com/hajimehoshi/ebiten/v2/vector"
 )
 
-// DivProps Div 组件的属性（CSS 风格）
+// DivProps Div 组件的属性
 type DivProps struct {
-	// 布局属性
-	Display        string
-	FlexDirection  string
-	JustifyContent string
-	AlignItems     string
-	AlignSelf      string
-	FlexWrap       string
-	FlexGrow       float32
-	FlexShrink     float32
-	FlexBasis      string
-	
-	// 间距（gap）
-	Gap          string
-	RowGap       string
-	ColumnGap    string
-	
-	// 尺寸
-	Width      string
-	Height     string
-	MinWidth   string
-	MinHeight  string
-	MaxWidth   string
-	MaxHeight  string
-	
-	// 间距
-	Padding      string
-	PaddingTop   string
-	PaddingRight string
-	PaddingBottom string
-	PaddingLeft  string
-	
-	Margin      string
-	MarginTop   string
-	MarginRight string
-	MarginBottom string
-	MarginLeft  string
-	
-	// 定位
-	Position string
-	Left     string
-	Right    string
-	Top      string
-	Bottom   string
-	
-	// 边框
-	BorderWidth  string
-	BorderColor  string
-	BorderStyle  string
-	BorderRadius string
-	
-	// 背景
-	BackgroundColor string
-	
-	// 子组件
-	Children []Component
+	Style    *Style      // CSS 样式对象
+	Children []Component // 子元素
+	Text     string      // 支持直接传入文字
 }
 
-// Div 通用容器组件（类似 HTML 的 div）
+// Div Div 组件（基于 View 实现）
 type Div struct {
-	BaseComponent
-	Style      *Style
-	Children   []Component
-	Layout     *LayoutEngine
-	Background *ebiten.Image
+	*View // 组合 View
 }
 
-// NewDiv 创建 Div 组件（支持两种方式：DivProps 或 *Style，第三个参数是 children）
-func NewDiv(props interface{}, children ...Component) *Div {
-	var style *Style
-	
-	switch p := props.(type) {
-	case DivProps:
-		style = &Style{
-			Display:         "flex", // 默认启用 flex 布局
-			FlexDirection:   p.FlexDirection,
-			JustifyContent:  p.JustifyContent,
-			AlignItems:      p.AlignItems,
-			AlignSelf:       p.AlignSelf,
-			FlexWrap:        p.FlexWrap,
-			FlexGrow:        p.FlexGrow,
-			FlexShrink:      p.FlexShrink,
-			FlexBasis:       p.FlexBasis,
-			Gap:             p.Gap,
-			RowGap:          p.RowGap,
-			ColumnGap:       p.ColumnGap,
-			Width:           p.Width,
-			Height:          p.Height,
-			MinWidth:        p.MinWidth,
-			MinHeight:       p.MinHeight,
-			MaxWidth:        p.MaxWidth,
-			MaxHeight:       p.MaxHeight,
-			Padding:         p.Padding,
-			PaddingTop:      p.PaddingTop,
-			PaddingRight:    p.PaddingRight,
-			PaddingBottom:   p.PaddingBottom,
-			PaddingLeft:     p.PaddingLeft,
-			Margin:          p.Margin,
-			MarginTop:       p.MarginTop,
-			MarginRight:     p.MarginRight,
-			MarginBottom:    p.MarginBottom,
-			MarginLeft:      p.MarginLeft,
-			Position:        p.Position,
-			Left:            p.Left,
-			Right:           p.Right,
-			Top:             p.Top,
-			Bottom:          p.Bottom,
-			BorderWidth:     p.BorderWidth,
-			BorderColor:     p.BorderColor,
-			BorderStyle:     p.BorderStyle,
-			BorderRadius:    p.BorderRadius,
-			BackgroundColor: p.BackgroundColor,
-		}
-	case *Style:
-		style = p
-		// 如果没有设置 display，默认为 "flex"
-		if style.Display == "" {
-			style.Display = "flex"
-		}
-	default:
-		style = &Style{
-			Display: "flex", // 默认启用 flex 布局
-		}
+// NewDiv 创建 Div 组件
+func NewDiv(props DivProps) *Div {
+	// 转换为 ViewProps
+	viewProps := ViewProps{
+		Children: props.Children,
+		Text:     props.Text,
 	}
 	
-	div := &Div{
-		Style:    style,
-		Children: make([]Component, 0),
-		Layout:   NewLayoutEngine(),
+	// 如果提供了 Style，应用样式
+	if props.Style != nil {
+		viewProps.Style = props.Style
+		viewProps.Flex = props.Style.Display
+		viewProps.FlexDir = props.Style.FlexDir
+		viewProps.Justify = props.Style.Justify
+		viewProps.Align = props.Style.Align
+		viewProps.Wrap = props.Style.FlexWrap
+		viewProps.ColumnGap = props.Style.ColumnGap
+		viewProps.RowGap = props.Style.RowGap
+		viewProps.Width = props.Style.Width
+		viewProps.Height = props.Style.Height
+		viewProps.Padding = props.Style.Padding
 	}
 	
-	// 设置默认可见性
-	div.SetVisible(true)
+	// 创建 View
+	view := NewView(viewProps)
 	
-	// 添加 children
-	for _, child := range children {
-		div.AddChild(child)
-	}
-	
-	// 应用样式到布局引擎
-	div.applyStyleToLayout()
-	
-	return div
-}
-
-// applyStyleToLayout 将样式应用到布局引擎
-func (d *Div) applyStyleToLayout() {
-	if d.Layout == nil {
-		return
+	// 设置背景色
+	if props.Style != nil && props.Style.BackColor != nil {
+		view.BackColor = props.Style.BackColor
 	}
 	
-	// 设置弹性方向
-	if d.Style.FlexDirection == "column" || d.Style.FlexDirection == "column-reverse" {
-		d.Layout.SetFlexDirection(FlexColumn)
-	} else {
-		d.Layout.SetFlexDirection(FlexRow)
-	}
-	
-	// 设置主轴对齐
-	switch d.Style.JustifyContent {
-	case "center":
-		d.Layout.SetJustifyContent(JustifyCenter)
-	case "flex-end":
-		d.Layout.SetJustifyContent(JustifyFlexEnd)
-	case "space-between":
-		d.Layout.SetJustifyContent(JustifySpaceBetween)
-	case "space-around":
-		d.Layout.SetJustifyContent(JustifySpaceAround)
-	default:
-		d.Layout.SetJustifyContent(JustifyFlexStart)
-	}
-	
-	// 设置交叉轴对齐
-	switch d.Style.AlignItems {
-	case "center":
-		d.Layout.SetAlignItems(AlignCenter)
-	case "flex-end":
-		d.Layout.SetAlignItems(AlignFlexEnd)
-	case "flex-start":
-		d.Layout.SetAlignItems(AlignFlexStart)
-	default:
-		d.Layout.SetAlignItems(AlignStretch)
-	}
-	
-	// 解析并设置 padding
-	if d.Style.Padding != "" {
-		top, right, bottom, left := parsePadding(d.Style.Padding)
-		d.Layout.SetPadding(top, right, bottom, left)
-	}
-	
-	// 解析并设置 gap
-	if d.Style.Gap != "" {
-		gap := parseSize(d.Style.Gap)
-		d.Layout.SetGap(gap)
-	}
-	if d.Style.RowGap != "" {
-		rowGap := parseSize(d.Style.RowGap)
-		d.Layout.SetRowGap(rowGap)
-	}
-	if d.Style.ColumnGap != "" {
-		columnGap := parseSize(d.Style.ColumnGap)
-		d.Layout.SetColumnGap(columnGap)
-	}
-	
-	// 解析并设置 width 和 height
-	if d.Style.Width != "" {
-		width := parseSize(d.Style.Width)
-		d.Layout.SetWidth(width)
-	}
-	if d.Style.Height != "" {
-		height := parseSize(d.Style.Height)
-		d.Layout.SetHeight(height)
+	return &Div{
+		View: view,
 	}
 }
 
-// SetStyle 设置样式
-func (d *Div) SetStyle(style *Style) *Div {
-	d.Style = style
-	d.applyStyleToLayout()
-	return d
-}
-
-// AddChild 添加子组件
-func (d *Div) AddChild(child Component) *Div {
-	d.Children = append(d.Children, child)
-	
-	// 为子组件创建布局节点
-	if baseChild, ok := child.(*Div); ok {
-		if baseChild.Layout == nil {
-			baseChild.Layout = NewLayoutEngine()
-		}
-		d.Layout.AddChild(baseChild.Layout)
-	} else if baseChild, ok := child.(*Label); ok {
-		if baseChild.Layout == nil {
-			baseChild.Layout = NewLayoutEngine()
-		}
-		d.Layout.AddChild(baseChild.Layout)
-	} else if baseChild, ok := child.(*Button); ok {
-		if baseChild.Layout == nil {
-			baseChild.Layout = NewLayoutEngine()
-		}
-		d.Layout.AddChild(baseChild.Layout)
-	}
-	
-	return d
-}
-
-// RemoveChild 移除子组件
-func (d *Div) RemoveChild(child Component) *Div {
-	for i, c := range d.Children {
-		if c == child {
-			d.Children = append(d.Children[:i], d.Children[i+1:]...)
-			break
-		}
-	}
-	return d
-}
-
-// DoLayout 执行布局计算
-func (d *Div) DoLayout() {
-	if d.Layout == nil {
-		return
-	}
-	
-	// 计算布局
-	d.Layout.CalculateLayout(d.Rect.X, d.Rect.Y, d.Rect.Width, d.Rect.Height)
-	
-	// 应用布局结果到子组件
-	for i, child := range d.Children {
-		if i < len(d.Layout.Children) {
-			childLayout := d.Layout.Children[i]
-			childRect := childLayout.GetComputedRect()
-			child.SetRect(childRect)
-		}
-	}
-}
-
-// Render 渲染 Div
+// Render 渲染 Div（委托给 View）
 func (d *Div) Render(screen *ebiten.Image) {
-	if !d.IsVisible() {
+	if d.View != nil {
+		d.View.Render(screen)
+	}
+}
+
+// AppendChild 添加子节点
+func (d *Div) AppendChild(child Component) {
+	if d.View != nil && d.View.Children != nil {
+		d.View.Children = append(d.View.Children, child)
+	}
+}
+
+// InsertBefore 在指定子节点之前插入
+func (d *Div) InsertBefore(newChild, refChild Component) {
+	if d.View != nil && d.View.Children != nil {
+		// 找到 refChild 的位置
+		for i, child := range d.View.Children {
+			if child == refChild {
+				// 在位置 i 之前插入
+				d.View.Children = append(d.View.Children[:i], append([]Component{newChild}, d.View.Children[i:]...)...)
+				return
+			}
+		}
+		// 如果没找到，追加到末尾
+		d.AppendChild(newChild)
+	}
+}
+
+// RemoveChild 移除子节点
+func (d *Div) RemoveChild(child Component) {
+	if d.View != nil && d.View.Children != nil {
+		for i, c := range d.View.Children {
+			if c == child {
+				d.View.Children = append(d.View.Children[:i], d.View.Children[i+1:]...)
+				return
+			}
+		}
+	}
+}
+
+// ReplaceChild 替换子节点
+func (d *Div) ReplaceChild(newChild, oldChild Component) {
+	if d.View != nil && d.View.Children != nil {
+		for i, c := range d.View.Children {
+			if c == oldChild {
+				d.View.Children[i] = newChild
+				return
+			}
+		}
+	}
+}
+
+// SetAttribute 设置属性（支持 style 对象）
+func (d *Div) SetAttribute(name, value string) {
+	if d.View == nil {
 		return
 	}
 	
-	// 绘制背景
-	if d.Style.BackgroundColor != "" {
-		bgColor := parseColor(d.Style.BackgroundColor)
-		if bgColor != ColorTransparent {
-			vector.DrawFilledRect(
-				screen,
-				float32(d.Rect.X),
-				float32(d.Rect.Y),
-				float32(d.Rect.Width),
-				float32(d.Rect.Height),
-				bgColor.ToGoColor(),
-				true,
-			)
+	// 特殊处理 style 属性
+	if name == "style" {
+		// value 可能是 JSON 字符串或者 CSS 字符串
+		// 这里简化处理，实际应用需要解析
+		if style := ParseStyle(value); style != nil {
+			d.View.Style = style
+			// 应用样式到 View
+			d.applyStyle(style)
 		}
+		return
 	}
 	
-	// 绘制边框
-	borderWidth := parseSize(d.Style.BorderWidth)
-	if borderWidth > 0 {
-		borderColor := parseColor(d.Style.BorderColor)
-		if borderColor == ColorTransparent {
-			borderColor = ColorBlack
-		}
-		vector.StrokeRect(
-			screen,
-			float32(d.Rect.X),
-			float32(d.Rect.Y),
-			float32(d.Rect.Width),
-			float32(d.Rect.Height),
-			float32(borderWidth),
-			borderColor.ToGoColor(),
-			true,
-		)
-	}
-	
-	// 执行布局计算
-	d.DoLayout()
-	
-	// 渲染子组件
-	for _, child := range d.Children {
-		if child.IsVisible() {
-			child.Render(screen)
-		}
+	// 直接设置 View 的属性（兼容旧代码）
+	switch name {
+	case "text":
+		d.View.Text = value
+	case "width":
+		d.View.Width = value
+	case "height":
+		d.View.Height = value
 	}
 }
 
-// OnClick 处理点击事件
-func (d *Div) OnClick(x, y int) {
-	for _, child := range d.Children {
-		if child.IsVisible() {
-			child.OnClick(x, y)
+// GetAttribute 获取属性
+func (d *Div) GetAttribute(name string) string {
+	if d.View == nil {
+		return ""
+	}
+	
+	switch name {
+	case "text":
+		return d.View.Text
+	case "width":
+		return d.View.Width
+	case "height":
+		return d.View.Height
+	case "style":
+		// 返回样式对象的字符串表示
+		if d.View.Style != nil {
+			// TODO: 实现 Style 的字符串化
+			return "style object"
 		}
+		return ""
+	default:
+		return ""
 	}
 }
 
-// OnMouseMove 处理鼠标移动事件
-func (d *Div) OnMouseMove(x, y int) {
-	for _, child := range d.Children {
-		if child.IsVisible() {
-			child.OnMouseMove(x, y)
-		}
+// applyStyle 应用样式到 View
+func (d *Div) applyStyle(style *Style) {
+	if d.View == nil {
+		return
 	}
-}
-
-// GetStyle 获取样式
-func (d *Div) GetStyle() *Style {
-	return d.Style
+	
+	d.View.Flex = style.Display
+	d.View.FlexDir = style.FlexDir
+	d.View.Justify = style.Justify
+	d.View.Align = style.Align
+	d.View.Wrap = style.FlexWrap
+	d.View.ColumnGap = style.ColumnGap
+	d.View.RowGap = style.RowGap
+	d.View.Width = style.Width
+	d.View.Height = style.Height
+	d.View.Padding = style.Padding
+	
+	if style.BackColor != nil {
+		d.View.BackColor = style.BackColor
+	}
 }
