@@ -142,11 +142,11 @@ func (t *Transformer) transformInterface(i *ast.InterfaceDecl) string {
 }
 
 func (t *Transformer) transformFunc(f *ast.FuncDecl) string {
-	// Check if this function contains TSX - use lit-html style transformation
+	// Check if this function contains TSX - use TSX style transformation
 	if t.containsTSX(f) {
-		// Use lit-html style transformation for TSX functions
-		litTfm := NewLitHTML()
-		return litTfm.TransformFunc(f)
+		// Use TSX style transformation for TSX functions
+		tsxTfm := NewTSX()
+		return tsxTfm.TransformFunc(f)
 	}
 	
 	var sb strings.Builder
