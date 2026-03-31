@@ -59,6 +59,8 @@ func (p *Parser) parseDecl() ast.Decl {
 		return p.parseExtendDecl(ast.Visibility{})
 	case token.LET:
 		return p.parseLetDecl()
+	case token.SIG:
+		return p.parseSigDecl(ast.Visibility{})
 	default:
 		// Not a declaration, let parseStmt handle it
 		return nil
@@ -310,6 +312,21 @@ func (p *Parser) parseVarDecl(vis ast.Visibility) *ast.VarDecl {
 	}
 
 	return &ast.VarDecl{Visibility: vis, Name: name, Type: typ, Value: value}
+}
+
+func (p *Parser) parseSigDecl(vis ast.Visibility) *ast.SigDecl {
+	p.nextToken()
+
+	name := p.expect(token.IDENT).Literal
+
+	// sig 声明不需要类型注解，直接 = value
+	var value ast.Expr
+	if p.curTok.Kind == token.ASSIGN {
+		p.nextToken()
+		value = p.parseExpr()
+	}
+
+	return &ast.SigDecl{Visibility: vis, Name: name, Value: value}
 }
 
 func (p *Parser) parseStructDecl(vis ast.Visibility) *ast.StructDecl {

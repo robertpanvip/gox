@@ -10,6 +10,8 @@ func (p *Parser) parseStmt() ast.Stmt {
 	switch p.curTok.Kind {
 	case token.LET, token.CONST, token.VAR:
 		return p.parseVarDeclStmt()
+	case token.SIG:
+		return p.parseSigDeclStmt()
 	case token.IF:
 		return p.parseIfStmt()
 	case token.FOR:
@@ -69,6 +71,22 @@ func (p *Parser) parseVarDeclStmt() ast.Stmt {
 		return &ast.ConstDecl{Visibility: vis, Name: name, Type: typ, Value: value}
 	}
 	return &ast.VarDecl{Visibility: vis, Name: name, Type: typ, Value: value}
+}
+
+func (p *Parser) parseSigDeclStmt() ast.Stmt {
+	// sig 声明不需要 visibility，直接解析
+	p.nextToken()
+
+	name := p.expect(token.IDENT).Literal
+
+	// sig 声明不需要类型注解，直接 = value
+	var value ast.Expr
+	if p.curTok.Kind == token.ASSIGN {
+		p.nextToken()
+		value = p.parseExpr()
+	}
+
+	return &ast.SigDecl{Name: name, Value: value}
 }
 
 func (p *Parser) parseVisibility() ast.Visibility {

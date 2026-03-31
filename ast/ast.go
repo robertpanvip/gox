@@ -150,6 +150,19 @@ func (c *ConstDecl) decl() {}
 func (c *ConstDecl) stmt() {}
 func (c *ConstDecl) Pos() token.Position { return c.P }
 
+// SigDecl Signal 声明 (sig x = value)
+type SigDecl struct {
+	Visibility Visibility
+	Name       string
+	Value      Expr
+	P          Position
+}
+
+func (s *SigDecl) node()  {}
+func (s *SigDecl) decl() {}
+func (s *SigDecl) stmt() {}
+func (s *SigDecl) Pos() token.Position { return s.P }
+
 type ExtendDecl struct {
 	Type    Expr
 	Methods []*FuncDecl

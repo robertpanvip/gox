@@ -51,7 +51,23 @@ func (t *Transformer) transformStmt(stmt ast.Stmt, isFuncThrows bool) string {
 			}
 		}
 
+	case *ast.SigDecl:
+		// sig count = 0  ->  count := gox.New(0)
+		// 记录 Signal 变量以便后续转换
+		t.sigVars[s.Name] = true
+		sb.WriteString(indentStr)
+		sb.WriteString(fmt.Sprintf("%s := gox.New(%s)\n", s.Name, t.transformExpr(s.Value)))
+
 	case *ast.AssignStmt:
+		// 检查是否是 Signal 变量的赋值
+		if ident, ok := s.LHS.(*ast.Ident); ok {
+			if t.isSigVar(ident.Name) {
+				// count = count + 1  ->  count.Set(count.Get() + 1)
+				sb.WriteString(indentStr)
+				sb.WriteString(fmt.Sprintf("%s.Set(%s)\n", ident.Name, t.transformExpr(s.RHS)))
+				break
+			}
+		}
 		sb.WriteString(indentStr)
 		sb.WriteString(t.transformExpr(s.LHS))
 		sb.WriteString(" = ")

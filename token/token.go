@@ -59,6 +59,7 @@ const (
 	LET
 	CONST
 	VAR
+	SIG  // Signal 关键字
 
 	FX
 	FUNC
@@ -107,6 +108,7 @@ var keywords = map[string]TokenKind{
 	"let":       LET,
 	"const":     CONST,
 	"var":       VAR,
+	"sig":       SIG,  // Signal 关键字
 	"fx":        FX,
 	"func":      FUNC,
 	"struct":    STRUCT,

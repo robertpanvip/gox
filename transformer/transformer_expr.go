@@ -14,6 +14,10 @@ func (t *Transformer) transformType(expr ast.Expr) string {
 	case *ast.BaseType:
 		return e.Name
 	case *ast.Ident:
+		// 检查是否是 Signal 变量，如果是则添加.Get()
+		if t.isSigVar(e.Name) {
+			return fmt.Sprintf("%s.Get()", e.Name)
+		}
 		return e.Name
 	case *ast.ArrayType:
 		return "[]" + t.transformType(e.Element)
@@ -190,6 +194,10 @@ func (t *Transformer) mapTSXTagsToComponent(tagName string) string {
 func (t *Transformer) transformExpr(expr ast.Expr) string {
 	switch e := expr.(type) {
 	case *ast.Ident:
+		// 检查是否是 Signal 变量，如果是则添加.Get()
+		if t.isSigVar(e.Name) {
+			return fmt.Sprintf("%s.Get()", e.Name)
+		}
 		return e.Name
 
 	case *ast.IntLit:

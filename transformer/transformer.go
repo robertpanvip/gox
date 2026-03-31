@@ -13,6 +13,7 @@ type Transformer struct {
 	imports     map[string]string           // package path -> source type ("go", "gox", or "")
 	funcTypes   map[string][]*ast.FuncParam // Store function parameter types: "FuncName" -> [params]
 	fxFuncs     []*ast.FuncDecl             // FX functions to process
+	sigVars     map[string]bool             // Signal 变量追踪
 }
 
 func New() *Transformer {
@@ -22,11 +23,18 @@ func New() *Transformer {
 		imports:     make(map[string]string),
 		funcTypes:   make(map[string][]*ast.FuncParam),
 		fxFuncs:     make([]*ast.FuncDecl, 0),
+		sigVars:     make(map[string]bool),
 	}
 }
 
 func (t *Transformer) addImport(path, sourceType string) {
 	t.imports[path] = sourceType
+}
+
+// isSigVar 检查变量是否是 Signal 变量
+func (t *Transformer) isSigVar(name string) bool {
+	_, ok := t.sigVars[name]
+	return ok
 }
 
 // parseTemplateString parses a string like "Hello, ${name}!" and returns format string and expressions
