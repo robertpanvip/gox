@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/gox-lang/gox/ast"
+	"github.com/gox-lang/gox/token"
 )
 
 // TestParser_ExpressionStatement 测试表达式语句
@@ -279,6 +280,340 @@ func TestParser_ArrowFunctionAsStatement(t *testing.T) {
 				// ExprStmt 的 X 应该是 BinaryExpr (赋值表达式)
 				if _, ok := exprStmt.X.(*ast.BinaryExpr); !ok {
 					t.Errorf("expected expression to be BinaryExpr, got %T", exprStmt.X)
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := New(tt.input)
+			prog := p.ParseProgram()
+
+			hasErrors := len(p.Errors()) > 0
+			if hasErrors && !tt.wantErr {
+				t.Fatalf("parser errors: %v", p.Errors())
+			}
+
+			if !hasErrors && tt.wantErr {
+				t.Fatalf("expected errors but got none")
+			}
+
+			if tt.validate != nil {
+				tt.validate(t, prog, p.Errors())
+			}
+		})
+	}
+}
+
+// TestParser_ExpressionStatement_Complex 测试复杂表达式语句
+func TestParser_ExpressionStatement_Complex(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		wantErr  bool
+		validate func(t *testing.T, prog *ast.Program, errors []string)
+	}{
+		{
+			name:    "chained assignment",
+			input:   `func test() { a = b = c = 1 }`,
+			wantErr: false,
+			validate: func(t *testing.T, prog *ast.Program, errors []string) {
+				if len(errors) > 0 {
+					t.Errorf("parser errors: %v", errors)
+				}
+			},
+		},
+		{
+			name:    "unary operators",
+			input:   `func test() { !x; -y; +z; ~w }`,
+			wantErr: false,
+			validate: func(t *testing.T, prog *ast.Program, errors []string) {
+				if len(errors) > 0 {
+					t.Errorf("parser errors: %v", errors)
+				}
+			},
+		},
+		{
+			name:    "null coalesce operator",
+			input:   `func test() { x ?? y }`,
+			wantErr: false,
+			validate: func(t *testing.T, prog *ast.Program, errors []string) {
+				if len(errors) > 0 {
+					t.Errorf("parser errors: %v", errors)
+				}
+			},
+		},
+		{
+			name:    "logical operators combination",
+			input:   `func test() { a && b || c && d }`,
+			wantErr: false,
+			validate: func(t *testing.T, prog *ast.Program, errors []string) {
+				if len(errors) > 0 {
+					t.Errorf("parser errors: %v", errors)
+				}
+			},
+		},
+		{
+			name:    "arithmetic operators",
+			input:   `func test() { a + b; c - d; e * f; g / h; i % j }`,
+			wantErr: false,
+			validate: func(t *testing.T, prog *ast.Program, errors []string) {
+				if len(errors) > 0 {
+					t.Errorf("parser errors: %v", errors)
+				}
+			},
+		},
+		{
+			name:    "parenthesized expression",
+			input:   `func test() { (a + b) * c }`,
+			wantErr: false,
+			validate: func(t *testing.T, prog *ast.Program, errors []string) {
+				if len(errors) > 0 {
+					t.Errorf("parser errors: %v", errors)
+				}
+			},
+		},
+		{
+			name:    "nested member access",
+			input:   `func test() { obj.property.subProperty }`,
+			wantErr: false,
+			validate: func(t *testing.T, prog *ast.Program, errors []string) {
+				if len(errors) > 0 {
+					t.Errorf("parser errors: %v", errors)
+				}
+			},
+		},
+		{
+			name:    "safe member access",
+			input:   `func test() { obj?.property }`,
+			wantErr: false,
+			validate: func(t *testing.T, prog *ast.Program, errors []string) {
+				if len(errors) > 0 {
+					t.Errorf("parser errors: %v", errors)
+				}
+			},
+		},
+		{
+			name:    "index expression",
+			input:   `func test() { arr[0]; obj[key] }`,
+			wantErr: false,
+			validate: func(t *testing.T, prog *ast.Program, errors []string) {
+				if len(errors) > 0 {
+					t.Errorf("parser errors: %v", errors)
+				}
+			},
+		},
+		{
+			name:    "chained call expressions",
+			input:   `func test() { obj.method().subMethod() }`,
+			wantErr: false,
+			validate: func(t *testing.T, prog *ast.Program, errors []string) {
+				if len(errors) > 0 {
+					t.Errorf("parser errors: %v", errors)
+				}
+			},
+		},
+		{
+			name:    "call with complex arguments",
+			input:   `func test() { fn(a + b, c = d, e ?? f) }`,
+			wantErr: false,
+			validate: func(t *testing.T, prog *ast.Program, errors []string) {
+				if len(errors) > 0 {
+					t.Errorf("parser errors: %v", errors)
+				}
+			},
+		},
+		{
+			name:    "object literal with arrow functions",
+			input:   `func test() { { onClick: () => x = x + 1, getValue: () => val } }`,
+			wantErr: false,
+			validate: func(t *testing.T, prog *ast.Program, errors []string) {
+				if len(errors) > 0 {
+					t.Errorf("parser errors: %v", errors)
+				}
+			},
+		},
+		{
+			name:    "nested object literals",
+			input:   `func test() { { a: 1, b: { c: 2, d: 3 } } }`,
+			wantErr: false,
+			validate: func(t *testing.T, prog *ast.Program, errors []string) {
+				if len(errors) > 0 {
+					t.Errorf("parser errors: %v", errors)
+				}
+			},
+		},
+		{
+			name:    "array literal with expressions",
+			input:   `func test() { [1, a + b, fn(), { x: 1 }] }`,
+			wantErr: false,
+			validate: func(t *testing.T, prog *ast.Program, errors []string) {
+				if len(errors) > 0 {
+					t.Errorf("parser errors: %v", errors)
+				}
+			},
+		},
+		{
+			name:    "post-increment expression",
+			input:   `func test() { x++; y-- }`,
+			wantErr: false,
+			validate: func(t *testing.T, prog *ast.Program, errors []string) {
+				if len(errors) > 0 {
+					t.Errorf("parser errors: %v", errors)
+				}
+			},
+		},
+		{
+			name:    "template string expression",
+			input:   `func test() { ` + "`Hello ${name}!`" + ` }`,
+			wantErr: false,
+			validate: func(t *testing.T, prog *ast.Program, errors []string) {
+				if len(errors) > 0 {
+					t.Errorf("parser errors: %v", errors)
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := New(tt.input)
+			prog := p.ParseProgram()
+
+			hasErrors := len(p.Errors()) > 0
+			if hasErrors && !tt.wantErr {
+				t.Fatalf("parser errors: %v", p.Errors())
+			}
+
+			if !hasErrors && tt.wantErr {
+				t.Fatalf("expected errors but got none")
+			}
+
+			if tt.validate != nil {
+				tt.validate(t, prog, p.Errors())
+			}
+		})
+	}
+}
+
+// TestParser_ExpressionStatement_ASTValidation 测试 AST 结构验证
+func TestParser_ExpressionStatement_ASTValidation(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		wantErr  bool
+		validate func(t *testing.T, prog *ast.Program, errors []string)
+	}{
+		{
+			name:    "binary expression AST structure",
+			input:   `func test() { a + b * c }`,
+			wantErr: false,
+			validate: func(t *testing.T, prog *ast.Program, errors []string) {
+				fnDecl := prog.Decls[0].(*ast.FuncDecl)
+				exprStmt := fnDecl.Body.List[0].(*ast.ExprStmt)
+				binaryExpr := exprStmt.X.(*ast.BinaryExpr)
+				
+				// 验证操作符优先级：+ 的优先级低于 *
+				if binaryExpr.Op != token.PLUS {
+					t.Errorf("expected top-level operator to be PLUS, got %v", binaryExpr.Op)
+				}
+			},
+		},
+		{
+			name:    "assignment expression AST structure",
+			input:   `func test() { a = b = c }`,
+			wantErr: false,
+			validate: func(t *testing.T, prog *ast.Program, errors []string) {
+				fnDecl := prog.Decls[0].(*ast.FuncDecl)
+				exprStmt := fnDecl.Body.List[0].(*ast.ExprStmt)
+				assignExpr := exprStmt.X.(*ast.BinaryExpr)
+				
+				// 验证右结合：a = (b = c)
+				if assignExpr.Op != token.ASSIGN {
+					t.Errorf("expected ASSIGN, got %v", assignExpr.Op)
+				}
+				
+				// 右侧也应该是 ASSIGN
+				rightAssign := assignExpr.Y.(*ast.BinaryExpr)
+				if rightAssign.Op != token.ASSIGN {
+					t.Errorf("expected right side to be ASSIGN, got %v", rightAssign.Op)
+				}
+			},
+		},
+		{
+			name:    "arrow function AST structure",
+			input:   `func test() { let fn = () => x = x + 1 }`,
+			wantErr: false,
+			validate: func(t *testing.T, prog *ast.Program, errors []string) {
+				fnDecl := prog.Decls[0].(*ast.FuncDecl)
+				varDecl := fnDecl.Body.List[0].(*ast.VarDecl)
+				arrowFn := varDecl.Value.(*ast.FunctionLiteral)
+				
+				// 验证 IsArrow 标志
+				if !arrowFn.IsArrow {
+					t.Errorf("expected IsArrow to be true")
+				}
+				
+				// 验证参数
+				if len(arrowFn.Params) != 0 {
+					t.Errorf("expected 0 params, got %d", len(arrowFn.Params))
+				}
+				
+				// Body 已经是 BlockStmt 类型
+				if arrowFn.Body == nil {
+					t.Errorf("expected Body to be non-nil")
+				}
+			},
+		},
+		{
+			name:    "call expression AST structure",
+			input:   `func test() { fn(a, b, c) }`,
+			wantErr: false,
+			validate: func(t *testing.T, prog *ast.Program, errors []string) {
+				fnDecl := prog.Decls[0].(*ast.FuncDecl)
+				exprStmt := fnDecl.Body.List[0].(*ast.ExprStmt)
+				callExpr := exprStmt.X.(*ast.CallExpr)
+				
+				// 验证参数数量
+				if len(callExpr.Args) != 3 {
+					t.Errorf("expected 3 args, got %d", len(callExpr.Args))
+				}
+			},
+		},
+		{
+			name:    "member expression AST structure",
+			input:   `func test() { obj.property.subProperty }`,
+			wantErr: false,
+			validate: func(t *testing.T, prog *ast.Program, errors []string) {
+				fnDecl := prog.Decls[0].(*ast.FuncDecl)
+				exprStmt := fnDecl.Body.List[0].(*ast.ExprStmt)
+				memberExpr := exprStmt.X.(*ast.MemberExpr)
+				
+				// 验证属性名
+				if memberExpr.Name != "subProperty" {
+					t.Errorf("expected name 'subProperty', got %s", memberExpr.Name)
+				}
+				
+				// 验证 X 也是 MemberExpr
+				innerMember := memberExpr.X.(*ast.MemberExpr)
+				if innerMember.Name != "property" {
+					t.Errorf("expected inner name 'property', got %s", innerMember.Name)
+				}
+			},
+		},
+		{
+			name:    "object literal AST structure",
+			input:   `func test() { let obj = { a: 1, b: 2 } }`,
+			wantErr: false,
+			validate: func(t *testing.T, prog *ast.Program, errors []string) {
+				fnDecl := prog.Decls[0].(*ast.FuncDecl)
+				varDecl := fnDecl.Body.List[0].(*ast.VarDecl)
+				structLit := varDecl.Value.(*ast.StructLit)
+				
+				// 验证字段数量
+				if len(structLit.Fields) != 2 {
+					t.Errorf("expected 2 fields, got %d", len(structLit.Fields))
 				}
 			},
 		},
