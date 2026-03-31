@@ -7,145 +7,192 @@ import (
 	"github.com/gox-lang/gox/parser"
 )
 
-func TestTransformer_TSXBasic(t *testing.T) {
-	src := `package main
-public func Main() {
-<View />
-}
-`
-	p := parser.New(src)
-	prog := p.ParseProgram()
-
-	if len(p.Errors()) > 0 {
-		t.Fatalf("parser errors: %v", p.Errors())
-	}
-
-	tfm := New()
-	result := tfm.Transform(prog)
-
-	if !strings.Contains(result, `View(ViewProps{})`) {
-		t.Error("expected TSX element, got:", result)
-	}
-}
-
-func TestTransformer_TSXWithAttributes(t *testing.T) {
-	src := `package main
-public func Main() {
-<View id="1" class="container" />
-}
-`
-	p := parser.New(src)
-	prog := p.ParseProgram()
-
-	if len(p.Errors()) > 0 {
-		t.Fatalf("parser errors: %v", p.Errors())
-	}
-
-	tfm := New()
-	result := tfm.Transform(prog)
-
-	if !strings.Contains(result, `View(ViewProps{Id: "1", Class: "container"})`) {
-		t.Error("expected TSX with attributes, got:", result)
-	}
-}
-
-func TestTransformer_TSXWithChildren(t *testing.T) {
-	src := `package main
-public func Main() {
-<View>
-    <Text>Hello</Text>
-</View>
-}
-`
-	p := parser.New(src)
-	prog := p.ParseProgram()
-
-	if len(p.Errors()) > 0 {
-		t.Fatalf("parser errors: %v", p.Errors())
-	}
-
-	tfm := New()
-	result := tfm.Transform(prog)
-
-	if !strings.Contains(result, `View(ViewProps{}`) {
-		t.Error("expected View component, got:", result)
-	}
-	if !strings.Contains(result, `Text(TextProps{}, "Hello")`) {
-		t.Error("expected Text with children, got:", result)
-	}
-}
-
-func TestTransformer_TSXNested(t *testing.T) {
-	src := `package main
-public func Main() {
-<View id="app">
-    <Header title="My App" />
-    <Content>
-        <Text>Hello</Text>
-    </Content>
-</View>
-}
-`
-	p := parser.New(src)
-	prog := p.ParseProgram()
-
-	if len(p.Errors()) > 0 {
-		t.Fatalf("parser errors: %v", p.Errors())
-	}
-
-	tfm := New()
-	result := tfm.Transform(prog)
-
-	if !strings.Contains(result, `View(ViewProps{Id: "app"}`) {
-		t.Error("expected nested View, got:", result)
-	}
-	if !strings.Contains(result, `Header(HeaderProps{Title: "My App"})`) {
-		t.Error("expected Header, got:", result)
-	}
-	if !strings.Contains(result, `Content(ContentProps{}`) {
-		t.Error("expected Content, got:", result)
-	}
+// TestTransformTSXLitHTML lit-html 风格的 TSX 转换测试（使用普通 func）
+func TestTransformTSXLitHTML(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		validate func(t *testing.T, result string)
+	}{
+		{
+			name: "simple div with static text",
+			input: `package main
+func test() {
+	return <div text="Hello" />
+}`,
+			validate: func(t *testing.T, result string) {
+				// 应该生成 gui.NewDiv
+				if !strings.Contains(result, "gui.NewDiv") {
+					t.Errorf("expected gui.NewDiv, got: %s", result)
+				}
+			},
+		},
+		{
+			name: "div with dynamic text from signal",
+			input: `package main
+func test() {
+	sig count = 0
+	return <div text={count} />
+}`,
+			validate: func(t *testing.T, result string) {
+				// 应该生成 gui.NewDiv
+				if !strings.Contains(result, "gui.NewDiv") {
+					t.Errorf("expected gui.NewDiv, got: %s", result)
+				}
+				// count 应该使用 .Get()
+				if !strings.Contains(result, "count.Get()") {
+					t.Errorf("expected count.Get(), got: %s", result)
+				}
+			},
+		},
+		{
+			name: "button with dynamic text",
+			input: `package main
+func test() {
+	sig count = 0
+	return <button text={count} />
+}`,
+			validate: func(t *testing.T, result string) {
+				if !strings.Contains(result, "gui.NewButton") {
+					t.Errorf("expected gui.NewButton, got: %s", result)
+				}
+				// count 应该使用 .Get()
+				if !strings.Contains(result, "count.Get()") {
+					t.Errorf("expected count.Get(), got: %s", result)
+				}
+			},
+		},
+		{
+			name: "div with text children",
+			input: `package main
+func test() {
+	sig message = "Hello"
+	return <div>{message}</div>
+}`,
+			validate: func(t *testing.T, result string) {
+				if !strings.Contains(result, "gui.NewDiv") {
+					t.Errorf("expected gui.NewDiv, got: %s", result)
+				}
+			},
+		},
+		{
+			name: "nested components",
+			input: `package main
+func test() {
+	sig count = 0
+	return <div>
+		<button text={count} />
+		<button text="Increment" />
+	</div>
+}`,
+			validate: func(t *testing.T, result string) {
+				if !strings.Contains(result, "gui.NewDiv") {
+					t.Errorf("expected gui.NewDiv, got: %s", result)
+				}
+				if !strings.Contains(result, "gui.NewButton") {
+					t.Errorf("expected gui.NewButton, got: %s", result)
+				}
+			},
+		},
+		{
+			name: "custom component",
+			input: `package main
+func Counter() {
+	sig count = 0
+	return <button text={count} />
 }
 
-func TestTransformer_TSXWithExpression(t *testing.T) {
-	src := `package main
-public func Main() {
-let name = "World"
-<View>{name}</View>
-}
-`
-	p := parser.New(src)
-	prog := p.ParseProgram()
-
-	if len(p.Errors()) > 0 {
-		t.Fatalf("parser errors: %v", p.Errors())
+func App() {
+	return <Counter />
+}`,
+			validate: func(t *testing.T, result string) {
+				// Counter 应该生成 gui.NewButton
+				if !strings.Contains(result, "gui.NewButton") {
+					t.Errorf("expected gui.NewButton in Counter, got: %s", result)
+				}
+				// App 应该调用 Counter
+				if !strings.Contains(result, "Counter(") {
+					t.Errorf("expected Counter call, got: %s", result)
+				}
+			},
+		},
 	}
 
-	tfm := New()
-	result := tfm.Transform(prog)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := parser.New(tt.input)
+			prog := p.ParseProgram()
 
-	if !strings.Contains(result, `View(ViewProps{}, name)`) {
-		t.Errorf("expected TSX with expression, got: %s", result)
+			if len(p.Errors()) > 0 {
+				t.Fatalf("parser errors: %v", p.Errors())
+			}
+
+			tfm := New()
+			result := tfm.Transform(prog)
+			tt.validate(t, result)
+		})
 	}
 }
 
-func TestTransformer_TSXBooleanAttribute(t *testing.T) {
-	src := `package main
-public func Main() {
-<Input disabled />
-}
-`
-	p := parser.New(src)
-	prog := p.ParseProgram()
-
-	if len(p.Errors()) > 0 {
-		t.Fatalf("parser errors: %v", p.Errors())
+// TestTransformTSXDynamicParts 测试动态部分（Part 系统）
+func TestTransformTSXDynamicParts(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		validate func(t *testing.T, result string)
+	}{
+		{
+			name: "multiple dynamic values",
+			input: `package main
+func test() {
+	sig a = 1
+	sig b = 2
+	return <div text={a} width={b} />
+}`,
+			validate: func(t *testing.T, result string) {
+				if !strings.Contains(result, "gui.NewDiv") {
+					t.Errorf("expected gui.NewDiv, got: %s", result)
+				}
+				// 应该有多个动态值
+				if !strings.Contains(result, "a.Get()") {
+					t.Errorf("expected a.Get(), got: %s", result)
+				}
+				if !strings.Contains(result, "b.Get()") {
+					t.Errorf("expected b.Get(), got: %s", result)
+				}
+			},
+		},
+		{
+			name: "dynamic expression",
+			input: `package main
+func test() {
+	sig count = 0
+	return <div text={count + 1} />
+}`,
+			validate: func(t *testing.T, result string) {
+				if !strings.Contains(result, "gui.NewDiv") {
+					t.Errorf("expected gui.NewDiv, got: %s", result)
+				}
+				// 应该有表达式
+				if !strings.Contains(result, "count.Get() + 1") {
+					t.Errorf("expected expression, got: %s", result)
+				}
+			},
+		},
 	}
 
-	tfm := New()
-	result := tfm.Transform(prog)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := parser.New(tt.input)
+			prog := p.ParseProgram()
 
-	if !strings.Contains(result, `Input(InputProps{Disabled: true})`) {
-		t.Error("expected boolean attribute, got:", result)
+			if len(p.Errors()) > 0 {
+				t.Fatalf("parser errors: %v", p.Errors())
+			}
+
+			tfm := New()
+			result := tfm.Transform(prog)
+			tt.validate(t, result)
+		})
 	}
 }
