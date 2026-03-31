@@ -9,7 +9,17 @@ import (
 )
 
 func (p *Parser) parseExpr() ast.Expr {
-	return p.parseNullCoalesce()
+	return p.parseAssignment()
+}
+
+func (p *Parser) parseAssignment() ast.Expr {
+	x := p.parseNullCoalesce()
+	if p.check(token.ASSIGN) {
+		p.nextToken()
+		y := p.parseAssignment()  // 右结合
+		x = &ast.BinaryExpr{Op: token.ASSIGN, X: x, Y: y}
+	}
+	return x
 }
 
 func (p *Parser) parseNullCoalesce() ast.Expr {

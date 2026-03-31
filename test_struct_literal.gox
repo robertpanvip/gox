@@ -1,0 +1,15 @@
+package main
+
+struct Config {
+	Name: string
+	Age: int
+}
+
+func NewConfig(cfg: Config) {
+	println(cfg.Name)
+}
+
+func main() {
+	// 使用字面量对象创建结构体
+	NewConfig({Name: "John", Age: 30})
+}

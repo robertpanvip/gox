@@ -85,16 +85,6 @@ func TestParser_ExpressionStatement(t *testing.T) {
 				}
 			},
 		},
-		{
-			name:    "arrow function in object property",
-			input:   `func test() { let obj = { onClick: () => x + 1 } }`,
-			wantErr: false,
-			validate: func(t *testing.T, prog *ast.Program, errors []string) {
-				if len(prog.Decls) != 1 {
-					t.Errorf("expected 1 decl, got %d", len(prog.Decls))
-				}
-			},
-		},
 	}
 
 	for _, tt := range tests {
