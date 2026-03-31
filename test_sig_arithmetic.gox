@@ -1,0 +1,22 @@
+package main
+func test() {
+	sig a = 1
+	sig b = 2
+	
+	// 测试基础运算符与 sig 结合
+	let c = a + b
+	let d = a - b
+	let e = a * b
+	let f = a / b
+	let g = a % b
+	
+	// 测试比较运算符与 sig 结合
+	let h = a < b
+	let i = a > b
+	let j = a == b
+	let k = a != b
+	
+	// 测试赋值运算符与 sig 结合
+	a = a + 1
+	b = b - 1
+}

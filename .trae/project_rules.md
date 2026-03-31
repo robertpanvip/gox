@@ -7,7 +7,7 @@
 - **主要开发平台**: Windows 10/11
 - **Shell**: PowerShell 5.1+
 - **IDE**: WebStorm / Trae IDE\
-  PowerShell 不支持 &&
+-  PowerShell 不支持 &&
 
 ### Go 运行环境
 

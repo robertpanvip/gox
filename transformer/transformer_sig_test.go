@@ -832,6 +832,62 @@ func test() {
 				}
 			},
 		},
+		{
+			name: "sig with arithmetic operators",
+			input: `package main
+func test() {
+	sig a = 1
+	sig b = 2
+	let c = a + b
+	let d = a - b
+	let e = a * b
+	let f = a / b
+	let g = a % b
+}`,
+			validate: func(t *testing.T, result string) {
+				if !strings.Contains(result, "c := a.Get() + b.Get()") {
+					t.Errorf("expected sig addition, got: %s", result)
+				}
+				if !strings.Contains(result, "d := a.Get() - b.Get()") {
+					t.Errorf("expected sig subtraction, got: %s", result)
+				}
+				if !strings.Contains(result, "e := a.Get() * b.Get()") {
+					t.Errorf("expected sig multiplication, got: %s", result)
+				}
+				if !strings.Contains(result, "f := a.Get() / b.Get()") {
+					t.Errorf("expected sig division, got: %s", result)
+				}
+				if !strings.Contains(result, "g := a.Get() % b.Get()") {
+					t.Errorf("expected sig modulo, got: %s", result)
+				}
+			},
+		},
+		{
+			name: "sig with comparison operators",
+			input: `package main
+func test() {
+	sig a = 1
+	sig b = 2
+	let h = a < b
+	let i = a > b
+	let j = a == b
+	let k = a != b
+}`,
+			validate: func(t *testing.T, result string) {
+				if !strings.Contains(result, "h := a.Get() < b.Get()") {
+					t.Errorf("expected sig less than, got: %s", result)
+				}
+				if !strings.Contains(result, "i := a.Get() > b.Get()") {
+					t.Errorf("expected sig greater than, got: %s", result)
+				}
+				if !strings.Contains(result, "j := a.Get() == b.Get()") {
+					t.Errorf("expected sig equality, got: %s", result)
+				}
+				if !strings.Contains(result, "k := a.Get() != b.Get()") {
+					t.Errorf("expected sig inequality, got: %s", result)
+				}
+			},
+		},
 	}
 
 	for _, tt := range tests {
