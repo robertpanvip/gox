@@ -60,6 +60,7 @@ const (
 	CONST
 	VAR
 	SIG  // Signal 关键字
+	ENUM // 枚举关键字
 
 	FUNC
 	STRUCT
@@ -108,6 +109,7 @@ var keywords = map[string]TokenKind{
 	"const":     CONST,
 	"var":       VAR,
 	"sig":       SIG,  // Signal 关键字
+	"enum":      ENUM, // 枚举关键字
 	"func":      FUNC,
 	"struct":    STRUCT,
 	"mixed":     MIXED,

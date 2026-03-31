@@ -132,6 +132,9 @@ func (t *Transformer) Transform(prog *ast.Program) string {
 		case *ast.ConstDecl:
 			sb.WriteString(t.transformConstDecl(d))
 			sb.WriteString("\n")
+		case *ast.EnumDecl:
+			sb.WriteString(t.transformEnum(d))
+			sb.WriteString("\n\n")
 		case *ast.ExtendDecl:
 			if d.Type != nil {
 				// Get type name for extend declaration (supports array types like int[])

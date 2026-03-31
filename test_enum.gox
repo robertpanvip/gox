@@ -1,0 +1,29 @@
+package main
+
+// 简单枚举（Go 风格）
+enum Direction {
+    Up,
+    Down,
+    Left,
+    Right,
+}
+
+// 带值枚举
+enum Status {
+    Pending = 1,
+    Running = 2,
+    Done = 100,
+}
+
+// 无显式值的枚举
+enum Color {
+    Red,
+    Green,
+    Blue,
+}
+
+func test() {
+    let d = Direction.Up
+    let s = Status.Running
+    let c = Color.Red
+}

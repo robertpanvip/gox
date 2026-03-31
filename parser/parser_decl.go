@@ -57,6 +57,8 @@ func (p *Parser) parseDecl() ast.Decl {
 		return p.parseLetDecl()
 	case token.SIG:
 		return p.parseSigDecl(ast.Visibility{})
+	case token.ENUM:
+		return p.parseEnumDecl(ast.Visibility{})
 	default:
 		// Not a declaration, let parseStmt handle it
 		return nil
@@ -432,6 +434,63 @@ func (p *Parser) parseInterfaceDecl(vis ast.Visibility) *ast.InterfaceDecl {
 	p.expect(token.RBRACE)
 
 	return &ast.InterfaceDecl{Visibility: vis, Name: name, Methods: methods, Mixed: mixed}
+}
+
+func (p *Parser) parseEnumDecl(vis ast.Visibility) *ast.EnumDecl {
+	p.nextToken()
+
+	name := p.expect(token.IDENT).Literal
+
+	p.expect(token.LBRACE)
+
+	variants := make([]*ast.EnumVariant, 0)
+	var currentValue int64 = 0
+
+	for p.curTok.Kind != token.RBRACE && p.curTok.Kind != token.EOF {
+		if p.curTok.Kind == token.NEWLINE || p.curTok.Kind == token.COMMA {
+			p.nextToken()
+			continue
+		}
+
+		if p.curTok.Kind == token.RBRACE {
+			break
+		}
+
+		// Parse variant name
+		variantName := p.expect(token.IDENT).Literal
+		variant := &ast.EnumVariant{
+			Name:  variantName,
+			Value: nil,
+			P:     ast.Position{Line: p.curTok.Line, Col: p.curTok.Col},
+		}
+
+		// Check for explicit value assignment
+		if p.curTok.Kind == token.ASSIGN {
+			p.nextToken()
+			valueExpr := p.parseExpr()
+			variant.Value = valueExpr
+
+			// Update currentValue if value is an integer literal
+			if intLit, ok := valueExpr.(*ast.IntLit); ok {
+				currentValue = intLit.Value + 1
+			} else {
+				currentValue++
+			}
+		} else {
+			currentValue++
+		}
+
+		variants = append(variants, variant)
+	}
+
+	p.expect(token.RBRACE)
+
+	return &ast.EnumDecl{
+		Visibility: vis,
+		Name:       name,
+		Variants:   variants,
+		P:          ast.Position{Line: p.curTok.Line, Col: p.curTok.Col},
+	}
 }
 
 func (p *Parser) parseExtendDecl(vis ast.Visibility) *ast.ExtendDecl {

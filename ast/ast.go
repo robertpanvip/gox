@@ -80,6 +80,28 @@ func (s *StructDecl) node()  {}
 func (s *StructDecl) decl() {}
 func (s *StructDecl) Pos() token.Position { return s.P }
 
+// EnumVariant 枚举变体（成员）
+type EnumVariant struct {
+	Name  string
+	Value Expr  // 可选的显式值
+	P     Position
+}
+
+func (v *EnumVariant) node() {}
+func (v *EnumVariant) Pos() token.Position { return v.P }
+
+// EnumDecl 枚举声明
+type EnumDecl struct {
+	Visibility Visibility
+	Name       string
+	Variants   []*EnumVariant
+	P          Position
+}
+
+func (e *EnumDecl) node()  {}
+func (e *EnumDecl) decl() {}
+func (e *EnumDecl) Pos() token.Position { return e.P }
+
 type FuncParam struct {
 	Name string
 	Type Expr

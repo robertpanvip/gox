@@ -234,6 +234,46 @@ func (t *Transformer) transformFunc(f *ast.FuncDecl) string {
 	return sb.String()
 }
 
+func (t *Transformer) transformEnum(e *ast.EnumDecl) string {
+	var sb strings.Builder
+
+	name := e.Name
+	if e.Visibility.Public {
+		name = strings.Title(name)
+	}
+
+	// 生成 Go 风格的枚举：使用 type + const
+	sb.WriteString(fmt.Sprintf("// %s 枚举类型\n", name))
+	sb.WriteString(fmt.Sprintf("type %s int\n\n", name))
+
+	sb.WriteString("const (\n")
+
+	// 生成枚举常量
+	for i, variant := range e.Variants {
+		variantName := variant.Name
+		if e.Visibility.Public {
+			variantName = strings.Title(variantName)
+		}
+
+		if variant.Value != nil {
+			// 有显式值
+			value := t.transformExpr(variant.Value)
+			sb.WriteString(fmt.Sprintf("\t%s %s = %s\n", variantName, name, value))
+		} else {
+			// 无显式值，使用 iota 或递增
+			if i == 0 {
+				sb.WriteString(fmt.Sprintf("\t%s %s = iota\n", variantName, name))
+			} else {
+				sb.WriteString(fmt.Sprintf("\t%s\n", variantName))
+			}
+		}
+	}
+
+	sb.WriteString(")\n")
+
+	return sb.String()
+}
+
 // containsTSX checks if a function contains TSX elements
 func (t *Transformer) containsTSX(f *ast.FuncDecl) bool {
 	if f.Body == nil {
