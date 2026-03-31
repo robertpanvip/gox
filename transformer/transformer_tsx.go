@@ -258,9 +258,28 @@ func (t *TransformerTSX) extractDynamicValues(tsx *ast.TSXElement) []string {
 
 func (t *TransformerTSX) createComponent(tsx *ast.TSXElement, partCount int) string {
 	componentName := strings.Title(tsx.TagName)
-
-	// 绠€鍗曞疄鐜帮細鍒涘缓缁勪欢
-	return fmt.Sprintf("\t\t\t\troot := gui.New%s(gui.%sProps{})\n", componentName, componentName)
+	
+	// 鏋勫缓 Props 瀛楁
+	propsFields := make([]string, 0)
+	
+	// 娣诲姞浜嬩欢澶勭悊鍣?
+	for _, attr := range tsx.Attributes {
+		if strings.HasPrefix(strings.ToLower(attr.Name), "on") {
+			// 浜嬩欢澶勭悊鍣細 onClick => OnClick: func() { ... }
+			eventName := strings.Title(attr.Name)
+			if _, ok := attr.Value.(*ast.FunctionLiteral); ok {
+				// 绠€鍖栧鐞嗭細鏆傛椂璁颁负 nil
+				propsFields = append(propsFields, fmt.Sprintf("%s: nil", eventName))
+			}
+		}
+	}
+	
+	propsStr := "{}"
+	if len(propsFields) > 0 {
+		propsStr = fmt.Sprintf("{%s}", strings.Join(propsFields, ", "))
+	}
+	
+	return fmt.Sprintf("\t\t\t\troot := gui.New%s(gui.%sProps%s)\n", componentName, componentName, propsStr)
 }
 
 // transformStmt 杞崲璇彞锛堟敮鎸?sig 鍜?TSX锛?
@@ -292,4 +311,5 @@ type StateVar struct {
 	Name  string
 	Value string
 }
+
 
