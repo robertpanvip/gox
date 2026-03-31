@@ -210,3 +210,74 @@ func TestParser_ArrowFunction(t *testing.T) {
 		})
 	}
 }
+
+// TestParser_ArrowFunctionAsStatement 测试箭头函数作为表达式语句
+func TestParser_ArrowFunctionAsStatement(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		wantErr  bool
+		validate func(t *testing.T, prog *ast.Program, errors []string)
+	}{
+		{
+			name:    "arrow function as statement",
+			input:   `func test() { () => x + 1 }`,
+			wantErr: false,
+			validate: func(t *testing.T, prog *ast.Program, errors []string) {
+				if len(prog.Decls) != 1 {
+					t.Errorf("expected 1 decl, got %d", len(prog.Decls))
+				}
+			},
+		},
+		{
+			name:    "arrow function assignment as statement",
+			input:   `func test() { () => x = x + 1 }`,
+			wantErr: false,
+			validate: func(t *testing.T, prog *ast.Program, errors []string) {
+				if len(prog.Decls) != 1 {
+					t.Errorf("expected 1 decl, got %d", len(prog.Decls))
+				}
+			},
+		},
+		{
+			name:    "arrow function assigned to variable",
+			input:   `func test() { let fn = () => x + 1 }`,
+			wantErr: false,
+			validate: func(t *testing.T, prog *ast.Program, errors []string) {
+				if len(prog.Decls) != 1 {
+					t.Errorf("expected 1 decl, got %d", len(prog.Decls))
+				}
+			},
+		},
+		{
+			name:    "arrow function with assignment in body",
+			input:   `func test() { let fn = () => x = x + 1 }`,
+			wantErr: false,
+			validate: func(t *testing.T, prog *ast.Program, errors []string) {
+				if len(prog.Decls) != 1 {
+					t.Errorf("expected 1 decl, got %d", len(prog.Decls))
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := New(tt.input)
+			prog := p.ParseProgram()
+
+			hasErrors := len(p.Errors()) > 0
+			if hasErrors && !tt.wantErr {
+				t.Fatalf("parser errors: %v", p.Errors())
+			}
+
+			if !hasErrors && tt.wantErr {
+				t.Fatalf("expected errors but got none")
+			}
+
+			if tt.validate != nil {
+				tt.validate(t, prog, p.Errors())
+			}
+		})
+	}
+}
