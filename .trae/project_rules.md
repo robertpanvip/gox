@@ -3,20 +3,24 @@
 ## 开发环境
 
 ### 操作系统
+
 - **主要开发平台**: Windows 10/11
 - **Shell**: PowerShell 5.1+
-- **IDE**: WebStorm / Trae IDE
+- **IDE**: WebStorm / Trae IDE\
+  PowerShell 不支持 &&
 
 ### Go 运行环境
 
 **Go 编译器位置**: `.\runtime\go\bin\go.exe`
 
 **编译项目**:
+
 ```powershell
 .\runtime\go\bin\go.exe build -o gox.exe cmd/gox/main.go
 ```
 
 **运行测试**:
+
 ```powershell
 # 编译 gox 编译器
 .\runtime\go\bin\go.exe build -o gox.exe cmd/gox/main.go
@@ -32,6 +36,7 @@ Copy-Item gox.exe test\ -Force
 ```
 
 **运行 GUI 程序**:
+
 ```powershell
 # 方式 1: 使用 run_tsx_gui.go 脚本
 .\runtime\go\bin\go.exe run run_tsx_gui.go
@@ -44,6 +49,7 @@ cd test
 ```
 
 **批处理脚本**:
+
 ```powershell
 # 使用提供的批处理脚本
 .\run_fx_simple2_test.bat
@@ -52,12 +58,14 @@ cd test
 ### 快速开始示例
 
 **1. 编译 Gox 编译器**:
+
 ```powershell
 cd e:\Soft\JetBrains\WebStorm WorkSpace\go-ts
 .\runtime\go\bin\go.exe build -o gox.exe cmd/gox/main.go
 ```
 
 **2. 运行简单的 Gox 程序**:
+
 ```powershell
 # 直接运行（输出到控制台）
 .\gox.exe test\demo_counter.gox
@@ -72,12 +80,14 @@ Get-Content test\demo_counter.go
 **3. 运行 GUI 示例（显示窗口）**:
 
 **方式 1: 使用自动化脚本（推荐）**:
+
 ```powershell
 # 一键运行：解析 -> 转换 -> 编译 -> 运行 GUI
 .\runtime\go\bin\go.exe run run_tsx_gui.go
 ```
 
 **方式 2: 手动步骤**:
+
 ```powershell
 # Step 1: 转换 Gox 为 Go
 .\gox.exe -o test\tsx_gui_demo.go test\tsx_gui_demo.gox
@@ -91,6 +101,7 @@ cd test
 ```
 
 **4. 运行测试套件**:
+
 ```powershell
 # 编译 gox 编译器
 .\runtime\go\bin\go.exe build -o gox.exe cmd/gox/main.go
@@ -105,6 +116,7 @@ Copy-Item gox.exe test\ -Force
 ### 完整测试用例运行流程
 
 #### 步骤 1: 准备环境
+
 ```powershell
 # 1. 进入项目目录
 cd e:\Soft\JetBrains\WebStorm WorkSpace\go-ts
@@ -120,6 +132,7 @@ cd test
 ```
 
 #### 步骤 2: 运行测试用例（查看输出）
+
 ```powershell
 # 运行测试用例（会输出 token 序列、AST、生成的 Go 代码）
 .\gox.exe test_fx_assignment.gox
@@ -129,11 +142,13 @@ cd test
 ```
 
 **输出说明**：
+
 - `=== Tokens ===` - 词法分析结果（每个 token 一行）
 - `=== AST ===` - 抽象语法树（显示解析后的结构）
 - `=== Generated Go Code ===` - 生成的 Go 代码
 
 #### 步骤 3: 生成 Go 文件
+
 ```powershell
 # 使用 -o 参数生成 Go 文件
 .\gox.exe -o demo_counter.go demo_counter.gox
@@ -147,6 +162,7 @@ notepad output.txt
 ```
 
 #### 步骤 4: 编译生成的 Go 代码
+
 ```powershell
 # 编译 Go 程序
 ..\runtime\go\bin\go.exe build demo_counter.go
@@ -156,6 +172,7 @@ notepad output.txt
 ```
 
 #### 步骤 5: 运行程序
+
 ```powershell
 # 运行编译后的程序
 .\demo_counter.exe
@@ -166,12 +183,14 @@ notepad output.txt
 ### 快速运行脚本
 
 **一键运行测试（批处理）**:
+
 ```powershell
 # 使用批处理脚本（如果存在）
 .\run_fx_simple2_test.bat
 ```
 
 **一键运行 GUI 程序**:
+
 ```powershell
 # 在项目根目录运行
 cd e:\Soft\JetBrains\WebStorm WorkSpace\go-ts
@@ -181,6 +200,7 @@ cd e:\Soft\JetBrains\WebStorm WorkSpace\go-ts
 ### 实际运行示例
 
 **示例 1: 运行简单的 FX 组件测试**
+
 ```powershell
 # 完整流程
 cd e:\Soft\JetBrains\WebStorm WorkSpace\go-ts
@@ -191,6 +211,7 @@ cd test
 ```
 
 **示例 2: 运行完整的计数器应用**
+
 ```powershell
 # 完整流程
 cd e:\Soft\JetBrains\WebStorm WorkSpace\go-ts
@@ -203,6 +224,7 @@ cd test
 ```
 
 **示例 3: 查看生成的代码**
+
 ```powershell
 # 只生成代码，不运行
 cd e:\Soft\JetBrains\WebStorm WorkSpace\go-ts\test
@@ -213,6 +235,7 @@ Get-Content output.go
 ### GUI 测试用例运行示例
 
 **运行 TSX GUI 演示**:
+
 ```powershell
 # 方式 1: 自动运行（推荐）
 cd e:\Soft\JetBrains\WebStorm WorkSpace\go-ts
@@ -226,6 +249,7 @@ cd test
 ```
 
 **运行 FX 组件示例**:
+
 ```powershell
 # 编译 FX 组件
 cd test
@@ -240,6 +264,7 @@ cd test
 
 **Q: 找不到 go.exe？**
 A: 确保 Go 运行环境在 `.\runtime\go\bin\` 目录下，或者使用系统安装的 Go：
+
 ```powershell
 go build -o gox.exe cmd/gox/main.go
 ```
@@ -249,6 +274,7 @@ A: 检查是否安装了 GUI 依赖（gg, glfw 等），并确保在 Windows 环
 
 **Q: 如何调试 Parser 错误？**
 A: 运行 gox 时会输出详细的 token 序列和 AST 信息：
+
 ```powershell
 .\gox.exe test\your_test.gox 2>&1 | Select-String -Pattern "Parser Errors" -Context 5
 ```

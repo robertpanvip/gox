@@ -365,6 +365,26 @@ func TestParser_ExpressionStatement_Complex(t *testing.T) {
 			},
 		},
 		{
+			name:    "equality operators",
+			input:   `func test() { a == b; c != d }`,
+			wantErr: false,
+			validate: func(t *testing.T, prog *ast.Program, errors []string) {
+				if len(errors) > 0 {
+					t.Errorf("parser errors: %v", errors)
+				}
+			},
+		},
+		{
+			name:    "comparison operators",
+			input:   `func test() { a < b; c > d; e <= f; g >= h }`,
+			wantErr: false,
+			validate: func(t *testing.T, prog *ast.Program, errors []string) {
+				if len(errors) > 0 {
+					t.Errorf("parser errors: %v", errors)
+				}
+			},
+		},
+		{
 			name:    "parenthesized expression",
 			input:   `func test() { (a + b) * c }`,
 			wantErr: false,

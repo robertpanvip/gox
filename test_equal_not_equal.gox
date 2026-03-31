@@ -1,0 +1,5 @@
+package main
+func test() {
+	let a = (x == y)
+	let b = (x != y)
+}

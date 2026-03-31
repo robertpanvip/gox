@@ -66,11 +66,6 @@ func (p *Parser) parseEquality() ast.Expr {
 func (p *Parser) parseRelational() ast.Expr {
 	x := p.parseAdditive()
 	for p.curTok.Kind == token.LESS || p.curTok.Kind == token.LESS_EQUAL || p.curTok.Kind == token.GREATER || p.curTok.Kind == token.GREATER_EQUAL {
-		// 如果是 < 且后面是 IDENT，说明这是 TSX 元素，不是小于运算符
-		if p.curTok.Kind == token.LESS && p.peekTok.Kind == token.IDENT {
-			return x
-		}
-		
 		op := p.curTok.Kind
 		p.nextToken()
 		y := p.parseAdditive()
