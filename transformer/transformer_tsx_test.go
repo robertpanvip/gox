@@ -7,8 +7,8 @@ import (
 	"github.com/gox-lang/gox/parser"
 )
 
-// TestTransformTSXLitHTML lit-html 风格的 TSX 转换测试（TemplateResult）
-func TestTransformTSXLitHTML(t *testing.T) {
+// TestTransformTSX TSX 转换测试（TemplateResult）
+func TestTransformTSX(t *testing.T) {
 	tests := []struct {
 		name     string
 		input    string
