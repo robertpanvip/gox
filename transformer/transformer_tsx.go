@@ -1,52 +1,52 @@
-﻿package transformer
+package transformer
 
 import (
 	"fmt"
 	"strings"
 
 	"github.com/gox-lang/gox/ast"
+	"github.com/gox-lang/gox/token"
 )
 
-// TransformerTSX TSX 椋庢牸鐨勮浆鎹㈠櫒锛圱emplateResult锛?
+// TransformerTSX TSX 风格的转换器（TemplateResult）
 type TransformerTSX struct {
-	imports map[string]bool
+	imports      map[string]bool
+	transformer  *Transformer  // 引用主转换器，用于调用 transformExpr
+	sigVars      map[string]bool  // Signal 变量追踪
 }
 
-// NewTSX 鍒涘缓 TSX 椋庢牸鐨勮浆鎹㈠櫒
+// NewTSX 创建 TSX 风格的转换器
 func NewTSX() *TransformerTSX {
 	return &TransformerTSX{
 		imports: make(map[string]bool),
+		sigVars: make(map[string]bool),
 	}
 }
 
-// Transform 杞崲绋嬪簭
+// SetTransformer 设置主转换器引用
+func (t *TransformerTSX) SetTransformer(tr *Transformer) {
+	t.transformer = tr
+}
+
+// Transform 转换程序
 func (t *TransformerTSX) Transform(prog *ast.Program) string {
 	var sb strings.Builder
 
-	// 鍐欏叆 package
+	// 写入 package
 	if prog.Package != nil {
 		sb.WriteString(fmt.Sprintf("package %s\n\n", prog.Package.Name))
 	}
 
-	// 鏀堕泦瀵煎叆
+	// 收集导入
 	t.collectImports(prog)
 
-	// 杈撳嚭瀵煎叆
+	// 输出导入
 	sb.WriteString("import (\n")
 	sb.WriteString("\t\"github.com/gox-lang/gox/gui\"\n")
 	for path := range t.imports {
 		sb.WriteString(fmt.Sprintf("\t%q\n", path))
 	}
 	sb.WriteString(")\n\n")
-
-	// 杞崲 FX 鍑芥暟锛堝凡搴熷純锛屼繚鐣欏嚱鏁扮鍚嶄互鍏煎鏃т唬鐮侊級
-	// FX 鍔熻兘宸茬Щ闄わ紝涓嶅啀澶勭悊
-	for _, decl := range prog.Decls {
-		if fn, ok := decl.(*ast.FuncDecl); ok {
-			// 涓嶅啀妫€鏌?IsFx锛屾墍鏈夊嚱鏁伴兘鎸夋櫘閫氬嚱鏁板鐞?
-			_ = fn
-		}
-	}
 
 	return sb.String()
 }
@@ -59,12 +59,7 @@ func (t *TransformerTSX) collectImports(prog *ast.Program) {
 	}
 }
 
-// TransformFxFunc 杞崲 FX 鍑芥暟涓?lit-html 椋庢牸锛堝叕寮€鏂规硶锛?
-func (t *TransformerTSX) TransformFxFunc(f *ast.FuncDecl) string {
-	return t.transformFxFunc(f)
-}
-
-// TransformFunc 杞崲鏅€氬嚱鏁颁负 lit-html 椋庢牸锛堟敮鎸?sig 鍏抽敭瀛楋級
+// TransformFunc 转换普通函数为 lit-html 风格（支持 sig 关键字）
 func (t *TransformerTSX) TransformFunc(f *ast.FuncDecl) string {
 	return t.transformFuncWithSig(f)
 }
@@ -74,11 +69,11 @@ func (t *TransformerTSX) transformFuncWithSig(f *ast.FuncDecl) string {
 
 	componentName := strings.Title(f.Name)
 
-	// 鐢熸垚鍑芥暟绛惧悕
-	sb.WriteString(fmt.Sprintf("// %s 缁勪欢鍑芥暟\n", componentName))
+	// 生成函数签名
+	sb.WriteString(fmt.Sprintf("// %s 组件函数\n", componentName))
 	sb.WriteString(fmt.Sprintf("func %s() {\n", componentName))
 
-	// 杞崲鍑芥暟浣擄紙鍖呮嫭 sig 澹版槑锛?
+	// 转换函数体（包括 sig 声明）
 	if f.Body != nil {
 		for _, stmt := range f.Body.List {
 			sb.WriteString(t.transformStmt(stmt))
@@ -90,118 +85,37 @@ func (t *TransformerTSX) transformFuncWithSig(f *ast.FuncDecl) string {
 	return sb.String()
 }
 
-func (t *TransformerTSX) transformFxFunc(f *ast.FuncDecl) string {
-	var sb strings.Builder
-
-	componentName := strings.Title(f.Name)
-
-	// 鏀堕泦鐘舵€佸彉閲?
-	stateVars := t.collectStateVars(f.Body)
-
-	// 鐢熸垚鍑芥暟绛惧悕
-	sb.WriteString(fmt.Sprintf("// %s 缁勪欢鍑芥暟\n", componentName))
-	sb.WriteString(fmt.Sprintf("func %s() func() gui.TemplateResult {\n", componentName))
-
-	// 鐘舵€佸彉閲忎綔涓洪棴鍖呭彉閲?
-	for _, sv := range stateVars {
-		sb.WriteString(fmt.Sprintf("\t%s := %s\n", sv.Name, sv.Value))
-	}
-
-	// 杩斿洖缁勪欢鍑芥暟
-	sb.WriteString("\treturn func() gui.TemplateResult {\n")
-
-	// 杞崲 TSX
-	if f.Body != nil {
-		returnStmt := t.findReturnStmt(f.Body)
-		if returnStmt != nil {
-			if tsx, ok := returnStmt.Result.(*ast.TSXElement); ok {
-				sb.WriteString(t.transformTSX(tsx, stateVars))
-			}
-		}
-	}
-
-	sb.WriteString("\t}\n")
-	sb.WriteString("}\n")
-
-	return sb.String()
-}
-
-func (t *TransformerTSX) collectStateVars(block *ast.BlockStmt) []StateVar {
-	vars := make([]StateVar, 0)
-
-	if block == nil {
-		return vars
-	}
-
-	for _, stmt := range block.List {
-		if varDecl, ok := stmt.(*ast.VarDecl); ok {
-			vars = append(vars, StateVar{
-				Name:  varDecl.Name,
-				Value: t.transformExpr(varDecl.Value),
-			})
-		}
-	}
-
-	return vars
-}
-
-func (t *TransformerTSX) findReturnStmt(block *ast.BlockStmt) *ast.ReturnStmt {
-	for _, stmt := range block.List {
-		if ret, ok := stmt.(*ast.ReturnStmt); ok {
-			return ret
-		}
-	}
-	return nil
-}
-
-func (t *TransformerTSX) transformExpr(expr ast.Expr) string {
-	if expr == nil {
-		return ""
-	}
-
-	switch e := expr.(type) {
-	case *ast.IntLit:
-		return fmt.Sprintf("%d", e.Value)
-	case *ast.StringLit:
-		return fmt.Sprintf("%q", e.Value)
-	case *ast.Ident:
-		return e.Name
-	default:
-		return "nil"
-	}
-}
-
 func (t *TransformerTSX) transformTSX(tsx *ast.TSXElement, stateVars []StateVar) string {
 	var sb strings.Builder
 
-	// 鎻愬彇鍔ㄦ€佸€?
+	// 提取动态值
 	dynamicValues := t.extractDynamicValues(tsx)
 
 	// StaticCode
 	sb.WriteString(fmt.Sprintf("\t\treturn gui.TemplateResult{\n"))
 	sb.WriteString(fmt.Sprintf("\t\t\tStaticCode: `<%s>`,\n", tsx.TagName))
 
-	// Dynamic 鏁扮粍
+	// Dynamic 数组
 	if len(dynamicValues) > 0 {
 		sb.WriteString(fmt.Sprintf("\t\t\tDynamic: []interface{}{%s},\n", strings.Join(dynamicValues, ", ")))
 	} else {
 		sb.WriteString("\t\t\tDynamic: []interface{}{},\n")
 	}
 
-	// Factory 鍑芥暟
+	// Factory 函数
 	sb.WriteString("\t\t\tFactory: func() (gui.Component, []gui.Part) {\n")
 
-	// 鍒涘缓 Parts
+	// 创建 Parts
 	partCount := len(dynamicValues)
 	for i := 0; i < partCount; i++ {
 		sb.WriteString(fmt.Sprintf("\t\t\t\tcomment%d := gui.NewComment(\"dynamic-%d\")\n", i, i))
 		sb.WriteString(fmt.Sprintf("\t\t\t\tpart%d := gui.NewTextPart(comment%d)\n", i, i))
 	}
 
-	// 鍒涘缓缁勪欢
+	// 创建组件
 	sb.WriteString(t.createComponent(tsx, partCount))
 
-	// 杩斿洖
+	// 返回
 	if partCount > 0 {
 		parts := make([]string, partCount)
 		for i := 0; i < partCount; i++ {
@@ -221,16 +135,16 @@ func (t *TransformerTSX) transformTSX(tsx *ast.TSXElement, stateVars []StateVar)
 func (t *TransformerTSX) extractDynamicValues(tsx *ast.TSXElement) []string {
 	values := make([]string, 0)
 
-	// 妫€鏌ュ睘鎬?
+	// 检查属性
 	for _, attr := range tsx.Attributes {
 		if attr.Value != nil {
-			// 妫€鏌ユā鏉垮瓧绗︿覆
+			// 检查模板字符串
 			if tmpl, ok := attr.Value.(*ast.TemplateString); ok {
 				for _, expr := range tmpl.Exprs {
 					values = append(values, t.transformExpr(expr))
 				}
 			} else {
-				// 妫€鏌ユ槸鍚︽槸鏍囪瘑绗︽垨鍏朵粬琛ㄨ揪寮忥紙闈炲瓧绗︿覆瀛楅潰閲忥級
+				// 检查是否是标识符或其他表达式（非字符串字面量）
 				if _, isStringLit := attr.Value.(*ast.StringLit); !isStringLit {
 					values = append(values, t.transformExpr(attr.Value))
 				}
@@ -238,15 +152,15 @@ func (t *TransformerTSX) extractDynamicValues(tsx *ast.TSXElement) []string {
 		}
 	}
 
-	// 妫€鏌ュ瓙鑺傜偣
+	// 检查子节点
 	for _, child := range tsx.Children {
-		// 妫€鏌ユā鏉垮瓧绗︿覆
+		// 检查模板字符串
 		if tmpl, ok := child.(*ast.TemplateString); ok {
 			for _, expr := range tmpl.Exprs {
 				values = append(values, t.transformExpr(expr))
 			}
 		} else if child != nil {
-			// 妫€鏌ユ槸鍚︽槸鏍囪瘑绗︽垨鍏朵粬琛ㄨ揪寮忥紙闈炲瓧绗︿覆瀛楅潰閲忥級
+			// 检查是否是标识符或其他表达式（非字符串字面量）
 			if _, isStringLit := child.(*ast.StringLit); !isStringLit {
 				values = append(values, t.transformExpr(child))
 			}
@@ -259,17 +173,28 @@ func (t *TransformerTSX) extractDynamicValues(tsx *ast.TSXElement) []string {
 func (t *TransformerTSX) createComponent(tsx *ast.TSXElement, partCount int) string {
 	componentName := strings.Title(tsx.TagName)
 	
-	// 鏋勫缓 Props 瀛楁
+	// 构建 Props 字段
 	propsFields := make([]string, 0)
 	
-	// 娣诲姞浜嬩欢澶勭悊鍣?
+	// 添加事件处理器
 	for _, attr := range tsx.Attributes {
 		if strings.HasPrefix(strings.ToLower(attr.Name), "on") {
-			// 浜嬩欢澶勭悊鍣細 onClick => OnClick: func() { ... }
+			// 事件处理器：onClick => OnClick: func() { ... }
 			eventName := strings.Title(attr.Name)
-			if _, ok := attr.Value.(*ast.FunctionLiteral); ok {
-				// 绠€鍖栧鐞嗭細鏆傛椂璁颁负 nil
-				propsFields = append(propsFields, fmt.Sprintf("%s: nil", eventName))
+			if fnLit, ok := attr.Value.(*ast.FunctionLiteral); ok {
+				// 使用主转换器的 transformExpr 转换箭头函数
+				// 先同步 sigVars 到主转换器
+				if t.transformer != nil {
+					// 同步 sigVars
+					for sigVar := range t.sigVars {
+						t.transformer.sigVars[sigVar] = true
+					}
+					fnCode := t.transformer.transformExpr(fnLit)
+					propsFields = append(propsFields, fmt.Sprintf("%s: %s", eventName, fnCode))
+				} else {
+					// 如果没有主转换器，暂时记为 nil
+					propsFields = append(propsFields, fmt.Sprintf("%s: nil", eventName))
+				}
 			}
 		}
 	}
@@ -282,13 +207,15 @@ func (t *TransformerTSX) createComponent(tsx *ast.TSXElement, partCount int) str
 	return fmt.Sprintf("\t\t\t\troot := gui.New%s(gui.%sProps%s)\n", componentName, componentName, propsStr)
 }
 
-// transformStmt 杞崲璇彞锛堟敮鎸?sig 鍜?TSX锛?
+// transformStmt 转换语句（支持 sig 和 TSX）
 func (t *TransformerTSX) transformStmt(stmt ast.Stmt) string {
 	var sb strings.Builder
 	
 	switch s := stmt.(type) {
 	case *ast.SigDecl:
 		// sig count = 0  ->  count := gox.New(0)
+		// 记录 Signal 变量
+		t.sigVars[s.Name] = true
 		sb.WriteString(fmt.Sprintf("\t%s := gox.New(%s)\n", s.Name, t.transformExpr(s.Value)))
 	case *ast.ReturnStmt:
 		if s.Result != nil {
@@ -299,17 +226,83 @@ func (t *TransformerTSX) transformStmt(stmt ast.Stmt) string {
 			}
 		}
 	default:
-		// 鍏朵粬璇彞浣跨敤鏅€氳浆鎹?
+		// 其他语句使用普通转换
 		sb.WriteString(fmt.Sprintf("\t// TODO: transform statement %T\n", stmt))
 	}
 	
 	return sb.String()
 }
 
-// StateVar 鐘舵€佸彉閲?
+// transformExpr 转换表达式（支持 Signal 变量）
+func (t *TransformerTSX) transformExpr(expr ast.Expr) string {
+	if expr == nil {
+		return ""
+	}
+
+	switch e := expr.(type) {
+	case *ast.IntLit:
+		return fmt.Sprintf("%d", e.Value)
+	case *ast.StringLit:
+		return fmt.Sprintf("%q", e.Value)
+	case *ast.Ident:
+		// 检查是否是 Signal 变量，如果是则添加.Get()
+		if t.sigVars[e.Name] {
+			return fmt.Sprintf("%s.Get()", e.Name)
+		}
+		return e.Name
+	case *ast.BinaryExpr:
+		// 特殊处理赋值表达式：检查是否是 Signal 变量赋值
+		if e.Op == token.ASSIGN {
+			if ident, ok := e.X.(*ast.Ident); ok {
+				if t.sigVars[ident.Name] {
+					// count = count + 1  ->  count.Set(count.Get() + 1)
+					return fmt.Sprintf("%s.Set(%s)", ident.Name, t.transformExpr(e.Y))
+				}
+			}
+		}
+		x := t.transformExpr(e.X)
+		y := t.transformExpr(e.Y)
+		op := t.mapOp(e.Op)
+		return x + " " + op + " " + y
+	default:
+		return "nil"
+	}
+}
+
+// mapOp 映射操作符
+func (t *TransformerTSX) mapOp(op token.TokenKind) string {
+	// 根据 token.go 中的定义映射
+	switch op {
+	case token.ASSIGN:
+		return "="
+	case token.PLUS:
+		return "+"
+	case token.MINUS:
+		return "-"
+	case token.STAR:
+		return "*"
+	case token.SLASH:
+		return "/"
+	case token.PERCENT:
+		return "%"
+	case token.LESS:
+		return "<"
+	case token.GREATER:
+		return ">"
+	case token.LESS_EQUAL:
+		return "<="
+	case token.GREATER_EQUAL:
+		return ">="
+	case token.EQUAL:
+		return "=="
+	case token.NOT_EQUAL:
+		return "!="
+	}
+	return ""
+}
+
+// StateVar 状态变量
 type StateVar struct {
 	Name  string
 	Value string
 }
-
-

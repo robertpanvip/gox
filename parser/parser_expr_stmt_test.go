@@ -124,10 +124,11 @@ func TestParser_ExpressionStatement_TSX(t *testing.T) {
 		{
 			name:    "tsx with arrow function attribute",
 			input:   `func test() { return <button onClick={() => count = count + 1} /> }`,
-			wantErr: true, // 目前会失败
+			wantErr: false, // 现在应该能成功
 			validate: func(t *testing.T, prog *ast.Program, errors []string) {
-				// 这个测试目前会失败，因为箭头函数解析有问题
-				t.Logf("Expected failure: %v", errors)
+				if len(prog.Decls) != 1 {
+					t.Errorf("expected 1 decl, got %d", len(prog.Decls))
+				}
 			},
 		},
 		{
@@ -246,6 +247,38 @@ func TestParser_ArrowFunctionAsStatement(t *testing.T) {
 			validate: func(t *testing.T, prog *ast.Program, errors []string) {
 				if len(prog.Decls) != 1 {
 					t.Errorf("expected 1 decl, got %d", len(prog.Decls))
+				}
+			},
+		},
+		{
+			name:    "arrow function body is exprstmt not returnstmt",
+			input:   `func test() { let fn = () => x = x + 1 }`,
+			wantErr: false,
+			validate: func(t *testing.T, prog *ast.Program, errors []string) {
+				// 验证箭头函数体是 ExprStmt 而不是 ReturnStmt
+				fnDecl := prog.Decls[0].(*ast.FuncDecl)
+				varDecl := fnDecl.Body.List[0].(*ast.VarDecl)
+				arrowFn := varDecl.Value.(*ast.FunctionLiteral)
+				
+				// Body 应该是 BlockStmt
+				block := arrowFn.Body
+				
+				// Block 中应该只有一个语句
+				if len(block.List) != 1 {
+					t.Errorf("expected 1 statement in body, got %d", len(block.List))
+					return
+				}
+				
+				// 语句应该是 ExprStmt，而不是 ReturnStmt
+				exprStmt, ok := block.List[0].(*ast.ExprStmt)
+				if !ok {
+					t.Errorf("expected statement to be ExprStmt, got %T", block.List[0])
+					return
+				}
+				
+				// ExprStmt 的 X 应该是 BinaryExpr (赋值表达式)
+				if _, ok := exprStmt.X.(*ast.BinaryExpr); !ok {
+					t.Errorf("expected expression to be BinaryExpr, got %T", exprStmt.X)
 				}
 			},
 		},

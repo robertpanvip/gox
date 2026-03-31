@@ -204,10 +204,12 @@ func (p *Parser) parsePrimary() ast.Expr {
 					P:       ast.Position{Line: pos.Line, Col: pos.Col},
 				}
 			} else {
+				// 箭头函数体是表达式时，包装成 ExprStmt
+				// 这样赋值表达式等都能正确处理
 				body := p.parseExpr()
 				return &ast.FunctionLiteral{
 					Params:  []*ast.FuncParam{{Name: name}},
-					Body:    &ast.BlockStmt{List: []ast.Stmt{&ast.ReturnStmt{Result: body}}},
+					Body:    &ast.BlockStmt{List: []ast.Stmt{&ast.ExprStmt{X: body}}},
 					IsArrow: true,
 					P:       ast.Position{Line: pos.Line, Col: pos.Col},
 				}
@@ -615,11 +617,12 @@ func (p *Parser) parseArrowFunction() ast.Expr {
 		block := p.parseBlock()
 		return &ast.FunctionLiteral{Params: params, Body: block, IsArrow: true, P: pos}
 	} else {
-		// Expression body
+		// Expression body - 包装成 ExprStmt 而不是 ReturnStmt
+		// 这样赋值表达式等都能正确处理
 		body := p.parseExpr()
 		return &ast.FunctionLiteral{
 			Params:  params,
-			Body:    &ast.BlockStmt{List: []ast.Stmt{&ast.ReturnStmt{Result: body}}},
+			Body:    &ast.BlockStmt{List: []ast.Stmt{&ast.ExprStmt{X: body}}},
 			IsArrow: true,
 			P:       pos,
 		}

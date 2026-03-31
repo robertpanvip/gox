@@ -357,6 +357,13 @@ func (t *Transformer) transformExpr(expr ast.Expr) string {
 		}
 
 		if e.IsArrow && e.Body != nil && len(e.Body.List) == 1 {
+			// 处理表达式体：() => expr
+			if exprStmt, ok := e.Body.List[0].(*ast.ExprStmt); ok {
+				body := t.transformExpr(exprStmt.X)
+				return fmt.Sprintf("func(%s) { %s }",
+					formatFuncParams(params, paramTypes), body)
+			}
+			// 处理返回语句体：() => { return expr }
 			if retStmt, ok := e.Body.List[0].(*ast.ReturnStmt); ok {
 				body := t.transformExpr(retStmt.Result)
 				if retType != "" {
@@ -407,6 +414,15 @@ func (t *Transformer) transformExpr(expr ast.Expr) string {
 		return obj + "[" + index + "]"
 
 	case *ast.BinaryExpr:
+		// 特殊处理赋值表达式：检查是否是 Signal 变量赋值
+		if e.Op == token.ASSIGN {
+			if ident, ok := e.X.(*ast.Ident); ok {
+				if t.isSigVar(ident.Name) {
+					// count = count + 1  ->  count.Set(count.Get() + 1)
+					return fmt.Sprintf("%s.Set(%s)", ident.Name, t.transformExpr(e.Y))
+				}
+			}
+		}
 		x := t.transformExpr(e.X)
 		y := t.transformExpr(e.Y)
 		op := t.mapOp(e.Op)

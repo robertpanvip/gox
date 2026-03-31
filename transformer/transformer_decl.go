@@ -146,6 +146,7 @@ func (t *Transformer) transformFunc(f *ast.FuncDecl) string {
 	if t.containsTSX(f) {
 		// Use TSX style transformation for TSX functions
 		tsxTfm := NewTSX()
+		tsxTfm.SetTransformer(t)  // 璁剧疆涓昏浆鎹㈠櫒寮曠敤
 		return tsxTfm.TransformFunc(f)
 	}
 	

@@ -508,3 +508,344 @@ func Func2() {
 		})
 	}
 }
+
+// TestTransformSigArrowFunction 测试箭头函数中的 Signal
+func TestTransformSigArrowFunction(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		validate func(t *testing.T, result string)
+	}{
+		{
+			name: "arrow function with sig assignment",
+			input: `package main
+func test() {
+	sig count = 0
+	let fn = () => count = count + 1
+}`,
+			validate: func(t *testing.T, result string) {
+				if !strings.Contains(result, "count := gox.New(0)") {
+					t.Errorf("expected sig declaration, got: %s", result)
+				}
+				if !strings.Contains(result, "func() { count.Set(count.Get() + 1) }") {
+					t.Errorf("expected arrow function with .Set() and .Get(), got: %s", result)
+				}
+			},
+		},
+		{
+			name: "arrow function with multiple sigs",
+			input: `package main
+func test() {
+	sig a = 1
+	sig b = 2
+	let fn = () => a = a + b
+}`,
+			validate: func(t *testing.T, result string) {
+				if !strings.Contains(result, "func() { a.Set(a.Get() + b.Get()) }") {
+					t.Errorf("expected arrow function with multiple sigs, got: %s", result)
+				}
+			},
+		},
+		{
+			name: "arrow function as event handler",
+			input: `package main
+func test() {
+	sig count = 0
+	let onClick = () => count = count + 1
+	onClick
+}`,
+			validate: func(t *testing.T, result string) {
+				if !strings.Contains(result, "onClick := func() { count.Set(count.Get() + 1) }") {
+					t.Errorf("expected event handler with .Set(), got: %s", result)
+				}
+			},
+		},
+		{
+			name: "arrow function with block body",
+			input: `package main
+func test() {
+	sig count = 0
+	let fn = () => { count = count + 1 }
+}`,
+			validate: func(t *testing.T, result string) {
+				if !strings.Contains(result, "func() { count.Set(count.Get() + 1) }") {
+					t.Errorf("expected block body arrow function with .Set(), got: %s", result)
+				}
+			},
+		},
+		{
+			name: "arrow function returning sig value",
+			input: `package main
+func test() {
+	sig count = 0
+	let getCount = () => count
+}`,
+			validate: func(t *testing.T, result string) {
+				// 箭头函数体是表达式，应该包装成 ExprStmt，不返回值
+				if !strings.Contains(result, "func() { count.Get() }") {
+					t.Errorf("expected arrow function returning sig value, got: %s", result)
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := parser.New(tt.input)
+			prog := p.ParseProgram()
+
+			if len(p.Errors()) > 0 {
+				t.Fatalf("parser errors: %v", p.Errors())
+			}
+
+			tfm := New()
+			result := tfm.Transform(prog)
+			tt.validate(t, result)
+		})
+	}
+}
+
+// TestTransformSigTSX 测试 TSX 中的 Signal
+func TestTransformSigTSX(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		validate func(t *testing.T, result string)
+	}{
+		{
+			name: "tsx with sig in attribute",
+			input: `package main
+func Counter() {
+	sig count = 0
+	return <button text={count} />
+}`,
+			validate: func(t *testing.T, result string) {
+				if !strings.Contains(result, "count := gox.New(0)") {
+					t.Errorf("expected sig declaration, got: %s", result)
+				}
+				if !strings.Contains(result, "count.Get()") {
+					t.Errorf("expected .Get() in TSX attribute, got: %s", result)
+				}
+			},
+		},
+		{
+			name: "tsx with sig in event handler",
+			input: `package main
+func Counter() {
+	sig count = 0
+	return <button onClick={() => count = count + 1} />
+}`,
+			validate: func(t *testing.T, result string) {
+				if !strings.Contains(result, "count := gox.New(0)") {
+					t.Errorf("expected sig declaration, got: %s", result)
+				}
+				if !strings.Contains(result, "OnClick: func() { count.Set(count.Get() + 1) }") {
+					t.Errorf("expected event handler with .Set() and .Get(), got: %s", result)
+				}
+			},
+		},
+		{
+			name: "tsx with multiple sigs",
+			input: `package main
+func Counter() {
+	sig x = 0
+	sig y = 0
+	return <div text={x} onClick={() => x = x + y} />
+}`,
+			validate: func(t *testing.T, result string) {
+				if !strings.Contains(result, "x := gox.New(0)") {
+					t.Errorf("expected x sig declaration, got: %s", result)
+				}
+				if !strings.Contains(result, "y := gox.New(0)") {
+					t.Errorf("expected y sig declaration, got: %s", result)
+				}
+				if !strings.Contains(result, "x.Get()") {
+					t.Errorf("expected x.Get() in TSX, got: %s", result)
+				}
+				if !strings.Contains(result, "func() { x.Set(x.Get() + y.Get()) }") {
+					t.Errorf("expected event handler with multiple sigs, got: %s", result)
+				}
+			},
+		},
+		{
+			name: "tsx with sig in children",
+			input: `package main
+func Counter() {
+	sig count = 0
+	return <button>{count}</button>
+}`,
+			validate: func(t *testing.T, result string) {
+				if !strings.Contains(result, "count.Get()") {
+					t.Errorf("expected .Get() in TSX children, got: %s", result)
+				}
+			},
+		},
+		{
+			name: "tsx with sig in complex expression",
+			input: `package main
+func Counter() {
+	sig price = 100
+	sig tax = 10
+	return <div text={price + tax} />
+}`,
+			validate: func(t *testing.T, result string) {
+				if !strings.Contains(result, "price.Get() + tax.Get()") {
+					t.Errorf("expected sig expression in TSX, got: %s", result)
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := parser.New(tt.input)
+			prog := p.ParseProgram()
+
+			if len(p.Errors()) > 0 {
+				t.Fatalf("parser errors: %v", p.Errors())
+			}
+
+			tfm := New()
+			result := tfm.Transform(prog)
+			tt.validate(t, result)
+		})
+	}
+}
+
+// TestTransformSigClosure 测试 Signal 在闭包中的使用
+func TestTransformSigClosure(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		validate func(t *testing.T, result string)
+	}{
+		{
+			name: "sig captured in closure",
+			input: `package main
+func test() {
+	sig count = 0
+	let increment = () => count = count + 1
+	increment
+}`,
+			validate: func(t *testing.T, result string) {
+				if !strings.Contains(result, "count := gox.New(0)") {
+					t.Errorf("expected sig declaration, got: %s", result)
+				}
+				if !strings.Contains(result, "increment := func() { count.Set(count.Get() + 1) }") {
+					t.Errorf("expected closure capturing sig, got: %s", result)
+				}
+			},
+		},
+		{
+			name: "sig in nested arrow function",
+			input: `package main
+func test() {
+	sig count = 0
+	let outer = () => {
+		let inner = () => count = count + 1
+		inner
+	}
+}`,
+			validate: func(t *testing.T, result string) {
+				if !strings.Contains(result, "count.Set(count.Get() + 1)") {
+					t.Errorf("expected nested arrow function with .Set(), got: %s", result)
+				}
+			},
+		},
+		{
+			name: "multiple closures with same sig",
+			input: `package main
+func test() {
+	sig count = 0
+	let inc = () => count = count + 1
+	let dec = () => count = count - 1
+}`,
+			validate: func(t *testing.T, result string) {
+				if !strings.Contains(result, "inc := func() { count.Set(count.Get() + 1) }") {
+					t.Errorf("expected inc closure, got: %s", result)
+				}
+				if !strings.Contains(result, "dec := func() { count.Set(count.Get() - 1) }") {
+					t.Errorf("expected dec closure, got: %s", result)
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := parser.New(tt.input)
+			prog := p.ParseProgram()
+
+			if len(p.Errors()) > 0 {
+				t.Fatalf("parser errors: %v", p.Errors())
+			}
+
+			tfm := New()
+			result := tfm.Transform(prog)
+			tt.validate(t, result)
+		})
+	}
+}
+
+// TestTransformSigControlFlow 测试 Signal 在控制流中的使用
+func TestTransformSigControlFlow(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		validate func(t *testing.T, result string)
+	}{
+		{
+			name: "sig in while loop",
+			input: `package main
+func test() {
+	sig i = 0
+	while i < 10 {
+		i = i + 1
+	}
+}`,
+			validate: func(t *testing.T, result string) {
+				if !strings.Contains(result, "for i.Get() < 10") {
+					t.Errorf("expected sig in while condition, got: %s", result)
+				}
+				if !strings.Contains(result, "i.Set(i.Get() + 1)") {
+					t.Errorf("expected sig assignment in loop, got: %s", result)
+				}
+			},
+		},
+		{
+			name: "sig in if-else",
+			input: `package main
+func test() {
+	sig count = 0
+	if count > 0 {
+		count = count + 1
+	} else {
+		count = 0
+	}
+}`,
+			validate: func(t *testing.T, result string) {
+				if !strings.Contains(result, "if count.Get() > 0") {
+					t.Errorf("expected sig in if condition, got: %s", result)
+				}
+				if !strings.Contains(result, "count.Set(count.Get() + 1)") {
+					t.Errorf("expected sig assignment in if body, got: %s", result)
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := parser.New(tt.input)
+			prog := p.ParseProgram()
+
+			if len(p.Errors()) > 0 {
+				t.Fatalf("parser errors: %v", p.Errors())
+			}
+
+			tfm := New()
+			result := tfm.Transform(prog)
+			tt.validate(t, result)
+		})
+	}
+}

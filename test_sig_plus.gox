@@ -1,0 +1,6 @@
+package main
+func Counter() {
+	sig price = 100
+	sig tax = 10
+	return <div text={price + tax} />
+}
