@@ -61,7 +61,6 @@ const (
 	VAR
 	SIG  // Signal 关键字
 
-	FX
 	FUNC
 	STRUCT
 	MIXED
@@ -109,7 +108,6 @@ var keywords = map[string]TokenKind{
 	"const":     CONST,
 	"var":       VAR,
 	"sig":       SIG,  // Signal 关键字
-	"fx":        FX,
 	"func":      FUNC,
 	"struct":    STRUCT,
 	"mixed":     MIXED,

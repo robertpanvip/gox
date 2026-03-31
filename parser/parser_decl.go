@@ -1,8 +1,6 @@
 package parser
 
 import (
-	"fmt"
-
 	"github.com/gox-lang/gox/ast"
 	"github.com/gox-lang/gox/token"
 )
@@ -43,8 +41,6 @@ func (p *Parser) parseDecl() ast.Decl {
 		} else if p.curTok.Kind == token.EXTEND {
 			return p.parseExtendDecl(ast.Visibility{Private: true})
 		}
-	case token.FX:
-		return p.parseFxFuncDecl()
 	case token.FUNC:
 		return p.parseFuncDecl(ast.Visibility{})
 	case token.CONST:
@@ -87,23 +83,6 @@ func (p *Parser) parseImportDecl() *ast.ImportDecl {
 	path := p.expect(token.STRING).Literal
 
 	return &ast.ImportDecl{Path: path, SourceType: sourceType}
-}
-
-func (p *Parser) parseFxFuncDecl() *ast.FuncDecl {
-	p.nextToken() // consume 'fx'
-	
-	// Next should be 'func'
-	if p.curTok.Kind != token.FUNC {
-		p.errors = append(p.errors, fmt.Sprintf("expected 'func' after 'fx', got %v", p.curTok.Kind))
-		return nil
-	}
-	
-	// Parse as normal function but mark as Fx
-	fn := p.parseFuncDecl(ast.Visibility{})
-	if fn != nil {
-		fn.IsFx = true
-	}
-	return fn
 }
 
 func (p *Parser) parseFuncDecl(vis ast.Visibility) *ast.FuncDecl {
