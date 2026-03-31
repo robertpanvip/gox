@@ -273,9 +273,8 @@ func (p *Parser) parsePrimary() ast.Expr {
 		p.expect(token.RPAREN)
 		return &ast.ParenExpr{X: x}
 	case token.LBRACE:
-		p.nextToken()
-		fields := p.parseStructFields()
-		return &ast.StructLit{Type: nil, Fields: fields}
+		// 对象字面量 {key: value}
+		return p.parseObjectLiteral()
 	case token.FUNC:
 		return p.parseFunctionLiteral()
 	case token.LESS:
@@ -423,66 +422,57 @@ func (p *Parser) parseObjectLiteral() ast.Expr {
 		p.nextToken()
 	}
 	
-	// Collect all tokens until we hit the matching RBRACE
-	parts := make([]string, 0)
+	fields := make([]*ast.ObjectField, 0)
+	
 	for p.curTok.Kind != token.RBRACE && p.curTok.Kind != token.EOF {
-		// Skip the inner LBRACE if present
-		if p.curTok.Kind == token.LBRACE {
+		// Skip commas和换行
+		if p.curTok.Kind == token.COMMA || p.curTok.Kind == token.NEWLINE {
 			p.nextToken()
 			continue
 		}
 		
-		// Collect field: value pairs
+		// 解析字段名
 		if p.curTok.Kind == token.IDENT {
 			fieldName := p.curTok.Literal
+			fieldPos := ast.Position{Line: p.curTok.Line, Col: p.curTok.Col}
 			p.nextToken()
 			
-			// Expect colon
+			// 期望冒号
 			if p.curTok.Kind == token.COLON {
 				p.nextToken()
 			}
 			
-			// Get value
-			value := ""
-			if p.curTok.Kind == token.STRING {
-				value = p.curTok.Literal
-				p.nextToken()
-			} else if p.curTok.Kind == token.INT || p.curTok.Kind == token.FLOAT {
-				value = p.curTok.Literal
-				p.nextToken()
-			} else if p.curTok.Kind == token.IDENT {
-				value = p.curTok.Literal
-				p.nextToken()
+			// 解析值表达式（关键修复：调用 parseExpr 而不是只收集 token）
+			value := p.parseExpr()
+			
+			// 创建字段
+			field := &ast.ObjectField{
+				Name:  fieldName,
+				Value: value,
+				P:     fieldPos,
 			}
+			fields = append(fields, field)
 			
-			// Add to parts
-			parts = append(parts, fmt.Sprintf("%s: %s", fieldName, value))
-			
-			// Skip comma if present
+			// 跳过逗号
 			if p.curTok.Kind == token.COMMA {
 				p.nextToken()
 			}
-		} else if p.curTok.Kind == token.COMMA {
-			p.nextToken()
-		} else if p.curTok.Kind == token.NEWLINE {
-			p.nextToken()
 		} else {
+			// 未知 token，跳过
 			p.nextToken()
 		}
 	}
 	
-	// Skip the closing RBRACE
+	// 跳过闭合的 RBRACE
 	if p.curTok.Kind == token.RBRACE {
 		p.nextToken()
 	}
 	
-	// Skip the outer closing RBRACE (the one that closes the JSX expression)
-	if p.curTok.Kind == token.RBRACE {
-		p.nextToken()
+	// 返回对象字面量
+	return &ast.ObjectLit{
+		Fields: fields,
+		P:      pos,
 	}
-	
-	// Store the object literal as a TemplateString
-	return &ast.TemplateString{Parts: parts, P: pos}
 }
 
 func (p *Parser) parseFunctionLiteral() ast.Expr {
