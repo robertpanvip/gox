@@ -42,7 +42,7 @@ func TestUnionStructField(t *testing.T) {
 
 func TestUnionMultiMember(t *testing.T) {
 	got := unionOut(t, "package main\nfunc f(v int | string | bool | float64) {}\n")
-	containsAll(t, got, "func f(v any) {}")
+	containsAll(t, got, "func f(v any) {", "case int, string, bool, float64:")
 }
 
 func TestUnionQualifiedAndCompositeMembers(t *testing.T) {
@@ -57,11 +57,16 @@ func e(v Box[int] | Box[string]) {}
 `
 	got := unionOut(t, src)
 	for _, want := range []string{
-		"func a(v any) {}",
-		"func b(v any) {}",
-		"func c(v any) {}",
-		"func d(v any) {}",
-		"func e(v any) {}",
+		"func a(v any) {",
+		"func b(v any) {",
+		"func c(v any) {",
+		"func d(v any) {",
+		"func e(v any) {",
+		"case fmt.Stringer, int:",
+		"case []int, string:",
+		"case *int, *string:",
+		"case map[string]int, int:",
+		"case Box[int], Box[string]:",
 	} {
 		containsAll(t, got, want)
 	}
@@ -164,5 +169,92 @@ func TestUnionSourceMapStartPos(t *testing.T) {
 	pos, ok := res.SourceMap.GoToGx(2, 12)
 	if !ok || pos.Line != 2 || pos.Column != 12 {
 		t.Errorf("any 起点映射 = %+v ok=%v, want 2:12", pos, ok)
+	}
+}
+
+// ---------- 联合参数运行时守卫 ----------
+
+func TestUnionGuardSingleParam(t *testing.T) {
+	got := unionOut(t, "package main\nfunc f(v int | string) {}\n")
+	containsAll(t, got,
+		"switch v.(type) {",
+		"case int, string:",
+		"default:",
+		`panic("gx: f: v expects int|string, got a non-matching type")`,
+	)
+}
+
+func TestUnionGuardMultipleParams(t *testing.T) {
+	got := unionOut(t, "package main\nfunc f(v int | string, n bool | float64) {}\n")
+	containsAll(t, got,
+		"switch v.(type) {", "case int, string:",
+		"switch n.(type) {", "case bool, float64:",
+	)
+}
+
+func TestUnionGuardMethod(t *testing.T) {
+	src := "package main\ntype T struct{}\nfunc (r T) f(v int | string) {}\n"
+	got := unionOut(t, src)
+	containsAll(t, got, `panic("gx: f: v expects int|string, got a non-matching type")`)
+}
+
+func TestUnionGuardNoUnionNoGuard(t *testing.T) {
+	// 无联合参数时不得插入任何守卫
+	src := "package main\nfunc f(v int) {}\nfunc g(v any) {}\n"
+	got := unionOut(t, src)
+	if strings.Contains(got, ".(type)") || strings.Contains(got, "panic(") {
+		t.Errorf("无联合参数却插入了守卫:\n%s", got)
+	}
+}
+
+func TestUnionGuardOnlyParamsNotLocals(t *testing.T) {
+	// 局部变量/type 别名的联合只擦除，不插守卫（没有函数入口可检查）
+	src := "package main\ntype Num = int | string\nfunc f() { var x int | string; _ = x }\n"
+	got := unionOut(t, src)
+	containsAll(t, got, "type Num = any", "var x any")
+	if strings.Contains(got, ".(type)") || strings.Contains(got, "panic(") {
+		t.Errorf("局部变量/别名不该有守卫:\n%s", got)
+	}
+}
+
+func TestUnionGuardReturnOnlyNoGuard(t *testing.T) {
+	// 仅返回值是联合：没有参数入口，不插守卫
+	src := "package main\nfunc f() int | string { return 1 }\n"
+	got := unionOut(t, src)
+	containsAll(t, got, "func f() any")
+	if strings.Contains(got, ".(type)") {
+		t.Errorf("仅返回值联合不该有守卫:\n%s", got)
+	}
+}
+
+func TestUnionGuardEndToEndValidInputs(t *testing.T) {
+	src := `package main
+import "fmt"
+func describe(v int | string) string {
+    if (v is int) { return fmt.sprint("int:", v+1) }
+    return fmt.sprint("str:", v)
+}
+`
+	got := compileOK(t, "ug_valid.gx", src)
+	containsAll(t, got,
+		"func describe(v any) string",
+		"switch v.(type) {",
+		"case int, string:",
+		"v.(int)",
+	)
+}
+
+func TestUnionGuardGeneratedCodeValid(t *testing.T) {
+	// 守卫代码必须通过 go/parser（尤其 panic 单参数）
+	src := `package main
+func f(a int | string, b bool | int) {}
+func g(v []int | map[string]int) {}
+`
+	res, err := Compile("ug_valid2.gx", src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := res.Validate(); err != nil {
+		t.Fatalf("带守卫的生成代码语法非法: %v\n---\n%s", err, res.GoSource)
 	}
 }

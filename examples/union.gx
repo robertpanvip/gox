@@ -4,8 +4,9 @@ package main
 
 import "fmt"
 
-// 参数声明为联合类型 int|string|bool，生成 Go 后是 any。
-// 函数体内用 is 守卫逐个窄化。
+// 参数声明为联合类型 int|string|bool，生成 Go 后是 any，
+// 并在函数入口自动插入运行时的 type switch 守卫：传入非这三类值会 panic。
+// 函数体内再用 is 守卫逐个窄化。
 pub func describe(v int | string | bool) string {
     if (v is int) {
         return fmt.sprint("int:", v+100)

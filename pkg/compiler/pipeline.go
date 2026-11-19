@@ -42,7 +42,7 @@ func Compile(file, src string) (*Result, error) {
 func CompileWithModule(file, src, module string) (*Result, error) {
 	toks := New(src).AllTokens()
 	names := map[string]string{} // 小写原名 → 大写导出名（自身 pub 符号）
-	toks = transformUnion(toks)
+	toks = runUnion(toks)
 	toks = transformTypeGuard(toks)
 	toks = transformEnum(toks, names)
 	toks = transformPub(toks, names)
@@ -95,7 +95,7 @@ func CompileStage(src, stage string) (string, error) {
 	case "lex":
 		return dumpTokens(toks), nil
 	case "union":
-		toks = transformUnion(toks)
+		toks = runUnion(toks)
 	case "typeguard":
 		toks = transformTypeGuard(toks)
 	case "enum":
@@ -111,7 +111,7 @@ func CompileStage(src, stage string) (string, error) {
 		toks = transformExternal(toks, scope, names)
 		toks = transformCompositeFields(toks, scope)
 	case "all":
-		toks = transformUnion(toks)
+		toks = runUnion(toks)
 		toks = transformTypeGuard(toks)
 		toks = transformEnum(toks, names)
 		toks = transformPub(toks, names)

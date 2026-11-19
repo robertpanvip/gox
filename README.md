@@ -126,8 +126,25 @@ type Num = int | float64   // → type Num = any
 - 支持位置：`var`/`const`/`type` 声明（含分组）、函数参数/返回值/接收者、struct 字段。
 - 成员可为任意 Go 类型：`int`、`pkg.Type`、`[]T`、`*T`、`map[K]V`、`Foo[T]` 等。
 - 消歧：`|` 仅在类型标注位置视为联合；函数体的位运算 `a | b`、`var x = a|b`（无类型初始化）不受影响。
+
+**参数运行时守卫**：函数参数声明为联合类型时，入口会自动插入 `switch v.(type)` 检查——动态类型不在成员列表内立即 `panic`，把弱联合的契约从「静默错误」变成「显式失败」：
+
+```go
+// 上述 describe 生成的 Go（守卫 + is 窄化）
+func Describe(v any) string {
+    switch v.(type) {
+    case int, string, bool:
+    default:
+        panic("gx: describe: v expects int|string|bool, got a non-matching type")
+    }
+    // ... 原有 is 守卫窄化代码
+}
+```
+
+- 守卫只加在**函数参数**的联合上；局部变量/类型别名/只有返回值的联合仅擦除，不插守卫（无入口可检查）。
+- panic 消息含函数名、参数名与期望类型，不打印实际类型（避免引入 `fmt` 依赖）。
 - **限制（务必知晓）**：
-  - **无编译期类型安全**：`describe(true)` 传给 `int|string` 也能编译，运行时才知道不匹配；
+  - **守卫在运行时**，不是编译期——传错类型能编译，但调用时立即 panic；
   - **无穷尽性检查**：联合有 3 个成员但只守卫 2 个，编译器不会提示遗漏；
   - `any` 上不能直接运算，须先 is 守卫窄化；
   - 不处理 interface/struct 内联、函数类型签名内部、以及「嵌套联合」（`[]int|string` 按 Go 优先级解析为 `([]int)|string`，整段擦除）。
