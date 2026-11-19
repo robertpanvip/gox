@@ -167,6 +167,43 @@ func main() {
 	}
 }
 
+func TestIntegrationDefaultParams(t *testing.T) {
+	// TS 语义核心：未传用默认值，显式传 0/"" 用零值而非默认值。
+	src := `package main
+import "fmt"
+func greet(name string = "world", times int = 2) string {
+	out := ""
+	for i := 0; i < times; i++ { out += name + " " }
+	return out
+}
+func main() {
+	fmt.Println(greet())
+	fmt.Println(greet("gx"))
+	fmt.Println(greet("gx", 1))
+	fmt.Println(greet("", 1))
+	fmt.Println(greet("z", 0))
+}
+`
+	out := runGX(t, src)
+	// 每行以 \n 结尾（含最后的空串行），去掉末尾一个 \n 再切分。
+	lines := strings.Split(strings.TrimSuffix(out, "\n"), "\n")
+	if len(lines) != 5 {
+		t.Fatalf("应输出 5 行, got %d: %q", len(lines), out)
+	}
+	checks := [][2]string{
+		{lines[0], "world world "},
+		{lines[1], "gx gx "},
+		{lines[2], "gx "},
+		{lines[3], " "},
+		{lines[4], ""},
+	}
+	for _, c := range checks {
+		if c[0] != c[1] {
+			t.Errorf("期望 %q, got %q (完整输出: %q)", c[1], c[0], out)
+		}
+	}
+}
+
 func TestIntegrationTemplateString(t *testing.T) {
 	// 模板字符串：静态段 + 多插值 + 嵌套表达式，真实运行校验拼接结果。
 	src := `package main

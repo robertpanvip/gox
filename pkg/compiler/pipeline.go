@@ -46,8 +46,12 @@ func Compile(file, src string) (*Result, error) {
 // CompileWithModule 以指定 module 转译。<module>/runtime/list 作为集合运行时 import 路径。
 func CompileWithModule(file, src, module string) (*Result, error) {
 	toks := New(src).AllTokens()
+	// 默认值：声明处先物理剥离（否则 Analyze 会把 `= default` 算进类型），
+	// 调用点在 Analyze 之后补全（补全表达式仍流经后续全部 transform）。
+	toks, defaultDefs := stripDefaults(toks)
 	analysis := Analyze(toks) // desugar 之前的 GX 语义层（联合未擦除）
 	names := map[string]string{} // 小写原名 → 大写导出名（自身 pub 符号）
+	toks = expandDefaults(toks, defaultDefs)
 	toks = transformTemplates(toks)
 	toks = runUnion(toks)
 	toks = transformTypeGuard(toks, analysis)
@@ -128,7 +132,10 @@ func CompileStage(src, stage string) (string, error) {
 		toks = transformExternal(toks, scope, names)
 		toks = transformCompositeFields(toks, scope)
 	case "all":
+		toks, defaultDefs := stripDefaults(toks)
 		analysis := Analyze(toks)
+		toks = expandDefaults(toks, defaultDefs)
+		toks = transformTemplates(toks)
 		toks = runUnion(toks)
 		toks = transformTypeGuard(toks, analysis)
 		toks = transformEnum(toks, names)
