@@ -1,0 +1,30 @@
+// 联合类型示例：GX 把类型位置的 A|B|C 擦除为 Go 的 any，
+// 配合 is 守卫在分支内窄化为具体类型。
+package main
+
+import "fmt"
+
+// 参数声明为联合类型 int|string|bool，生成 Go 后是 any。
+// 函数体内用 is 守卫逐个窄化。
+pub func describe(v int | string | bool) string {
+    if (v is int) {
+        return fmt.sprint("int:", v+100)
+    } else if (v is string) {
+        return fmt.sprint("str:", v)
+    }
+    // bool 分支未守卫，v 仍是 any —— 这正是「弱联合」的边界：
+    // Go 侧不做穷尽检查，也不保证参数一定是三种类型之一。
+    return "other"
+}
+
+// 类型别名里的联合同样擦除为 any。
+type Num = int | float64
+
+func main() {
+    fmt.println(describe(42))
+    fmt.println(describe("hi"))
+    fmt.println(describe(true))
+
+    var n Num = 3.5
+    fmt.println(n)
+}

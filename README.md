@@ -6,7 +6,7 @@
 >
 > **书写约定核心：声明用 `pub` 显式导出；标识符一律「只首字母小写，其余驼峰照抄」。** 转译器机械还原大小写，无需类型推导、无需读取第三方包符号表。
 
-## 六项特性速览
+## 七项特性速览
 
 | 特性 | GX 写法 | 生成的 Go |
 |---|---|---|
@@ -16,6 +16,7 @@
 | **外部符号** | `http.newRequest`、`uRL` | `http.NewRequest`、`URL`（机械首字母还原） |
 | **集合链式** | `xs.map(f).filter(g)` | `list.List[T].Map(f).Filter(g)`，切片 `[]T` 全局提升 |
 | **is 类型守卫** | `if (x is float64) { … }` | `if v, ok := x.(float64); ok { x := v; … }`（块内 x 窄化为 float64） |
+| **联合类型** | `func f(v int \| string)` | `func f(v any)`（擦除为 any，配合 is 守卫窄化） |
 
 ## 1. 可见性：`pub`
 
@@ -109,7 +110,30 @@ if (x is float64) {
 - 支持 `else if` 链与嵌套；`else` 分支内 `x` 保持原类型。
 - **限制**：被守卫者须为简单标识符且静态类型是接口（如 `any`）——`x.(T)` 要求接口，否则生成的 Go 编译不过（转译器不做类型检查）；暂不支持 `obj.field` 作被守卫者、复合条件 `x is T && y`。
 
-## 7. Sourcemap / LSP / 编译检查
+## 7. 联合类型
+
+类型位置的 `A | B | C` 被**擦除为 `any`**，配合 is 守卫在分支内窄化为具体类型。这是一项「弱联合」语法糖——Go 侧没有原生联合类型，擦除后由 is 守卫承担运行时类型判断。
+
+```gx
+pub func describe(v int | string | bool) string {
+    if (v is int)     { return fmt.sprint("int:", v+100) }
+    if (v is string)  { return fmt.sprint("str:", v) }
+    return "other"
+}
+type Num = int | float64   // → type Num = any
+```
+
+- 支持位置：`var`/`const`/`type` 声明（含分组）、函数参数/返回值/接收者、struct 字段。
+- 成员可为任意 Go 类型：`int`、`pkg.Type`、`[]T`、`*T`、`map[K]V`、`Foo[T]` 等。
+- 消歧：`|` 仅在类型标注位置视为联合；函数体的位运算 `a | b`、`var x = a|b`（无类型初始化）不受影响。
+- **限制（务必知晓）**：
+  - **无编译期类型安全**：`describe(true)` 传给 `int|string` 也能编译，运行时才知道不匹配；
+  - **无穷尽性检查**：联合有 3 个成员但只守卫 2 个，编译器不会提示遗漏；
+  - `any` 上不能直接运算，须先 is 守卫窄化；
+  - 不处理 interface/struct 内联、函数类型签名内部、以及「嵌套联合」（`[]int|string` 按 Go 优先级解析为 `([]int)|string`，整段擦除）。
+- 若需要真正的编译期类型安全，后续可升级为泛型约束方案（`[T int|string]`）。
+
+## 8. Sourcemap / LSP / 编译检查
 
 - 自带 `.gx ↔ .go` **双向精确位置映射**（`sourcemap` / `map-lookup`）。
 - LSP：跳转 / 补全 / 悬停 / 文档符号 / **重命名**（枚举成员三种拼写派生新名）。
@@ -120,11 +144,11 @@ if (x is float64) {
 ```
 gox/
 ├── cmd/
-│   ├── gox/            CLI：build / typeguard / jsx / pub / enum / collections /
-│   │                       sourcemap / map-lookup / lsp-map / lsp / test
+│   ├── gox/            CLI：build / union / typeguard / jsx / pub / enum /
+│   │                       collections / sourcemap / map-lookup / lsp-map / lsp / test
 │   └── gox-lsp/        独立 LSP server 入口（stdin/stdout JSON-RPC）
 ├── pkg/                对外稳定 API
-│   ├── compiler/       转译引擎：词法 / typeguard / JSX / pub / enum / scope / external / collections / pipeline
+│   ├── compiler/       转译引擎：词法 / union / typeguard / JSX / pub / enum / scope / external / collections / pipeline
 │   └── sourcemap/      双向位置映射（无业务依赖）
 ├── internal/           工具内部实现
 │   ├── lsp/            LSP 协议 / server / 诊断 / 符号映射 / 重命名

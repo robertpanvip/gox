@@ -26,10 +26,12 @@ func (r *Result) Validate() error {
 }
 
 // Compile 执行完整管线：
-// lex → typeguard(is 类型守卫) → enum → pub → jsx → collections(集合链式)
-// → scope(作用域符号收集) → restoreRefs(自身 pub 符号) → external(外部符号机械还原) → emit。
+// lex → union(联合类型擦除) → typeguard(is 类型守卫) → enum → pub → jsx
+// → collections(集合链式) → scope(作用域符号收集) → restoreRefs(自身 pub 符号)
+// → external(外部符号机械还原) → emit。
 //
-// typeguard 必须在最前：把 is 改写为 Go 原生 comma-ok 断言后，后续各层无需特殊处理。
+// union/typeguard 必须在最前：分别把 A|B 擦除为 any、把 is 改写为 Go 原生
+// comma-ok 断言后，后续各层无需特殊处理。
 // scope 必须在 pub 之后（pub 名已大写，不会被误收为私有）、
 // jsx/collections 之后（它们注入的 import 也要被识别为包名）。
 func Compile(file, src string) (*Result, error) {
@@ -40,6 +42,7 @@ func Compile(file, src string) (*Result, error) {
 func CompileWithModule(file, src, module string) (*Result, error) {
 	toks := New(src).AllTokens()
 	names := map[string]string{} // 小写原名 → 大写导出名（自身 pub 符号）
+	toks = transformUnion(toks)
 	toks = transformTypeGuard(toks)
 	toks = transformEnum(toks, names)
 	toks = transformPub(toks, names)
@@ -84,13 +87,15 @@ func emit(toks []Token, file string) (string, *sourcemap.SourceMap) {
 }
 
 // CompileStage 只执行单个转换阶段，用于 CLI 的 jsx/pub 等子命令与调试。
-// stage 取值：lex / enum / jsx / pub / external / all。
+// stage 取值：lex / union / typeguard / enum / jsx / pub / external / all。
 func CompileStage(src, stage string) (string, error) {
 	toks := New(src).AllTokens()
 	names := map[string]string{}
 	switch stage {
 	case "lex":
 		return dumpTokens(toks), nil
+	case "union":
+		toks = transformUnion(toks)
 	case "typeguard":
 		toks = transformTypeGuard(toks)
 	case "enum":
@@ -106,6 +111,7 @@ func CompileStage(src, stage string) (string, error) {
 		toks = transformExternal(toks, scope, names)
 		toks = transformCompositeFields(toks, scope)
 	case "all":
+		toks = transformUnion(toks)
 		toks = transformTypeGuard(toks)
 		toks = transformEnum(toks, names)
 		toks = transformPub(toks, names)
@@ -116,7 +122,7 @@ func CompileStage(src, stage string) (string, error) {
 		toks = transformExternal(toks, scope, names)
 		toks = transformCompositeFields(toks, scope)
 	default:
-		return "", fmt.Errorf("unknown stage %q (want lex/typeguard/enum/jsx/pub/collections/external/all)", stage)
+		return "", fmt.Errorf("unknown stage %q (want lex/union/typeguard/enum/jsx/pub/collections/external/all)", stage)
 	}
 	out, _ := emit(toks, "<stage>")
 	return out, nil
