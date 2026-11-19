@@ -93,38 +93,26 @@ func collectUnionGuards(toks []Token) []unionGuard {
 			funcName = toks[nameIdx].Text
 		}
 
-		// 逐参数段检查联合类型
-		segStart := open + 1
-		for k := open + 1; k <= close; k++ {
-			if k == close || toks[k].Text == "," {
-				seg := parseParamSeg(toks, segStart, k)
-				if seg.nameIdx >= 0 && seg.typeStart >= seg.nameIdx {
-					members := unionMembersAt(toks, seg.typeStart, seg.typeEnd)
-					if len(members) >= 2 {
-						guards = append(guards, unionGuard{
-							param:     toks[seg.nameIdx].Text,
-							members:   members,
-							braceIdx:  brace,
-							funcName:  funcName,
-							insertPos: toks[brace].Pos,
-						})
-					}
-				}
-				segStart = k + 1
+		// 逐参数检查联合类型（按 Go 参数声明规则处理共享类型，如 a, b int|string）
+		for _, p := range parseParamBindings(toks, open, close) {
+			members := unionMembersAt(toks, p.typeStart, p.typeEnd)
+			if len(members) >= 2 {
+				guards = append(guards, unionGuard{
+					param:     toks[p.nameIdx].Text,
+					members:   members,
+					braceIdx:  brace,
+					funcName:  funcName,
+					insertPos: toks[brace].Pos,
+				})
 			}
 		}
 	}
 	return guards
 }
 
-type paramSegInfo struct {
-	nameIdx   int // 参数名下标（-1 表示无名参数）
-	typeStart int // 类型起始下标
-	typeEnd   int // 类型结束（exclusive）
-}
-
-// parseParamSeg 解析一段参数：有两个标识符时第一个是名字、第二个是类型；
-// 只有一个时视为无名参数（nameIdx=-1）。
+// parseParamSeg 解析单个逗号段：有两个类型起始 token 时第一个是名字、其后是类型；
+// 只有一个时视为无名参数（nameIdx=-1）。供 analysis 层的签名索引使用。
+// unionguard 不用它——unionguard 需要按 Go 规则处理共享类型，见 parseParamBindings。
 func parseParamSeg(toks []Token, start, limit int) paramSegInfo {
 	first := nextSig(toks, start)
 	if first < 0 || first >= limit || !isTypeStartTok(toks[first]) {
@@ -132,11 +120,120 @@ func parseParamSeg(toks []Token, start, limit int) paramSegInfo {
 	}
 	second := nextSig(toks, first+1)
 	if second >= 0 && second < limit && isTypeStartTok(toks[second]) {
-		// first 是名字，second 起是类型
 		return paramSegInfo{nameIdx: first, typeStart: second, typeEnd: limit}
 	}
-	// 无名参数：整段是类型
 	return paramSegInfo{nameIdx: -1, typeStart: first, typeEnd: limit}
+}
+
+type paramSegInfo struct {
+	nameIdx   int
+	typeStart int
+	typeEnd   int
+}
+
+// paramBinding 是一个参数名与其类型的绑定（类型区间为 [typeStart,typeEnd)）。
+type paramBinding struct {
+	nameIdx   int
+	typeStart int
+	typeEnd   int
+}
+
+// paramSeg 是逗号分割后的一个参数段。
+type paramSeg struct {
+	names     []int // 该段中的参数名下标（如 "a, b int" 里的 a、b 在拆分前已分到不同段）
+	nameIdx   int   // 单一参数名下标，-1 表示没有名字
+	typeStart int   // 类型起始，-1 表示本段未写类型（共享后面的类型）
+	typeEnd   int
+}
+
+// parseParamBindings 解析参数列表，产出每个「参数名 → 类型」绑定。
+//
+// 关键点：Go 允许 a, b int 这种「多个名字共享一个类型」的写法，也允许
+// a, b int | string。按逗号切段后，`a` 段只有名字没类型，`b int|string`
+// 段有名字也有类型。这里把「连续的无类型名字段」绑定到其后第一个「有类型段」
+// 的类型上，确保共享类型的每个参数都能拿到联合守卫。
+func parseParamBindings(toks []Token, open, close int) []paramBinding {
+	// 1) 按顶层逗号切段（跳过括号/方括号/花括号内部的逗号）
+	var segs [][2]int
+	depth := 0
+	segStart := open + 1
+	for k := open + 1; k <= close; k++ {
+		if k == close {
+			segs = append(segs, [2]int{segStart, k})
+			break
+		}
+		switch toks[k].Text {
+		case "(", "[", "{":
+			depth++
+		case ")", "]", "}":
+			depth--
+		case ",":
+			if depth == 0 {
+				segs = append(segs, [2]int{segStart, k})
+				segStart = k + 1
+			}
+		}
+	}
+
+	// 2) 解析每段：找到参数名与类型起点
+	parsed := make([]paramSeg, len(segs))
+	for i, seg := range segs {
+		s, e := seg[0], seg[1]
+		first := nextSigIn(toks, s, e)
+		if first < 0 || !isTypeStartTok(toks[first]) {
+			continue
+		}
+		// 段内第二个有效 token：若存在且是类型起始，则 first 是名字、其后是类型
+		second := nextSigIn(toks, first+1, e)
+		if second >= 0 && isTypeStartTok(toks[second]) {
+			parsed[i] = paramSeg{nameIdx: first, typeStart: second, typeEnd: e}
+		} else {
+			// 只有一个标识符：可能是「待共享类型的名字」，也可能是无名参数类型。
+			parsed[i] = paramSeg{nameIdx: first, typeStart: -1}
+		}
+	}
+
+	// 3) 合并共享类型：连续的无类型名字段绑定到其后第一个有类型段。
+	//    但若到段尾都没有有类型段，则这些标识符本身是无名参数的类型（跳过）。
+	var out []paramBinding
+	for i := 0; i < len(parsed); i++ {
+		cur := parsed[i]
+		if cur.nameIdx < 0 {
+			continue
+		}
+		if cur.typeStart >= 0 {
+			out = append(out, paramBinding{cur.nameIdx, cur.typeStart, cur.typeEnd})
+			continue
+		}
+		// 向后找第一个有类型的段，把从 i 开始连续的无类型名字都绑定过去
+		j := i
+		var names []int
+		for j < len(parsed) && parsed[j].nameIdx >= 0 && parsed[j].typeStart < 0 {
+			names = append(names, parsed[j].nameIdx)
+			j++
+		}
+		if j < len(parsed) && parsed[j].typeStart >= 0 {
+			for _, n := range names {
+				out = append(out, paramBinding{n, parsed[j].typeStart, parsed[j].typeEnd})
+			}
+			// 有类型段本身会在下一轮正常处理，这里只跳过被合并的无类型段
+			i = j - 1
+		}
+		// 若 j 到尾仍无有类型段，这些是无名参数类型，不产出绑定
+	}
+	return out
+}
+
+// nextSigIn 在 [start, limit) 内找第一个非空白/注释 token，越界返回 -1。
+func nextSigIn(toks []Token, start, limit int) int {
+	for i := start; i < limit && i < len(toks); i++ {
+		switch toks[i].Kind {
+		case Space, Newline, Comment:
+			continue
+		}
+		return i
+	}
+	return -1
 }
 
 // unionMembersAt 在 [start,end) 内按顶层 '|' 切出联合成员文本；非联合返回 nil。

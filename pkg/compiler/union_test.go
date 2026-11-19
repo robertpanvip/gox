@@ -258,3 +258,62 @@ func g(v []int | map[string]int) {}
 		t.Fatalf("带守卫的生成代码语法非法: %v\n---\n%s", err, res.GoSource)
 	}
 }
+
+func TestUnionGuardGroupedParams(t *testing.T) {
+	// a、b 共享 int|string，都应得到运行时守卫
+	src := `package main
+func process(a, b int | string) { println(a, b) }
+func main() { process(1, "x") }
+`
+	res, err := CompileSource(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"switch a.(type)", "switch b.(type)",
+		"a expects int|string", "b expects int|string",
+	} {
+		if !strings.Contains(res.GoSource, want) {
+			t.Errorf("生成代码应包含 %q:\n%s", want, res.GoSource)
+		}
+	}
+	if err := res.Validate(); err != nil {
+		t.Fatalf("生成代码语法无效: %v", err)
+	}
+}
+
+func TestUnionGuardMixedParamGroups(t *testing.T) {
+	// a、b 共享 int|string；c 独立为 bool（非联合，不应有守卫）
+	src := `package main
+func process(a, b int | string, c bool) { println(a, b, c) }
+func main() { process(1, "x", true) }
+`
+	res, err := CompileSource(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"switch a.(type)", "switch b.(type)"} {
+		if !strings.Contains(res.GoSource, want) {
+			t.Errorf("应包含 %q:\n%s", want, res.GoSource)
+		}
+	}
+	if strings.Contains(res.GoSource, "switch c.(type)") {
+		t.Errorf("非联合参数 c 不应有守卫:\n%s", res.GoSource)
+	}
+}
+
+func TestUnionGuardThreeSharedParams(t *testing.T) {
+	src := `package main
+func process(a, b, c int | string) { println(a, b, c) }
+func main() { process(1, "x", 2) }
+`
+	res, err := CompileSource(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"a", "b", "c"} {
+		if !strings.Contains(res.GoSource, "switch "+name+".(type)") {
+			t.Errorf("参数 %s 应有守卫:\n%s", name, res.GoSource)
+		}
+	}
+}
