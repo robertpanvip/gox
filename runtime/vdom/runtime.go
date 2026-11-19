@@ -23,6 +23,11 @@ type VNode struct {
 	Component any            // 函数组件；非 nil 时本节点在 Render/Diff 阶段展开
 	Props     map[string]any
 	Children  []any
+
+	// 组件展开缓存：惰性执行，但一个组件节点只执行一次。
+	// 避免 Diff 展开一次、Render 又展开一次导致有副作用/不纯组件行为不一致。
+	resolved    any
+	resolveDone bool
 }
 
 // Element 是 VNode 的兼容别名（早期版本使用 Element 这一名称）。
@@ -123,6 +128,9 @@ func renderTo(b *strings.Builder, node any) {
 // props 原样传入，children 以 "children" 键附加。用反射以兼容不同返回类型。
 // 若组件不是可调用对象或调用失败，返回 nil（渲染为空），不 panic。
 func invokeComponent(n *Element) any {
+	if n.resolveDone {
+		return n.resolved
+	}
 	v := reflect.ValueOf(n.Component)
 	if !v.IsValid() || v.Kind() != reflect.Func {
 		return nil
@@ -158,7 +166,19 @@ func invokeComponent(n *Element) any {
 	if len(res) == 0 {
 		return nil
 	}
-	return res[0].Interface()
+	out := res[0].Interface()
+	n.resolved = out
+	n.resolveDone = true
+	return out
+}
+
+// ExpandComponent 显式展开一个组件节点，返回其产出的节点树；非组件节点返回 nil。
+// 供调用方在需要时主动解析（结果会被缓存，与 Render/Diff 共享）。
+func ExpandComponent(n *Element) any {
+	if n == nil || n.Component == nil {
+		return nil
+	}
+	return invokeComponent(n)
 }
 
 func isFunc(v any) bool {

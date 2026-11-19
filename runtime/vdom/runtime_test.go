@@ -244,3 +244,48 @@ func TestRenderNonFuncComponentIsSafe(t *testing.T) {
 		t.Fatalf("非函数组件应渲染为空, got %q", got)
 	}
 }
+
+func TestComponentInvokedOnce(t *testing.T) {
+	calls := 0
+	counter := func(map[string]any) any {
+		calls++
+		return CreateElement("span", nil, "x")
+	}
+	node := CreateElement(counter, nil)
+	_ = Render(node) // 第一次展开
+	_ = Render(node) // 应命中缓存
+	_ = ExpandComponent(node)
+	if calls != 1 {
+		t.Fatalf("组件应只执行一次（惰性+缓存）, got %d", calls)
+	}
+}
+
+func TestComponentExplicitExpand(t *testing.T) {
+	comp := func(props map[string]any) any {
+		return CreateElement("b", nil, props["text"])
+	}
+	node := CreateElement(comp, map[string]any{"text": "hi"})
+	expanded := ExpandComponent(node)
+	native, ok := expanded.(*Element)
+	if !ok || native.Tag != "b" {
+		t.Fatalf("ExpandComponent 应返回组件产出的节点树: %#v", expanded)
+	}
+	if got := Render(expanded); got != "<b>hi</b>" {
+		t.Fatalf("展开后渲染 = %q", got)
+	}
+}
+
+func TestExpandComponentOnNativeReturnsNil(t *testing.T) {
+	if got := ExpandComponent(CreateElement("div", nil)); got != nil {
+		t.Fatalf("原生元素的 ExpandComponent 应为 nil, got %v", got)
+	}
+}
+
+func TestComponentRejectsWrongSignature(t *testing.T) {
+	// 组件签名不符合 func(map) T 时应安全降级为空，不 panic。
+	bad := func(int) any { return CreateElement("div", nil) }
+	node := CreateElement(bad, nil)
+	if got := Render(node); got != "" {
+		t.Fatalf("错误签名组件应渲染为空, got %q", got)
+	}
+}
