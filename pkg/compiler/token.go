@@ -1,6 +1,6 @@
 // Package compiler 把 .gx 源码转译为等价的、可直接 go build 的标准 Go 源码。
 //
-// GX = Go 语法 + 四项语法糖（pub / enum / JSX / 外部符号小写调用）。
+// GX = Go 语法 + 五项语法糖（pub / enum / JSX / 外部符号小写调用 / is 类型守卫）。
 // 转译在 token 流上分层进行，每一层都保留原始位置，最终 emit 时产出 sourcemap 原始数据。
 package compiler
 

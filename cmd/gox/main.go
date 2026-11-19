@@ -26,7 +26,7 @@ func main() {
 	switch cmd {
 	case "build":
 		err = cmdBuild(args)
-	case "jsx", "pub", "enum", "collections", "external", "all":
+	case "typeguard", "jsx", "pub", "enum", "collections", "external", "all":
 		err = cmdStage(cmd, args)
 	case "sourcemap":
 		err = cmdSourcemap(args)
@@ -59,7 +59,7 @@ func usage() {
        -module   集合/JSX 运行时的 module 路径（默认 github.com/robertpanvip/gox）
        -check    转译后执行真实 go build，并把错误回投到 .gx 位置
        -replace  go.mod replace 指令，可重复（module=本地目录）
-  gox jsx|pub|enum|collections|external|all <file.gx>   单步 / 全管线调试
+  gox typeguard|jsx|pub|enum|collections|external|all <file.gx>   单步 / 全管线调试
   gox sourcemap <file.gx> [-o map.json]                 输出 GX↔Go 位置映射 JSON
   gox map-lookup [-to-go] <map.json> <line> <col>        位置反查（默认 Go→GX）
   gox lsp-map <dir-or-file>                              项目符号映射 JSON

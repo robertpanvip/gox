@@ -1,0 +1,19 @@
+package main
+
+import "fmt"
+
+func main() {
+    var vals []any = []any{float64(3.5), 42, "hi", true}
+
+    for _, v := range vals {
+        if (v is float64) {
+            fmt.println("float:", v + 0.5)
+        } else if (v is int) {
+            fmt.println("int:", v * 2)
+        } else if (v is string) {
+            fmt.println("string:", len(v))
+        } else {
+            fmt.println("other:", v)
+        }
+    }
+}

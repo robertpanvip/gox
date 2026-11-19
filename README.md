@@ -6,7 +6,7 @@
 >
 > **书写约定核心：声明用 `pub` 显式导出；标识符一律「只首字母小写，其余驼峰照抄」。** 转译器机械还原大小写，无需类型推导、无需读取第三方包符号表。
 
-## 五项特性速览
+## 六项特性速览
 
 | 特性 | GX 写法 | 生成的 Go |
 |---|---|---|
@@ -15,6 +15,7 @@
 | **JSX** | `<div class="box">hi</div>` | `gxvdom.CreateElement("div", …)` 嵌套 |
 | **外部符号** | `http.newRequest`、`uRL` | `http.NewRequest`、`URL`（机械首字母还原） |
 | **集合链式** | `xs.map(f).filter(g)` | `list.List[T].Map(f).Filter(g)`，切片 `[]T` 全局提升 |
+| **is 类型守卫** | `if (x is float64) { … }` | `if v, ok := x.(float64); ok { x := v; … }`（块内 x 窄化为 float64） |
 
 ## 1. 可见性：`pub`
 
@@ -91,7 +92,24 @@ total := nums.filter(even).reduce(0, func(acc, x int) int { return acc + x })
 - **不误伤**：数组 `[3]T`、索引 `a[i]`、切片表达式 `a[1:2]`、`map[K]V`、`Foo[T]` 都不是切片类型形态，不会被提升。
 - 用 `-module` 指定运行时 import 路径（默认 `github.com/robertpanvip/gox` → `.../list`）。运行时见 [`list/`](list/)。
 
-## 6. Sourcemap / LSP / 编译检查
+## 6. is 类型守卫
+
+`if (x is T) { … }` 判断接口值 `x` 的动态类型是否为 `T`，成立时**块内 `x` 自动窄化为 `T`**，可直接按 `T` 使用。转译为 Go 原生 comma-ok 断言 + 块首 shadow，零运行时魔法。
+
+```gx
+var x any = float64(3.5)
+if (x is float64) {
+    fmt.println(x + 1.5)   // 此处 x 是 float64，可直接运算
+}
+// → if __v, __ok := x.(float64); __ok { x := __v; fmt.println(x + 1.5) }
+```
+
+- `is` 不是全局关键字，仅在 if 守卫模式中识别；作普通变量名不受影响。
+- 支持 `if (x is T)` 与 `if x is T` 两种写法；`T` 支持任意 Go 类型（`int`、`[]int`、`*T`、`pkg.Type`、`map[K]V` 等）。
+- 支持 `else if` 链与嵌套；`else` 分支内 `x` 保持原类型。
+- **限制**：被守卫者须为简单标识符且静态类型是接口（如 `any`）——`x.(T)` 要求接口，否则生成的 Go 编译不过（转译器不做类型检查）；暂不支持 `obj.field` 作被守卫者、复合条件 `x is T && y`。
+
+## 7. Sourcemap / LSP / 编译检查
 
 - 自带 `.gx ↔ .go` **双向精确位置映射**（`sourcemap` / `map-lookup`）。
 - LSP：跳转 / 补全 / 悬停 / 文档符号 / **重命名**（枚举成员三种拼写派生新名）。
@@ -102,11 +120,11 @@ total := nums.filter(even).reduce(0, func(acc, x int) int { return acc + x })
 ```
 gox/
 ├── cmd/
-│   ├── gox/            CLI：build / jsx / pub / enum / collections / sourcemap /
-│   │                       map-lookup / lsp-map / lsp / test
+│   ├── gox/            CLI：build / typeguard / jsx / pub / enum / collections /
+│   │                       sourcemap / map-lookup / lsp-map / lsp / test
 │   └── gox-lsp/        独立 LSP server 入口（stdin/stdout JSON-RPC）
 ├── pkg/                对外稳定 API
-│   ├── compiler/       转译引擎：词法 / JSX / pub / enum / scope / external / collections / pipeline
+│   ├── compiler/       转译引擎：词法 / typeguard / JSX / pub / enum / scope / external / collections / pipeline
 │   └── sourcemap/      双向位置映射（无业务依赖）
 ├── internal/           工具内部实现
 │   ├── lsp/            LSP 协议 / server / 诊断 / 符号映射 / 重命名

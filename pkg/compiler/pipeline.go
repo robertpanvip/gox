@@ -26,9 +26,10 @@ func (r *Result) Validate() error {
 }
 
 // Compile 执行完整管线：
-// lex → enum → pub → jsx → collections(集合链式) → scope(作用域符号收集)
-// → restoreRefs(自身 pub 符号) → external(外部符号机械还原) → emit。
+// lex → typeguard(is 类型守卫) → enum → pub → jsx → collections(集合链式)
+// → scope(作用域符号收集) → restoreRefs(自身 pub 符号) → external(外部符号机械还原) → emit。
 //
+// typeguard 必须在最前：把 is 改写为 Go 原生 comma-ok 断言后，后续各层无需特殊处理。
 // scope 必须在 pub 之后（pub 名已大写，不会被误收为私有）、
 // jsx/collections 之后（它们注入的 import 也要被识别为包名）。
 func Compile(file, src string) (*Result, error) {
@@ -39,6 +40,7 @@ func Compile(file, src string) (*Result, error) {
 func CompileWithModule(file, src, module string) (*Result, error) {
 	toks := New(src).AllTokens()
 	names := map[string]string{} // 小写原名 → 大写导出名（自身 pub 符号）
+	toks = transformTypeGuard(toks)
 	toks = transformEnum(toks, names)
 	toks = transformPub(toks, names)
 	toks = transformJSX(toks)
@@ -88,6 +90,8 @@ func CompileStage(src, stage string) (string, error) {
 	switch stage {
 	case "lex":
 		return dumpTokens(toks), nil
+	case "typeguard":
+		toks = transformTypeGuard(toks)
 	case "enum":
 		toks = transformEnum(toks, names)
 	case "jsx":
@@ -100,6 +104,7 @@ func CompileStage(src, stage string) (string, error) {
 		scope := collectScope(toks)
 		toks = transformExternal(toks, scope, names)
 	case "all":
+		toks = transformTypeGuard(toks)
 		toks = transformEnum(toks, names)
 		toks = transformPub(toks, names)
 		toks = transformJSX(toks)
@@ -108,7 +113,7 @@ func CompileStage(src, stage string) (string, error) {
 		toks = restoreRefs(toks, names)
 		toks = transformExternal(toks, scope, names)
 	default:
-		return "", fmt.Errorf("unknown stage %q (want lex/enum/jsx/pub/collections/external/all)", stage)
+		return "", fmt.Errorf("unknown stage %q (want lex/typeguard/enum/jsx/pub/collections/external/all)", stage)
 	}
 	out, _ := emit(toks, "<stage>")
 	return out, nil
