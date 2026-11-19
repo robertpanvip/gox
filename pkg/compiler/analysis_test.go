@@ -297,3 +297,75 @@ func f(v int | string | bool) {
 		}
 	}
 }
+
+func TestNamedTypeAliasUnion(t *testing.T) {
+	src := `package main
+type MyU = int | string
+func f(v MyU) {
+    var x MyU = 1
+    _ = v; _ = x
+}
+`
+	a := Analyze(New(src).AllTokens())
+	// 别名应展开：参数 v 与变量 x 都应是 int|string 联合
+	for _, s := range a.Symbols() {
+		if (s.Name == "v" || s.Name == "x") && !s.Type.IsUnion() {
+			t.Errorf("%s 类型应为展开后的 int|string 联合, got %s", s.Name, s.Type.String())
+		}
+	}
+}
+
+func TestNamedTypeAliasChain(t *testing.T) {
+	src := `package main
+type A = int | string
+type B = A
+func f(v B) {}
+`
+	a := Analyze(New(src).AllTokens())
+	sig, ok := a.FuncSig("f")
+	if !ok || len(sig.Params) != 1 || !sig.Params[0].IsUnion() || sig.Params[0].String() != "int|string" {
+		t.Errorf("链式别名 B=A=int|string 应展开, got %v", sig.Params)
+	}
+}
+
+func TestNamedTypeAliasCycle(t *testing.T) {
+	src := `package main
+type A = B
+type B = A
+func f() {}
+`
+	// 循环别名不应死循环或 panic
+	a := Analyze(New(src).AllTokens())
+	if a == nil {
+		t.Fatal("Analyze 应正常返回")
+	}
+}
+
+func TestStrandedIsInCompoundCondition(t *testing.T) {
+	src := `package main
+func f() {
+    var v int | string = 1
+    if v is int && v == 1 {
+    }
+}
+`
+	_, err := Compile("input.gx", src)
+	if err == nil {
+		t.Fatal("复合条件残留 is 应报错，而不是静默产出非法 Go")
+	}
+	if !strings.Contains(err.Error(), "is 守卫仅支持") {
+		t.Errorf("错误信息应说明 is 限制, got %v", err)
+	}
+}
+
+func TestStrandedIsDoesNotRejectVariableNamedIs(t *testing.T) {
+	src := `package main
+func f() {
+    is := 1
+    _ = is
+}
+`
+	if _, err := Compile("input.gx", src); err != nil {
+		t.Errorf("变量名为 is 不应被误判: %v", err)
+	}
+}

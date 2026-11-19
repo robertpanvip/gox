@@ -184,9 +184,17 @@ GX 源码 ─lex→ token ─Analyze→ side table（符号 / 联合 / 收窄，
 | `union-member` | is 守卫目标不是联合成员 | `x is bool` 而 x 是 `int\|string` |
 | `redundant-guard` | 已收窄类型上的重复守卫 | 嵌套 `if x is int { if x is int {} }` |
 
-**防误报原则**：右侧类型推断不出来（如未知函数调用）时一律放过；非联合变量交给 `go/types`；`any`/`unknown` 不做成员约束。
+**类型兼容规则**（严格按 Go 可赋值语义，不是字符串比较）：
+- **无类型常量**（字面量 / `const`）：`1` 可赋给 `int/int64/uint/float64` 等数值族，`3.5` 可赋给浮点族，`"x"` 可赋给 `string`；但负数（`-1`）不能赋给无符号类型；
+- **具类型值**：必须精确匹配联合成员；
+- **命名别名**：`type MyU = int|string` 会展开参与检查（含链式别名、循环检测）。
+- **多值**：`x, y = true, false` 逐项检查；命名返回值 `func f() (v int|string)` 的赋值也检查。
 
-**收窄边界（M2 既定）**：is 守卫只在其**块内**注入 `x := __gx_v` shadow。因此运算收窄要用正向守卫块（`if x is int { x+1 }`）；`else` 分支的收窄事实仅供穷尽性分析，不注入 shadow，块内直接运算会被 `go build` 拒绝——需再写一个正向 is 守卫。
+**防误报原则**：右侧类型推断不出来（如未知函数调用、跨包 selector、struct 字段）一律放过；非联合变量交给 `go/types`；`any`/`unknown` 不做成员约束。跨包/方法调用按名字匹配会误判同名函数，故只检查本包直接调用。
+
+**收窄边界（M2 既定）**：is 守卫只在其**块内**注入 `x := __gx_v` shadow。因此运算收窄要用正向守卫块（`if x is int { x+1 }`）；`else` 分支的收窄事实仅供穷尽性分析，不注入 shadow，块内直接运算会被 `go build` 拒绝——检查器会报 `union-operand` 与之一致。
+
+**is 语法限制**：`is` 仅支持 `if x is T` 简单守卫形态。复合条件（如 `if x is int && x > 0`）不被改写，会在转译时报明确错误，而非静默产出非法 Go。
 
 ## 目录结构
 

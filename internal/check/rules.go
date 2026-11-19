@@ -10,74 +10,158 @@ import (
 )
 
 // =============================================================================
-// 表达式类型推断
+// 表达式类型推断（值类型 + 无类型常量标记）
 // =============================================================================
 
-// exprType 递归推断表达式的 GX 类型文本；无法判定时返回空串（放过，避免误报）。
-// 与旧 literalType 不同，它支持：括号、类型断言、标识符（查 side table 收窄后类型）、
-// 函数调用返回、一元/二元运算结果。
-func (v *visitor) exprType(e ast.Expr) string {
+// valueType 是一个表达式的类型推断结果。
+// Text 是类型文本；无类型常量（Go untyped constant）用内部标记 int-lit /
+// float-lit / rune-lit / string-lit / bool-lit，配合 Untyped=true，
+// 交给 compiler.Type.Accepts 按 Go 可赋值规则判定。
+// Text 为空表示无法判定（放过，避免误报）。
+type valueType struct {
+	Text    string
+	Untyped bool
+}
+
+func known(v valueType) bool { return v.Text != "" }
+
+// exprType 递归推断表达式类型。env 为当前值环境（标识符 → 推断类型）。
+func (v *visitor) exprType(e ast.Expr, env map[string]valueType) valueType {
 	switch x := e.(type) {
 	case *ast.BasicLit:
 		switch x.Kind {
 		case token.INT:
-			return "int"
-		case token.STRING:
-			return "string"
+			return valueType{"int-lit", true}
 		case token.FLOAT:
-			return "float64"
+			return valueType{"float-lit", true}
+		case token.STRING:
+			return valueType{"string-lit", true}
 		case token.CHAR:
-			return "rune"
+			return valueType{"rune-lit", true}
+		case token.IMAG:
+			return valueType{"complex-lit", true}
 		}
 	case *ast.Ident:
 		switch x.Name {
 		case "true", "false":
-			return "bool"
+			return valueType{"bool-lit", true}
 		case "nil":
-			return "nil"
+			return valueType{"nil", true}
+		case "iota":
+			return valueType{"int-lit", true}
 		}
-		// 变量：查 side table（含收窄），单类型才返回；联合/未知放过。
+		// 值环境只用于无类型常量传播（const c = true），避免具类型值
+		// 因扁平 env 泄漏（is 块内 shadow）而误判。
+		if t, ok := env[x.Name]; ok && t.Untyped {
+			return t
+		}
+		// 具类型值一律以 side table + 坐标为准（含 shadow 区间判定）。
 		line, col, _ := v.gxPos(x.Pos())
-		t, ok := v.c.an.TypeAtGx(x.Name, line, col)
-		if ok && !t.IsUnion() && t.Name != "unknown" && t.Name != "any" && t.Name != "never" {
-			return t.Name
+		if t, ok := v.c.an.TypeAtGx(x.Name, line, col); ok && !t.IsUnion() {
+			switch t.Name {
+			case "unknown", "any", "never":
+			default:
+				return valueType{t.Name, false}
+			}
 		}
 	case *ast.UnaryExpr:
 		switch x.Op {
 		case token.NOT:
-			return "bool"
-		case token.SUB, token.ADD:
-			return v.exprType(x.X) // -1 / +1 保持原类型
+			return valueType{"bool", false} // !x 结果具类型 bool
+		case token.SUB:
+			inner := v.exprType(x.X, env)
+			// -<整数字面量> 标记为负整数字面量，不能赋给无符号类型
+			if inner.Text == "int-lit" || inner.Text == "rune-lit" {
+				return valueType{"neg-int-lit", true}
+			}
+			return inner
+		case token.ADD, token.XOR:
+			// +x / ^x 保持操作数类型族（无类型常量仍无类型）
+			return v.exprType(x.X, env)
+		case token.AND:
+			// &x 是指针，无法简单推断类型文本
+			return valueType{}
 		}
 	case *ast.ParenExpr:
-		return v.exprType(x.X)
+		return v.exprType(x.X, env)
 	case *ast.TypeAssertExpr:
 		if x.Type != nil {
-			return typeExprName(x.Type)
+			return valueType{typeExprName(x.Type), false}
 		}
 	case *ast.CallExpr:
-		// 已知函数的单返回值类型
+		// 类型转换 T(x)：T 是类型名且已知函数不是普通调用时，结果为 T
 		if id, ok := x.Fun.(*ast.Ident); ok {
+			if isBuiltinType(id.Name) && len(x.Args) == 1 {
+				return valueType{id.Name, false}
+			}
 			if sig, ok := v.c.an.FuncSig(id.Name); ok && len(sig.Results) == 1 {
 				r := sig.Results[0]
 				if !r.IsUnion() && r.Name != "unknown" {
-					return r.Name
+					return valueType{r.Name, false}
 				}
 			}
 		}
 	case *ast.BinaryExpr:
 		if isCompareOp(x.Op) {
-			return "bool"
+			return valueType{"bool", false}
 		}
-		lt, rt := v.exprType(x.X), v.exprType(x.Y)
-		if lt != "" && lt == rt {
-			return lt
+		lt, rt := v.exprType(x.X, env), v.exprType(x.Y, env)
+		if !known(lt) || !known(rt) {
+			return valueType{}
 		}
+		// 无类型常量参与运算：结果仍无类型，取更高优先级的操作数类型族。
+		if lt.Untyped && rt.Untyped {
+			return valueType{dominantLiteral(lt.Text, rt.Text), true}
+		}
+		if lt.Untyped && !rt.Untyped {
+			return valueType{rt.Text, false}
+		}
+		if !lt.Untyped && rt.Untyped {
+			return valueType{lt.Text, false}
+		}
+		if lt.Text == rt.Text {
+			return valueType{lt.Text, false}
+		}
+	case *ast.IndexExpr:
+		// 索引结果类型无法从文本简单推断（slice/array/map 元素），放过
 	case *ast.StarExpr:
-		// 指针解引用：类型文本前带 * 的参数无法简单推断，放过
-		_ = x
+		// 指针解引用类型无法从文本推断，放过
 	}
-	return ""
+	return valueType{}
+}
+
+// dominantLiteral 返回两个无类型字面量运算后的类型族（优先级：complex > float > rune > int）。
+func dominantLiteral(a, b string) string {
+	rank := func(s string) int {
+		switch s {
+		case "complex-lit":
+			return 5
+		case "float-lit":
+			return 4
+		case "rune-lit":
+			return 3
+		case "int-lit", "neg-int-lit":
+			return 2
+		case "string-lit":
+			return 1
+		}
+		return 0
+	}
+	if rank(a) >= rank(b) {
+		return a
+	}
+	return b
+}
+
+func isBuiltinType(s string) bool {
+	switch s {
+	case "int", "int8", "int16", "int32", "int64",
+		"uint", "uint8", "uint16", "uint32", "uint64", "uintptr",
+		"byte", "rune", "float32", "float64", "complex64", "complex128",
+		"string", "bool", "any", "error":
+		return true
+	}
+	return false
 }
 
 // typeExprName 把 AST 类型表达式还原为 GX 类型文本。
@@ -113,57 +197,85 @@ func isCompareOp(op token.Token) bool {
 	return false
 }
 
-// typeUnionReport 生成"类型不在联合成员内"的诊断消息。
-// what 描述目标（如"变量 x"），union 为声明的联合类型。
-func typeUnionReport(what, typeText string, union compiler.Type) string {
-	return fmt.Sprintf("类型 %s 不能赋给%s（联合类型 %s）", typeText, what, union.String())
-}
-
 // =============================================================================
 // 规则 1：联合赋值 / 初始化兼容性（union-assign）
 // =============================================================================
 
 func (v *visitor) checkValueSpec(vs *ast.ValueSpec) {
-	if len(vs.Values) == 0 {
-		return
+	// 先推断每个 RHS 的类型，供后续赋值检查与值环境记录。
+	rhs := make([]valueType, len(vs.Values))
+	for i, e := range vs.Values {
+		rhs[i] = v.exprType(e, v.env)
 	}
+
+	// 逐名字检查：声明类型（联合）从 side table 按名字坐标取回（降级后 AST 是 any）。
 	for i, name := range vs.Names {
-		if i >= len(vs.Values) {
-			break
-		}
 		line, col, _ := v.gxPos(name.Pos())
-		lhs, ok := v.c.an.TypeAtGx(name.Name, line, col)
-		if !ok || !lhs.IsUnion() {
-			continue
+		declared, hasDecl := v.c.an.TypeAtGx(name.Name, line, col)
+		if i < len(rhs) && hasDecl && declared.IsUnion() {
+			v.checkOneAssign(name.Pos(), name.Name, declared, rhs[i], vs.Values[i])
 		}
-		rhs := v.exprType(vs.Values[i])
-		if rhs == "" || lhs.Has(rhs) {
-			continue
+		// 记录值环境：显式联合类型优先，否则用 RHS 推断（const 字面量保留 untyped）。
+		if hasDecl && declared.IsUnion() {
+			v.env[name.Name] = valueType{declared.String(), false}
+		} else if i < len(rhs) && known(rhs[i]) {
+			v.env[name.Name] = rhs[i]
 		}
-		v.report(vs.Values[i].Pos(), "union-assign",
-			typeUnionReport(fmt.Sprintf("变量 %s", name.Name), rhs, lhs))
 	}
 }
 
 func (v *visitor) checkAssign(as *ast.AssignStmt) {
-	if as.Tok != token.ASSIGN || len(as.Lhs) != 1 || len(as.Rhs) != 1 {
+	rhs := make([]valueType, len(as.Rhs))
+	for i, e := range as.Rhs {
+		rhs[i] = v.exprType(e, v.env)
+	}
+
+	// 逐项检查（支持多值赋值）。:=/= 都检查：= 时左侧联合来自 side table。
+	for i, lhsExpr := range as.Lhs {
+		if i >= len(rhs) {
+			break
+		}
+		id, ok := lhsExpr.(*ast.Ident)
+		if !ok {
+			continue
+		}
+		line, col, _ := v.gxPos(id.Pos())
+		t, ok := v.c.an.TypeAtGx(id.Name, line, col)
+		if ok && t.IsUnion() {
+			v.checkOneAssign(id.Pos(), id.Name, t, rhs[i], as.Rhs[i])
+		}
+		// 更新值环境：:= 新值类型；= 若推断不到则保留声明类型。
+		if known(rhs[i]) {
+			v.env[id.Name] = rhs[i]
+		}
+	}
+}
+
+// checkOneAssign 检查单个赋值是否符合联合类型，不符则报 union-assign。
+func (v *visitor) checkOneAssign(pos token.Pos, name string, union compiler.Type, val valueType, expr ast.Expr) {
+	if !known(val) || union.Accepts(val.Text, val.Untyped) {
 		return
 	}
-	id, ok := as.Lhs[0].(*ast.Ident)
-	if !ok {
-		return
+	v.report(pos, "union-assign", fmt.Sprintf(
+		"类型 %s 不能赋给变量 %s（联合类型 %s）", literalDisplay(val), name, union.String()))
+}
+
+func literalDisplay(v valueType) string {
+	switch v.Text {
+	case "int-lit":
+		return "整数(int)"
+	case "neg-int-lit":
+		return "负整数"
+	case "float-lit":
+		return "浮点数(float64)"
+	case "rune-lit":
+		return "rune"
+	case "string-lit":
+		return "字符串(string)"
+	case "bool-lit":
+		return "bool"
 	}
-	line, col, _ := v.gxPos(id.Pos())
-	lhs, ok := v.c.an.TypeAtGx(id.Name, line, col)
-	if !ok || !lhs.IsUnion() {
-		return
-	}
-	rhs := v.exprType(as.Rhs[0])
-	if rhs == "" || lhs.Has(rhs) {
-		return
-	}
-	v.report(as.Rhs[0].Pos(), "union-assign",
-		typeUnionReport(fmt.Sprintf("变量 %s", id.Name), rhs, lhs))
+	return v.Text
 }
 
 // =============================================================================
@@ -171,32 +283,29 @@ func (v *visitor) checkAssign(as *ast.AssignStmt) {
 // =============================================================================
 
 func (v *visitor) checkCall(c *ast.CallExpr) {
-	var name string
-	switch f := c.Fun.(type) {
-	case *ast.Ident:
-		name = f.Name
-	case *ast.SelectorExpr:
-		name = f.Sel.Name // 跨包/方法可能重名，尽力而为
-	default:
+	// 只检查本包直接调用 f(...)。selector 调用（跨包 pkg.f / 方法 obj.f）
+	// 无法可靠解析到本包的联合签名——按名字匹配会误判同名函数，故跳过，
+	// 类型安全交给 go build 与函数入口的运行时守卫。
+	f, ok := c.Fun.(*ast.Ident)
+	if !ok {
 		return
 	}
+	name := f.Name
 	sig, ok := v.c.an.FuncSig(name)
-	if !ok || len(sig.Params) == 0 {
-		return
-	}
-	if len(c.Args) != len(sig.Params) {
+	if !ok || len(sig.Params) == 0 || len(c.Args) != len(sig.Params) {
 		return
 	}
 	for i, p := range sig.Params {
 		if !p.IsUnion() {
 			continue
 		}
-		at := v.exprType(c.Args[i])
-		if at == "" || p.Has(at) {
+		at := v.exprType(c.Args[i], v.env)
+		if !known(at) || p.Accepts(at.Text, at.Untyped) {
 			continue
 		}
-		v.report(c.Args[i].Pos(), "union-call-arg",
-			typeUnionReport(fmt.Sprintf("函数 %s 第 %d 个参数", name, i+1), at, p))
+		v.report(c.Args[i].Pos(), "union-call-arg", fmt.Sprintf(
+			"类型 %s 不能作为函数 %s 第 %d 个参数（联合类型 %s）",
+			literalDisplay(at), name, i+1, p.String()))
 	}
 }
 
@@ -207,54 +316,73 @@ func (v *visitor) checkCall(c *ast.CallExpr) {
 func (v *visitor) checkReturn(r *ast.ReturnStmt) {
 	line, col, _ := v.gxPos(r.Pos())
 	sig, ok := v.c.an.FuncSigAtGx(line, col)
-	if !ok || len(sig.Results) == 0 {
+	if !ok || len(sig.Results) == 0 || len(r.Results) != len(sig.Results) {
 		return
-	}
-	if len(r.Results) != len(sig.Results) {
-		return // 多值返回直传等场景放过
 	}
 	for i, e := range r.Results {
 		ret := sig.Results[i]
 		if !ret.IsUnion() {
 			continue
 		}
-		at := v.exprType(e)
-		if at == "" || ret.Has(at) {
+		at := v.exprType(e, v.env)
+		if !known(at) || ret.Accepts(at.Text, at.Untyped) {
 			continue
 		}
-		v.report(e.Pos(), "union-return",
-			typeUnionReport(fmt.Sprintf("函数 %s 返回值", sig.Name), at, ret))
+		v.report(e.Pos(), "union-return", fmt.Sprintf(
+			"类型 %s 不能作为函数 %s 返回值（联合类型 %s）",
+			literalDisplay(at), sig.Name, ret.String()))
 	}
 }
 
 // =============================================================================
-// 规则 4：未收窄联合参与运算（union-operand）
+// 规则 4：联合参与运算（union-operand）—— 一元 + 二元
 // =============================================================================
 
-func (v *visitor) checkBinary(b *ast.BinaryExpr) {
-	// 只查算术/位运算；比较与逻辑运算放过（any == nil 等合法场景避免误报）
-	switch b.Op {
-	case token.ADD, token.SUB, token.MUL, token.QUO, token.REM,
-		token.SHL, token.SHR, token.AND, token.OR, token.XOR, token.AND_NOT:
+// checkUnary 检查一元运算的操作数是否为未收窄联合。
+func (v *visitor) checkUnary(u *ast.UnaryExpr) {
+	switch u.Op {
+	case token.ADD, token.SUB, token.XOR: // 数值运算要求操作数可运算
 	default:
 		return
 	}
-	reported := map[string]bool{}
-	for _, operand := range []ast.Expr{b.X, b.Y} {
-		id, ok := operand.(*ast.Ident)
-		if !ok || reported[id.Name] {
-			continue
-		}
-		line, col, _ := v.gxPos(id.Pos())
-		t, ok := v.c.an.TypeAtGx(id.Name, line, col)
-		if !ok || !t.IsUnion() {
-			continue
-		}
-		reported[id.Name] = true
-		v.report(id.Pos(), "union-operand", fmt.Sprintf(
-			"联合类型变量 %s（%s）未收窄，不能参与 %s 运算；请先用 is 守卫收窄",
-			id.Name, t.String(), b.Op))
+	v.checkOperand(u.X, u.Op.String())
+}
+
+func (v *visitor) checkBinary(b *ast.BinaryExpr) {
+	if isCompareOp(b.Op) {
+		return // 比较/逻辑运算放过（any == nil 等合法）
 	}
+	v.checkOperand(b.X, b.Op.String())
+	v.checkOperand(b.Y, b.Op.String())
+}
+
+// checkOperand 检查一个操作数：解包括号后，若是标识符且为未收窄联合，则报。
+// 关键：只认「desugar 真正注入了 shadow」的收窄——即 if 守卫块内。
+// else 分支的分析层收窄没有对应 shadow，仍视为未收窄，避免 check 通过但 build 失败。
+func (v *visitor) checkOperand(e ast.Expr, op string) {
+	// 解包括号
+	for {
+		p, ok := e.(*ast.ParenExpr)
+		if !ok {
+			break
+		}
+		e = p.X
+	}
+	id, ok := e.(*ast.Ident)
+	if !ok {
+		return
+	}
+	line, col, _ := v.gxPos(id.Pos())
+	// TypeAtGx 内部用 TypeAtShadowed：只认 if 守卫块内有 shadow 的收窄。
+	// if 块内返回收窄后的具体类型（放过）；else 分支无 shadow，仍返回联合（报），
+	// 与 desugar 生成代码完全一致——避免 check 通过但 go build 失败。
+	t, ok := v.c.an.TypeAtGx(id.Name, line, col)
+	if !ok || !t.IsUnion() {
+		return
+	}
+	v.report(id.Pos(), "union-operand", fmt.Sprintf(
+		"联合类型变量 %s（%s）未收窄，不能参与 %s 运算；请先用 is 守卫收窄",
+		id.Name, t.String(), op))
 }
 
 // =============================================================================
@@ -262,7 +390,6 @@ func (v *visitor) checkBinary(b *ast.BinaryExpr) {
 // =============================================================================
 
 func (v *visitor) checkTypeSwitch(ts *ast.TypeSwitchStmt) {
-	// 取被 switch 的变量：switch v := x.(type) / switch x.(type)
 	var subject ast.Expr
 	switch a := ts.Assign.(type) {
 	case *ast.AssignStmt:
@@ -292,18 +419,26 @@ func (v *visitor) checkTypeSwitch(ts *ast.TypeSwitchStmt) {
 		if !ok {
 			continue
 		}
-		if cc.List == nil { // default
+		if cc.List == nil {
 			hasDefault = true
 			continue
 		}
 		for _, e := range cc.List {
-			if n := typeExprName(e); n != "" {
-				covered[n] = true
+			n := typeExprName(e)
+			if n == "" {
+				continue
 			}
+			// case 是联合别名（type MyU = int|string → 擦除为 any）：
+			// 在 type switch 中 case MyU 等价 case any，覆盖全部成员。
+			if at, ok := v.c.an.NamedType(n); ok && at.IsUnion() {
+				hasDefault = true
+				continue
+			}
+			covered[n] = true
 		}
 	}
 	if hasDefault {
-		return // 显式 default 视为已处理
+		return
 	}
 	var missing []string
 	for _, m := range t.Members {
@@ -313,7 +448,6 @@ func (v *visitor) checkTypeSwitch(ts *ast.TypeSwitchStmt) {
 	}
 	if len(missing) > 0 {
 		v.report(ts.Pos(), "non-exhaustive", fmt.Sprintf(
-			"type switch 未覆盖 %s 的联合成员：%s",
-			id.Name, strings.Join(missing, "|")))
+			"type switch 未覆盖 %s 的联合成员：%s", id.Name, strings.Join(missing, "|")))
 	}
 }

@@ -47,7 +47,7 @@ func (t Type) String() string {
 	return strings.Join(parts, "|")
 }
 
-// Has 报告类型是否可容纳指定成员文本。any 视作可容纳任意成员（不产生误报）。
+// Has 报告类型是否可容纳指定成员文本（精确匹配）。any 视作可容纳任意成员。
 func (t Type) Has(member string) bool {
 	if t.Name == "any" {
 		return true
@@ -62,6 +62,88 @@ func (t Type) Has(member string) bool {
 	}
 	return t.Name == member
 }
+
+// Accepts 判断本类型（通常是联合）能否接受一个值。
+// value 是值的类型文本，untyped 表示该值是 Go 无类型常量（字面量 / const）。
+// 遵循 Go 可赋值规则：无类型常量可隐式转换到兼容的类型族。
+func (t Type) Accepts(value string, untyped bool) bool {
+	if t.Name == "any" || value == "" {
+		return true // any 或未知类型放过，避免误报
+	}
+	candidates := []Type{t}
+	if t.IsUnion() {
+		candidates = t.Members
+	}
+	for _, c := range candidates {
+		if assignableTo(c.String(), value, untyped) {
+			return true
+		}
+	}
+	return false
+}
+
+// assignableTo 判断 value 类型能否赋给 target 类型。
+// untyped 时按 Go 无类型常量规则放宽到类型族；具类型时要求精确匹配。
+func assignableTo(target, value string, untyped bool) bool {
+	if target == value || target == "any" {
+		return true
+	}
+	if !untyped {
+		return false
+	}
+	// 无类型整数常量：1 可赋给所有整数/浮点/复数类型；
+	// 负整数字面量（-1）不能赋给无符号整数。
+	if value == "int-lit" {
+		return isIntegerType(target) || isFloatType(target) || isComplexType(target)
+	}
+	if value == "neg-int-lit" {
+		if isUnsignedType(target) {
+			return false
+		}
+		return isSignedIntegerType(target) || isFloatType(target) || isComplexType(target)
+	}
+	// 无类型浮点常量：3.5 可赋给浮点/复数
+	if value == "float-lit" {
+		return isFloatType(target) || isComplexType(target)
+	}
+	// rune 常量：'a' 可赋给整数/浮点（rune 是 int32 的别名）
+	if value == "rune-lit" {
+		return isIntegerType(target) || isFloatType(target) || target == "rune"
+	}
+	// 无类型字符串常量：可赋给 string（及具名 string 类型，这里简化为 string 族）
+	if value == "string-lit" {
+		return isStringType(target)
+	}
+	// 无类型布尔常量
+	if value == "bool-lit" {
+		return target == "bool"
+	}
+	return false
+}
+
+func isIntegerType(s string) bool {
+	return isSignedIntegerType(s) || isUnsignedType(s)
+}
+
+func isSignedIntegerType(s string) bool {
+	switch s {
+	case "int", "int8", "int16", "int32", "int64", "rune":
+		return true
+	}
+	return false
+}
+
+func isUnsignedType(s string) bool {
+	switch s {
+	case "uint", "uint8", "uint16", "uint32", "uint64", "uintptr", "byte":
+		return true
+	}
+	return false
+}
+
+func isFloatType(s string) bool    { return s == "float32" || s == "float64" }
+func isComplexType(s string) bool  { return s == "complex64" || s == "complex128" }
+func isStringType(s string) bool   { return s == "string" }
 
 // Without 从类型中排除一个成员（用于 else 分支收窄）。
 // 非联合类型无法做有意义的排除，原样返回；联合排空后记为 never。
@@ -97,11 +179,15 @@ type Symbol struct {
 }
 
 // NarrowFact 表示在 token 下标 [From, To) 内，变量 Var 的有效类型被收窄为 Type。
+// Shadowed 表示 desugar 是否在该区间注入了 `x := <窄值>` shadow：
+//   - if 守卫块内为 true（有 shadow，值确实被窄化，可参与运算）；
+//   - else 分支为 false（分析层知道剩余类型用于穷尽性，但无 shadow，值仍是 any）。
 type NarrowFact struct {
-	Var  string
-	Type Type
-	From int
-	To   int
+	Var      string
+	Type     Type
+	From     int
+	To       int
+	Shadowed bool
 }
 
 // Guard 是一个已识别的 is 守卫，供 desugar 生成 comma-ok 断言使用。
@@ -144,7 +230,8 @@ type Analysis struct {
 	// 构建时不覆盖：同一坐标保留最小下标（首个 token）。
 	posToIdx map[posKey]int
 	lineIdx  map[int][]lineEntry // 行号 → 该行的有效 token（按列升序）
-	sigs     []FuncSig           // 函数签名索引（参数/返回值联合类型），供 AST 侧调用/返回规则使用
+	sigs       []FuncSig          // 函数签名索引（参数/返回值联合类型），供 AST 侧调用/返回规则使用
+	namedTypes map[string]Type    // 命名类型别名表：type MyU = int|string → MyU: 联合
 }
 
 type lineEntry struct {
@@ -155,12 +242,14 @@ type lineEntry struct {
 // Analyze 在原始 token 流（union 擦除、is 改写之前）上做语义分析。
 func Analyze(toks []Token) *Analysis {
 	a := &Analysis{
-		n:        len(toks),
-		guards:   map[posKey]Guard{},
-		posToIdx: map[posKey]int{},
-		lineIdx:  map[int][]lineEntry{},
+		n:          len(toks),
+		guards:     map[posKey]Guard{},
+		posToIdx:   map[posKey]int{},
+		lineIdx:    map[int][]lineEntry{},
+		namedTypes: map[string]Type{},
 	}
 	a.funcRange = findFuncRanges(toks)
+	a.collectNamedTypes(toks) // 必须先于符号收集：变量类型解析要查别名表
 	a.collectSymbols(toks)
 	a.collectSigs(toks)
 	a.collectGuards(toks)
@@ -227,7 +316,7 @@ func (a *Analysis) TypeAtGx(name string, line, col int) (Type, bool) {
 	if idx < 0 {
 		return Type{}, false
 	}
-	t := a.TypeAt(name, idx)
+	t := a.TypeAtShadowed(name, idx) // 只认有 shadow 的收窄，与生成代码一致
 	if t.Name == "unknown" && !t.IsUnion() {
 		return Type{}, false
 	}
@@ -247,7 +336,15 @@ func (a *Analysis) GuardAt(p Pos) (Guard, bool) {
 // 先取最近的声明类型，再叠加覆盖该下标的最窄收窄事实（嵌套时内层优先）。
 func (a *Analysis) TypeAt(name string, idx int) Type {
 	base := a.declaredTypeAt(name, idx)
-	return a.narrowAt(name, idx, base)
+	return a.narrowAt(name, idx, base, false)
+}
+
+// TypeAtShadowed 只叠加「有 shadow 注入」的收窄事实——即 desugar 真正把变量
+// 窄化成具体值的区间（if 守卫块内）。供 AST 检查器判定「能否参与运算」，
+// 与生成代码保持一致：else 分支无 shadow，即使分析层知道剩余类型也按未收窄处理。
+func (a *Analysis) TypeAtShadowed(name string, idx int) Type {
+	base := a.declaredTypeAt(name, idx)
+	return a.narrowAt(name, idx, base, true)
 }
 
 // Diagnostics 返回 GX 语义层诊断的副本。
@@ -261,6 +358,17 @@ func (a *Analysis) Diagnostics() []GXDiagnostic {
 // Symbols 返回收集到的符号副本（供测试 / LSP 消费）。
 func (a *Analysis) Symbols() []Symbol {
 	return append([]Symbol(nil), a.symbols...)
+}
+
+// NamedType 返回命名别名的展开类型。
+// 供 AST 检查器判断 case 里的类型名是否为「擦除为 any 的联合别名」
+// （如 type MyU = int|string → case MyU 在 type switch 中等价于 case any，覆盖全部）。
+func (a *Analysis) NamedType(name string) (Type, bool) {
+	if a == nil {
+		return Type{}, false
+	}
+	t, ok := a.namedTypes[name]
+	return t, ok && t.String() != "unknown"
 }
 
 // ---------- 作用域与符号查询 ----------
@@ -296,12 +404,16 @@ func (a *Analysis) declaredTypeAt(name string, idx int) Type {
 	return best.Type
 }
 
-func (a *Analysis) narrowAt(name string, idx int, fallback Type) Type {
+// narrowAt 叠加覆盖 idx 的最窄收窄事实。shadowedOnly=true 时只考虑注入了 shadow 的区间。
+func (a *Analysis) narrowAt(name string, idx int, fallback Type, shadowedOnly bool) Type {
 	best := a.n + 1
 	found := false
 	var res Type
 	for _, f := range a.facts {
 		if f.Var != name || idx < f.From || idx >= f.To {
+			continue
+		}
+		if shadowedOnly && !f.Shadowed {
 			continue
 		}
 		if span := f.To - f.From; span < best {
@@ -316,16 +428,184 @@ func (a *Analysis) narrowAt(name string, idx int, fallback Type) Type {
 	return fallback
 }
 
-func (a *Analysis) addFact(v string, t Type, from, to int) {
+func (a *Analysis) addFact(v string, t Type, from, to int, shadowed bool) {
 	if from >= to {
 		return
 	}
 	for _, f := range a.facts {
-		if f.Var == v && f.From == from && f.To == to && f.Type.String() == t.String() {
+		if f.Var == v && f.From == from && f.To == to && f.Type.String() == t.String() && f.Shadowed == shadowed {
 			return
 		}
 	}
-	a.facts = append(a.facts, NarrowFact{Var: v, Type: t, From: from, To: to})
+	a.facts = append(a.facts, NarrowFact{Var: v, Type: t, From: from, To: to, Shadowed: shadowed})
+}
+
+// ---------- 命名类型别名 ----------
+
+// collectNamedTypes 收集 type 声明的底层类型，供变量/参数类型解析时展开。
+// 两遍：先记录所有别名名字（含前向引用），再解析其底层类型。
+func (a *Analysis) collectNamedTypes(toks []Token) {
+	// 第一遍：记录 type 声明的名字与类型起点
+	type decl struct {
+		name string
+		from int
+		to   int
+	}
+	var decls []decl
+	for i := 0; i < len(toks); i++ {
+		if !toks[i].is("type") {
+			continue
+		}
+		j := nextSig(toks, i+1)
+		if j < 0 || toks[j].Kind != Ident {
+			continue
+		}
+		name := toks[j].Text
+		// 单行声明：名字后是 = 或直接类型
+		k := nextSig(toks, j+1)
+		if k < 0 {
+			continue
+		}
+		if toks[k].Text == "=" {
+			k = nextSig(toks, k+1)
+		}
+		if k < 0 || !isTypeStartTok(toks[k]) {
+			continue
+		}
+		from, to, ok := unionSpan(toks, k)
+		if !ok {
+			from, to = k, typeEnd(toks, k)
+		}
+		decls = append(decls, decl{name: name, from: from, to: to})
+		// 先占位，避免自引用/前向引用解析时死循环
+		a.namedTypes[name] = Type{Name: "unknown"}
+	}
+
+	// 分组 type 声明
+	for i := 0; i < len(toks); i++ {
+		if !toks[i].is("type") {
+			continue
+		}
+		j := nextSig(toks, i+1)
+		if j < 0 || toks[j].Text != "(" {
+			continue
+		}
+		close := matchDelim(toks, j, "(", ")")
+		if close <= j {
+			continue
+		}
+		lineStart := j + 1
+		for k := j + 1; k <= close; k++ {
+			if k == close || toks[k].Kind == Newline {
+				nameIdx := nextSig(toks, lineStart)
+				if nameIdx >= 0 && nameIdx < k && toks[nameIdx].Kind == Ident {
+					t := nextSig(toks, nameIdx+1)
+					if t < 0 || t >= k {
+						lineStart = k + 1
+						continue
+					}
+					if toks[t].Text == "=" {
+						t = nextSig(toks, t+1)
+					}
+					if t >= 0 && t < k && isTypeStartTok(toks[t]) {
+						from, to, ok := unionSpan(toks, t)
+						if !ok {
+							from, to = t, typeEnd(toks, t)
+						}
+						if to > k {
+							to = k
+						}
+						decls = append(decls, decl{name: toks[nameIdx].Text, from: from, to: to})
+						a.namedTypes[toks[nameIdx].Text] = Type{Name: "unknown"}
+					}
+				}
+				lineStart = k + 1
+			}
+		}
+	}
+
+	// 第二遍：解析底层类型（展开已知别名，带访问栈防循环）
+	visiting := map[string]bool{}
+	var resolve func(d decl, depth int) Type
+	resolve = func(d decl, depth int) Type {
+		if depth > 16 {
+			return Type{Name: "unknown"}
+		}
+		return typeFromTokensResolved(toks, d.from, d.to, func(name string) (Type, bool) {
+			if underlying, ok := a.namedTypes[name]; ok && underlying.String() != "unknown" {
+				return underlying, true
+			}
+			// 找目标别名的声明并递归解析
+			for _, od := range decls {
+				if od.name == name {
+					if visiting[name] {
+						return Type{Name: "unknown"}, true // 循环别名
+					}
+					visiting[name] = true
+					t := resolve(od, depth+1)
+					delete(visiting, name)
+					a.namedTypes[name] = t
+					return t, true
+				}
+			}
+			return Type{}, false
+		})
+	}
+	for _, d := range decls {
+		if visiting[d.name] {
+			continue
+		}
+		visiting[d.name] = true
+		t := resolve(d, 0)
+		delete(visiting, d.name)
+		a.namedTypes[d.name] = t
+	}
+}
+
+// typeFromTokensResolved 是 typeFromTokens 的可注入版本：resolveNamed 用于在
+// 类型名匹配到命名别名时返回其展开类型。resolveNamed 返回 ok=false 时按普通类型名处理。
+func typeFromTokensResolved(toks []Token, s, e int, resolveNamed func(string) (Type, bool)) Type {
+	if s >= e || s < 0 || e > len(toks) {
+		return Type{Name: "unknown"}
+	}
+	mems := unionMembersAt(toks, s, e)
+	if len(mems) >= 2 {
+		t := Type{}
+		for _, m := range mems {
+			t.Members = append(t.Members, resolveMember(m, resolveNamed))
+		}
+		return t
+	}
+	// 单类型：可能是别名
+	if e-s == 1 && toks[s].Kind == Ident {
+		if t, ok := resolveNamed(toks[s].Text); ok {
+			return t
+		}
+	}
+	return Type{Name: joinTypeText(toks, s, e)}
+}
+
+func resolveMember(m string, resolveNamed func(string) (Type, bool)) Type {
+	// 成员文本是单个标识符时尝试展开别名（如 type U = MyU|bool 且 MyU=int|string）
+	if isSimpleIdent(m) {
+		if t, ok := resolveNamed(m); ok {
+			return t
+		}
+	}
+	return Type{Name: m}
+}
+
+func isSimpleIdent(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i, r := range s {
+		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r == '_' || (i > 0 && r >= '0' && r <= '9') {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 // ---------- 符号收集 ----------
@@ -449,7 +729,7 @@ func (a *Analysis) collectParams(toks []Token, open, close, ff, ft int) {
 		if k == close || toks[k].Text == "," {
 		seg := parseParamSeg(toks, segStart, k)
 		if seg.nameIdx >= 0 {
-			typ := typeFromTokens(toks, seg.typeStart, typeRangeEnd(toks, seg.typeStart))
+			typ := a.typeFromTokens(toks, seg.typeStart, typeRangeEnd(toks, seg.typeStart))
 				a.symbols = append(a.symbols, Symbol{
 					Name: toks[seg.nameIdx].Text, Type: typ, DeclIdx: seg.nameIdx,
 					ScopeFrom: ff, ScopeTo: ft,
@@ -473,7 +753,7 @@ func (a *Analysis) addVarSymbol(toks []Token, start, limit int) {
 	if limit > 0 && te > limit {
 		te = limit
 	}
-	typ := typeFromTokens(toks, ts, te)
+	typ := a.typeFromTokens(toks, ts, te)
 	ff, ft := a.scopeOf(nameIdx)
 	a.symbols = append(a.symbols, Symbol{
 		Name: toks[nameIdx].Text, Type: typ, DeclIdx: nameIdx,
@@ -492,19 +772,20 @@ func typeRangeEnd(toks []Token, s int) int {
 }
 
 // typeFromTokens 把 token 区间解析为 Type：顶层 A|B|C → 联合，否则单类型。
+// 不展开命名别名（供无 Analysis 上下文的工具函数使用）。
 func typeFromTokens(toks []Token, s, e int) Type {
-	if s >= e || s < 0 || e > len(toks) {
-		return Type{Name: "unknown"}
-	}
-	mems := unionMembersAt(toks, s, e)
-	if len(mems) >= 2 {
-		t := Type{}
-		for _, m := range mems {
-			t.Members = append(t.Members, Type{Name: m})
+	return typeFromTokensResolved(toks, s, e, func(string) (Type, bool) { return Type{}, false })
+}
+
+// a.typeFromTokens 在 Analysis 上下文中解析类型，展开已知命名别名。
+func (a *Analysis) typeFromTokens(toks []Token, s, e int) Type {
+	return typeFromTokensResolved(toks, s, e, func(name string) (Type, bool) {
+		t, ok := a.namedTypes[name]
+		if !ok || t.String() == "unknown" {
+			return Type{}, false
 		}
-		return t
-	}
-	return Type{Name: joinTypeText(toks, s, e)}
+		return t, true
+	})
 }
 
 // ---------- is 收窄数据流 ----------
@@ -530,6 +811,25 @@ func parseGuardAt(toks []Token, i int) (parsedGuard, bool) {
 		typeToks: g.typeToks,
 		target:   typeFromTokens(g.typeToks, 0, len(g.typeToks)),
 	}, true
+}
+
+// checkStrandedIs 检测 desugar 后仍残留的中缀 `x is T` 形态。
+// 这类 is 出现在复合条件（如 `if x is int && x > 0`）中，parseTypeGuard 会
+// 正确拒绝改写，但残留的 is 关键字会让 Go 源码非法。与其静默产出非法码，
+// 不如在这里报出明确诊断，引导用户拆成简单守卫。
+func checkStrandedIs(toks []Token) error {
+	for i := 0; i < len(toks); i++ {
+		if !toks[i].is("is") {
+			continue
+		}
+		p := prevSig(toks, i-1)
+		n := nextSig(toks, i+1)
+		// 中缀形态：前是标识符、后是类型起始 token
+		if p >= 0 && toks[p].Kind == Ident && n >= 0 && isTypeStartTok(toks[n]) {
+			return fmt.Errorf("%d:%d: is 守卫仅支持 `if x is T` 简单形态，复合条件请拆分为独立守卫", toks[i].Pos.Line, toks[i].Pos.Col)
+		}
+	}
+	return nil
 }
 
 func (a *Analysis) collectGuards(toks []Token) {
@@ -558,7 +858,7 @@ func (a *Analysis) processChain(toks []Token, start int, processed map[int]bool)
 	if !ok {
 		return
 	}
-	cur := a.narrowAt(g.recv, start, a.declaredTypeAt(g.recv, start))
+	cur := a.narrowAt(g.recv, start, a.declaredTypeAt(g.recv, start), false)
 	covered := 0 // 链已覆盖的联合成员数（仅统计确实是成员的守卫）
 	i := start
 	for {
@@ -585,7 +885,7 @@ func (a *Analysis) processChain(toks []Token, start int, processed map[int]bool)
 		if thenClose <= thenBrace {
 			return
 		}
-		a.addFact(g.recv, target, thenBrace+1, thenClose)
+		a.addFact(g.recv, target, thenBrace+1, thenClose, true) // if 块内：有 shadow
 		a.guards[keyOf(toks[i].Pos)] = Guard{
 			Pos: toks[i].Pos, EndPos: toks[thenBrace].Pos,
 			Recv: g.recv, RecvPos: g.recvPos,
@@ -627,7 +927,7 @@ func (a *Analysis) processChain(toks []Token, start int, processed map[int]bool)
 		if toks[m].Text == "{" {
 			ec := matchDelim(toks, m, "{", "}")
 			if ec > m {
-				a.addFact(g.recv, cur, m+1, ec)
+				a.addFact(g.recv, cur, m+1, ec, false) // else 块内：无 shadow，仅用于穷尽性
 			}
 		}
 		return

@@ -50,6 +50,9 @@ func CompileWithModule(file, src, module string) (*Result, error) {
 	names := map[string]string{} // 小写原名 → 大写导出名（自身 pub 符号）
 	toks = runUnion(toks)
 	toks = transformTypeGuard(toks, analysis)
+	if err := checkStrandedIs(toks); err != nil {
+		return nil, err
+	}
 	toks = transformEnum(toks, names)
 	toks = transformPub(toks, names)
 	toks = transformJSX(toks)

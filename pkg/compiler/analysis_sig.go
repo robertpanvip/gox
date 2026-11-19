@@ -83,12 +83,46 @@ func (a *Analysis) collectSigs(toks []Token) {
 		}
 		sig := FuncSig{
 			Name:     toks[nameIdx].Text,
-			Params:   parseSigParams(toks, open, close),
-			Results:  parseSigResults(toks, close+1, brace),
+			Params:   a.parseSigParams(toks, open, close),
+			Results:  a.parseSigResults(toks, close+1, brace),
 			BodyFrom: brace,
 			BodyTo:   bodyEnd,
 		}
 		a.sigs = append(a.sigs, sig)
+		// 命名返回值也是函数体内的局部变量，加入符号表供赋值检查。
+		a.collectNamedResults(toks, close+1, brace, brace, bodyEnd)
+	}
+}
+
+// collectNamedResults 把命名返回值 (x int|string) 作为局部变量加入符号表，
+// 作用域为函数体。这样函数体内 `x = true` 能被联合赋值检查捕获。
+func (a *Analysis) collectNamedResults(toks []Token, from, to, bodyFrom, bodyTo int) {
+	j := nextSig(toks, from)
+	if j < 0 || j >= to || toks[j].Text != "(" {
+		return // 非括号分组的返回值不具名
+	}
+	rc := matchDelim(toks, j, "(", ")")
+	if rc <= j || rc > to {
+		return
+	}
+	segStart := j + 1
+	for k := j + 1; k <= rc; k++ {
+		if k == rc || toks[k].Text == "," {
+			seg := parseParamSeg(toks, segStart, k)
+			// 命名返回值有两个标识符：名字 + 类型
+			if seg.nameIdx >= 0 && seg.typeStart > seg.nameIdx {
+				te := typeRangeEnd(toks, seg.typeStart)
+				if te > k {
+					te = k
+				}
+				typ := a.typeFromTokens(toks, seg.typeStart, te)
+				a.symbols = append(a.symbols, Symbol{
+					Name: toks[seg.nameIdx].Text, Type: typ,
+					DeclIdx: seg.nameIdx, ScopeFrom: bodyFrom, ScopeTo: bodyTo,
+				})
+			}
+			segStart = k + 1
+		}
 	}
 }
 
@@ -125,8 +159,8 @@ func funcParamParens(toks []Token, fi int) (open, close int, ok bool) {
 	return open, close, close > open
 }
 
-// parseSigParams 解析参数段为类型列表（联合完整保留）。
-func parseSigParams(toks []Token, open, close int) []Type {
+// parseSigParams 解析参数段为类型列表（联合完整保留，展开命名别名）。
+func (a *Analysis) parseSigParams(toks []Token, open, close int) []Type {
 	var out []Type
 	segStart := open + 1
 	for k := open + 1; k <= close; k++ {
@@ -137,7 +171,7 @@ func parseSigParams(toks []Token, open, close int) []Type {
 				if te > k {
 					te = k
 				}
-				out = append(out, typeFromTokens(toks, seg.typeStart, te))
+				out = append(out, a.typeFromTokens(toks, seg.typeStart, te))
 			} else {
 				out = append(out, Type{Name: "unknown"})
 			}
@@ -149,7 +183,7 @@ func parseSigParams(toks []Token, open, close int) []Type {
 
 // parseSigResults 解析返回值段 [from,to) 为类型列表。
 // 支持：单类型（含联合）、括号分组 (int, error)、命名返回 (x int|string)。
-func parseSigResults(toks []Token, from, to int) []Type {
+func (a *Analysis) parseSigResults(toks []Token, from, to int) []Type {
 	// 去掉尾部的空白/换行
 	for to > from && (toks[to-1].Kind == Space || toks[to-1].Kind == Newline || toks[to-1].Kind == Comment) {
 		to--
@@ -161,7 +195,7 @@ func parseSigResults(toks []Token, from, to int) []Type {
 	if toks[j].Text == "(" {
 		rc := matchDelim(toks, j, "(", ")")
 		if rc > j && rc <= to {
-			return parseResultGroup(toks, j+1, rc)
+			return a.parseResultGroup(toks, j+1, rc)
 		}
 	}
 	// 单类型（可能联合）：用 typeRangeEnd 吃完整
@@ -169,11 +203,11 @@ func parseSigResults(toks []Token, from, to int) []Type {
 	if te > to {
 		te = to
 	}
-	return []Type{typeFromTokens(toks, j, te)}
+	return []Type{a.typeFromTokens(toks, j, te)}
 }
 
 // parseResultGroup 解析括号内返回值列表，逐段取类型（跳过命名返回的名字）。
-func parseResultGroup(toks []Token, from, to int) []Type {
+func (a *Analysis) parseResultGroup(toks []Token, from, to int) []Type {
 	var out []Type
 	segStart := from
 	for k := from; k <= to; k++ {
@@ -184,10 +218,10 @@ func parseResultGroup(toks []Token, from, to int) []Type {
 				if te > k {
 					te = k
 				}
-				out = append(out, typeFromTokens(toks, seg.typeStart, te))
+				out = append(out, a.typeFromTokens(toks, seg.typeStart, te))
 			} else if nameIdx := nextSig(toks, segStart); nameIdx >= 0 && nameIdx < k {
 				// 兜底：整段当一个类型名
-				out = append(out, typeFromTokens(toks, nameIdx, k))
+				out = append(out, a.typeFromTokens(toks, nameIdx, k))
 			}
 			segStart = k + 1
 		}

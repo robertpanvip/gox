@@ -56,7 +56,7 @@ func (c *Checker) Check(goSrc string) ([]Diagnostic, error) {
 	if err != nil {
 		return []Diagnostic{{Line: 1, Col: 1, Code: "parse", Message: err.Error()}}, nil
 	}
-	v := &visitor{c: c, fset: fset}
+	v := newVisitor(c, fset)
 	ast.Walk(v, f)
 	return v.diags, nil
 }
@@ -102,6 +102,12 @@ type visitor struct {
 	c     *Checker
 	fset  *token.FileSet
 	diags []Diagnostic
+	env   map[string]valueType // 值环境：标识符 → 已推断类型（const/:= /= 传播）
+}
+
+// newVisitor 创建遍历器，初始化值环境。
+func newVisitor(c *Checker, fset *token.FileSet) *visitor {
+	return &visitor{c: c, fset: fset, env: map[string]valueType{}}
 }
 
 // gxPos 把 AST 节点的 Go 坐标映射回 GX 坐标。映射失败时回退到 Go 坐标。
@@ -143,6 +149,8 @@ func (v *visitor) Visit(n ast.Node) ast.Visitor {
 		v.checkReturn(node)
 	case *ast.BinaryExpr:
 		v.checkBinary(node)
+	case *ast.UnaryExpr:
+		v.checkUnary(node)
 	case *ast.TypeSwitchStmt:
 		v.checkTypeSwitch(node)
 	}

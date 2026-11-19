@@ -6,16 +6,17 @@ import "fmt"
 
 // 参数声明为联合类型 int|string|bool，生成 Go 后是 any，
 // 并在函数入口自动插入运行时的 type switch 守卫：传入非这三类值会 panic。
-// 函数体内再用 is 守卫逐个窄化。
+// 函数体内再用 is 守卫逐个窄化，并用 else 覆盖剩余成员（穷尽）。
 pub func describe(v int | string | bool) string {
     if (v is int) {
         return fmt.sprint("int:", v+100)
     } else if (v is string) {
         return fmt.sprint("str:", v)
+    } else {
+        // 此分支 v 已排除 int/string，剩余 bool。
+        // 注意：else 分支 desugar 不注入 shadow，此处不要对 v 做运算。
+        return "bool"
     }
-    // bool 分支未守卫，v 仍是 any —— 这正是「弱联合」的边界：
-    // Go 侧不做穷尽检查，也不保证参数一定是三种类型之一。
-    return "other"
 }
 
 // 类型别名里的联合同样擦除为 any。
