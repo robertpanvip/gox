@@ -6,10 +6,12 @@ import (
 	"strings"
 )
 
-// external 转换：按「只首字母小写、其余驼峰照抄」的书写约定还原外部符号。
+// external 转换：还原 selector 右侧的外部符号大小写。
 //
-// 约定：Go 侧 NewRequest 在 gx 里写 newRequest；URL 写 uRL；Method 写 method。
-// 还原因此退化为机械的 upperFirst——不读 export data、不查类型、无歧义。
+// 约定：外部符号按 Go 真实拼写照抄即可，全大写缩写（URL、StatusOK）直接写
+// 大写、原样保留；同时兼容「首字母小写」的旧写法（newRequest、uRL、method），
+// 由 upperFirst 还原。大小写转换只作用于小写开头的标识符，全大写的不碰。
+// 不读 export data、不查类型、无歧义。
 //
 // 作用域防误伤（Scope，在 pub 转换后收集）：
 //   - selector 左侧是 import 包名 → 右侧是外部包符号 → upperFirst
@@ -47,9 +49,9 @@ func isLowerStart(s string) bool {
 
 // transformCompositeFields 还原「外部包类型复合字面量」的字段名。
 //
-// GX 约定标识符一律小写书写，外部结构体字段在 Go 侧是大写（value -> Value）。
-// transformExternal 只处理 selector 右侧（x.sel），不覆盖 lib.Box{value: 9}
-// 这种复合字面量的字段名——这里补上。
+// 复合字面量的字段名：小写形式（value → Value）由这里补大写；全大写字段
+// （URL）原样保留。transformExternal 只处理 selector 右侧（x.sel），不覆盖
+// lib.Box{value: 9} 这种复合字面量的字段名——这里补上。
 //
 // 只识别 pkg.Type{...}（pkg 是 import 名，类型可带泛型实例化 [T]）形态；
 // 本包类型 point{x:1}、map 字面量、匿名结构、嵌套函数体等一律不碰。

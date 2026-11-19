@@ -242,15 +242,19 @@ func TestSourcemapRoundTrip(t *testing.T) {
 	}
 }
 
-// ---- 外部符号「首字母小写」机械还原 + 作用域防误伤单测 ----
+// ---- 外部符号大小写还原 + 作用域防误伤单测 ----
 
 func TestMechanicalExternalRestore(t *testing.T) {
-	// 只首字母小写、其余驼峰照抄 → upperFirst 精确还原
+	// 小写形式 → upperFirst 精确还原（兼容旧写法）
 	cases := []struct{ in, want string }{
 		{"newRequest", "NewRequest"},
 		{"uRL", "URL"},
 		{"sprintf", "Sprintf"},
 		{"itoa", "Itoa"},
+		// 全大写缩写：upperFirst 幂等，原样保留
+		{"URL", "URL"},
+		{"StatusOK", "StatusOK"},
+		{"HTTPServer", "HTTPServer"},
 	}
 	for _, c := range cases {
 		if got := upperFirst(c.in); got != c.want {

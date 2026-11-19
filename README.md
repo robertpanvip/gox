@@ -4,7 +4,7 @@
 
 > 设计原则：**零运行时魔法**。JSX 只是嵌套的函数调用，枚举只是具名类型 + const + String/Parse，集合只是切片类型提升 + 泛型方法。生成代码可直接提交、阅读、调试。
 >
-> **书写约定核心：声明用 `pub` 显式导出；标识符一律「只首字母小写，其余驼峰照抄」。** 转译器机械还原大小写，无需类型推导、无需读取第三方包符号表。
+> **书写约定核心：声明用 `pub` 显式导出；标识符按 Go 真实拼写书写，全大写缩写（如 `URL`）直接写大写、原样保留。** 小写形式兼容旧写法、机械还原，无需类型推导、无需读取第三方包符号表。
 
 ## 十一项特性速览
 
@@ -13,7 +13,7 @@
 | **pub 导出** | `pub func greet(){}` | `func Greet(){}`（引用处作用域感知还原） |
 | **枚举** | `pub enum color { red, green }` | `type Color int` + `const(ColorRed…)` + `String()`/`ParseColor()` |
 | **JSX** | `<div class="box">hi</div>` | `gxvdom.CreateElement("div", …)` 嵌套 |
-| **外部符号** | `http.newRequest`、`uRL` | `http.NewRequest`、`URL`（机械首字母还原） |
+| **外部符号** | `http.NewRequest`、`URL` | 原样保留；小写形式 `http.newRequest`、`newRequest` 机械还原 |
 | **集合链式** | `xs.map(f).filter(g)` | `list.List[T].Map(f).Filter(g)`，切片 `[]T` 全局提升 |
 | **is 类型守卫** | `if (x is float64) { … }` | `if v, ok := x.(float64); ok { x := v; … }`（块内 x 窄化为 float64） |
 | **联合类型** | `func f(v int \| string)` | `func f(v any)`（擦除为 any，配合 is 守卫窄化） |
@@ -67,21 +67,23 @@ pub func render(name string) any {
 | `{name}` 表达式子节点 | 作为 child 参数 `name` |
 | `<Foo/>` 组件 | `CreateElement(Foo, …)`（不加引号） |
 
-## 4. 外部 Go 符号：只首字母小写
+## 4. 外部 Go 符号：按真实拼写书写
 
-**约定：按 Go 真实名字照抄，只把首字母改成小写。** 还原因此是机械的 `upperFirst`，零依赖、零歧义。
+**约定：按 Go 真实名字照抄即可。** 全大写缩写（`URL`、`StatusOK`）直接写大写、原样保留；小写形式（`newRequest`）也兼容，由机械的 `upperFirst` 还原。零依赖、零歧义。
 
 | GX 书写 | 生成 Go | 说明 |
 |---|---|---|
-| `http.newRequest(...)` | `http.NewRequest(...)` | 多词保留驼峰 |
-| `uRL` | `URL` | 全大写缩写只压首字母 |
-| `fmt.println(...)` | `fmt.Println(...)` | 单词 |
+| `http.NewRequest(...)` | `http.NewRequest(...)` | 真实拼写，原样保留 |
+| `r.URL` / `http.StatusOK` | `r.URL` / `http.StatusOK` | 全大写缩写，原样保留 |
+| `http.newRequest(...)` | `http.NewRequest(...)` | 小写形式，机械还原（兼容旧写法） |
 | `req.method` / `u.host` | `req.Method` / `u.Host` | 外部结构体字段 |
+| `fmt.println(...)` | `fmt.Println(...)` | 单词 |
 
-- **作用域感知**：自己的私有字段/变量（同样小写书写）不会被误改——转译器收集本文件的私有符号加以排除。
-- 裸标识符（内置 `println`/`len`/`make` 等）不碰；已写大写的不动。
+- **全大写不改写**：已经是大写的标识符（`URL`、`StatusOK`）在整条管线里透明通过，不会被首字母化破坏——用别人的 Go 代码时按真实拼写写即可。
+- **作用域感知**：自己的私有字段/变量（小写书写）不会被误改——转译器收集本文件的私有符号加以排除。
+- 裸标识符（内置 `println`/`len`/`make` 等）不碰。
 - 别名导入 `import h "net/http"` 支持。
-- 代价：需按 Go 真实名字照抄驼峰（`Itoa` 要写 `itoa`，不能写 `itoA`）。
+- 小写形式需按 Go 真实名字照抄驼峰（`Itoa` 写 `itoa`，不能写 `itoA`）；全大写写法无此约束。
 
 ## 5. 集合链式调用
 

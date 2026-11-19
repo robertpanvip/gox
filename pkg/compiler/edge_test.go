@@ -221,7 +221,7 @@ pub func f() colorGreen {
 // ---------- external 边界 ----------
 
 func TestExternalMultiwordCamel(t *testing.T) {
-	// uRL → URL：只首字母小写、其余驼峰照抄
+	// 小写形式照抄还原（兼容旧写法）：parse → Parse、host → Host、userinfo → Userinfo
 	src := `package main
 
 import "net/url"
@@ -236,6 +236,23 @@ pub func f() {
 	containsAll(t, got, "url.Parse", "u.Host")
 	// Userinfo 的首字母小写形式是 userinfo，应还原为 Userinfo
 	containsAll(t, got, "u.Userinfo")
+}
+
+func TestExternalAllCapsPreserved(t *testing.T) {
+	// 全大写符号（缩写词）直接写大写，生成 Go 时原样保留，不被 upperFirst 改写。
+	src := `package main
+
+import "net/http"
+
+pub func f(r *http.Request) int {
+    _ = r.URL
+    _ = r.Header
+    return http.StatusOK
+}
+`
+	got := compileOK(t, "allcaps.gx", src)
+	containsAll(t, got, "r.URL", "r.Header", "http.StatusOK")
+	assertNotContains(t, got, "r.Url", "全大写字段不应被改写成首字母大写")
 }
 
 func TestExternalPrivateFieldProtected(t *testing.T) {

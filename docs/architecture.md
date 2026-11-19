@@ -54,7 +54,7 @@ emit               拼装 Go 源码，同时记录输出 token → 输入位置�
 
 旧方案"一律写小写"把 `NewRequest` 压成 `newrequest`，丢失了驼峰信息，只能靠 `go/importer` 读导出符号表反查——依赖 export data、要处理歧义与本地 module 兜底。
 
-新约定"只首字母小写、其余驼峰照抄"`newRequest` **保留了完整驼峰**，还原退化为 `upperFirst` 纯字符串操作：零依赖、零歧义、O(1)。唯一要排除的是"自己声明的私有符号"——由 `scope` 在 pub 阶段后收集解决。`Scope.private` 只收录会出现在 selector 右侧的声明（struct 字段、方法名、参数、局部变量），不收类型名/包名，避免误保护同名的外部字段。
+新约定按 Go 真实拼写书写：`newRequest` **保留了完整驼峰**，由 `upperFirst` 纯字符串还原；全大写缩写（`URL`、`StatusOK`）直接写大写、在整条管线里原样保留不改写（大小写转换只作用于小写开头的标识符）。两条路径都零依赖、零歧义、O(1)。唯一要排除的是"自己声明的私有符号"——由 `scope` 在 pub 阶段后收集解决。`Scope.private` 只收录会出现在 selector 右侧的声明（struct 字段、方法名、参数、局部变量），不收类型名/包名，避免误保护同名的外部字段。
 
 ## sourcemap
 

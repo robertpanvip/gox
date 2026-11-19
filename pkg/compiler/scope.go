@@ -4,11 +4,11 @@ import "strconv"
 
 // Scope 收集「本文件小写声明的符号」，供外部符号还原时防误伤。
 //
-// GX 书写约定：外部 Go 符号「只首字母小写、其余驼峰照抄」
-// （NewRequest → newRequest，URL → uRL，Method → method）。
-// 于是 selector 右侧的小写名默认 upperFirst 即可精确还原，无需 importer、
-// 无类型推导、无歧义。唯一要排除的是「自己声明的私有字段/变量/方法」——
-// 它们同样是小写书写，但生成 Go 时保持小写，不能还原为大写。
+// GX 书写约定：外部 Go 符号按真实拼写照抄即可（NewRequest、Method）。
+// 全大写缩写（URL、StatusOK）直接写大写，转译器原样保留；也兼容「首字母
+// 小写」的旧写法（newRequest、uRL、method），selector 右侧的小写名由
+// upperFirst 还原。全程无需 importer、无类型推导。要排除的是「自己声明的
+// 私有字段/变量/方法」——它们同样是小写书写，生成 Go 时保持小写，不能还原。
 //
 // Scope 在 pub 转换之后收集：pub 声明的名字此时已大写，不会被误收为私有名。
 

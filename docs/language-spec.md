@@ -4,9 +4,9 @@ GoX（`.gx`）= Go 语法 + 十一项语法糖（pub / enum / JSX / 外部符号
 
 ## 书写约定（最重要）
 
-> **标识符一律「只首字母小写，其余驼峰照抄」。声明用 `pub` 显式导出。**
+> **标识符按 Go 真实拼写书写；全大写缩写（如 `URL`、`StatusOK`）直接写大写、原样保留。声明用 `pub` 显式导出。**
 
-转译器据此做**机械的大小写还原**（`upperFirst`），不读取任何第三方包的符号表、不做类型推导。代价是书写时要按 Go 真实名字照抄驼峰形状：`NewRequest` 写 `newRequest`，`URL` 写 `uRL`，`Itoa` 写 `itoa`（不能写 `itoA`）。收益是零依赖、零歧义、行为完全可预测。
+转译器对**小写形式**做机械还原（`upperFirst`），对**已大写的标识符原样保留**，全程不读取第三方包符号表、不做类型推导。因此用别人的 Go 代码时按真实拼写写即可（`http.NewRequest`、`r.URL`、`http.StatusOK`）；也兼容旧的小写写法（`newRequest`、`uRL`、`itoa`），由 `upperFirst` 还原。收益是零依赖、零歧义、行为完全可预测。
 
 ## 1. pub 可见性
 
@@ -68,14 +68,16 @@ pub enum perm { read = 1 << iota, write, exec }  // 位标志 1,2,4
 
 ## 4. 外部 Go 符号
 
-按"首字母小写、其余照抄"书写，selector 右侧机械 `upperFirst` 还原：
+按 Go 真实拼写书写即可：全大写标识符原样保留，小写形式由 selector 右侧的机械 `upperFirst` 还原。
 
-| GX | Go |
-|---|---|
-| `http.newRequest(...)` | `http.NewRequest(...)` |
-| `uRL` | `URL` |
-| `fmt.sprintf(...)` | `fmt.Sprintf(...)` |
-| `req.statusCode` | `req.StatusCode` |
+| GX | Go | 说明 |
+|---|---|---|
+| `http.NewRequest(...)` | `http.NewRequest(...)` | 真实拼写，原样保留 |
+| `r.URL` / `http.StatusOK` | `r.URL` / `http.StatusOK` | 全大写缩写，原样保留 |
+| `http.newRequest(...)` | `http.NewRequest(...)` | 小写形式，机械还原（兼容旧写法） |
+| `uRL` | `URL` | 小写形式，机械还原 |
+| `fmt.sprintf(...)` | `fmt.Sprintf(...)` | 小写形式 |
+| `req.statusCode` | `req.StatusCode` | 小写形式 |
 
 作用域防误伤：转译器在 pub 转换后收集本文件所有小写声明符号（参数、局部变量、私有字段/方法）。selector 右侧若命中自己的 pub 符号用其导出名；命中私有符号保持小写；否则（外部字段/方法）`upperFirst`。裸标识符（内置函数等）一律不碰。
 

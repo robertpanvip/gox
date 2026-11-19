@@ -7,7 +7,8 @@ package compiler
 
 type stream struct {
 	toks []Token
-	// pubNames 记录「小写原名 → 大写导出名」，供引用处还原（gx 一律小写书写）。
+	// pubNames 记录「小写原名 → 大写导出名」，供小写形式的引用处还原。
+	// 全大写书写的引用原样保留，不进此表。
 	pubNames map[string]string
 }
 
