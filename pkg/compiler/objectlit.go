@@ -334,7 +334,32 @@ func (e *objectLitError) Error() string {
 // resolveExpectType 为对象字面量解析期望类型名。
 // 返回类型名（具名 struct 或匿名 struct 文本）与「该类型是否已知为 struct」。
 // an 可为 nil；structs 是 collectStructTypes 的结果。
+// resolveExpectType 返回对象字面量的期望类型名；返回空串表示「无有效期望类型」，
+// 此时调用方按匿名结构体处理。
+//
+// 规则（用户补充）：any / interface{} 虽然是一个「期望类型」，但它不携带任何
+// 字段结构信息，无法用于补全结构体类型名（生成 any{...} 是非法 Go）。因此在
+// 这里显式归一为空串，让对象字面量按匿名结构体编译。具名 struct 则保留，
+// 交给 validateObjectLit 补全 + 校验。
 func resolveExpectType(toks []Token, lit *objectLit, an *Analysis, structs map[string]*structInfo) string {
+	typ := resolveExpectTypeRaw(toks, lit, an, structs)
+	if isAnyLikeType(typ) {
+		return ""
+	}
+	return typ
+}
+
+// isAnyLikeType 判断类型文本是否为 any / interface{}（含带空格写法 interface { }）。
+func isAnyLikeType(s string) bool {
+	s = strings.TrimSpace(s)
+	if s == "any" {
+		return true
+	}
+	// interface{} / interface { } 去掉所有空白后比较
+	return strings.Join(strings.Fields(s), "") == "interface{}"
+}
+
+func resolveExpectTypeRaw(toks []Token, lit *objectLit, an *Analysis, structs map[string]*structInfo) string {
 	open := lit.open
 	p := prevSig(toks, open-1)
 	if p < 0 {

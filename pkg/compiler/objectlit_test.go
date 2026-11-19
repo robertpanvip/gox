@@ -174,3 +174,57 @@ func main() {
 		t.Errorf("不应误改写 struct 声明:\n%s", got)
 	}
 }
+
+func TestObjectLitExpectAnyUsesAnonStruct(t *testing.T) {
+	// 期望类型为 any / interface{} 时不携带字段结构，对象字面量按匿名结构体编译，
+	// 而不是把 any 当类型名补全（any{...} 是非法 Go）。
+	cases := []struct {
+		name string
+		src  string
+	}{
+		{"returnAny", `package main
+func make() any {
+	return { name: "x", age: 1 }
+}
+func main() { _ = make() }
+`},
+		{"returnIface", `package main
+func make() interface{} {
+	return { name: "x", age: 1 }
+}
+func main() { _ = make() }
+`},
+		{"argAny", `package main
+func f(v any) {}
+func main() { f({ name: "x", age: 1 }) }
+`},
+		{"varAny", `package main
+func main() {
+	var v any = { name: "x", age: 1 }
+	_ = v
+}
+`},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := compileOK(t, "objany_"+c.name+".gx", c.src)
+			containsAll(t, got, `struct{ name string; age int }{ name: "x", age: 1 }`)
+			if strings.Contains(got, "any{") || strings.Contains(got, "interface{}{") {
+				t.Errorf("any/interface{} 不应被当作结构体类型名补全:\n%s", got)
+			}
+		})
+	}
+}
+
+func TestIsAnyLikeType(t *testing.T) {
+	for _, s := range []string{"any", " any ", "interface{}", "interface {}", "interface { }"} {
+		if !isAnyLikeType(s) {
+			t.Errorf("%q 应判为 any-like", s)
+		}
+	}
+	for _, s := range []string{"point", "struct{}", "int", ""} {
+		if isAnyLikeType(s) {
+			t.Errorf("%q 不应判为 any-like", s)
+		}
+	}
+}

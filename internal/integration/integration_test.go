@@ -200,6 +200,28 @@ func main() {
 	}
 }
 
+func TestIntegrationObjectLiteralAnyExpect(t *testing.T) {
+	// 期望类型为 any / interface{} 时对象字面量按匿名结构体编译，
+	// 真实 go run 验证能编译运行且字段值正确。
+	src := `package main
+import "fmt"
+func make() any { return { name: "x", age: 7 } }
+func pass(v any) { fmt.Println(v) }
+func main() {
+	fmt.Println(make())
+	var i interface{} = { name: "y", age: 8 }
+	fmt.Println(i)
+	pass({ name: "z", age: 9 })
+}
+`
+	out := runGX(t, src)
+	for _, want := range []string{"{x 7}", "{y 8}", "{z 9}"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("any 期望类型下匿名结构体输出应包含 %q, got:\n%s", want, out)
+		}
+	}
+}
+
 func TestIntegrationLambda(t *testing.T) {
 	// Lambda 最简箭头：表达式反推（int/bool）、显式参数、集合回调、函数实参。
 	src := `package main

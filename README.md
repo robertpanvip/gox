@@ -226,6 +226,7 @@ func make() point { return { name: "x", age: 1 } }  // 按返回类型补全
 
 - 校验：字段名未知、缺失字段、值类型不兼容均报**编译错误**（带 GX 源码坐标）。
 - 无类型常量按 Go 可赋值规则放宽（整数字面量可赋给整数/浮点族）。
+- **期望类型为 `any` / `interface{}` 时不补全**：这类类型不携带字段结构，`any{...}` 是非法 Go，故按匿名结构体处理（如 `func make() any { return { name: "x" } }` → `return struct{ name string }{ name: "x" }`）。
 - 支持嵌套对象字面量（由内向外逐层补全）。
 
 ## 12. Sourcemap / LSP / 编译检查
