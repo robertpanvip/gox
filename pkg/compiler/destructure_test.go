@@ -8,12 +8,12 @@ import (
 func TestDestructureShortDecl(t *testing.T) {
 	// { name, age } := p → name := p.name; age := p.age
 	src := `package main
-type student struct {
+type Student struct {
     name string
     age  int
 }
 pub func f() {
-    var p student = { name: "x", age: 1 }
+    var p Student = { name: "x", age: 1 }
     { name, age } := p
     _, _ = name, age
 }
@@ -25,12 +25,12 @@ pub func f() {
 func TestDestructureVarDecl(t *testing.T) {
 	// var { name, age } = p → var name = p.name; var age = p.age
 	src := `package main
-type student struct {
+type Student struct {
     name string
     age  int
 }
 pub func f() {
-    var p student = { name: "x", age: 1 }
+    var p Student = { name: "x", age: 1 }
     var { name, age } = p
     _, _ = name, age
 }
@@ -55,12 +55,12 @@ pub func f() {
 func TestDestructureUnknownFieldError(t *testing.T) {
 	// 解构了类型不存在的字段 → 报错，位置为字段名 GX 坐标
 	src := `package main
-type student struct {
+type Student struct {
     name string
     age  int
 }
 pub func f() {
-    var p student = { name: "x", age: 1 }
+    var p Student = { name: "x", age: 1 }
     { name, nope } := p
     _ = name
 }
@@ -81,11 +81,11 @@ pub func f() {
 func TestDestructureUnknownTypeLenient(t *testing.T) {
 	// 右值类型无法本地推断（函数调用返回外部 struct）→ 宽松生成，不校验字段
 	src := `package main
-type student struct {
+type Student struct {
     name string
     age  int
 }
-func getP() student { return student{"x", 1} }
+func getP() Student { return Student{"x", 1} }
 pub func f() {
     { name, age } := getP()
     _, _ = name, age

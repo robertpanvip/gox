@@ -221,11 +221,11 @@ p := { name: "x", age: 1, ok: true }
 **有期望类型**（明确标注了参数/返回/变量类型的上下文）：省略结构体类型名，由期望类型补全并校验字段：
 
 ```gx
-type point struct { name string; age int }
-var p point = { name: "x", age: 1 }   // → var p point = point{ name: "x", age: 1 }
-f({ name: "x", age: 1 })              // f(p point) → f(point{...})
+type Point struct { name string; age int }
+var p Point = { name: "x", age: 1 }   // → var p Point = Point{ name: "x", age: 1 }
+f({ name: "x", age: 1 })              // f(p Point) → f(Point{...})
 p = { name: "x", age: 1 }             // 赋值：按 p 的声明类型补全
-func make() point { return { name: "x", age: 1 } }  // 按返回类型补全
+func make() Point { return { name: "x", age: 1 } }  // 按返回类型补全
 ```
 
 - 校验：字段名未知、缺失字段、值类型不兼容均报**编译错误**（带 GX 源码坐标）。
@@ -238,8 +238,8 @@ func make() point { return { name: "x", age: 1 } }  // 按返回类型补全
 `{ name, age } := p` / `var { name, age } = p` 把结构体字段解构为同名的局部变量，逐字段生成 Go 声明：
 
 ```gx
-type student struct { name string; age int; city string }
-var p student = { name: "x", age: 1, city: "SZ" }
+type Student struct { name string; age int; city string }
+var p Student = { name: "x", age: 1, city: "SZ" }
 { name, age } := p        // → name := p.name; age := p.age
 var { name, city } = q    // → var name = q.name; var city = q.city
 ```

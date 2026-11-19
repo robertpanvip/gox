@@ -171,16 +171,16 @@ func TestIntegrationObjectLiteral(t *testing.T) {
 	// 对象字面量：匿名结构体（字段类型反推）+ 期望类型补全（var/arg/assign/return）。
 	src := `package main
 import "fmt"
-type point struct {
+type Point struct {
 	name string
 	age  int
 }
-func describe(p point) string { return fmt.Sprint(p.name, ":", p.age) }
-func makePoint() point { return { name: "ret", age: 4 } }
+func describe(p Point) string { return fmt.Sprint(p.name, ":", p.age) }
+func makePoint() Point { return { name: "ret", age: 4 } }
 func main() {
 	anon := { name: "anon", age: 1 }
 	fmt.Println(anon.name, anon.age)
-	var p point = { name: "var", age: 2 }
+	var p Point = { name: "var", age: 2 }
 	fmt.Println(describe(p))
 	fmt.Println(describe({ name: "arg", age: 3 }))
 	p = { name: "assign", age: 5 }
@@ -223,23 +223,23 @@ func main() {
 }
 
 func TestIntegrationObjectDestructure(t *testing.T) {
-	// 构造后立刻解构：S₁={name,age} 构造、S₂={name,age} 解构，均 ⊆ fields(student)。
+	// 构造后立刻解构：S₁={name,age} 构造、S₂={name,age} 解构，均 ⊆ fields(Student)。
 	// 覆盖短声明 / var 形式 / 匿名 struct / 部分字段解构。
 	src := `package main
 import "fmt"
-type student struct {
+type Student struct {
 	name string
 	age  int
 	city string
 }
 func main() {
 	{
-		var p student = { name: "x", age: 1, city: "SZ" }
+		var p Student = { name: "x", age: 1, city: "SZ" }
 		{ name, age } := p
 		fmt.Println(name, age)
 	}
 	{
-		var q student = { name: "y", age: 2, city: "BJ" }
+		var q Student = { name: "y", age: 2, city: "BJ" }
 		var { name, city } = q
 		fmt.Println(name, city)
 	}

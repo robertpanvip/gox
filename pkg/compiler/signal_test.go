@@ -78,10 +78,10 @@ func TestSignalScopeExclusions(t *testing.T) {
 	// selector 右侧、复合字段键、函数参数、声明目标都不应被读改写
 	src := `package main
 signal count = 0
-type box struct { count int }
+type Box struct { count int }
 func use(count int) int { return count }
 func main() {
-    var b box = box{count: 1}
+    var b Box = Box{count: 1}
     println(b.count)
     println(use(2))
     println(count())
@@ -89,7 +89,7 @@ func main() {
 `
 	got := compileOK(t, "sig6.gx", src)
 	containsAll(t, got,
-		`box{count: 1}`,       // 复合字段键不改写
+		`Box{count: 1}`,       // 复合字段键不改写
 		`println(b.count)`,    // selector 不改写
 		`return count`,        // 函数参数不改写（保持裸标识符）
 	)

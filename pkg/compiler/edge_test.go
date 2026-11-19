@@ -142,15 +142,15 @@ func main() { _, _, _, _ = alpha, beta, gamma, delta }
 func TestPubMethodReceiver(t *testing.T) {
 	src := `package main
 
-type point struct{ x int }
+type Point struct{ x int }
 
-pub func (p point) distance() int { return p.x }
+pub func (p Point) distance() int { return p.x }
 
-func main() { p := point{x: 1}; _ = p.distance() }
+func main() { p := Point{x: 1}; _ = p.distance() }
 `
 	got := compileOK(t, "pubmethod.gx", src)
 	// pub 方法：接收者跳过，方法名大写
-	containsAll(t, got, "func (p point) Distance() int")
+	containsAll(t, got, "func (p Point) Distance() int")
 	// 调用处还原
 	containsAll(t, got, "p.Distance()")
 }
@@ -259,16 +259,16 @@ func TestExternalPrivateFieldProtected(t *testing.T) {
 	// 端到端：自己声明的私有字段 host 不应被当成外部字段大写
 	src := `package main
 
-type config struct {
+type Config struct {
     host string
 }
 
-pub func f(c *config) string {
+pub func f(c *Config) string {
     return c.host
 }
 `
 	got := compileOK(t, "privfield.gx", src)
-	containsAll(t, got, "type config struct", "host string")
+	containsAll(t, got, "type Config struct", "host string")
 	// c.host 是自己的私有字段，必须保持小写
 	containsAll(t, got, "return c.host")
 	assertNotContains(t, got, "return c.Host", "自己的私有字段不应被大写")
@@ -323,19 +323,19 @@ func TestLocalCompositeLiteralFieldsUnchanged(t *testing.T) {
 	// 本包类型字面量的字段名是私有字段，必须保持小写
 	src := `package main
 
-type point struct{ x int; y int }
-type box struct{ v int }
+type Point struct{ x int; y int }
+type Box struct{ v int }
 
 func f() {
-    _ = point{x: 1, y: 2}
-    _ = box{v: 3}
-    p := point{x: 1}
+    _ = Point{x: 1, y: 2}
+    _ = Box{v: 3}
+    p := Point{x: 1}
     _ = p.x
 }
 `
 	got := compileOK(t, "loclit.gx", src)
-	containsAll(t, got, "point{x: 1, y: 2}", "box{v: 3}", "p.x")
-	assertNotContains(t, got, "point{X: 1", "本包私有字段不应大写")
+	containsAll(t, got, "Point{x: 1, y: 2}", "Box{v: 3}", "p.x")
+	assertNotContains(t, got, "Point{X: 1", "本包私有字段不应大写")
 }
 
 func TestExternalCompositeGenericTypeFields(t *testing.T) {
@@ -358,16 +358,16 @@ func TestCompositeFieldRestoreDoesNotTouchMapOrAnon(t *testing.T) {
 
 import "example.com/lib"
 
-type pair struct{ k int; v int }
+type Pair struct{ k int; v int }
 
 func f() {
     m := map[string]int{alpha: 1, beta: 2}
     _ = m
-    _ = pair{k: 1, v: 2}
-    _ = lib.box{value: 3, opt: pair{k: 4}}
+    _ = Pair{k: 1, v: 2}
+    _ = lib.box{value: 3, opt: Pair{k: 4}}
 }
 `
 	got := compileOK(t, "compmix.gx", src)
-	containsAll(t, got, "lib.Box{Value: 3, Opt: pair{k: 4}}")
-	containsAll(t, got, "map[string]int{alpha: 1, beta: 2}", "pair{k: 1, v: 2}")
+	containsAll(t, got, "lib.Box{Value: 3, Opt: Pair{k: 4}}")
+	containsAll(t, got, "map[string]int{alpha: 1, beta: 2}", "Pair{k: 1, v: 2}")
 }
