@@ -45,6 +45,83 @@ func isLowerStart(s string) bool {
 	return lowerFirst(s) == s && upperFirst(s) != s
 }
 
+// transformCompositeFields 还原「外部包类型复合字面量」的字段名。
+//
+// GX 约定标识符一律小写书写，外部结构体字段在 Go 侧是大写（value -> Value）。
+// transformExternal 只处理 selector 右侧（x.sel），不覆盖 lib.Box{value: 9}
+// 这种复合字面量的字段名——这里补上。
+//
+// 只识别 pkg.Type{...}（pkg 是 import 名，类型可带泛型实例化 [T]）形态；
+// 本包类型 point{x:1}、map 字面量、匿名结构、嵌套函数体等一律不碰。
+func transformCompositeFields(in []Token, scope *Scope) []Token {
+	out := append([]Token{}, in...)
+	for i := 0; i < len(out); i++ {
+		if out[i].Kind != Ident || !scope.HasImport(out[i].Text) {
+			continue
+		}
+		brace := externalTypeBrace(out, i, scope)
+		if brace < 0 {
+			continue
+		}
+		promoteLiteralFields(out, brace)
+	}
+	return out
+}
+
+// externalTypeBrace 给定 import 包名下标，若其后是 .Type{ 或 .Type[T]{，
+// 返回该 '{' 的下标，否则 -1。
+func externalTypeBrace(toks []Token, pkgIdx int, scope *Scope) int {
+	j := nextSig(toks, pkgIdx+1)
+	if j < 0 || toks[j].Text != "." {
+		return -1
+	}
+	j = nextSig(toks, j+1)
+	if j < 0 || toks[j].Kind != Ident {
+		return -1
+	}
+	// 可选泛型实例化 [T]
+	n := nextSig(toks, j+1)
+	if n >= 0 && toks[n].Text == "[" {
+		close := matchBracket(toks, n)
+		if close <= n {
+			return -1
+		}
+		j = close
+	}
+	j = nextSig(toks, j+1)
+	if j < 0 || toks[j].Text != "{" {
+		return -1
+	}
+	return j
+}
+
+// promoteLiteralFields 把一个复合字面量顶层的字段名首字母大写。
+// 只处理相对深度 0 的 `Ident :`；嵌套字面量由各自的识别单独处理。
+func promoteLiteralFields(toks []Token, brace int) {
+	close := matchDelim(toks, brace, "{", "}")
+	if close <= brace {
+		return
+	}
+	depth := 0
+	for i := brace + 1; i < close; i++ {
+		switch toks[i].Text {
+		case "{", "(", "[":
+			depth++
+			continue
+		case "}", ")", "]":
+			depth--
+			continue
+		}
+		if depth != 0 || toks[i].Kind != Ident || !isLowerStart(toks[i].Text) {
+			continue
+		}
+		c := nextSig(toks, i+1)
+		if c >= 0 && c <= close && toks[c].Text == ":" {
+			toks[i].Text = upperFirst(toks[i].Text)
+		}
+	}
+}
+
 // transformExternal 还原 selector 右侧的外部符号。
 // scope 提供私有符号保护；pubNames 提供自身导出符号映射（可能与外部同名，自身优先）。
 func transformExternal(in []Token, scope *Scope, pubNames map[string]string) []Token {

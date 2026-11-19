@@ -1,0 +1,40 @@
+package main
+
+import (
+    "fmt"
+    "strconv"
+    "strings"
+)
+
+pub enum kind { circle, square }
+
+pub type shape struct {
+    name string
+    k    kind
+}
+
+// is 守卫：块内 v 自动窄化为对应类型
+func describe(v any) string {
+    if (v is int) {
+        return "int=" + strconv.itoa(v)
+    } else if (v is string) {
+        return "str=" + strings.toUpper(v)
+    } else if (v is float64) {
+        return "float=" + fmt.sprint(v)
+    }
+    return "unknown"
+}
+
+func main() {
+    vals := []any{1, "hello", 3.14, true}
+    for _, v := range vals {
+        fmt.println(describe(v))
+    }
+
+    nums := []int{1, 2, 3, 4, 5}
+    labels := nums.map(strconv.itoa).filter(func(s string) bool { return len(s) == 1 })
+    fmt.println(labels)
+
+    s := shape{name: "box", k: kindSquare}
+    fmt.println(s.name, s.k)
+}

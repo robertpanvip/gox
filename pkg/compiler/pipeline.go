@@ -48,6 +48,7 @@ func CompileWithModule(file, src, module string) (*Result, error) {
 	scope := collectScope(toks)
 	toks = restoreRefs(toks, names)
 	toks = transformExternal(toks, scope, names)
+	toks = transformCompositeFields(toks, scope)
 	goSrc, sm := emit(toks, file)
 	return &Result{File: file, GoSource: goSrc, SourceMap: sm}, nil
 }
@@ -103,6 +104,7 @@ func CompileStage(src, stage string) (string, error) {
 	case "external":
 		scope := collectScope(toks)
 		toks = transformExternal(toks, scope, names)
+		toks = transformCompositeFields(toks, scope)
 	case "all":
 		toks = transformTypeGuard(toks)
 		toks = transformEnum(toks, names)
@@ -112,6 +114,7 @@ func CompileStage(src, stage string) (string, error) {
 		scope := collectScope(toks)
 		toks = restoreRefs(toks, names)
 		toks = transformExternal(toks, scope, names)
+		toks = transformCompositeFields(toks, scope)
 	default:
 		return "", fmt.Errorf("unknown stage %q (want lex/typeguard/enum/jsx/pub/collections/external/all)", stage)
 	}

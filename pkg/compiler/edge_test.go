@@ -270,3 +270,87 @@ pub func f(req *http.Request) string {
 	got := compileOK(t, "extfield.gx", src)
 	containsAll(t, got, "return req.Method")
 }
+
+// ---------- 外部包复合字面量字段名还原 ----------
+
+func TestExternalCompositeLiteralFields(t *testing.T) {
+	src := `package main
+
+import "example.com/lib"
+
+func f() {
+    _ = lib.box{value: 9, name: "x"}
+    _ = lib.wrap{count: 1}
+}
+`
+	got := compileOK(t, "extlit.gx", src)
+	// 外部包类型的字段应按外部符号约定首字母还原
+	containsAll(t, got, "lib.Box{Value: 9, Name: \"x\"}")
+	containsAll(t, got, "lib.Wrap{Count: 1}")
+}
+
+func TestExternalCompositeLiteralNested(t *testing.T) {
+	src := `package main
+
+import "example.com/lib"
+
+func f() {
+    _ = lib.outer{inner: lib.inner{value: 1}, tag: "z"}
+}
+`
+	got := compileOK(t, "extnest.gx", src)
+	containsAll(t, got, "lib.Outer{Inner: lib.Inner{Value: 1}, Tag: \"z\"}")
+}
+
+func TestLocalCompositeLiteralFieldsUnchanged(t *testing.T) {
+	// 本包类型字面量的字段名是私有字段，必须保持小写
+	src := `package main
+
+type point struct{ x int; y int }
+type box struct{ v int }
+
+func f() {
+    _ = point{x: 1, y: 2}
+    _ = box{v: 3}
+    p := point{x: 1}
+    _ = p.x
+}
+`
+	got := compileOK(t, "loclit.gx", src)
+	containsAll(t, got, "point{x: 1, y: 2}", "box{v: 3}", "p.x")
+	assertNotContains(t, got, "point{X: 1", "本包私有字段不应大写")
+}
+
+func TestExternalCompositeGenericTypeFields(t *testing.T) {
+	// 外部包泛型实例化类型 pkg.Type[T]{field:...}
+	src := `package main
+
+import "example.com/lib"
+
+func f() {
+    _ = lib.option[int]{value: 7, valid: true}
+}
+`
+	got := compileOK(t, "extgen.gx", src)
+	containsAll(t, got, "lib.Option[int]{Value: 7, Valid: true}")
+}
+
+func TestCompositeFieldRestoreDoesNotTouchMapOrAnon(t *testing.T) {
+	// map 字面量的 key、匿名结构字段值不应被当作外部字段名改写
+	src := `package main
+
+import "example.com/lib"
+
+type pair struct{ k int; v int }
+
+func f() {
+    m := map[string]int{alpha: 1, beta: 2}
+    _ = m
+    _ = pair{k: 1, v: 2}
+    _ = lib.box{value: 3, opt: pair{k: 4}}
+}
+`
+	got := compileOK(t, "compmix.gx", src)
+	containsAll(t, got, "lib.Box{Value: 3, Opt: pair{k: 4}}")
+	containsAll(t, got, "map[string]int{alpha: 1, beta: 2}", "pair{k: 1, v: 2}")
+}
