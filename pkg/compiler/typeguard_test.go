@@ -191,3 +191,77 @@ func main() {
 		t.Errorf("3 个 if 应有 3 个不同的临时变量名，got %d: %v\n---\n%s\n---", len(seen), seen, got)
 	}
 }
+
+func TestTypeGuardElseExclusionShadow(t *testing.T) {
+	// 联合守卫：int|string 排除 int 后，else 内注入 `v := v.(string)`。
+	src := `package main
+func f(v int | string) {
+    if v is int {
+        println(v + 1)
+    } else {
+        println(v + "x")
+    }
+}
+`
+	got := tgStage(t, src)
+	if !strings.Contains(got, "v := v.(string)") {
+		t.Errorf("else 应注入排除法 shadow `v := v.(string)`\n---\n%s\n---", got)
+	}
+}
+
+func TestTypeGuardElseChainExclusionShadow(t *testing.T) {
+	// else-if 链末环：int|string|bool 守卫 int、string 后，末 else 注入 `v := v.(bool)`。
+	src := `package main
+func f(v int | string | bool) {
+    if v is int {
+        println(v)
+    } else if v is string {
+        println(v)
+    } else {
+        println(v)
+    }
+}
+`
+	got := tgStage(t, src)
+	if !strings.Contains(got, "v := v.(bool)") {
+		t.Errorf("链末 else 应注入 `v := v.(bool)`\n---\n%s\n---", got)
+	}
+}
+
+func TestTypeGuardThenUnusedUsesBlank(t *testing.T) {
+	// then 块未使用 recv：comma-ok 第一个返回值应为 '_'，避免未使用变量。
+	src := `package main
+func f(v int | string) string {
+    if v is int {
+        return "num"
+    } else {
+        return v + "s"
+    }
+}
+`
+	got := tgStage(t, src)
+	if !strings.Contains(got, "if _, __gx_ok_") {
+		t.Errorf("then 未用 v 时 comma-ok 应以 '_' 绑定\n---\n%s\n---", got)
+	}
+	// else 用了 v，应注入排除法 shadow
+	if !strings.Contains(got, "v := v.(string)") {
+		t.Errorf("else 用到 v 应注入 `v := v.(string)`\n---\n%s\n---", got)
+	}
+}
+
+func TestTypeGuardElseRemainderUnionNoShadow(t *testing.T) {
+	// 剩余仍是联合（int|string|bool 只守卫 int），else 不注入非法断言。
+	src := `package main
+func f(v int | string | bool) {
+    if v is int {
+        println(v)
+    } else {
+        println("other")
+    }
+}
+`
+	got := tgStage(t, src)
+	if strings.Contains(got, "v := v.(string|bool)") || strings.Contains(got, "v := v.(string)") {
+		t.Errorf("剩余联合不应注入单类型断言\n---\n%s\n---", got)
+	}
+}

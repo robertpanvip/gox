@@ -2,7 +2,27 @@ package main
 
 import "fmt"
 
+// 联合参数：if 守卫的 then 块收窄到目标类型，else 块做排除法收窄。
+func describe(v int | string | bool) string {
+    if v is int {
+        return fmt.sprint("int:", v+100)
+    } else if v is string {
+        return fmt.sprint("str:", v)
+    } else {
+        // 排除 int、string 后，v 必为 bool —— 注入 v := v.(bool)
+        if v {
+            return "bool:true"
+        }
+        return "bool:false"
+    }
+}
+
 func main() {
+    fmt.println(describe(1))
+    fmt.println(describe("hi"))
+    fmt.println(describe(true))
+    fmt.println(describe(false))
+
     var vals []any = []any{float64(3.5), 42, "hi", true}
 
     for _, v := range vals {

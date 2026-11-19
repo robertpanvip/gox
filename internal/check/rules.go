@@ -373,8 +373,9 @@ func (v *visitor) checkOperand(e ast.Expr, op string) {
 		return
 	}
 	line, col, _ := v.gxPos(id.Pos())
-	// TypeAtGx 内部用 TypeAtShadowed：只认 if 守卫块内有 shadow 的收窄。
-	// if 块内返回收窄后的具体类型（放过）；else 分支无 shadow，仍返回联合（报），
+	// TypeAtGx 内部用 TypeAtShadowed：只认真正注入了 shadow 的收窄区间。
+	// then 块内、以及 else 排除法收窄到单一类型的块内返回具体类型（放过）；
+	// else 剩余仍是联合（无法注入单断言）时返回联合（报），
 	// 与 desugar 生成代码完全一致——避免 check 通过但 go build 失败。
 	t, ok := v.c.an.TypeAtGx(id.Name, line, col)
 	if !ok || !t.IsUnion() {

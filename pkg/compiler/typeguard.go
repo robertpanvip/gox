@@ -15,9 +15,11 @@ import "strconv"
 //     结果存在 Analysis 里；本文件只按 Analysis.GuardAt(pos) 的语义生成代码。
 //   - parseTypeGuard 退化为分析层内部的「语法形态识别」，不再被 desugar 直接调用。
 //   - 临时变量按 if 位置命名，保证同文件唯一、可复现、无全局状态（并发安全）。
-//   - 块首插入 `x := __gx_v` 做 shadow，使分支内 x 具有收窄后的类型。
+//   - 块首插入 `x := __gx_v` 做 shadow，使 then 分支内 x 具有收窄后的类型。
+//   - else 分支：若分析层记录了排除法 shadow（ElseShadowAt），在 else 块首插入
+//     `x := x.(<剩余类型>)`，使 x 拥有「联合减去已守卫成员」后的真实类型。
 //   - 本阶段应在 runUnion 之后：union 擦除与守卫插入不改变 if / '{' 的原始 Pos，
-//     故 GuardAt(pos) 仍能精确命中（用 EndPos 定位块跳过点，不受下标漂移影响）。
+//     故 GuardAt(pos) / ElseShadowAt(pos) 仍能精确命中（用 Pos 定位，不受下标漂移影响）。
 
 type typeGuard struct {
 	start    int    // if 的下标
@@ -101,6 +103,23 @@ func parseTypeGuard(toks []Token, i int) (typeGuard, bool) {
 func transformTypeGuard(in []Token, an *Analysis) []Token {
 	out := make([]Token, 0, len(in))
 	for i := 0; i < len(in); i++ {
+		// else 块首的排除法 shadow：if x is T {...} else {...} 中，
+		// else 内 x 必为「联合减去已守卫成员」的剩余类型，注入
+		// `x := x.(<Narrow>);` 让 x 拥有真实类型（而非擦除后的 any）。
+		if in[i].Text == "{" {
+			if es, ok := an.ElseShadowAt(in[i].Pos); ok {
+				p := in[i].Pos
+				out = append(out, in[i]) // 先保留原始的 '{'
+				out = append(out,
+					tokSpace(" ", p),
+					tokIdent(es.Recv, es.RecvPos), tokSpace(" ", p), tokOp(":=", p), tokSpace(" ", p),
+					tokIdent(es.Recv, es.RecvPos), tokOp(".", p), tokOp("(", p),
+				)
+				out = append(out, tokTypeText(es.Narrow.String(), p)...)
+				out = append(out, tokOp(")", p), tokOp(";", p))
+				continue
+			}
+		}
 		if !in[i].is("if") {
 			out = append(out, in[i])
 			continue
@@ -116,10 +135,17 @@ func transformTypeGuard(in []Token, an *Analysis) []Token {
 		vName := "__gx_v_" + suffix
 		okName := "__gx_ok_" + suffix
 
-		// if <v>, <ok> := <x>.(<T>); <ok> { x := <v>;
+		// comma-ok 的第一个返回值：then 块用到 recv 才绑定具名变量并注入 shadow，
+		// 否则用 '_' 丢弃，避免 Go 报「declared and not used」。
+		bindName := vName
+		if !g.ThenUsesRecv {
+			bindName = "_"
+		}
+
+		// if <bind>, <ok> := <x>.(<T>); <ok> { [x := <bind>;]
 		out = append(out,
 			tokIdent("if", p), tokSpace(" ", p),
-			tokIdent(vName, p), tokOp(",", p), tokSpace(" ", p),
+			tokIdent(bindName, p), tokOp(",", p), tokSpace(" ", p),
 			tokIdent(okName, p), tokSpace(" ", p), tokOp(":=", p), tokSpace(" ", p),
 			tokIdent(g.Recv, g.RecvPos), tokOp(".", p), tokOp("(", p),
 		)
@@ -127,10 +153,14 @@ func transformTypeGuard(in []Token, an *Analysis) []Token {
 		out = append(out,
 			tokOp(")", p), tokOp(";", p), tokSpace(" ", p),
 			tokIdent(okName, p), tokSpace(" ", p), tokOp("{", p),
-			tokSpace(" ", p),
-			tokIdent(g.Recv, g.RecvPos), tokSpace(" ", p), tokOp(":=", p), tokSpace(" ", p),
-			tokIdent(vName, p), tokOp(";", p),
 		)
+		if g.ThenUsesRecv {
+			out = append(out,
+				tokSpace(" ", p),
+				tokIdent(g.Recv, g.RecvPos), tokSpace(" ", p), tokOp(":=", p), tokSpace(" ", p),
+				tokIdent(vName, p), tokOp(";", p),
+			)
+		}
 
 		// 跳过原 `if ... {` 区间：用 EndPos 定位块 '{'（不受 runUnion 的下标漂移影响）。
 		j := i + 1

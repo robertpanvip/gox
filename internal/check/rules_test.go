@@ -329,8 +329,9 @@ func f() {
 	hasDiag(t, checkGx(t, src), "union-operand", "-")
 }
 
-func TestStrictElseBranchNoShadowReported(t *testing.T) {
-	// else 分支无 shadow：v 仍是 any，做运算应报（与 go build 一致）
+func TestStrictElseBranchExclusionNarrowed(t *testing.T) {
+	// 排除法收窄：int|string 守卫 int 后，else 内 v 必为 string，可直接拼接。
+	// desugar 注入 `v := v.(string)`，check 与 go build 一致，均不报错。
 	src := `package main
 func f() {
     var v int | string = 1
@@ -341,11 +342,27 @@ func f() {
     }
 }
 `
-	diags := checkGx(t, src)
-	// if 块内不报（有 shadow），else 块内报 1 条
-	if n := countCode(diags, "union-operand"); n != 1 {
-		t.Errorf("应仅 else 分支报 1 条 union-operand, got %d: %v", n, diags)
+	for _, d := range checkGx(t, src) {
+		if d.Code == "union-operand" {
+			t.Errorf("else 内 v 已排除法收窄为 string，不应误报: %v", d)
+		}
 	}
+}
+
+func TestStrictElseBranchUnionRemainderReported(t *testing.T) {
+	// 剩余仍是联合（排除一个后还有 string|bool），无法单断言注入 shadow，
+	// else 内 v 仍是 any，做运算应报（不生成非法 v.(string|bool)）。
+	src := `package main
+func f() {
+    var v int | string | bool = 1
+    if v is int {
+        _ = v + 1
+    } else {
+        _ = v + "x"
+    }
+}
+`
+	hasDiag(t, checkGx(t, src), "union-operand", "int|string|bool")
 }
 
 func TestStrictIfBlockShadowNoFalsePositive(t *testing.T) {

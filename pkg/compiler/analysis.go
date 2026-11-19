@@ -179,9 +179,10 @@ type Symbol struct {
 }
 
 // NarrowFact 表示在 token 下标 [From, To) 内，变量 Var 的有效类型被收窄为 Type。
-// Shadowed 表示 desugar 是否在该区间注入了 `x := <窄值>` shadow：
-//   - if 守卫块内为 true（有 shadow，值确实被窄化，可参与运算）；
-//   - else 分支为 false（分析层知道剩余类型用于穷尽性，但无 shadow，值仍是 any）。
+// Shadowed 表示 desugar 是否在该区间注入了 shadow（值确实被窄化，可参与运算）：
+//   - then 守卫块内为 true（注入 x := __gx_v）；
+//   - else 分支：剩余为单一具体类型且块内用到 x 时为 true（注入 x := x.(Narrow)），
+//     否则为 false（剩余仍是联合或块内未用 x，仅保留类型供穷尽性分析）。
 type NarrowFact struct {
 	Var      string
 	Type     Type
@@ -197,8 +198,23 @@ type Guard struct {
 	EndPos   Pos      // 守卫块 '{' 位置（desugar 用它定位跳过点）
 	Recv     string   // 被守卫变量
 	RecvPos  Pos      // 被守卫变量位置（shadow 生成复用）
-	Target   Type     // 目标类型
-	TypeToks []Token  // 目标类型原始 token（保留位置，供 emit / sourcemap）
+	Target       Type     // 目标类型
+	TypeToks     []Token  // 目标类型原始 token（保留位置，供 emit / sourcemap）
+	ThenUsesRecv bool     // then 块内是否引用了 recv；false 时不注入 shadow 避免未使用错误
+}
+
+// ElseShadow 描述一个 else 分支可注入的 shadow。
+// 当 x 的联合类型经 is 守卫排除目标类型后，剩余类型 Narrow 若为单一具体类型
+// （可作 Go 类型断言 x.(Narrow)），desugar 就在 else 块首注入
+//
+//	x := x.(Narrow)
+//
+// 使 else 内 x 具有收窄后的真实类型（而非擦除后的 any），从而可直接参与运算。
+// 以 else 块 '{' 的 Pos 作为键，与 GuardAt 一样不受 desugar 下标漂移影响。
+type ElseShadow struct {
+	Recv    string
+	RecvPos Pos
+	Narrow  Type
 }
 
 // GXDiagnostic 是 GX 语义层产出的一条诊断，位置为 GX 源码坐标（1 基）。
@@ -222,9 +238,10 @@ type funcRange struct{ from, to int }
 type Analysis struct {
 	n         int
 	symbols   []Symbol
-	facts     []NarrowFact
-	guards    map[posKey]Guard
-	diags     []GXDiagnostic
+	facts       []NarrowFact
+	guards      map[posKey]Guard
+	elseShadows map[posKey]ElseShadow // else 块 '{' 位置 → 可注入的排除法 shadow
+	diags       []GXDiagnostic
 	funcRange []funcRange
 	// posToIdx 把 GX 坐标（行列）映射到 token 下标，供 AST 侧查询。
 	// 构建时不覆盖：同一坐标保留最小下标（首个 token）。
@@ -242,9 +259,10 @@ type lineEntry struct {
 // Analyze 在原始 token 流（union 擦除、is 改写之前）上做语义分析。
 func Analyze(toks []Token) *Analysis {
 	a := &Analysis{
-		n:          len(toks),
-		guards:     map[posKey]Guard{},
-		posToIdx:   map[posKey]int{},
+		n:           len(toks),
+		guards:      map[posKey]Guard{},
+		elseShadows: map[posKey]ElseShadow{},
+		posToIdx:    map[posKey]int{},
 		lineIdx:    map[int][]lineEntry{},
 		namedTypes: map[string]Type{},
 	}
@@ -332,6 +350,16 @@ func (a *Analysis) GuardAt(p Pos) (Guard, bool) {
 	return g, ok
 }
 
+// ElseShadowAt 返回位于 Pos p 的 else 块应注入的排除法 shadow。
+// desugar 遍历到 else 块的 '{' 时以此生成 `x := x.(Narrow)`。
+func (a *Analysis) ElseShadowAt(p Pos) (ElseShadow, bool) {
+	if a == nil {
+		return ElseShadow{}, false
+	}
+	s, ok := a.elseShadows[keyOf(p)]
+	return s, ok
+}
+
 // TypeAt 返回 token 下标 idx 处变量 name 的有效（收窄后）类型。
 // 先取最近的声明类型，再叠加覆盖该下标的最窄收窄事实（嵌套时内层优先）。
 func (a *Analysis) TypeAt(name string, idx int) Type {
@@ -340,8 +368,9 @@ func (a *Analysis) TypeAt(name string, idx int) Type {
 }
 
 // TypeAtShadowed 只叠加「有 shadow 注入」的收窄事实——即 desugar 真正把变量
-// 窄化成具体值的区间（if 守卫块内）。供 AST 检查器判定「能否参与运算」，
-// 与生成代码保持一致：else 分支无 shadow，即使分析层知道剩余类型也按未收窄处理。
+// 窄化成具体值的区间（then 守卫块内，以及 else 排除法收窄到单一类型的块）。
+// 供 AST 检查器判定「能否参与运算」，与生成代码保持一致：else 剩余仍是联合
+// （无法注入单断言）或块内未用 x 时，即使分析层知道剩余类型也按未收窄处理。
 func (a *Analysis) TypeAtShadowed(name string, idx int) Type {
 	base := a.declaredTypeAt(name, idx)
 	return a.narrowAt(name, idx, base, true)
@@ -885,11 +914,13 @@ func (a *Analysis) processChain(toks []Token, start int, processed map[int]bool)
 		if thenClose <= thenBrace {
 			return
 		}
+		thenUses := blockUsesVar(toks, thenBrace+1, thenClose, g.recv)
 		a.addFact(g.recv, target, thenBrace+1, thenClose, true) // if 块内：有 shadow
 		a.guards[keyOf(toks[i].Pos)] = Guard{
 			Pos: toks[i].Pos, EndPos: toks[thenBrace].Pos,
 			Recv: g.recv, RecvPos: g.recvPos,
 			Target: target, TypeToks: g.typeToks,
+			ThenUsesRecv: thenUses,
 		}
 
 		// 为后续 else-if / else 排除当前成员。
@@ -927,9 +958,46 @@ func (a *Analysis) processChain(toks []Token, start int, processed map[int]bool)
 		if toks[m].Text == "{" {
 			ec := matchDelim(toks, m, "{", "}")
 			if ec > m {
-				a.addFact(g.recv, cur, m+1, ec, false) // else 块内：无 shadow，仅用于穷尽性
+				// 排除法收窄：else 块内 x 的有效类型是「联合减去已守卫成员」的剩余。
+				// 若剩余为单一具体类型，且 else 块内确实引用了 x，则可注入
+				// `x := x.(Narrow)` shadow，让 else 内 x 拥有真实类型（而非 any）。
+				// 否则（剩余仍是联合 / never / 块内未用 x）保持无 shadow，避免
+				// 生成非法的 `x.(A|B)` 断言或未使用变量。
+				if canAssertSingle(cur) && blockUsesVar(toks, m+1, ec, g.recv) {
+					a.elseShadows[keyOf(toks[m].Pos)] = ElseShadow{
+						Recv: g.recv, RecvPos: g.recvPos, Narrow: cur,
+					}
+					a.addFact(g.recv, cur, m+1, ec, true) // 有 shadow：可参与运算
+				} else {
+					a.addFact(g.recv, cur, m+1, ec, false) // 无 shadow：仅用于穷尽性
+				}
 			}
 		}
 		return
 	}
+}
+
+// canAssertSingle 报告类型 t 能否作为 Go 单个类型断言 x.(T) 的目标：
+// 必须是单一具体类型，不能是联合、never、any、unknown 或空。
+func canAssertSingle(t Type) bool {
+	if t.IsUnion() {
+		return false
+	}
+	switch t.String() {
+	case "", "never", "any", "unknown":
+		return false
+	}
+	return true
+}
+
+// blockUsesVar 扫描 token 下标 [from,to) 内是否引用了标识符 name。
+// 用于判断 else 块是否真的用到被守卫变量——没用到就不注入 shadow，
+// 避免生成 `x := x.(T)` 后 Go 报「declared and not used」。
+func blockUsesVar(toks []Token, from, to int, name string) bool {
+	for k := from; k < to; k++ {
+		if toks[k].Kind == Ident && toks[k].Text == name {
+			return true
+		}
+	}
+	return false
 }
