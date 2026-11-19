@@ -53,6 +53,11 @@ func CompileWithModule(file, src, module string) (*Result, error) {
 	names := map[string]string{} // 小写原名 → 大写导出名（自身 pub 符号）
 	toks = expandDefaults(toks, defaultDefs)
 	toks = transformLambdas(toks, analysis)
+	// 对象字面量：期望类型校验失败时返回带 GX 坐标的错误。
+	toks, err := transformObjectLits(toks, analysis)
+	if err != nil {
+		return nil, err
+	}
 	toks = transformTemplates(toks)
 	toks = runUnion(toks)
 	toks = transformTypeGuard(toks, analysis)
@@ -137,6 +142,10 @@ func CompileStage(src, stage string) (string, error) {
 		analysis := Analyze(toks)
 		toks = expandDefaults(toks, defaultDefs)
 		toks = transformLambdas(toks, analysis)
+		toks, err := transformObjectLits(toks, analysis)
+		if err != nil {
+			return "", err
+		}
 		toks = transformTemplates(toks)
 		toks = runUnion(toks)
 		toks = transformTypeGuard(toks, analysis)

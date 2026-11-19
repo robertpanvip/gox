@@ -151,6 +151,12 @@ func (s *Scope) collectPrivate(toks []Token) {
 					}
 				}
 			}
+		case "struct":
+			// 匿名 struct（对象字面量降级产物等）：收集其字段名，
+			// 避免 transformExternal 把 x.inner 误当外部字段大写。
+			if br := nextSig(toks, i+1); br >= 0 && toks[br].Text == "{" {
+				s.collectStructFields(toks, br, add)
+			}
 		case ":=":
 			p := prevSig(toks, i-1)
 			for p >= 0 {
@@ -253,7 +259,7 @@ func (s *Scope) collectStructFields(toks []Token, open int, add func(Token)) {
 		if depth > 0 {
 			continue
 		}
-		if t.Kind == Newline {
+		if t.Kind == Newline || t.Text == ";" {
 			lineStart = true
 			continue
 		}

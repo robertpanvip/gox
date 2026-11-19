@@ -33,6 +33,28 @@ func (a *Analysis) FuncSig(name string) (FuncSig, bool) {
 	return FuncSig{}, false
 }
 
+// FuncSigAtTok 返回包含 token 下标 idx 的函数签名——用于按 token 位置定位
+// 「这条 return 属于哪个函数」。取包含该下标且函数体区间最小的签名。
+func (a *Analysis) FuncSigAtTok(idx int) (FuncSig, bool) {
+	if a == nil {
+		return FuncSig{}, false
+	}
+	best := -1
+	bestSpan := a.n + 1
+	for i, s := range a.sigs {
+		if idx > s.BodyFrom && idx < s.BodyTo {
+			if span := s.BodyTo - s.BodyFrom; span < bestSpan {
+				bestSpan = span
+				best = i
+			}
+		}
+	}
+	if best < 0 {
+		return FuncSig{}, false
+	}
+	return a.sigs[best], true
+}
+
 // FuncSigAtGx 返回包含 GX 坐标 (line,col) 的函数签名——用于 ReturnStmt
 // 定位「这条 return 属于哪个函数」。取包含该位置且函数体区间最小的签名。
 func (a *Analysis) FuncSigAtGx(line, col int) (FuncSig, bool) {

@@ -167,6 +167,39 @@ func main() {
 	}
 }
 
+func TestIntegrationObjectLiteral(t *testing.T) {
+	// 对象字面量：匿名结构体（字段类型反推）+ 期望类型补全（var/arg/assign/return）。
+	src := `package main
+import "fmt"
+type point struct {
+	name string
+	age  int
+}
+func describe(p point) string { return fmt.Sprint(p.name, ":", p.age) }
+func makePoint() point { return { name: "ret", age: 4 } }
+func main() {
+	anon := { name: "anon", age: 1 }
+	fmt.Println(anon.name, anon.age)
+	var p point = { name: "var", age: 2 }
+	fmt.Println(describe(p))
+	fmt.Println(describe({ name: "arg", age: 3 }))
+	p = { name: "assign", age: 5 }
+	fmt.Println(describe(p))
+	fmt.Println(describe(makePoint()))
+	nested := { name: "n", inner: { a: 10, ok: true } }
+	fmt.Println(nested.inner.a, nested.inner.ok)
+}
+`
+	out := runGX(t, src)
+	for _, want := range []string{
+		"anon 1", "var:2", "arg:3", "assign:5", "ret:4", "10 true",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("对象字面量输出应包含 %q, got:\n%s", want, out)
+		}
+	}
+}
+
 func TestIntegrationLambda(t *testing.T) {
 	// Lambda 最简箭头：表达式反推（int/bool）、显式参数、集合回调、函数实参。
 	src := `package main

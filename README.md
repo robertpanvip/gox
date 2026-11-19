@@ -6,7 +6,7 @@
 >
 > **书写约定核心：声明用 `pub` 显式导出；标识符一律「只首字母小写，其余驼峰照抄」。** 转译器机械还原大小写，无需类型推导、无需读取第三方包符号表。
 
-## 十项特性速览
+## 十一项特性速览
 
 | 特性 | GX 写法 | 生成的 Go |
 |---|---|---|
@@ -20,6 +20,7 @@
 | **参数默认值** | `func f(x int = 5)` | 调用点补全：`f()` → `f(5)`（TS 语义，区分未传与零值） |
 | **Lambda** | `x => x+1` | `func(x int) int { return x+1 }`（类型从上下文/表达式推断） |
 | **模板字符串** | `` `hi ${name}` `` | `"hi " + fmt.Sprint(name)`（拼接，自动 import fmt） |
+| **对象字面量** | `{ name: "x", age: 1 }` | `struct{ name string; age int }{...}`，有期望类型时用 `point{...}` |
 
 ## 1. 可见性：`pub`
 
@@ -202,13 +203,38 @@ msg := `hello ${name}, score=${score}`   // "hello " + fmt.Sprint(name) + ", sco
 - 插值内是完整表达式，可含外部符号调用、集合链式、嵌套字面量；花括号深度与字符串/反引号内的 `}` 会被正确跳过。
 - **限制**：暂不处理 `\${` 转义。
 
-## 11. Sourcemap / LSP / 编译检查
+## 11. 对象字面量
+
+`{ name: "x", age: 1 }` 编译为 Go 匿名结构体字面量。两种情况：
+
+**无期望类型**（如 `p := {...}`）：从字段值反推类型（`"x"`→`string`、`1`→`int`、`3.5`→`float64`、`true`→`bool`、嵌套 `{...}`→嵌套匿名 struct、推断不出→`any`），生成匿名结构体：
+
+```gx
+p := { name: "x", age: 1, ok: true }
+// → p := struct{ name string; age int; ok bool }{ name: "x", age: 1, ok: true }
+```
+
+**有期望类型**（明确标注了参数/返回/变量类型的上下文）：省略结构体类型名，由期望类型补全并校验字段：
+
+```gx
+type point struct { name string; age int }
+var p point = { name: "x", age: 1 }   // → var p point = point{ name: "x", age: 1 }
+f({ name: "x", age: 1 })              // f(p point) → f(point{...})
+p = { name: "x", age: 1 }             // 赋值：按 p 的声明类型补全
+func make() point { return { name: "x", age: 1 } }  // 按返回类型补全
+```
+
+- 校验：字段名未知、缺失字段、值类型不兼容均报**编译错误**（带 GX 源码坐标）。
+- 无类型常量按 Go 可赋值规则放宽（整数字面量可赋给整数/浮点族）。
+- 支持嵌套对象字面量（由内向外逐层补全）。
+
+## 12. Sourcemap / LSP / 编译检查
 
 - 自带 `.gx ↔ .go` **双向精确位置映射**（`sourcemap` / `map-lookup`）。
 - LSP：跳转 / 补全 / 悬停 / 文档符号 / **重命名**（枚举成员三种拼写派生新名）。
 - 真实 `go build` 检查（`buildcheck`，可取消 + LRU），错误经 sourcemap **回投到 `.gx`**。
 
-## 12. GX 类型检查（方案 B：AST + side table）
+## 13. GX 类型检查（方案 B：AST + side table）
 
 GX 把联合 `A|B` 擦除为 `any` 后，`go/types` 眼里只剩 `any`，**永远看不到联合契约被违反**。因此类型检查的主战场放在 desugar 之前的 GX 层——这正是 TS 对 JS 的关系：类型是本层的责任，`go build` 只兜底「降级代码是否合法」。
 
