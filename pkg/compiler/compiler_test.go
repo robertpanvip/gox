@@ -278,3 +278,63 @@ func main() { _ = <div/> }
 		t.Fatalf("生成代码语法无效: %v", err)
 	}
 }
+
+func TestEnumDuplicateValues(t *testing.T) {
+	// 整数枚举重复值：String() 只生成一个 case，编译合法，取第一个为规范名
+	intSrc := `package main
+pub enum status {
+    pending = 1,
+    processing = 1,
+}
+func main() { println(statusPending.String()) }
+`
+	res, err := CompileSource(intSrc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Count(res.GoSource, "case StatusPending:") != 1 {
+		t.Errorf("规范名 case 应恰好一个:\n%s", res.GoSource)
+	}
+	if strings.Contains(res.GoSource, "case StatusProcessing:") {
+		t.Errorf("重复值别名不应生成重复 case:\n%s", res.GoSource)
+	}
+	if err := res.Validate(); err != nil {
+		t.Fatalf("整数枚举重复值生成代码语法无效: %v", err)
+	}
+
+	// 字符串枚举重复值：Parse() 只生成一个 case，取第一个
+	strSrc := `package main
+pub enum method string {
+    get = "GET",
+    retrieve = "GET",
+}
+func main() { println(ParseMethod("GET")) }
+`
+	res2, err := CompileSource(strSrc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Count(res2.GoSource, `case "GET":`) != 1 {
+		t.Errorf("重复字符串值的 case 应恰好一个:\n%s", res2.GoSource)
+	}
+	if err := res2.Validate(); err != nil {
+		t.Fatalf("字符串枚举重复值生成代码语法无效: %v", err)
+	}
+}
+
+func TestEnumNoValueMembersDeduplicated(t *testing.T) {
+	// 无值成员靠 iota 自增，值各不相同，不能被误判为重复而丢失 case
+	src := `package main
+enum color { red, green, blue }
+func main() { println(colorRed.String()) }
+`
+	res, err := CompileSource(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []string{"case ColorRed:", "case ColorGreen:", "case ColorBlue:"} {
+		if !strings.Contains(res.GoSource, c) {
+			t.Errorf("无值成员 %s 不应被去重:\n%s", c, res.GoSource)
+		}
+	}
+}

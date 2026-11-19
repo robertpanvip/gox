@@ -150,6 +150,11 @@ func genEnumCode(info enumInfo, memberNames []string) string {
 	}
 	b.WriteString(")\n")
 
+	// duplicateValue 标记「值与此前某成员相同」的别名成员。别名仍有常量定义，
+	// 但不参与 String()/Parse() 的 case 生成——否则 Go 编译器会报重复 case。
+	// 别名语义：第一个出现的成员是规范名，String() 返回它，Parse() 也解析到它。
+	duplicateValue := computeDuplicateValues(info, memberNames)
+
 	// String()
 	if info.underlying == "string" {
 		fmt.Fprintf(&b, "func (x %s) String() string { return string(x) }\n", t)
@@ -161,6 +166,9 @@ func genEnumCode(info enumInfo, memberNames []string) string {
 			if strings.Contains(valueCode(m.value), "<<") {
 				continue
 			}
+			if duplicateValue[i] {
+				continue // 别名：跳过重复 case
+			}
 			fmt.Fprintf(&b, "\tcase %s:\n\t\treturn %s\n", cn, strconv.Quote(memberNames[i]))
 		}
 		b.WriteString("\t}\n\treturn strconv.Itoa(int(x))\n}\n")
@@ -169,6 +177,7 @@ func genEnumCode(info enumInfo, memberNames []string) string {
 	// Parse()
 	parseName := "Parse" + p
 	fmt.Fprintf(&b, "func %s(s string) (%s, bool) {\n\tswitch s {\n", parseName, t)
+	seenKeys := map[string]bool{}
 	for _, m := range info.members {
 		cn := p + upperFirst(m.name)
 		// 字符串枚举用成员的显式值匹配；整数枚举用 String() 返回的名字匹配
@@ -183,6 +192,10 @@ func genEnumCode(info enumInfo, memberNames []string) string {
 		} else {
 			key = strconv.Quote(m.name)
 		}
+		if seenKeys[key] {
+			continue // 重复 key：保留第一个 case
+		}
+		seenKeys[key] = true
 		fmt.Fprintf(&b, "\tcase %s:\n\t\treturn %s, true\n", key, cn)
 	}
 	zero := "0"
@@ -192,6 +205,40 @@ func genEnumCode(info enumInfo, memberNames []string) string {
 	fmt.Fprintf(&b, "\t}\n\treturn %s, false\n}\n", zero)
 
 	return b.String()
+}
+
+// computeDuplicateValues 返回每个成员是否与更早成员「值相同」。
+//
+// 整数枚举：以显式值表达式（去空白）为键。省略值的成员靠 iota 自增，值各不相同，
+// 用下标构造唯一键避免误判；只有显式写了相同表达式（如 =1 两次）才算重复。
+// 字符串枚举：以显式字符串值（含引号）为键；省略值用成员名引号形式。
+// 重复者视为别名：规范名取第一个，String() 的 case 只保留第一个。
+func computeDuplicateValues(info enumInfo, memberNames []string) []bool {
+	out := make([]bool, len(info.members))
+	seen := map[string]bool{}
+	for i, m := range info.members {
+		var key string
+		val := strings.TrimSpace(valueCode(m.value))
+		if info.underlying == "string" {
+			if val == "" {
+				val = strconv.Quote(m.name)
+			}
+			key = val
+		} else {
+			if val == "" {
+				// 无值成员（iota / 重复上一表达式）值互不相同，构造唯一键
+				key = "\x00iota#" + strconv.Itoa(i)
+			} else {
+				key = val
+			}
+		}
+		if seen[key] {
+			out[i] = true
+		} else {
+			seen[key] = true
+		}
+	}
+	return out
 }
 
 // valueCode 把值表达式 token 拼回源码文本。
