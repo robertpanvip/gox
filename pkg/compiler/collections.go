@@ -2,33 +2,43 @@ package compiler
 
 import "strconv"
 
-// collections 转换：把集合链式调用从 gx 的小写写法还原为 gxcollections.List 的泛型方法。
+// collections 转换：把集合链式调用与切片类型提升为 gx 运行时。
 //
-// gx 里写（一律小写）：
+// 1) 方法名还原：xs.map(f) -> xs.Map(f)（Go 1.27 泛型方法，换型链式）。
+// 2) 全局切片提升：所有切片类型 []T -> list.List[T]，使原生 []T 直接获得
+//    Map/Filter/Reduce 方法。List[T] 与 []T 底层相同，可双向赋值。
 //
-//	nums := []int{1, 2, 3}
-//	labels := nums.map(strconv.itoa).filter(func(s string) bool { return s != "" })
+// 提升只匹配「空方括号 [] 紧跟类型表达式」——这是切片类型独有的形态，
+// 天然不误伤：数组 [3]T（方括号非空）、索引 a[i]、切片表达式 a[1:2]、
+// map[K]V（map 的方括号非空）、泛型实例 Foo[T]（方括号非空）。
 //
-// 生成：
-//
-//	nums := gxcollections.List[int]{1, 2, 3}
-//	labels := nums.Map(strconv.Itoa).Filter(func(s string) bool { return s != "" })
-//
-// 「按需提升」：只有被 map/filter/reduce 调用的接收者变量，其声明处的 []T
-// 才改写成 gxcollections.List[T]；其它切片保持原生 []T。依赖 Go 1.27 泛型方法，
-// Map/Reduce 可换型并保持链式（List[T].Map[R func(T)R] List[R]）。
+// import 路径由 module 决定：<module>/list。
 
 var chainMethods = map[string]string{
 	"map": "Map", "filter": "Filter", "reduce": "Reduce",
 }
 
-const gxCollectionsPath = "github.com/robertpanvip/gox/gxcollections"
+const defaultModule = "github.com/robertpanvip/gox"
 
-func transformCollections(in []Token) []Token {
+func listImportPath(module string) string {
+	if module == "" {
+		module = defaultModule
+	}
+	return module + "/list"
+}
+
+func transformCollections(in []Token, module string) []Token {
+	out := upperChainMethods(in)
+	out, promoted := promoteAllSlices(out, "list")
+	if !promoted {
+		return out // 没有切片被提升，不注入无用 import
+	}
+	return injectListImport(out, listImportPath(module))
+}
+
+// upperChainMethods 把 .map/.filter/.reduce 方法名首字母大写。
+func upperChainMethods(in []Token) []Token {
 	out := append([]Token{}, in...)
-	promote := map[string]bool{}
-
-	// 1) 方法名小写 → 大写，并收集接收者变量名。
 	for i := 0; i < len(out); i++ {
 		if out[i].Kind != Operator || out[i].Text != "." {
 			continue
@@ -41,73 +51,39 @@ func transformCollections(in []Token) []Token {
 		if !ok {
 			continue
 		}
-		k := nextSig(out, j+1)
-		if k < 0 || k >= len(out) || out[k].Text != "(" {
-			continue
-		}
-		out[j].Text = up // map → Map
-		p := prevSig(out, i-1)
-		if p >= 0 && out[p].Kind == Ident && isLowerStart(out[p].Text) {
-			promote[out[p].Text] = true
-		}
+		out[j].Text = up
 	}
-	if len(promote) == 0 {
-		return in
-	}
-
-	// 2) 提升接收者声明处的 []T → gxcollections.List[T]。
-	out = promoteDecls(out, promote)
-
-	// 3) 注入 gxcollections import。
-	out = injectCollectionsImport(out)
 	return out
 }
 
-// promoteDecls 对接收者变量的声明/参数/字面量处的 []T 做类型提升。
-func promoteDecls(toks []Token, promote map[string]bool) []Token {
+// promoteAllSlices 把所有 []T 改写为 alias.List[T]，返回是否发生过提升。
+func promoteAllSlices(toks []Token, alias string) ([]Token, bool) {
 	res := make([]Token, 0, len(toks))
+	changed := false
 	for i := 0; i < len(toks); {
 		t := toks[i]
-		if t.Kind == Ident && promote[t.Text] {
-			j := nextSig(toks, i+1)
-			if j >= 0 && j < len(toks) && toks[j].Text == ":=" {
-				j = nextSig(toks, j+1)
-				// nums := make([]T, ...) — 跳到 make 的参数
-				if j >= 0 && j < len(toks) && toks[j].Text == "make" {
-					j = nextSig(toks, j+1)
-					if j >= 0 && j < len(toks) && toks[j].Text == "(" {
-						j = nextSig(toks, j+1)
-					}
+		// 识别空方括号：'[' 紧随 ']'（切片类型 []T 的形态，严格相邻）
+		if t.Kind == Operator && t.Text == "[" && i+1 < len(toks) && toks[i+1].Text == "]" && !toks[i+1].IsGen {
+			te := typeEnd(toks, i+2)
+			if te > i+2 { // ']' 后确有类型表达式
+				p := t.Pos
+				gen := []Token{
+					tokIdent(alias, p), tokOp(".", p), tokIdent("List", p), tokOp("[", p),
 				}
-			}
-			if j >= 0 && j+1 < len(toks) && toks[j].Text == "[" && toks[j+1].Text == "]" {
-				gen, next := rewriteSliceType(toks, j)
-				res = append(res, toks[i:j]...)
+				// 递归提升类型内部可能存在的切片（如 [][]int）
+				inner, _ := promoteAllSlices(toks[i+2:te], alias)
+				gen = append(gen, inner...)
+				gen = append(gen, tokOp("]", p))
 				res = append(res, gen...)
-				i = next
+				i = te
+				changed = true
 				continue
 			}
 		}
 		res = append(res, t)
 		i++
 	}
-	return res
-}
-
-// rewriteSliceType 把 [ ] T 改写成 gxcollections.List [ T ]，返回生成 token 与消费到的下标。
-func rewriteSliceType(toks []Token, bracket int) ([]Token, int) {
-	ts := nextSig(toks, bracket+2)
-	if ts < 0 {
-		ts = bracket + 2
-	}
-	te := typeEnd(toks, ts)
-	p := toks[bracket].Pos
-	gen := []Token{
-		tokIdent("gxcollections", p), tokOp(".", p), tokIdent("List", p), tokOp("[", p),
-	}
-	gen = append(gen, toks[ts:te]...)
-	gen = append(gen, tokOp("]", p))
-	return gen, te
+	return res, changed
 }
 
 // typeEnd 解析一个类型表达式的结束下标（exclusive），支持指针/嵌套切片/map/包限定/泛型实例化。
@@ -122,26 +98,17 @@ func typeEnd(toks []Token, start int) int {
 	if i >= len(toks) {
 		return i
 	}
-	switch {
-	case toks[i].Text == "map":
-		i++
-		if i < len(toks) && toks[i].Text == "[" {
-			i = matchBracket(toks, i) + 1
-		}
-		i = typeEnd(toks, i)
-	case toks[i].Text == "[":
+	if toks[i].Kind != Ident {
+		return i
+	}
+	i++
+	// 包限定 pkg.Type
+	if i+1 < len(toks) && toks[i].Text == "." && toks[i+1].Kind == Ident {
+		i += 2
+	}
+	// 泛型实例化 Foo[T] 或数组/切片 [N] —— 跳过整个方括号
+	if i < len(toks) && toks[i].Text == "[" {
 		i = matchBracket(toks, i) + 1
-		i = typeEnd(toks, i)
-	case toks[i].Kind == Ident:
-		i++
-		if i+1 < len(toks) && toks[i].Text == "." && toks[i+1].Kind == Ident {
-			i += 2
-		}
-		if i < len(toks) && toks[i].Text == "[" {
-			i = matchBracket(toks, i) + 1
-		}
-	default:
-		i++
 	}
 	return i
 }
@@ -186,9 +153,10 @@ func prevSig(toks []Token, i int) int {
 	return -1
 }
 
-func injectCollectionsImport(toks []Token) []Token {
+func injectListImport(toks []Token, path string) []Token {
+	quoted := strconv.Quote(path)
 	for _, t := range toks {
-		if t.Kind == String && t.Text == strconv.Quote(gxCollectionsPath) {
+		if t.Kind == String && t.Text == quoted {
 			return toks // 已存在
 		}
 	}
@@ -207,7 +175,7 @@ func injectCollectionsImport(toks []Token) []Token {
 	p := toks[0].Pos
 	imp := []Token{
 		tokNewline(p),
-		tokIdent("import", p), tokSpace(" ", p), tokString(strconv.Quote(gxCollectionsPath), p), tokNewline(p),
+		tokIdent("import", p), tokSpace(" ", p), tokString(quoted, p), tokNewline(p),
 	}
 	out := append([]Token{}, toks[:insert]...)
 	out = append(out, imp...)

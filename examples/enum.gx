@@ -4,16 +4,23 @@ import "fmt"
 
 pub enum color { red, green, blue }
 
-// 显式赋值的枚举
+// 显式赋值的枚举（私有 enum：类型名保持小写，常量前缀仍大写）
 enum status { pending = 1, active = 2, done = 3 }
 
+// 字符串枚举
+pub enum method string { get = "GET", post = "POST" }
+
+// 位标志
+pub enum perm { read = 1 << iota, write, exec }
+
 pub func name(c color) string {
-    if c == red { return "red" }
-    if c == green { return "green" }
+    if c == ColorRed { return "red" }
+    if c == ColorGreen { return "green" }
     return "blue"
 }
 
 func main() {
-    c := red
-    fmt.println(name(c), pending, done)
+    c := ColorRed
+    m, _ := parseMethod("GET")
+    fmt.println(name(c), StatusPending, m, PermRead|PermWrite)
 }

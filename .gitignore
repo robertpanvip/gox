@@ -4,6 +4,8 @@
 *.exe
 *.test
 libgox.*
+gox
+gox-lsp
 # Go 缓存
 /vendor/
 # 编辑器

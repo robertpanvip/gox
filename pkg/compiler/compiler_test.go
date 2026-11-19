@@ -52,8 +52,24 @@ enum code { ok = 200, fail = 500 }
 `
 	got := compileOK(t, "enum.gx", src)
 	containsAll(t, got,
-		"type Color int", "Red Color = iota", "Green Color = iota", "Blue Color = iota",
-		"type code int", "ok code = 200", "fail code = 500")
+		"type Color int", "ColorRed Color = iota", "ColorGreen Color = iota", "ColorBlue Color = iota",
+		"func (x Color) String() string", "func ParseColor(s string) (Color, bool)",
+		"type code int", "CodeOk code = 200", "CodeFail code = 500",
+		"func ParseCode(s string) (code, bool)")
+}
+
+func TestEnumStringAndFlags(t *testing.T) {
+	src := `package main
+
+pub enum method string { get = "GET", post = "POST" }
+pub enum perm { read = 1 << iota, write, exec }
+`
+	got := compileOK(t, "enum2.gx", src)
+	containsAll(t, got,
+		"type Method string", `MethodGet Method = "GET"`, `MethodPost Method = "POST"`,
+		"func (x Method) String() string", "func ParseMethod(s string) (Method, bool)",
+		"type Perm int", "PermRead Perm = 1 << iota", "PermWrite Perm = 1 << iota",
+		"case \"GET\":", "return MethodGet, true")
 }
 
 func TestJSX(t *testing.T) {
@@ -85,7 +101,7 @@ import (
 )
 
 pub func f() {
-    req, _ := http.newrequest("GET", "http://x", nil)
+    req, _ := http.newRequest("GET", "http://x", nil)
     u, _ := url.parse("http://x")
     fmt.println(req.method, u.host, u.path)
 }
@@ -101,7 +117,7 @@ func TestExternalAliasImport(t *testing.T) {
 
 import h "net/http"
 
-pub func f() { _, _ = h.newrequest("GET", "http://x", nil) }
+pub func f() { _, _ = h.newRequest("GET", "http://x", nil) }
 `
 	got := compileOK(t, "alias.gx", src)
 	containsAll(t, got, "h.NewRequest")
@@ -152,8 +168,8 @@ pub func f() {
 `
 	got := compileOK(t, "coll.gx", src)
 	containsAll(t, got,
-		`import "github.com/robertpanvip/gox/gxcollections"`,
-		"gxcollections.List[int]",
+		`import "github.com/robertpanvip/gox/list"`,
+		"list.List[int]",
 		"nums.Map(strconv.Itoa).Filter(",
 		"nums.Filter(keep).Reduce(0,",
 		"func(acc int, x int) int { return acc + x }")
@@ -166,7 +182,7 @@ func keep(x int) bool { return x > 0 }
 pub func f() { xs := make([]int, 3); _ = xs.filter(keep) }
 `
 	got := compileOK(t, "collmake.gx", src)
-	containsAll(t, got, "make(gxcollections.List[int], 3)")
+	containsAll(t, got, "make(list.List[int], 3)")
 }
 
 func TestSourcemapRoundTrip(t *testing.T) {
@@ -188,28 +204,52 @@ func TestSourcemapRoundTrip(t *testing.T) {
 	}
 }
 
-// ---- ExtSymbols 歧义兜底单元测试 ----
+// ---- 外部符号「首字母小写」机械还原 + 作用域防误伤单测 ----
 
-func TestExtSymbolsAmbiguityFallback(t *testing.T) {
-	e := &ExtSymbols{
-		byPkg:  map[string]map[string]string{},
-		global: map[string]string{},
+func TestMechanicalExternalRestore(t *testing.T) {
+	// 只首字母小写、其余驼峰照抄 → upperFirst 精确还原
+	cases := []struct{ in, want string }{
+		{"newRequest", "NewRequest"},
+		{"uRL", "URL"},
+		{"sprintf", "Sprintf"},
+		{"itoa", "Itoa"},
 	}
-	// 直接构造歧义场景：同名小写映射被丢弃（global 不收录）
-	// 通过 loadExtSymbols 的 cand 逻辑验证：这里模拟「唯一才收录」
-	e.global["method"] = "Method"
-	if got, ok := e.restore("", "method"); !ok || got != "Method" {
-		t.Errorf("唯一映射应还原: got %q ok=%v", got, ok)
+	for _, c := range cases {
+		if got := upperFirst(c.in); got != c.want {
+			t.Errorf("upperFirst(%q) = %q, want %q", c.in, got, c.want)
+		}
 	}
-	if got, ok := e.restore("", "unknownsym"); ok || got != "unknownsym" {
-		t.Errorf("未知符号应原样保留: got %q ok=%v", got, ok)
+	// 已大写 / 未知小写标识符保持
+	if isLowerStart("Method") || isLowerStart("URL") {
+		t.Errorf("isLowerStart 对大写名应返回 false")
 	}
-	if got, ok := e.restore("", "Method"); ok || got != "Method" {
-		t.Errorf("已大写应不动: got %q ok=%v", got, ok)
+	if !isLowerStart("method") {
+		t.Errorf("method 应为小写开头")
 	}
-	// 包名精确表缺失时，不退回 global（避免包内私有名被误改）
-	e.byPkg["fake"] = map[string]string{}
-	if got, ok := e.restore("fake", "method"); ok || got != "method" {
-		t.Errorf("包名精确未命中不应回退 global: got %q ok=%v", got, ok)
+}
+
+func TestScopePrivateProtection(t *testing.T) {
+	src := `package main
+type config struct {
+    host string
+}
+func demo(req *config) {
+    x := req.host
+    _ = x
+}
+`
+	toks := New(src).AllTokens()
+	s := collectScope(toks)
+	if !s.IsPrivate("host") {
+		t.Errorf("私有字段 host 应被收集")
+	}
+	if !s.IsPrivate("x") {
+		t.Errorf("局部变量 x 应被收集")
+	}
+	if !s.IsPrivate("req") {
+		t.Errorf("参数 req 应被收集")
+	}
+	if s.IsPrivate("config") {
+		t.Errorf("类型名 config 不应进私有表（它不是 selector 右侧会引用的字段）")
 	}
 }

@@ -2,11 +2,14 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 
+	"github.com/robertpanvip/gox/internal/buildcheck"
 	"github.com/robertpanvip/gox/internal/lsp"
 	"github.com/robertpanvip/gox/pkg/compiler"
 	"github.com/robertpanvip/gox/pkg/sourcemap"
@@ -49,19 +52,19 @@ func main() {
 }
 
 func usage() {
-	fmt.Println(`gox — GX 编译到 Go 的工具
+	fmt.Println(`gox — GX（编译到 Go）命令行工具
 
 用法:
-  gox build <file.gx> [-o out.go]   转译为 Go 源码（默认输出到 <file>.go）
-  gox jsx <file.gx>                 仅执行 JSX → createElement 转换
-  gox pub <file.gx>                 仅执行 pub 可见性转换
-  gox collections <file.gx>         仅执行集合链式转换
-  gox enum|external|all <file.gx>   其它单步 / 全管线
-  gox sourcemap <file.gx>           输出 GX↔Go 位置映射 JSON
-  gox map-lookup <map.json> <goLine> <goCol>   查询 Go 位置对应的 GX 位置
-  gox lsp-map <file.gx>             输出符号/位置映射摘要
-  gox lsp                           启动 LSP server（stdio）
-  gox test                          运行内置自检`)
+  gox build <file.gx> [-o out.go] [-module path] [-check] [-replace old=new]
+       -module   集合/JSX 运行时的 module 路径（默认 github.com/robertpanvip/gox）
+       -check    转译后执行真实 go build，并把错误回投到 .gx 位置
+       -replace  go.mod replace 指令，可重复（module=本地目录）
+  gox jsx|pub|enum|collections|external|all <file.gx>   单步 / 全管线调试
+  gox sourcemap <file.gx> [-o map.json]                 输出 GX↔Go 位置映射 JSON
+  gox map-lookup [-to-go] <map.json> <line> <col>        位置反查（默认 Go→GX）
+  gox lsp-map <dir-or-file>                              项目符号映射 JSON
+  gox lsp                                                启动 LSP server（stdio）
+  gox test                                               运行内置转译自检`)
 }
 
 func readFile(path string) (string, error) {
@@ -72,32 +75,110 @@ func readFile(path string) (string, error) {
 	return string(b), nil
 }
 
-func cmdBuild(args []string) error {
+// buildFlags 解析 build 子命令参数。
+type buildFlags struct {
+	file     string
+	out      string
+	module   string
+	check    bool
+	replaces []string
+}
+
+func parseBuildFlags(args []string) (*buildFlags, error) {
+	f := &buildFlags{module: "github.com/robertpanvip/gox"}
 	if len(args) == 0 {
-		return fmt.Errorf("build: 需要 <file.gx>")
+		return nil, fmt.Errorf("build: 需要 <file.gx>")
 	}
-	src, err := readFile(args[0])
+	f.file = args[0]
+	for i := 1; i < len(args); i++ {
+		switch args[i] {
+		case "-o":
+			if i+1 >= len(args) {
+				return nil, fmt.Errorf("-o 缺少参数")
+			}
+			i++
+			f.out = args[i]
+		case "-module":
+			if i+1 >= len(args) {
+				return nil, fmt.Errorf("-module 缺少参数")
+			}
+			i++
+			f.module = args[i]
+		case "-check":
+			f.check = true
+		case "-replace":
+			if i+1 >= len(args) {
+				return nil, fmt.Errorf("-replace 缺少参数")
+			}
+			i++
+			f.replaces = append(f.replaces, args[i])
+		default:
+			return nil, fmt.Errorf("未知参数 %q", args[i])
+		}
+	}
+	if f.out == "" {
+		f.out = f.file + ".go"
+	}
+	return f, nil
+}
+
+func cmdBuild(args []string) error {
+	f, err := parseBuildFlags(args)
 	if err != nil {
 		return err
 	}
-	res, err := compiler.Compile(args[0], src)
+	src, err := readFile(f.file)
+	if err != nil {
+		return err
+	}
+	res, err := compiler.CompileWithModule(f.file, src, f.module)
 	if err != nil {
 		return err
 	}
 	if err := res.Validate(); err != nil {
 		return fmt.Errorf("生成的 Go 代码语法无效: %w", err)
 	}
-	out := args[0] + ".go"
-	for i := 1; i < len(args)-1; i++ {
-		if args[i] == "-o" {
-			out = args[i+1]
-		}
-	}
-	if err := os.WriteFile(out, []byte(res.GoSource), 0644); err != nil {
+	if err := os.WriteFile(f.out, []byte(res.GoSource), 0644); err != nil {
 		return err
 	}
-	fmt.Printf("已生成 %s （%d 字节，%d 条映射）\n", out, len(res.GoSource), res.SourceMap.Len())
+	fmt.Printf("已生成 %s （%d 字节，%d 条映射）\n", f.out, len(res.GoSource), res.SourceMap.Len())
+
+	if f.check {
+		return runCheck(res.GoSource, res.SourceMap, f.replaces)
+	}
 	return nil
+}
+
+// runCheck 执行真实 go build，并把诊断从 Go 位置经 sourcemap 回投到 .gx。
+func runCheck(goSrc string, sm *sourcemap.SourceMap, replaces []string) error {
+	checker := buildcheck.New(64)
+	checker.SetToolchain("go", "GOTOOLCHAIN=go1.27.3")
+	for _, r := range replaces {
+		parts := strings.SplitN(r, "=", 2)
+		if len(parts) != 2 {
+			return fmt.Errorf("-replace 格式应为 module=dir，得到 %q", r)
+		}
+		checker.AddReplace(parts[0], parts[1])
+	}
+
+	diags, err := checker.Check(context.Background(), goSrc)
+	if err != nil {
+		return fmt.Errorf("编译检查失败: %w", err)
+	}
+	if len(diags) == 0 {
+		fmt.Println("编译检查通过：无错误")
+		return nil
+	}
+	fmt.Fprintf(os.Stderr, "编译检查发现 %d 条错误（已回投到 .gx）:\n", len(diags))
+	for _, d := range diags {
+		pos, ok := sm.GoToGx(d.Line, d.Col)
+		if !ok {
+			fmt.Fprintf(os.Stderr, "  %d:%d: %s\n", d.Line, d.Col, d.Message)
+			continue
+		}
+		fmt.Fprintf(os.Stderr, "  %d:%d: %s\n", pos.Line, pos.Column, d.Message)
+	}
+	return fmt.Errorf("编译检查未通过")
 }
 
 func cmdStage(stage string, args []string) error {
@@ -117,14 +198,24 @@ func cmdStage(stage string, args []string) error {
 }
 
 func cmdSourcemap(args []string) error {
-	if len(args) == 0 {
+	var outPath string
+	var fileArgs []string
+	for i := 0; i < len(args); i++ {
+		if args[i] == "-o" && i+1 < len(args) {
+			i++
+			outPath = args[i]
+		} else {
+			fileArgs = append(fileArgs, args[i])
+		}
+	}
+	if len(fileArgs) == 0 {
 		return fmt.Errorf("sourcemap: 需要 <file.gx>")
 	}
-	src, err := readFile(args[0])
+	src, err := readFile(fileArgs[0])
 	if err != nil {
 		return err
 	}
-	res, err := compiler.Compile(args[0], src)
+	res, err := compiler.Compile(fileArgs[0], src)
 	if err != nil {
 		return err
 	}
@@ -132,13 +223,25 @@ func cmdSourcemap(args []string) error {
 	if err != nil {
 		return err
 	}
+	if outPath != "" {
+		if err := os.WriteFile(outPath, data, 0644); err != nil {
+			return err
+		}
+		fmt.Printf("已生成 %s\n", outPath)
+		return nil
+	}
 	fmt.Println(string(data))
 	return nil
 }
 
 func cmdMapLookup(args []string) error {
+	toGo := false
+	if len(args) > 0 && args[0] == "-to-go" {
+		toGo = true
+		args = args[1:]
+	}
 	if len(args) < 3 {
-		return fmt.Errorf("map-lookup: 需要 <map.json> <goLine> <goCol>")
+		return fmt.Errorf("map-lookup: 需要 [-to-go] <map.json> <line> <col>")
 	}
 	data, err := readFile(args[0])
 	if err != nil {
@@ -156,6 +259,14 @@ func cmdMapLookup(args []string) error {
 	if err != nil {
 		return err
 	}
+	if toGo {
+		pos, ok := sm.GxToGo(line, col)
+		if !ok {
+			return fmt.Errorf("映射为空")
+		}
+		fmt.Printf("gx %d:%d → go %d:%d\n", line, col, pos.Line, pos.Column)
+		return nil
+	}
 	pos, ok := sm.GoToGx(line, col)
 	if !ok {
 		return fmt.Errorf("映射为空")
@@ -166,24 +277,48 @@ func cmdMapLookup(args []string) error {
 
 func cmdLspMap(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("lsp-map: 需要 <file.gx>")
+		return fmt.Errorf("lsp-map: 需要 <file.gx> 或 <dir>")
 	}
-	src, err := readFile(args[0])
+	// 目录：合并目录下所有 .gx 的符号
+	info, err := os.Stat(args[0])
 	if err != nil {
 		return err
 	}
-	res, err := compiler.Compile(args[0], src)
-	if err != nil {
-		return err
+	all := map[string]any{}
+	if info.IsDir() {
+		entries, err := os.ReadDir(args[0])
+		if err != nil {
+			return err
+		}
+		files := map[string]any{}
+		for _, e := range entries {
+			if e.IsDir() || !strings.HasSuffix(e.Name(), ".gx") {
+				continue
+			}
+			p := args[0] + "/" + e.Name()
+			src, err := readFile(p)
+			if err != nil {
+				continue
+			}
+			sm := lsp.BuildSymbolMap(src)
+			files[p] = sm.Symbols
+		}
+		all["files"] = files
+	} else {
+		src, err := readFile(args[0])
+		if err != nil {
+			return err
+		}
+		res, err := compiler.Compile(args[0], src)
+		if err != nil {
+			return err
+		}
+		sm := lsp.BuildSymbolMap(src)
+		all["file"] = args[0]
+		all["symbols"] = sm.Symbols
+		all["mapCount"] = res.SourceMap.Len()
 	}
-	sm := lsp.BuildSymbolMap(src)
-	out := map[string]any{
-		"file":        args[0],
-		"symbols":     sm.Symbols,
-		"mapCount":    res.SourceMap.Len(),
-		"generatedGo": res.GoSource,
-	}
-	data, _ := json.MarshalIndent(out, "", "  ")
+	data, _ := json.MarshalIndent(all, "", "  ")
 	fmt.Println(string(data))
 	return nil
 }

@@ -26,17 +26,26 @@ func (r *Result) Validate() error {
 }
 
 // Compile 执行完整管线：
-// lex → enum → jsx → pub → collections(集合链式) → restoreRefs(自身 pub 符号)
-// → external(外部符号) → emit。
+// lex → enum → pub → jsx → collections(集合链式) → scope(作用域符号收集)
+// → restoreRefs(自身 pub 符号) → external(外部符号机械还原) → emit。
+//
+// scope 必须在 pub 之后（pub 名已大写，不会被误收为私有）、
+// jsx/collections 之后（它们注入的 import 也要被识别为包名）。
 func Compile(file, src string) (*Result, error) {
+	return CompileWithModule(file, src, defaultModule)
+}
+
+// CompileWithModule 以指定 module 转译。<module>/list 作为集合运行时 import 路径。
+func CompileWithModule(file, src, module string) (*Result, error) {
 	toks := New(src).AllTokens()
 	names := map[string]string{} // 小写原名 → 大写导出名（自身 pub 符号）
 	toks = transformEnum(toks, names)
-	toks = transformJSX(toks)
 	toks = transformPub(toks, names)
-	toks = transformCollections(toks)
+	toks = transformJSX(toks)
+	toks = transformCollections(toks, module)
+	scope := collectScope(toks)
 	toks = restoreRefs(toks, names)
-	toks = transformExternal(toks)
+	toks = transformExternal(toks, scope, names)
 	goSrc, sm := emit(toks, file)
 	return &Result{File: file, GoSource: goSrc, SourceMap: sm}, nil
 }
@@ -86,16 +95,18 @@ func CompileStage(src, stage string) (string, error) {
 	case "pub":
 		toks = transformPub(toks, names)
 	case "collections":
-		toks = transformCollections(toks)
+		toks = transformCollections(toks, defaultModule)
 	case "external":
-		toks = transformExternal(toks)
+		scope := collectScope(toks)
+		toks = transformExternal(toks, scope, names)
 	case "all":
 		toks = transformEnum(toks, names)
-		toks = transformJSX(toks)
 		toks = transformPub(toks, names)
-		toks = transformCollections(toks)
+		toks = transformJSX(toks)
+		toks = transformCollections(toks, defaultModule)
+		scope := collectScope(toks)
 		toks = restoreRefs(toks, names)
-		toks = transformExternal(toks)
+		toks = transformExternal(toks, scope, names)
 	default:
 		return "", fmt.Errorf("unknown stage %q (want lex/enum/jsx/pub/collections/external/all)", stage)
 	}

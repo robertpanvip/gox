@@ -14,7 +14,7 @@ pub type config struct {
 }
 
 pub func demo() {
-    req, _ := http.newrequest("GET", "http://example.com", nil)
+    req, _ := http.newRequest("GET", "http://example.com", nil)
     u, _ := url.parse("http://example.com/a")
 
     c := config{host: "localhost"}

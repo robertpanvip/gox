@@ -1,14 +1,16 @@
 package main
 
+import "github.com/robertpanvip/gox/list"
+
 import (
     "fmt"
     gxvdom "github.com/robertpanvip/gox/vdom"
 )
 
- func Card(title string, items []string) any {
+ func Card(title string, items list.List[string]) any {
     return gxvdom.CreateElement("div", map[string]any{"class": "card"}, gxvdom.CreateElement("h1", nil, title,), gxvdom.CreateElement("ul", nil, items,), gxvdom.CreateElement("img", map[string]any{"src": "logo.png", "alt": true}),)
 }
 
 func main() {
-    fmt.Println(gxvdom.Render(Card("GX", []string{"a", "b"})))
+    fmt.Println(gxvdom.Render(Card("GX", list.List[string]{"a", "b"})))
 }

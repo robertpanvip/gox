@@ -57,15 +57,51 @@ func TestNamesAndLookup(t *testing.T) {
 	}
 }
 
-func splitLines(s string) []string {
-	var out []string
-	start := 0
-	for i := 0; i < len(s); i++ {
-		if s[i] == '\n' {
-			out = append(out, s[start:i])
-			start = i + 1
+func TestEnumMemberThreeSpellings(t *testing.T) {
+	sm := BuildSymbolMap(sample) // pub enum color { red, green }
+	for _, spelling := range []string{"green", "ColorGreen", "colorGreen"} {
+		syms := sm.Lookup(spelling)
+		if len(syms) == 0 {
+			t.Errorf("拼写 %q 未命中任何符号", spelling)
+			continue
+		}
+		if !syms[0].IsEnumMember() || syms[0].EnumType != "Color" {
+			t.Errorf("拼写 %q 命中的不是 Color 枚举成员: %+v", spelling, syms[0])
 		}
 	}
-	out = append(out, s[start:])
-	return out
+}
+
+func TestEnumMemberPrivatePrefix(t *testing.T) {
+	src := "package main\nenum status { pending, done }\n"
+	sm := BuildSymbolMap(src)
+	for _, spelling := range []string{"pending", "StatusPending", "statusPending"} {
+		if len(sm.Lookup(spelling)) == 0 {
+			t.Errorf("私有 enum 成员拼写 %q 未命中", spelling)
+		}
+	}
+}
+
+func TestFindIdentifierEditsEnumRename(t *testing.T) {
+	// 模拟：成员 green 重命名为 yellow -> ColorGreen/ColorYellow, colorGreen/colorYellow
+	repl := map[string]string{
+		"green":      "yellow",
+		"ColorGreen": "ColorYellow",
+		"colorGreen": "colorYellow",
+	}
+	lines := []string{
+		"pub enum color { red, green, blue }",
+		"func f(c Color) bool { return c == ColorGreen }",
+		"import pkg; x := pkg.colorGreen",
+	}
+	edits := findIdentifierEdits(lines, repl)
+	if len(edits) != 3 {
+		t.Fatalf("期望 3 处编辑，实际 %d: %+v", len(edits), edits)
+	}
+	byNew := map[string]int{}
+	for _, e := range edits {
+		byNew[e.NewText]++
+	}
+	if byNew["yellow"] != 1 || byNew["ColorYellow"] != 1 || byNew["colorYellow"] != 1 {
+		t.Errorf("派生替换不正确: %+v", edits)
+	}
 }

@@ -29,6 +29,8 @@ type document struct {
 func NewServer(in io.Reader, out io.Writer, checker *buildcheck.Checker) *Server {
 	if checker == nil {
 		checker = buildcheck.New(64)
+		// 生成的 Go 代码声明 go 1.27；固定 toolchain 避免默认 go 联网下载卡住。
+		checker.SetToolchain("go", "GOTOOLCHAIN=go1.27.3")
 	}
 	return &Server{
 		in:      in,
@@ -91,6 +93,7 @@ func (s *Server) handleRequest(req *RequestMessage, body []byte) (any, *RPCError
 				HoverProvider:          true,
 				CompletionProvider:     &CompletionOptions{TriggerCharacters: []string{"."}},
 				DocumentSymbolProvider: true,
+				RenameProvider:         true,
 			},
 			ServerInfo: ServerInfo{Name: "gox-lsp", Version: "0.1.0"},
 		}, nil
@@ -104,6 +107,8 @@ func (s *Server) handleRequest(req *RequestMessage, body []byte) (any, *RPCError
 		return s.completion(body)
 	case "textDocument/documentSymbol":
 		return s.documentSymbol(body)
+	case "textDocument/rename":
+		return s.rename(body)
 	default:
 		return nil, &RPCError{Code: -32601, Message: fmt.Sprintf("method not found: %s", req.Method)}
 	}
@@ -308,7 +313,9 @@ func readMessage(r *bufio.Reader) (*RequestMessage, []byte, error) {
 	if err := json.Unmarshal(buf, &req); err != nil {
 		return nil, buf, nil
 	}
-	return &req, buf, nil
+	// 各 handler 期望拿到 params 对象本身（顶层 textDocument/position 等字段），
+	// 而不是包含 jsonrpc/method/params 的完整消息。
+	return &req, req.Params, nil
 }
 
 func writeMessage(w *bufio.Writer, v any) error {
@@ -319,6 +326,86 @@ func writeMessage(w *bufio.Writer, v any) error {
 	fmt.Fprintf(w, "Content-Length: %d\r\n\r\n", len(data))
 	_, err = w.Write(data)
 	return err
+}
+
+// rename 实现作用域感知重命名：
+// 普通符号按名字精确替换所有出现处；枚举成员按三种拼写派生替换——
+// 简名 green -> 新简名、全名 ColorGreen -> Color<新简名>、跨包 colorGreen -> color<新简名>。
+func (s *Server) rename(body []byte) (any, *RPCError) {
+	var p RenameParams
+	if err := json.Unmarshal(body, &p); err != nil {
+		return nil, &RPCError{Code: -32602, Message: err.Error()}
+	}
+	d, ok := s.docForURI(p.TextDocument.URI)
+	if !ok {
+		return nil, &RPCError{Code: -32602, Message: "document not opened"}
+	}
+	lines := splitLines(d.Text)
+	sm := s.symbolMap(d)
+	sym := sm.At(lines, p.Position.Line, p.Position.Character)
+	if sym == nil {
+		return nil, &RPCError{Code: -32602, Message: "no symbol at position"}
+	}
+	newName := strings.TrimSpace(p.NewName)
+	if newName == "" {
+		return nil, &RPCError{Code: -32602, Message: "empty newName"}
+	}
+
+	// 构造「旧拼写 -> 新拼写」映射
+	replacements := map[string]string{}
+	if sym.IsEnumMember() {
+		short := sym.Name // 声明处简名
+		newShort := newName
+		// 若用户传的是全名 ColorYellow 或跨包 colorYellow，提取成员简名 yellow
+		prefix := sym.EnumType
+		fullPrefix := prefix
+		crossPrefix := lowerFirstLocal(prefix)
+		if strings.HasPrefix(newName, fullPrefix) && len(newName) > len(fullPrefix) {
+			newShort = lowerFirstLocal(newName[len(fullPrefix):])
+		} else if strings.HasPrefix(newName, crossPrefix) && len(newName) > len(crossPrefix) {
+			rest := newName[len(crossPrefix):]
+			if rest != "" && rest[0] >= 'A' && rest[0] <= 'Z' {
+				newShort = lowerFirstLocal(rest)
+			}
+		}
+		replacements[short] = newShort
+		replacements[prefix+upperFirstLocal(short)] = prefix + upperFirstLocal(newShort)
+		replacements[lowerFirstLocal(prefix+upperFirstLocal(short))] = lowerFirstLocal(prefix + upperFirstLocal(newShort))
+	} else {
+		replacements[sym.Name] = newName
+	}
+
+	edits := findIdentifierEdits(lines, replacements)
+	return WorkspaceEdit{Changes: map[string][]TextEdit{p.TextDocument.URI: edits}}, nil
+}
+
+// findIdentifierEdits 扫描所有行的标识符，按 replacements 精确替换，编辑范围按实际拼写宽度。
+func findIdentifierEdits(lines []string, replacements map[string]string) []TextEdit {
+	var edits []TextEdit
+	for li, line := range lines {
+		i := 0
+		for i < len(line) {
+			if !isIdentByte(line[i]) {
+				i++
+				continue
+			}
+			start := i
+			for i < len(line) && isIdentByte(line[i]) {
+				i++
+			}
+			word := line[start:i]
+			if repl, ok := replacements[word]; ok && repl != word {
+				edits = append(edits, TextEdit{
+					Range: Range{
+						Start: Position{Line: li, Character: start},
+						End:   Position{Line: li, Character: i},
+					},
+					NewText: repl,
+				})
+			}
+		}
+	}
+	return edits
 }
 
 func mustJSON(v any) json.RawMessage {

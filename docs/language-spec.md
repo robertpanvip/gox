@@ -1,141 +1,105 @@
-# GX 语言规范
+# GoX 语言规范
 
-GX（后缀 `.gx`）= 标准 Go 语法 + 四项语法糖。转译器把它降级为**等价、可读、可直接 `go build` 的 Go 源码**，并产出双向 sourcemap。
+GoX（`.gx`）= Go 语法 + 五项语法糖。转译产物是标准 Go 源码，交给官方工具链编译。**需要 Go 1.27+**。
 
-> 心智负担只有一条：**一律写小写**。自己的符号用 `pub` 声明（决定导出），外部的符号（包级函数、字段、方法）由转译器自动还原真实大小写。极少数歧义情况 IDE 会提示，那时写真实大小写兜底。
+## 书写约定（最重要）
 
-## 1. 可见性 `pub`
+> **标识符一律「只首字母小写，其余驼峰照抄」。声明用 `pub` 显式导出。**
 
-Go 用首字母大小写决定导出；GX 反过来——统一小写书写，`pub` 显式标记公开。转译时 `pub` 目标的首字母大写，并在**所有引用处**同步还原。
+转译器据此做**机械的大小写还原**（`upperFirst`），不读取任何第三方包的符号表、不做类型推导。代价是书写时要按 Go 真实名字照抄驼峰形状：`NewRequest` 写 `newRequest`，`URL` 写 `uRL`，`Itoa` 写 `itoa`（不能写 `itoA`）。收益是零依赖、零歧义、行为完全可预测。
 
-```gx
-pub type point struct {
-    pub x int   // → X int（导出）
-    y int       // → y int（私有）
-}
-pub const max_size = 100          // → const Max_size = 100
-pub func greet() {}               // → func Greet() {}
-func main() { greet() }           // → Greet()（引用还原）
-```
+## 1. pub 可见性
 
-`pub` 可作用于：`func`（含方法，会跳过接收者找方法名）、`type`、`var`、`const`（含分组）、`enum`、struct 字段、interface 方法。
-
-## 2. 枚举 `enum`
+- `pub` 作用于紧随的声明：`func` / `type` / `var` / `const` / `enum` / struct 字段 / interface 方法。
+- 声明处首字母大写；**引用处作用域感知还原**：自己的 pub 符号引用同步大写，局部变量与私有符号保持小写。
+- 已写大写的标识符不动（支持渐进迁移）。
 
 ```gx
-pub enum color { red, green, blue }
-enum status { pending = 1, active = 2 }
+pub func greet() {}   // func Greet() {}
+func helper() {}      // func helper() {}
+func main() { greet() } // func main() { Greet() }
 ```
 
-```go
-type Color int
-const (
-    Red   Color = iota
-    Green Color = iota
-    Blue  Color = iota
-)
-type status int
-const (
-    pending status = 1
-    active  status = 2
-)
+## 2. enum 枚举
+
+展开为具名类型 + const 组 + `String()` + `Parse<T>()`。
+
+### 前缀式命名
+
+常量 = `upperFirst(类型名)` + `upperFirst(成员名)`：
+
+| enum 声明 | 类型名（Go） | 常量 | Parse |
+|---|---|---|---|
+| `pub enum color { red }` | `Color` | `ColorRed` | `ParseColor` |
+| `enum status { pending }` | `status`（私有） | `StatusPending` | `ParseStatus` |
+
+即使 enum 私有，常量与 Parse 名仍以大写前缀开头（遵循 Go 导出惯例）。
+
+### 三种底层类型
+
+```gx
+pub enum color { red, green, blue }              // int，iota 0,1,2
+enum code { ok = 200, fail = 500 }               // 显式值
+pub enum method string { get = "GET", post = "POST" }  // 字符串枚举
+pub enum perm { read = 1 << iota, write, exec }  // 位标志 1,2,4
 ```
 
-- `pub enum` → 类型名与成员均导出；无 `pub` → 全部私有。
-- 成员用 `=` 显式赋值；成员间以逗号或换行分隔。
-- 无显式值的成员用 `iota`（按成员序号）。
+- 整数枚举无值成员重复上一表达式并递增 `iota`；`String()` 返回成员简名，未知值返回数字字符串。
+- 字符串枚举 `String()` 返回底层字符串；`Parse` 用显式值匹配。
+- `Parse<T>()` 返回 `(T, bool)`。
+
+### 三种拼写与使用
+
+成员声明处写简名 `green`；使用处写完整名 `ColorGreen`、首字母小写 `colorGreen`（跨包），LSP 三种拼写命中同一符号。重命名时声明处写新简名，使用处自动派生新全名（`yellow` → `ColorYellow` / `colorYellow`），编辑范围按各自拼写宽度精确计算。
 
 ## 3. JSX
 
-任何 `<tag>...</tag>` 片段被转成 `gxvdom.createElement` 的**嵌套调用**（不实现 diff）。
-
-```gx
-return <div class="card" id={name}>
-    hello {name}
-    <span>world</span>
-    <br/>
-</div>
-```
-
-```go
-return gxvdom.CreateElement("div", map[string]any{"class": "card", "id": name},
-    "hello", name,
-    gxvdom.CreateElement("span", nil, "world"),
-    gxvdom.CreateElement("br", nil))
-```
+`<tag>` → `gxvdom.CreateElement(tag, props, children...)` 嵌套调用，是普通 Go 表达式，不含 diff 调度。
 
 | JSX 形态 | 生成 |
 |---|---|
-| 字符串属性 `class="x"` | `map[string]any{"class": "x"}` |
-| 表达式属性 `id={name}` | `map[string]any{"id": name}` |
-| 无值属性 `disabled` | `map[string]any{"disabled": true}` |
-| 文本子节点 | 字符串字面量（纯缩进空白被丢弃） |
-| 表达式子节点 `{expr}` | 直接作为 child 参数 |
-| 嵌套元素 | 递归 `CreateElement` |
-| 自闭合 `<br/>` | `CreateElement("br", props)` |
-| 大写/含点标签 `<Foo/>` | 组件引用（不加引号） |
+| 属性 `class="x"` / `id={name}` | `map[string]any{"class":"x", "id":name}` |
+| 无值属性 `<input disabled/>` | `map[string]any{"disabled": true}` |
+| 文本 / 表达式子节点 | 字符串字面量 / 表达式参数 |
+| `<br/>` 空元素 | `CreateElement("br", map[string]any{})` |
+| `<Foo/>` 组件 | `CreateElement(Foo, …)` |
 
-遇到 JSX 时转译器自动注入 `import gxvdom "github.com/robertpanvip/gox/vdom"`。运行时 `Render` 把 Element 树渲染为 HTML。
+运行时 `vdom/`：`VNode`（`Element` 为其别名）、`CreateElement`、`Render`、`Diff`。`Diff(old,new)` 产出 `[]Patch`（set-text / set-prop / remove-prop / replace / append / remove），只描述"做什么"，不含调度。
 
-## 4. 导入 Go 与小写调用
+## 4. 外部 Go 符号
 
-GX 认为调用方一律小写更自然。转译器从 `import` 收集包名，用 `go/importer` 读取每个包的**导出符号表**（包级符号 + 结构体字段 + 接口/类型方法），把 selector 右侧的小写名还原为真实大小写。
+按"首字母小写、其余照抄"书写，selector 右侧机械 `upperFirst` 还原：
 
-```gx
-import (
-    "fmt"
-    "net/http"
-    "net/url"
-)
+| GX | Go |
+|---|---|
+| `http.newRequest(...)` | `http.NewRequest(...)` |
+| `uRL` | `URL` |
+| `fmt.sprintf(...)` | `fmt.Sprintf(...)` |
+| `req.statusCode` | `req.StatusCode` |
 
-req, _ := http.newrequest("GET", "http://x", nil)
-u, _ := url.parse("http://x")
-fmt.println(req.method, u.host, u.path)
-```
+作用域防误伤：转译器在 pub 转换后收集本文件所有小写声明符号（参数、局部变量、私有字段/方法）。selector 右侧若命中自己的 pub 符号用其导出名；命中私有符号保持小写；否则（外部字段/方法）`upperFirst`。裸标识符（内置函数等）一律不碰。
 
-```go
-req, _ := http.NewRequest("GET", "http://x", nil)
-u, _ := url.Parse("http://x")
-fmt.Println(req.Method, u.Host, u.Path)
-```
+## 5. 集合链式调用
 
-### 还原规则
-
-| 场景 | 查表方式 | 歧义 |
-|---|---|---|
-| `http.newrequest`（左侧是包名） | 精确查 `net/http` 符号表 | 零歧义 |
-| `req.method`（左侧是变量） | 查全局唯一表 | 极小：只有同一小写名对应多个真实名才回退 |
-
-- **只作用于 selector 右侧**：裸标识符 `println("x")` 不会被误改。
-- **已大写不动**：`fmt.Println` 原样保留，可渐进迁移。
-- **别名导入**：`import h "net/http"` → `h.newrequest` 正常还原。
-- **歧义回退**：同一小写名映射到多个真实名（如 `Foo`/`FOO`）时丢弃该映射，需写真实大小写。
-- **失败降级**：第三方包没 `go build` 过（无 export data）时跳过该包，不影响其它包。
-
-## 5. 集合链式调用 `map`/`filter`/`reduce`
-
-依赖 **Go 1.27 泛型方法**（方法可声明自己的类型参数），`Map`/`Reduce` 可换型并保持链式。回调是 Go 原生闭包，原样透传。
+所有切片类型 `[]T` **全局提升**为 `list.List[T]`，获得链式方法（Go 1.27 泛型方法，Map/Reduce 可换型）：
 
 ```gx
-nums := []int{1, 2, 3, 4, 5, 6}
-
-// 换型：int → string，再过滤
-labels := nums.map(strconv.itoa).filter(func(s string) bool { return len(s) == 1 })
-
-// 换累加器类型 + 链式
-total := nums.filter(even).reduce(0, func(acc int, x int) int { return acc + x })
+nums := []int{1, 2, 3}
+labels := nums.map(fn).filter(keep).reduce(0, add)
 ```
 
-```go
-nums := gxcollections.List[int]{1, 2, 3, 4, 5, 6}
-labels := nums.Map(strconv.Itoa).Filter(func(s string) bool { return len(s) == 1 })
-total := nums.Filter(even).Reduce(0, func(acc int, x int) int { return acc + x })
-```
+- `List[T]` 与 `[]T` 底层相同，双向可直接赋值/传参。
+- **仅匹配空方括号 `[]` 紧跟类型**（切片类型独有形态），故不误伤：数组 `[3]T`、索引 `a[i]`、切片表达式 `a[1:2]`、`map[K]V`、`Foo[T]`。
+- 只有实际发生提升时才注入 `<module>/list` import；`-module` 指定 module 路径。
 
-- **按需提升**：只有被 `map`/`filter`/`reduce` 调用的接收者变量，其声明处的 `[]T` 才提升为 `gxcollections.List[T]`；其它切片保持原生 `[]T`。`List[E]` 与 `[]E` 双向可直接赋值/传参。
-- 自动注入 `import "github.com/robertpanvip/gox/gxcollections"`。
-- `Map[R any]`、`Reduce[R any]` 换型；`Filter` 同型。
+## 6. sourcemap / LSP / 编译检查
 
-## 6. go.mod
+- `.gx ↔ .go` 双向位置映射（最近邻），可 JSON 序列化。
+- LSP：initialize / didOpen / didChange / definition / hover / completion / documentSymbol / rename，诊断经 sourcemap 回投到 `.gx`。
+- 编译检查：真实 `go build`（可取消 context + LRU 缓存），诊断回投到 `.gx` 行号。支持注入 go.mod `replace` 以解析本地运行时。
 
-必须 `go 1.27`（泛型方法所需）。
+## 与 Go 的关系
+
+- gx 标识符书写规则≠Go（大小写语义由 `pub` 与约定承担），但语法、类型系统、标准库、工具链完全复用。
+- 生成代码是标准 `.go`，可与其他 Go 代码混编、提交、调试。
+- 渐进迁移：已大写的 Go 标识符在 gx 中原样保留。

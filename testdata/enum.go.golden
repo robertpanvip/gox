@@ -1,31 +1,125 @@
 package main
 
+import "strconv"
+
 import "fmt"
 
 type Color int
 const (
-	Red Color = iota
-	Green Color = iota
-	Blue Color = iota
+	ColorRed Color = iota
+	ColorGreen Color = iota
+	ColorBlue Color = iota
 )
+func (x Color) String() string {
+	switch x {
+	case ColorRed:
+		return "red"
+	case ColorGreen:
+		return "green"
+	case ColorBlue:
+		return "blue"
+	}
+	return strconv.Itoa(int(x))
+}
+func ParseColor(s string) (Color, bool) {
+	switch s {
+	case "red":
+		return ColorRed, true
+	case "green":
+		return ColorGreen, true
+	case "blue":
+		return ColorBlue, true
+	}
+	return 0, false
+}
 
 
-// 显式赋值的枚举
+// 显式赋值的枚举（私有 enum：类型名保持小写，常量前缀仍大写）
 type status int
 const (
-	pending status = 1
-	active status = 2
-	done status = 3 
+	StatusPending status = 1
+	StatusActive status = 2
+	StatusDone status = 3
 )
+func (x status) String() string {
+	switch x {
+	case StatusPending:
+		return "pending"
+	case StatusActive:
+		return "active"
+	case StatusDone:
+		return "done"
+	}
+	return strconv.Itoa(int(x))
+}
+func ParseStatus(s string) (status, bool) {
+	switch s {
+	case "pending":
+		return StatusPending, true
+	case "active":
+		return StatusActive, true
+	case "done":
+		return StatusDone, true
+	}
+	return 0, false
+}
+
+
+// 字符串枚举
+type Method string
+const (
+	MethodGet Method = "GET"
+	MethodPost Method = "POST"
+)
+func (x Method) String() string { return string(x) }
+func ParseMethod(s string) (Method, bool) {
+	switch s {
+	case "GET":
+		return MethodGet, true
+	case "POST":
+		return MethodPost, true
+	}
+	return "", false
+}
+
+
+// 位标志
+type Perm int
+const (
+	PermRead Perm = 1 << iota
+	PermWrite Perm = 1 << iota
+	PermExec Perm = 1 << iota
+)
+func (x Perm) String() string {
+	switch x {
+	case PermWrite:
+		return "write"
+	case PermExec:
+		return "exec"
+	}
+	return strconv.Itoa(int(x))
+}
+func ParsePerm(s string) (Perm, bool) {
+	switch s {
+	case "read":
+		return PermRead, true
+	case "write":
+		return PermWrite, true
+	case "exec":
+		return PermExec, true
+	}
+	return 0, false
+}
 
 
  func Name(c Color) string {
-    if c == Red { return "red" }
-    if c == Green { return "green" }
+    if c == ColorRed { return "red" }
+    if c == ColorGreen { return "green" }
     return "blue"
 }
 
 func main() {
-    c := Red
-    fmt.Println(Name(c), pending, done)
+    c := ColorRed
+    m, _ := ParseMethod("GET")
+    fmt.Println(Name(c), StatusPending, m, PermRead|PermWrite)
 }

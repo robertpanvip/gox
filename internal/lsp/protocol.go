@@ -68,6 +68,7 @@ type ServerCapabilities struct {
 	HoverProvider            bool                    `json:"hoverProvider"`
 	CompletionProvider       *CompletionOptions      `json:"completionProvider,omitempty"`
 	DocumentSymbolProvider   bool                    `json:"documentSymbolProvider"`
+	RenameProvider           bool                    `json:"renameProvider"`
 	SemanticTokensProvider   *SemanticTokensOptions  `json:"semanticTokensProvider,omitempty"`
 }
 
@@ -157,6 +158,23 @@ type DocumentSymbol struct {
 	Range          Range            `json:"range"`
 	SelectionRange Range            `json:"selectionRange"`
 	Children       []DocumentSymbol `json:"children,omitempty"`
+}
+
+// ---- rename ----
+
+type RenameParams struct {
+	TextDocument TextDocumentIdentifier `json:"textDocument"`
+	Position     Position               `json:"position"`
+	NewName      string                 `json:"newName"`
+}
+
+type TextEdit struct {
+	Range   Range  `json:"range"`
+	NewText string `json:"newText"`
+}
+
+type WorkspaceEdit struct {
+	Changes map[string][]TextEdit `json:"changes"`
 }
 
 // ---- 诊断通知 ----

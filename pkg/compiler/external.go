@@ -6,11 +6,19 @@ import (
 	"strings"
 )
 
-// external 转换：把 selector 右侧的小写符号还原为 Go 侧真实大小写。
-// 精确还原依赖 extsym（go/importer 读导出符号表），不靠首字母猜测：
-//   - pkg.println → pkg.Println（包级，查该包符号表）
-//   - req.method  → req.Method（字段/方法，查全局唯一表）
-// 只作用于 X.sel 右侧；裸标识符不碰；已大写不动；歧义回退。
+// external 转换：按「只首字母小写、其余驼峰照抄」的书写约定还原外部符号。
+//
+// 约定：Go 侧 NewRequest 在 gx 里写 newRequest；URL 写 uRL；Method 写 method。
+// 还原因此退化为机械的 upperFirst——不读 export data、不查类型、无歧义。
+//
+// 作用域防误伤（Scope，在 pub 转换后收集）：
+//   - selector 左侧是 import 包名 → 右侧是外部包符号 → upperFirst
+//   - 右侧名字在自己 pubNames 表 → 用记录的导出名（自己的 pub 字段/方法）
+//   - 右侧名字在自己 private 表 → 保持（自己的私有字段/变量/方法）
+//   - 其余（左侧是变量 → 外部结构体字段/方法）→ upperFirst
+//
+// 裸标识符一律不碰（println/len/make 等内置与局部变量保持原样）；
+// 自身 pub 符号的裸引用由 restoreRefs 负责。
 
 var versionSuffix = regexp.MustCompile(`^(.+)\.v[0-9]+$`)
 
@@ -37,19 +45,10 @@ func isLowerStart(s string) bool {
 	return lowerFirst(s) == s && upperFirst(s) != s
 }
 
-func transformExternal(in []Token) []Token {
-	specs := collectImportSpecs(in)
-	if len(specs) == 0 {
-		return in
-	}
-	ext := loadExtSymbols(specs)
+// transformExternal 还原 selector 右侧的外部符号。
+// scope 提供私有符号保护；pubNames 提供自身导出符号映射（可能与外部同名，自身优先）。
+func transformExternal(in []Token, scope *Scope, pubNames map[string]string) []Token {
 	out := append([]Token{}, in...)
-
-	importNames := map[string]bool{}
-	for _, sp := range specs {
-		importNames[sp.pkg] = true
-	}
-
 	for i := 0; i < len(out); i++ {
 		if out[i].Kind != Ident {
 			continue
@@ -70,18 +69,24 @@ func transformExternal(in []Token) []Token {
 			continue
 		}
 
-		left := out[i].Text
-		if importNames[left] {
-			// 左侧是 import 包名：精确查该包符号表
-			if real, ok := ext.restore(left, out[k].Text); ok {
-				out[k].Text = real
-			}
+		left, sel := out[i].Text, out[k].Text
+
+		// 左侧是 import 包名：右侧是外部包符号，机械 upperFirst
+		if scope.HasImport(left) {
+			out[k].Text = upperFirst(sel)
 			continue
 		}
-		// 左侧是变量：查全局唯一表（字段/方法）
-		if real, ok := ext.restore("", out[k].Text); ok {
+		// 自己的 pub 字段/方法：用记录的导出名（自身优先）
+		if real, ok := pubNames[sel]; ok {
 			out[k].Text = real
+			continue
 		}
+		// 自己的私有字段/变量/方法：保持小写
+		if scope.IsPrivate(sel) {
+			continue
+		}
+		// 左侧是变量：外部结构体字段/方法，机械 upperFirst
+		out[k].Text = upperFirst(sel)
 	}
 	return out
 }

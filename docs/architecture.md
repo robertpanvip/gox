@@ -1,103 +1,84 @@
-# gox 架构
+# GoX 架构
 
-## 目录结构
+## 分层
 
 ```
-gox/
-├── cmd/
-│   ├── gox/           CLI：build / jsx / pub / enum / collections / external / all
-│   │                      sourcemap / map-lookup / lsp-map / lsp / test
-│   └── gox-lsp/       独立 LSP server 入口（stdio）
-├── pkg/               ← 对外稳定 API
-│   ├── compiler/      转译引擎（token / lexer / enum / pub / extsym / external /
-│   │                      collections / jsx / pipeline）
-│   └── sourcemap/     双向位置映射（无业务依赖）
-├── internal/          ← 工具内部实现
-│   ├── lsp/           LSP 协议 / server / 诊断 / 符号映射
-│   └── buildcheck/    真实 go build 检查（可取消 + LRU）
-├── bindings/cabi/     C-ABI 共享库（go build -buildmode=c-shared，供 IDEA JNA）
-├── vdom/              createElement 运行时
-├── gxcollections/     List[T] + Map/Filter/Reduce 运行时
-├── examples/ testdata/ docs/
+cmd/                 入口与参数解析（不写业务逻辑）
+  gox/               build / jsx / pub / enum / collections / sourcemap /
+                     map-lookup / lsp-map / lsp / test
+  gox-lsp/           独立 LSP server（stdio JSON-RPC）
+pkg/                 对外稳定 API（可被 CLI / 插件 / 其它工具 import）
+  compiler/          转译引擎
+  sourcemap/         位置映射基础库（无业务依赖）
+internal/            仅本仓库 cmd 使用
+  lsp/               协议 / server / 诊断 / 符号映射 / 重命名
+  buildcheck/        真实 go build 检查（可取消 + LRU）
+bindings/cabi/       C-ABI 共享库（JNA）
+vdom/ list/          运行时
 ```
+
+外部前端（IDEA 插件）通过 `bindings/cabi` 或直接 import `pkg` 接入，不碰 `internal`。
 
 ## 转译管线
 
 ```
 .gx 源码
-  │
-  ├─ lex         词法分析：token 流（空白/换行/注释保留，JSX 作为整体 token）
-  │
-  ├─ enum        pub enum / enum → type + const 块；收集 pub 名字到 names
-  │
-  ├─ jsx         <tag> → gxvdom.CreateElement 嵌套；注入 vdom import
-  │
-  ├─ pub         删除 pub、大写声明名；收集「小写→大写」到 names
-  │
-  ├─ collections 检测 X.map/filter/reduce → 方法名大写；按需提升接收者 []T→List[T]；
-  │              注入 gxcollections import
-  │
-  ├─ restoreRefs 用 names 把引用处的自身 pub 符号还原为大写
-  │
-  ├─ external    go/importer 读导出符号表，还原外部符号（包级精确 + 全局唯一）
-  │
-  └─ emit        拼装 token 流 → Go 源码 + sourcemap 原始数据
+  │ lex（token 流，保留原始位置与空白）
+  ▼
+transformEnum      enum → 具名类型 + const + String/Parse（注入 strconv import）
+  ▼
+transformPub       pub 声明处大写，收集「小写原名 → 导出名」到 names
+  ▼
+transformJSX       JSX → gxvdom.CreateElement 嵌套（注入 vdom import）
+  ▼
+transformCollections  []T → list.List[T]（全局提升）+ 方法名大写 + 注入 list import
+  ▼
+collectScope       收集本文件小写声明符号（私有字段/变量/方法/参数）与 import 包名
+  ▼
+restoreRefs        自身 pub 符号的引用还原为导出名（作用域感知）
+  ▼
+transformExternal  selector 右侧外部符号机械 upperFirst（私有符号用 scope 排除）
+  ▼
+emit               拼装 Go 源码，同时记录输出 token → 输入位置的 sourcemap 原始映射
+  ▼
+.go 源码 + sourcemap
 ```
 
-### 设计要点
+**顺序约束**：
+- `collectScope` 必须在 `transformPub` 之后（pub 名已大写，不会被误收为私有）；
+- 必须在 JSX / collections 之后（它们注入的 import 也要被识别为包名）；
+- `restoreRefs` 与 `transformExternal` 都在 scope 之后，共享同一份符号信息。
 
-- **token 流上分层**：每层输出仍是 token 流（空白 token 保留），未改写部分原样输出，可读性好、sourcemap 精确。
-- **两步还原**：自身 pub 符号（restoreRefs）与外部符号（external）分开。前者靠 pub/enum 层收集的 `names`，后者靠 importer 符号表；两者不冲突（已大写的不会被再改）。
-- **sourcemap**：emit 时每个输出 token 起点记录「Go 行:列 → GX 行:列」；Generator 位置排序后支持双向最近邻查询。生成代码被改写处映射到原构造起点。
+## 外部符号还原：为何不需要 importer
+
+旧方案"一律写小写"把 `NewRequest` 压成 `newrequest`，丢失了驼峰信息，只能靠 `go/importer` 读导出符号表反查——依赖 export data、要处理歧义与本地 module 兜底。
+
+新约定"只首字母小写、其余驼峰照抄"`newRequest` **保留了完整驼峰**，还原退化为 `upperFirst` 纯字符串操作：零依赖、零歧义、O(1)。唯一要排除的是"自己声明的私有符号"——由 `scope` 在 pub 阶段后收集解决。`Scope.private` 只收录会出现在 selector 右侧的声明（struct 字段、方法名、参数、局部变量），不收类型名/包名，避免误保护同名的外部字段。
 
 ## sourcemap
 
-`pkg/sourcemap` 无业务依赖，只处理行列对：
+- `emit` 为每个非空白输出 token 记录 `OutLine/OutCol → InLine/InCol` 原始映射。
+- `sourcemap.Build` 归并为可查询结构，提供 `GoToGx` / `GxToGo`（最近邻）与 JSON 序列化。
+- 生成代码（枚举的 String/Parse、JSX 的 CreateElement、注入的 import）的位置重定位到触发生成的源 token，故编译错误能准确回投到 `.gx` 对应行。
 
-- `Build(file, raw)` 构造，内部按 Generated / Original 各排一份。
-- `GoToGx(line, col)` / `GxToGo(line, col)`：最近的前一个映射，同行时按列偏移线性修正。
-- `MarshalJSON` / `UnmarshalJSON`：可读 JSON（`{version, file, sources, mappings:[{go,gx}]}`）。
+## 编译检查与诊断回投
 
-CLI：`gox sourcemap <file>` 导出，`gox map-lookup <map.json> <line> <col>` 反查。
+`buildcheck.Checker`：
+- 把 Go 源码写入临时 module（`go.mod` 声明 `go 1.27`），执行 `go build`；
+- 解析 `file:line:col: msg` 为结构化诊断；
+- `context` 可取消；结果按源码 hash 做 LRU 缓存；
+- `AddReplace` 注入 `go.mod replace`，使生成代码能解析到本地运行时（vdom/list）。
+
+诊断的 Go 坐标经 `sourcemap.GoToGx` 转成 `.gx` 坐标后输出（CLI `-check` 与 LSP 诊断共用此路径）。
 
 ## LSP
 
-`internal/lsp` 实现最小 JSON-RPC over stdio：
+- JSON-RPC over stdio，按 `Content-Length` 帧读写。
+- `readMessage` 返回 `RequestMessage.Params`（params 对象本身），各 handler 直接反序列化到具体参数类型。
+- 文档状态保存在 `Server.docs[uri]`，符号表懒构建并可标脏重建。
+- 符号表收录 enum 成员的三种拼写别名（简名 / 全名 / 跨包小写名）指向同一 `Symbol`；`Symbol.EnumType` 记录常量前缀供重命名派生。
+- 诊断在 didOpen/didChange 时触发，经 sourcemap 回投。
 
-| 能力 | 实现 |
-|---|---|
-| 实时诊断 | didOpen/didChange → compile + buildcheck → 经 sourcemap 把 Go 诊断映射回 GX 位置 → publishDiagnostics |
-| 定义跳转 / hover | `BuildSymbolMap` 从 GX 源码轻量抽取 func/type/enum/var 符号 |
-| 补全 | 符号表 + 关键字 + map/filter/reduce |
-| documentSymbol | 符号表 |
+## C-ABI
 
-诊断落点用 sourcemap 的 `GoToGx`，因此错误位置指回 GX 源码而非生成代码。
-
-## buildcheck
-
-`internal/buildcheck.Checker`：
-
-- 把 Go 源码写入临时 module，`exec.CommandContext` 跑 `go build ./...`。
-- 解析 `file:line:col: msg` → `Diagnostic`。
-- context 取消立即返回 `context.Canceled`。
-- LRU 缓存（key = 源码 SHA-256），默认容量 64/128，避免 LSP 反复构建。
-
-> 注：注入了本地 module 依赖（如 gxcollections）的生成代码，LSP 场景需在临时 module 里加 `replace` 指向工程目录；CLI 的 `gox build` 只做语法校验（`go/parser`），不解析依赖，因此不受影响。
-
-## C-ABI（JNA）
-
-`bindings/cabi` 用 cgo `//export` + `-buildmode=c-shared` 生成 `libgox.so` + `libgox.h`：
-
-| 函数 | 作用 |
-|---|---|
-| `gx_translate(const char* source) -> char*` | 转译，返回 `{goSource, sourceMap, error}` JSON |
-| `gx_validate(const char* goSource) -> char*` | Go 语法校验，返回 `{valid, error}` |
-| `gx_map_lookup(const char* mapJson, int line, int col) -> char*` | 位置反查，返回 `{line, col, ok}` |
-| `gx_version() -> char*` | 版本字符串 |
-| `gx_free(void*)` | 释放上述返回的字符串 |
-
-约定：返回字符串由 Go `C.CString` 分配，调用方必须用 `gx_free` 释放。
-
-```bash
-go build -buildmode=c-shared -o libgox.so ./bindings/cabi
-```
+`bindings/cabi` 以 `go build -buildmode=c-shared` 产出共享库，导出 `gx_translate` / `gx_build` / `gx_map_lookup` / `gx_version` / `gx_free`。返回 JSON 字符串，由调用方 `gx_free` 释放。供 IDEA 插件经 JNA 调用，详见 [CABI.md](CABI.md)。

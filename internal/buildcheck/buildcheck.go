@@ -39,6 +39,9 @@ type Checker struct {
 	// toolchain 用于 go 命令（默认 "go"；测试可注入）。
 	toolchain string
 	extraEnv  []string
+	// replaces 是 go.mod 的 replace 指令（module 路径 -> 本地目录），
+	// 用于让生成的 Go 代码能解析到本地运行时（vdom/list）。
+	replaces map[string]string
 }
 
 type cacheEntry struct {
@@ -52,10 +55,11 @@ func New(capacity int) *Checker {
 		capacity = 64
 	}
 	return &Checker{
-		cache:    map[string]*list.Element{},
-		order:    list.New(),
-		capacity: capacity,
+		cache:     map[string]*list.Element{},
+		order:     list.New(),
+		capacity:  capacity,
 		toolchain: "go",
+		replaces:  map[string]string{},
 	}
 }
 
@@ -63,6 +67,16 @@ func New(capacity int) *Checker {
 func (c *Checker) SetToolchain(bin string, env ...string) {
 	c.toolchain = bin
 	c.extraEnv = env
+}
+
+// AddReplace 添加一条 go.mod replace 指令（module 路径 -> 本地目录），
+// 并在替换变更时清空缓存（缓存键未包含 replace 内容）。
+func (c *Checker) AddReplace(modulePath, localDir string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.replaces[modulePath] = localDir
+	c.cache = map[string]*list.Element{}
+	c.order.Init()
 }
 
 // Check 对 goSrc 执行构建检查。结果被缓存；ctx 取消时返回 ctx.Err()。
@@ -109,8 +123,19 @@ func (c *Checker) build(ctx context.Context, goSrc string) ([]Diagnostic, error)
 	}
 	defer os.RemoveAll(dir)
 
-	gomod := "module buildcheck\n\ngo 1.27\n"
-	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte(gomod), 0644); err != nil {
+	var gomod strings.Builder
+	gomod.WriteString("module buildcheck\n\ngo 1.27\n")
+	if len(c.replaces) > 0 {
+		gomod.WriteString("\n")
+		for mod := range c.replaces {
+			fmt.Fprintf(&gomod, "require %s v0.0.0\n", mod)
+		}
+		gomod.WriteString("\n")
+		for mod, local := range c.replaces {
+			fmt.Fprintf(&gomod, "replace %s => %s\n", mod, local)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte(gomod.String()), 0644); err != nil {
 		return nil, err
 	}
 	srcPath := filepath.Join(dir, "main.go")

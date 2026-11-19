@@ -13,7 +13,11 @@ type Symbol struct {
 	Col      int
 	Detail   string
 	Doc      string
+	EnumType string // 成员所属枚举的常量前缀（如 "Color"）；空表示非枚举成员
 }
+
+// IsEnumMember 报告该符号是否为枚举成员。
+func (s Symbol) IsEnumMember() bool { return s.EnumType != "" }
 
 // SymbolMap 保存一份 gx 源码的符号表。
 type SymbolMap struct {
@@ -24,26 +28,105 @@ type SymbolMap struct {
 var (
 	reFunc   = regexp.MustCompile(`\bpub\s+func\s+([a-zA-Z_][\w]*)|^func\s+([a-zA-Z_][\w]*)`)
 	reType   = regexp.MustCompile(`\bpub\s+type\s+([a-zA-Z_][\w]*)|^type\s+([a-zA-Z_][\w]*)`)
-	reEnum   = regexp.MustCompile(`\b(?:pub\s+)?enum\s+([a-zA-Z_][\w]*)`)
+	reEnum   = regexp.MustCompile(`^\s*(?:pub\s+)?enum\s+([a-zA-Z_][\w]*)(?:\s+(int|string))?`)
 	reVar    = regexp.MustCompile(`^\s*(?:pub\s+)?(?:var|const)\s+([a-zA-Z_][\w]*)`)
 	reAssign = regexp.MustCompile(`^\s*([a-zA-Z_][\w]*)\s*:=`)
+	reMember = regexp.MustCompile(`^\s*([a-zA-Z_][\w]*)`)
 )
 
-// BuildSymbolMap 从 gx 源码抽取符号定义。轻量扫描，不求语法精确。
+// BuildSymbolMap 从 gx 源码抽取符号定义（含枚举成员的三拼写索引）。轻量扫描，不求语法精确。
 func BuildSymbolMap(src string) *SymbolMap {
 	m := &SymbolMap{byName: map[string][]Symbol{}}
-	add := func(name string, kind int, line, col int, detail, doc string) {
-		if name == "" || name == "pub" || name == "func" || name == "type" {
-			return
-		}
+	add := func(name string, kind int, line, col int, detail, doc string) Symbol {
 		s := Symbol{Name: name, Kind: kind, Line: line, Col: col, Detail: detail, Doc: doc}
 		m.Symbols = append(m.Symbols, s)
 		m.byName[name] = append(m.byName[name], s)
+		return s
 	}
-	for i, rawLine := range strings.Split(src, "\n") {
+	indexAlias := func(alias string, s Symbol) {
+		if alias != "" && alias != s.Name {
+			m.byName[alias] = append(m.byName[alias], s)
+		}
+	}
+
+	lines := strings.Split(src, "\n")
+	enumPrefix := ""      // 非空表示正处于 enum 块中，值为常量前缀
+	enumMemberBase := 0   // enum 声明所在行
+	var enumSeg strings.Builder
+	addMember := func(seg string, line int) {
+		for _, part := range strings.Split(seg, ",") {
+			part = strings.TrimSpace(part)
+			if part == "" || strings.HasPrefix(part, "//") {
+				continue
+			}
+			if r := reMember.FindStringSubmatch(part); r != nil {
+				short := r[1]
+				if isGoKeywordLocal(short) {
+					continue
+				}
+				sym := add(short, 20, line, strings.Index(lines[line], short),
+					"enum member", "枚举成员 "+short)
+				sym.EnumType = enumPrefix
+				m.Symbols[len(m.Symbols)-1] = sym
+				m.byName[short][len(m.byName[short])-1] = sym
+				full := enumPrefix + upperFirstLocal(short)
+				indexAlias(full, sym)                  // ColorGreen
+				indexAlias(lowerFirstLocal(full), sym) // colorGreen（跨包）
+			}
+		}
+	}
+	for i, rawLine := range lines {
 		line := strings.TrimRight(rawLine, "\r")
 		trimmed := strings.TrimLeft(line, " \t")
 		col := len(line) - len(trimmed)
+
+		if enumPrefix != "" {
+			enumSeg.WriteString(" ")
+			enumSeg.WriteString(trimmed)
+			if strings.Contains(trimmed, "}") {
+				// 去掉 '{' ... '}' 之间的内容交给成员解析：取 '{' 之后、'}' 之前
+				seg := enumSeg.String()
+				if oi := strings.Index(seg, "{"); oi >= 0 {
+					if ci := strings.Index(seg, "}"); ci > oi {
+						addMember(seg[oi+1:ci], enumMemberBase)
+					}
+				}
+				enumSeg.Reset()
+				enumPrefix = ""
+			}
+			continue
+		}
+
+		if r := reEnum.FindStringSubmatch(line); r != nil {
+			name := r[1]
+			pub := strings.Contains(line[:strings.Index(line, "enum")], "pub")
+			typeName := name
+			if pub {
+				typeName = upperFirstLocal(name)
+			}
+			prefix := upperFirstLocal(typeName)
+			add(name, 10, i, col+strings.Index(line, name), "enum", "枚举 "+name)
+			// 单行 enum { ... }：当场解析成员
+			if oi := strings.Index(line, "{"); oi >= 0 {
+				if ci := strings.Index(line, "}"); ci > oi {
+					memberLine := i
+					seg := line[oi+1 : ci]
+					enumPrefix = prefix
+					enumMemberBase = memberLine
+					addMember(seg, memberLine)
+					enumPrefix = ""
+				}
+			} else {
+				enumPrefix = prefix
+				enumMemberBase = i
+				enumSeg.Reset()
+				open := strings.Index(line, "{")
+				if open >= 0 {
+					enumSeg.WriteString(line[open+1:])
+				}
+			}
+			continue
+		}
 		if r := reFunc.FindStringSubmatch(trimmed); r != nil {
 			name := r[1]
 			if name == "" {
@@ -60,10 +143,6 @@ func BuildSymbolMap(src string) *SymbolMap {
 			add(name, 5, i, col+strings.Index(trimmed, name), "type", "类型 "+name)
 			continue
 		}
-		if r := reEnum.FindStringSubmatch(trimmed); r != nil {
-			add(r[1], 10, i, col+strings.Index(trimmed, r[1]), "enum", "枚举 "+r[1])
-			continue
-		}
 		if r := reVar.FindStringSubmatch(trimmed); r != nil {
 			add(r[1], 13, i, col+strings.Index(trimmed, r[1]), "var", "变量 "+r[1])
 		}
@@ -74,7 +153,7 @@ func BuildSymbolMap(src string) *SymbolMap {
 	return m
 }
 
-// Lookup 返回名为 name 的所有定义。
+// Lookup 返回名为 name 的所有定义（含枚举成员的三种拼写）。
 func (m *SymbolMap) Lookup(name string) []Symbol {
 	return m.byName[name]
 }
@@ -88,7 +167,6 @@ func (m *SymbolMap) At(lines []string, line, col int) *Symbol {
 	if col > len(s) {
 		return nil
 	}
-	// 取 col 所在位置的连续标识符
 	start := col
 	for start > 0 && isIdentByte(s[start-1]) {
 		start--
@@ -112,15 +190,64 @@ func isIdentByte(c byte) bool {
 	return c == '_' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c >= 0x80
 }
 
-// Names 返回所有唯一符号名（供 completion）。
+// splitLines 按 \n 切分源码行（保留行内容，去掉 \r 由调用方处理）。
+func splitLines(s string) []string {
+	var out []string
+	start := 0
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\n' {
+			out = append(out, s[start:i])
+			start = i + 1
+		}
+	}
+	out = append(out, s[start:])
+	return out
+}
+
+// Names 返回所有唯一符号名与枚举成员的三种拼写（供 completion）。
 func (m *SymbolMap) Names() []string {
 	seen := map[string]bool{}
 	var out []string
-	for _, s := range m.Symbols {
-		if !seen[s.Name] {
-			seen[s.Name] = true
-			out = append(out, s.Name)
+	for name := range m.byName {
+		if !seen[name] {
+			seen[name] = true
+			out = append(out, name)
 		}
 	}
 	return out
+}
+
+// ---- 本地小工具（避免符号表依赖 compiler 包）----
+
+func upperFirstLocal(s string) string {
+	if s == "" {
+		return s
+	}
+	r := []rune(s)
+	if r[0] >= 'a' && r[0] <= 'z' {
+		r[0] -= 'a' - 'A'
+	}
+	return string(r)
+}
+
+func lowerFirstLocal(s string) string {
+	if s == "" {
+		return s
+	}
+	r := []rune(s)
+	if r[0] >= 'A' && r[0] <= 'Z' {
+		r[0] += 'a' - 'A'
+	}
+	return string(r)
+}
+
+func isGoKeywordLocal(s string) bool {
+	switch s {
+	case "break", "default", "func", "interface", "select", "case", "defer", "go",
+		"map", "struct", "chan", "else", "goto", "package", "switch", "const",
+		"fallthrough", "if", "range", "type", "continue", "for", "import",
+		"return", "var", "pub", "enum":
+		return true
+	}
+	return false
 }

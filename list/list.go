@@ -1,11 +1,11 @@
-// Package gxcollections 是 GX 集合链式调用 map/filter/reduce 的运行时。
+// Package list 是 GX 集合链式调用 map/filter/reduce 的运行时。
 //
 // GX 里写 xs.map(f)、xs.filter(f)、xs.reduce(init, f)（小写方法式），转译器
 // 把它们首字母大写还原为 List 上的方法调用。回调是 Go 原生闭包，原样透传。
 //
 // 依赖 Go 1.27 的泛型方法：方法可声明自己的类型参数，因此 Map 可以换型
 // （T → R）并保持方法链式，例如 nums.Map(strconv.Itoa).Filter(...)。
-package gxcollections
+package list
 
 // List 是一个带链式方法的切片类型。它与 []E 双向可直接赋值/传参，
 // 因为 []E 是无名类型、List[E] 是命名类型且底层类型相同。

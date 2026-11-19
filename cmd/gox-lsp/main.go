@@ -11,8 +11,9 @@ import (
 
 func main() {
 	checker := buildcheck.New(128)
-	// 尊重外部注入的 GOTOOLCHAIN（如 go1.27.3）；默认工具链为 go。
-	checker.SetToolchain("go")
+	// 生成的 Go 声明 go 1.27；显式固定 toolchain，避免默认 go 联网下载卡住。
+	// 用户可用环境变量覆盖时，仍以这里为准（LSP 诊断需稳定可复现）。
+	checker.SetToolchain("go", "GOTOOLCHAIN=go1.27.3")
 	srv := lsp.NewServer(os.Stdin, os.Stdout, checker)
 	if err := srv.Run(); err != nil {
 		fmt.Fprintln(os.Stderr, "gox-lsp:", err)
