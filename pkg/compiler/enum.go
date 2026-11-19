@@ -37,7 +37,6 @@ type enumInfo struct {
 func transformEnum(in []Token, names map[string]string) []Token {
 	s := &stream{toks: in, pubNames: names}
 	out := make([]Token, 0, len(in))
-	needStrconv := false
 	for i := 0; i < len(s.toks); i++ {
 		t := s.toks[i]
 		isPub := false
@@ -55,16 +54,11 @@ func transformEnum(in []Token, names map[string]string) []Token {
 			out = append(out, t)
 			continue
 		}
-		gen, end, isInt := s.genEnum(enumIdx, isPub)
+		gen, end, _ := s.genEnum(enumIdx, isPub)
 		out = append(out, gen...)
-		if isInt {
-			needStrconv = true
-		}
 		i = end // 跳过 enum ... '}'
 	}
-	if needStrconv {
-		out = ensureImport(out, "strconv")
-	}
+	// strconv import 由 ReconcileImports 按实际使用情况统一注入。
 	return out
 }
 

@@ -57,6 +57,9 @@ func CompileWithModule(file, src, module string) (*Result, error) {
 	toks = transformPub(toks, names)
 	toks = transformJSX(toks)
 	toks = transformCollections(toks, module)
+	// 统一 import 别名：源码若已用别名导入 list/vdom/strconv，生成代码的占位包名
+	// 需替换为实际别名；否则各 transform 注入的 import 会与生成引用对不上。
+	toks = ReconcileImports(toks, module)
 	scope := collectScope(toks)
 	toks = restoreRefs(toks, names)
 	toks = transformExternal(toks, scope, names)
@@ -127,6 +130,7 @@ func CompileStage(src, stage string) (string, error) {
 		toks = transformPub(toks, names)
 		toks = transformJSX(toks)
 		toks = transformCollections(toks, defaultModule)
+		toks = ReconcileImports(toks, defaultModule)
 		scope := collectScope(toks)
 		toks = restoreRefs(toks, names)
 		toks = transformExternal(toks, scope, names)

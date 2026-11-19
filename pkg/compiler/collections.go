@@ -29,11 +29,9 @@ func listImportPath(module string) string {
 
 func transformCollections(in []Token, module string) []Token {
 	out := upperChainMethods(in)
-	out, promoted := promoteAllSlices(out, "list")
-	if !promoted {
-		return out // 没有切片被提升，不注入无用 import
-	}
-	return injectListImport(out, listImportPath(module))
+	out, _ = promoteAllSlices(out, "list")
+	// import 由 ReconcileImports 统一注入（按实际使用情况），此处不再注入。
+	return out
 }
 
 // upperChainMethods 把 .map/.filter/.reduce 方法名首字母大写。

@@ -642,5 +642,5 @@ func transformJSXCore(in []Token, injectImport bool) []Token {
 	return out
 }
 
-// transformJSX 是管线入口。
-func transformJSX(in []Token) []Token { return transformJSXCore(in, true) }
+// transformJSX 是管线入口。import 由 ReconcileImports 统一注入。
+func transformJSX(in []Token) []Token { return transformJSXCore(in, false) }

@@ -338,3 +338,77 @@ func main() { println(colorRed.String()) }
 		}
 	}
 }
+
+func TestImportAliasReuse(t *testing.T) {
+	// 源码已用别名导入运行时，生成代码应复用该别名而非注入新的
+	src := `package main
+import mylist "github.com/robertpanvip/gox/runtime/list"
+func main() {
+	xs := []int{1, 2, 3}
+	_ = xs.map(func(x int) int { return x })
+}
+`
+	res, err := CompileSource(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(res.GoSource, "mylist.List[int]") {
+		t.Errorf("生成代码应复用别名 mylist:\n%s", res.GoSource)
+	}
+	if strings.Contains(res.GoSource, "undefined") || strings.Count(res.GoSource, "runtime/list") != 1 {
+		t.Errorf("不应重复注入 list import:\n%s", res.GoSource)
+	}
+	if err := res.Validate(); err != nil {
+		t.Fatalf("生成代码语法无效: %v", err)
+	}
+}
+
+func TestImportAliasConflict(t *testing.T) {
+	// 占位名 list 被用户 import 占用，运行时应分配无冲突别名 list2
+	src := `package main
+import list "strings"
+func main() {
+	xs := []int{1, 2, 3}
+	_ = xs.map(func(x int) int { return x })
+	_ = list.ToUpper("hi")
+}
+`
+	res, err := CompileSource(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(res.GoSource, "import list2 \"github.com/robertpanvip/gox/runtime/list\"") {
+		t.Errorf("占位名冲突应分配 list2:\n%s", res.GoSource)
+	}
+	if !strings.Contains(res.GoSource, "list2.List[int]") {
+		t.Errorf("生成代码应使用 list2 别名:\n%s", res.GoSource)
+	}
+	if !strings.Contains(res.GoSource, `list.ToUpper`) {
+		t.Errorf("用户的 list(strings) 引用不应被改写:\n%s", res.GoSource)
+	}
+	if err := res.Validate(); err != nil {
+		t.Fatalf("生成代码语法无效: %v", err)
+	}
+}
+
+func TestImportOnlyWhenUsed(t *testing.T) {
+	// 只用 map、不用 JSX/enum，不应注入 vdom/strconv import
+	src := `package main
+func main() {
+	xs := []int{1, 2}
+	_ = xs.map(func(x int) int { return x })
+}
+`
+	res, err := CompileSource(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, unwanted := range []string{"runtime/vdom", `"strconv"`, "strconv."} {
+		if strings.Contains(res.GoSource, unwanted) {
+			t.Errorf("未使用的特性不应注入 %q:\n%s", unwanted, res.GoSource)
+		}
+	}
+	if !strings.Contains(res.GoSource, "runtime/list") {
+		t.Errorf("使用的 map 应注入 list import:\n%s", res.GoSource)
+	}
+}
