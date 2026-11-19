@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -64,9 +65,14 @@ func New(capacity int) *Checker {
 }
 
 // SetToolchain 注入 go 命令路径与额外环境变量（如 GOTOOLCHAIN=go1.27.3）。
+// 工具链变更会使缓存失效，因此在锁内清空缓存。
 func (c *Checker) SetToolchain(bin string, env ...string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.toolchain = bin
-	c.extraEnv = env
+	c.extraEnv = append([]string(nil), env...)
+	c.cache = map[string]*list.Element{}
+	c.order.Init()
 }
 
 // AddReplace 添加一条 go.mod replace 指令（module 路径 -> 本地目录），
@@ -79,10 +85,56 @@ func (c *Checker) AddReplace(modulePath, localDir string) {
 	c.order.Init()
 }
 
+// buildConfig 是一次构建所用配置的一致快照。build 只读取快照，
+// 绝不在锁外访问 Checker 的共享字段，从而消除并发数据竞争。
+type buildConfig struct {
+	toolchain string
+	extraEnv  []string
+	replaces  map[string]string
+}
+
+// snapshot 在锁内复制当前配置。
+func (c *Checker) snapshot() buildConfig {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	env := append([]string(nil), c.extraEnv...)
+	rep := make(map[string]string, len(c.replaces))
+	for k, v := range c.replaces {
+		rep[k] = v
+	}
+	return buildConfig{toolchain: c.toolchain, extraEnv: env, replaces: rep}
+}
+
+// cacheKey 把源码与构建配置一起哈希：不同 toolchain/replace/env 的检查结果
+// 不会互相命中旧缓存。
+func cacheKey(goSrc string, cfg buildConfig) string {
+	h := sha256.New()
+	h.Write([]byte(goSrc))
+	h.Write([]byte{0})
+	h.Write([]byte(cfg.toolchain))
+	for _, e := range cfg.extraEnv {
+		h.Write([]byte{0})
+		h.Write([]byte(e))
+	}
+	// map 迭代无序，按 key 排序保证 key 稳定。
+	keys := make([]string, 0, len(cfg.replaces))
+	for k := range cfg.replaces {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		h.Write([]byte{0})
+		h.Write([]byte(k))
+		h.Write([]byte{0})
+		h.Write([]byte(cfg.replaces[k]))
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}
+
 // Check 对 goSrc 执行构建检查。结果被缓存；ctx 取消时返回 ctx.Err()。
 func (c *Checker) Check(ctx context.Context, goSrc string) ([]Diagnostic, error) {
-	sum := sha256.Sum256([]byte(goSrc))
-	key := hex.EncodeToString(sum[:])
+	cfg := c.snapshot()
+	key := cacheKey(goSrc, cfg)
 
 	c.mu.Lock()
 	if ent, ok := c.cache[key]; ok {
@@ -93,12 +145,18 @@ func (c *Checker) Check(ctx context.Context, goSrc string) ([]Diagnostic, error)
 	}
 	c.mu.Unlock()
 
-	diags, err := c.build(ctx, goSrc)
+	diags, err := c.build(ctx, goSrc, cfg)
 	if err != nil {
 		return nil, err
 	}
 
 	c.mu.Lock()
+	// 双检：并发期间可能已有相同 key 的构建完成，避免插入重复 LRU 节点。
+	if ent, ok := c.cache[key]; ok {
+		c.order.MoveToFront(ent)
+		c.mu.Unlock()
+		return append([]Diagnostic{}, ent.Value.(*cacheEntry).diags...), nil
+	}
 	ent := c.order.PushFront(&cacheEntry{key: key, diags: diags})
 	c.cache[key] = ent
 	for c.order.Len() > c.capacity {
@@ -116,7 +174,7 @@ func (c *Checker) Check(ctx context.Context, goSrc string) ([]Diagnostic, error)
 
 var diagRe = regexp.MustCompile(`^(.*?):(\d+):(\d+):\s*(.+)$`)
 
-func (c *Checker) build(ctx context.Context, goSrc string) ([]Diagnostic, error) {
+func (c *Checker) build(ctx context.Context, goSrc string, cfg buildConfig) ([]Diagnostic, error) {
 	dir, err := os.MkdirTemp("", "gox-buildcheck-")
 	if err != nil {
 		return nil, err
@@ -125,14 +183,20 @@ func (c *Checker) build(ctx context.Context, goSrc string) ([]Diagnostic, error)
 
 	var gomod strings.Builder
 	gomod.WriteString("module buildcheck\n\ngo 1.27\n")
-	if len(c.replaces) > 0 {
+	if len(cfg.replaces) > 0 {
 		gomod.WriteString("\n")
-		for mod := range c.replaces {
+		// 排序使 go.mod 内容稳定（确定性构建）
+		mods := make([]string, 0, len(cfg.replaces))
+		for mod := range cfg.replaces {
+			mods = append(mods, mod)
+		}
+		sort.Strings(mods)
+		for _, mod := range mods {
 			fmt.Fprintf(&gomod, "require %s v0.0.0\n", mod)
 		}
 		gomod.WriteString("\n")
-		for mod, local := range c.replaces {
-			fmt.Fprintf(&gomod, "replace %s => %s\n", mod, local)
+		for _, mod := range mods {
+			fmt.Fprintf(&gomod, "replace %s => %s\n", mod, cfg.replaces[mod])
 		}
 	}
 	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte(gomod.String()), 0644); err != nil {
@@ -143,9 +207,9 @@ func (c *Checker) build(ctx context.Context, goSrc string) ([]Diagnostic, error)
 		return nil, err
 	}
 
-	cmd := exec.CommandContext(ctx, c.toolchain, "build", "./...")
+	cmd := exec.CommandContext(ctx, cfg.toolchain, "build", "./...")
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), c.extraEnv...)
+	cmd.Env = append(os.Environ(), cfg.extraEnv...)
 	out, err := cmd.CombinedOutput()
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
