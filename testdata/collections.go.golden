@@ -1,0 +1,25 @@
+package main
+
+import "github.com/robertpanvip/gox/gxcollections"
+
+import (
+    "fmt"
+    "strconv"
+)
+
+func double(x int) int { return x * 2 }
+func even(x int) bool { return x % 2 == 0 }
+
+ func Run() {
+    nums := gxcollections.List[int]{1, 2, 3, 4, 5, 6}
+
+    // 换型链式：int → string，再过滤
+    labels := nums.Map(strconv.Itoa).Filter(func(s string) bool { return len(s) == 1 })
+
+    // 同型链式 + reduce（换累加器类型）
+    total := nums.Filter(even).Map(double).Reduce(0, func(acc int, x int) int { return acc + x })
+
+    fmt.Println(labels, total)
+}
+
+func main() { Run() }

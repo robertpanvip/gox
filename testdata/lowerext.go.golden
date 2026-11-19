@@ -1,0 +1,24 @@
+package main
+
+// GX 心智负担：一律写小写。
+// 自己的符号用 pub 声明；外部符号（包级函数、结构体字段）由转译器自动还原大小写。
+
+import (
+    "fmt"
+    "net/http"
+    "net/url"
+)
+
+ type Config struct {
+     Host string
+}
+
+ func Demo() {
+    req, _ := http.NewRequest("GET", "http://example.com", nil)
+    u, _ := url.Parse("http://example.com/a")
+
+    c := Config{Host: "localhost"}
+    fmt.Println(req.Method, u.Host, u.Path, c.Host)
+}
+
+func main() { Demo() }

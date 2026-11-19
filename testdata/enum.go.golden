@@ -1,0 +1,31 @@
+package main
+
+import "fmt"
+
+type Color int
+const (
+	Red Color = iota
+	Green Color = iota
+	Blue Color = iota
+)
+
+
+// 显式赋值的枚举
+type status int
+const (
+	pending status = 1
+	active status = 2
+	done status = 3 
+)
+
+
+ func Name(c Color) string {
+    if c == Red { return "red" }
+    if c == Green { return "green" }
+    return "blue"
+}
+
+func main() {
+    c := Red
+    fmt.Println(Name(c), pending, done)
+}

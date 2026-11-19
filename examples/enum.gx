@@ -1,0 +1,19 @@
+package main
+
+import "fmt"
+
+pub enum color { red, green, blue }
+
+// 显式赋值的枚举
+enum status { pending = 1, active = 2, done = 3 }
+
+pub func name(c color) string {
+    if c == red { return "red" }
+    if c == green { return "green" }
+    return "blue"
+}
+
+func main() {
+    c := red
+    fmt.println(name(c), pending, done)
+}

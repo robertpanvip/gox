@@ -1,0 +1,20 @@
+package main
+
+import (
+    "fmt"
+    gxvdom "github.com/robertpanvip/gox/vdom"
+)
+
+pub func card(title string, items []string) any {
+    return <div class="card">
+        <h1>{title}</h1>
+        <ul>
+            {items}
+        </ul>
+        <img src="logo.png" alt />
+    </div>
+}
+
+func main() {
+    fmt.println(gxvdom.render(card("GX", []string{"a", "b"})))
+}

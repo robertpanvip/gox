@@ -1,0 +1,115 @@
+package compiler
+
+import (
+	"fmt"
+	"go/parser"
+	"go/token"
+	"strings"
+
+	"github.com/robertpanvip/gox/pkg/sourcemap"
+)
+
+// Result 是一次完整转译的产物。
+type Result struct {
+	File      string
+	GoSource  string
+	SourceMap *sourcemap.SourceMap
+}
+
+// Validate 用 Go 解析器校验生成源码的语法（不检查类型/符号）。
+func (r *Result) Validate() error {
+	if r == nil {
+		return fmt.Errorf("nil result")
+	}
+	_, err := parser.ParseFile(token.NewFileSet(), r.File, r.GoSource, parser.AllErrors)
+	return err
+}
+
+// Compile 执行完整管线：
+// lex → enum → jsx → pub → collections(集合链式) → restoreRefs(自身 pub 符号)
+// → external(外部符号) → emit。
+func Compile(file, src string) (*Result, error) {
+	toks := New(src).AllTokens()
+	names := map[string]string{} // 小写原名 → 大写导出名（自身 pub 符号）
+	toks = transformEnum(toks, names)
+	toks = transformJSX(toks)
+	toks = transformPub(toks, names)
+	toks = transformCollections(toks)
+	toks = restoreRefs(toks, names)
+	toks = transformExternal(toks)
+	goSrc, sm := emit(toks, file)
+	return &Result{File: file, GoSource: goSrc, SourceMap: sm}, nil
+}
+
+// CompileSource 以默认文件名转译源码。
+func CompileSource(src string) (*Result, error) { return Compile("input.gx", src) }
+
+// emit 把 token 流拼成源码，同时记录「输出 token 起点 → 输入位置」的映射。
+func emit(toks []Token, file string) (string, *sourcemap.SourceMap) {
+	var b strings.Builder
+	line, col := 1, 1
+	var raw []sourcemap.RawMapping
+	for _, t := range toks {
+		if t.Skip || t.Text == "" {
+			continue
+		}
+		if t.Kind != Space && t.Kind != Newline && t.Pos.valid() {
+			raw = append(raw, sourcemap.RawMapping{
+				OutLine: line, OutCol: col, InLine: t.Pos.Line, InCol: t.Pos.Col,
+			})
+		}
+		for _, r := range t.Text {
+			b.WriteRune(r)
+			if r == '\n' {
+				line++
+				col = 1
+			} else {
+				col++
+			}
+		}
+	}
+	return b.String(), sourcemap.Build(file, raw)
+}
+
+// CompileStage 只执行单个转换阶段，用于 CLI 的 jsx/pub 等子命令与调试。
+// stage 取值：lex / enum / jsx / pub / external / all。
+func CompileStage(src, stage string) (string, error) {
+	toks := New(src).AllTokens()
+	names := map[string]string{}
+	switch stage {
+	case "lex":
+		return dumpTokens(toks), nil
+	case "enum":
+		toks = transformEnum(toks, names)
+	case "jsx":
+		toks = transformJSX(toks)
+	case "pub":
+		toks = transformPub(toks, names)
+	case "collections":
+		toks = transformCollections(toks)
+	case "external":
+		toks = transformExternal(toks)
+	case "all":
+		toks = transformEnum(toks, names)
+		toks = transformJSX(toks)
+		toks = transformPub(toks, names)
+		toks = transformCollections(toks)
+		toks = restoreRefs(toks, names)
+		toks = transformExternal(toks)
+	default:
+		return "", fmt.Errorf("unknown stage %q (want lex/enum/jsx/pub/collections/external/all)", stage)
+	}
+	out, _ := emit(toks, "<stage>")
+	return out, nil
+}
+
+func dumpTokens(toks []Token) string {
+	var b strings.Builder
+	for i, t := range toks {
+		if t.Kind == EOF {
+			break
+		}
+		fmt.Fprintf(&b, "%3d  %-8s  %-24q  @%d:%d\n", i, t.Kind, t.Text, t.Pos.Line, t.Pos.Col)
+	}
+	return b.String()
+}

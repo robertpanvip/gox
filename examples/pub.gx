@@ -1,0 +1,22 @@
+package main
+
+import "fmt"
+
+// 一切标识符小写书写；pub 决定是否导出（生成 Go 时首字母大写）。
+pub type point struct {
+    pub x int
+    y int // 私有字段，保持小写
+}
+
+pub const max_size = 100
+
+pub func distance(p point) int {
+    return p.x * p.x + p.y * p.y
+}
+
+func helper() int { return 42 }
+
+func main() {
+    p := point{x: 3, y: 4}
+    fmt.println(distance(p), max_size, helper())
+}

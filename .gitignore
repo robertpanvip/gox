@@ -1,0 +1,12 @@
+# 构建产物
+*.so
+*.h
+*.exe
+*.test
+libgox.*
+# Go 缓存
+/vendor/
+# 编辑器
+.idea/
+.vscode/
+*.swp
