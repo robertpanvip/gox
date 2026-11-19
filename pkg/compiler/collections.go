@@ -86,48 +86,178 @@ func promoteAllSlices(toks []Token, alias string) ([]Token, bool) {
 	return res, changed
 }
 
-// typeEnd 解析一个类型表达式的结束下标（exclusive）。
-// 支持指针、嵌套切片/数组、包限定、泛型实例化、map[K]V 的值类型。
+// typeEnd 解析一个 Go 类型表达式的结束下标（exclusive）。
+//
+// 覆盖 Go 规范允许的完整类型语法，而不只基础/指针/切片/数组：
+//   - 具名类型、包限定 pkg.Type、泛型实例 Foo[T]
+//   - 指针 *T、切片 []T、数组 [N]T（递归解析元素）
+//   - map[K]V（连值类型一起）
+//   - 通道 chan T / chan<- T / <-chan T
+//   - 函数 func(A) B / func(A) (B, C) / func()
+//   - 结构体 struct{...}、接口 interface{...}
+//   - 括号类型 (T)
+//
+// 这样 []func(int) bool、[]struct{...} 等复杂类型会被整体识别为一个
+// 类型表达式，集合提升生成 list.List[func(int) bool] 而非非法的
+// list.List[func](int) bool。
 func typeEnd(toks []Token, start int) int {
-	i := start
-	if i >= len(toks) {
-		return i
+	i := nextSig(toks, start)
+	if i < 0 {
+		return maxInt(start, 0)
 	}
-	if toks[i].Text == "*" {
-		i++
-		if i >= len(toks) {
-			return i
+	t := toks[i]
+
+	// 指针：*T（可含空格，如 * pkg.Type）
+	if t.Text == "*" {
+		return typeEnd(toks, i+1)
+	}
+
+	// 通道方向前缀：<-chan T
+	if t.Text == "<-" {
+		j := nextSig(toks, i+1)
+		if j >= 0 && toks[j].is("chan") {
+			return typeEnd(toks, j+1) // chan 后即为元素类型
 		}
+		return i + 1
 	}
-	// 切片/数组类型 [...]T：递归解析元素类型（[]int、[3]int、[][]int…）
-	if toks[i].Text == "[" {
-		close := matchBracket(toks, i)
+
+	switch {
+	case t.is("chan"):
+		// chan T 或 chan<- T
+		j := nextSig(toks, i+1)
+		if j >= 0 && toks[j].Text == "<-" {
+			j = nextSig(toks, j+1)
+		}
+		if j >= 0 {
+			return typeEnd(toks, j)
+		}
+		return i + 1
+
+	case t.is("map"):
+		// map[K]V：吞掉 [K] 后继续解析 V
+		j := nextSig(toks, i+1)
+		if j >= 0 && toks[j].Text == "[" {
+			close := matchDelimSkipSpace(toks, j, "[", "]")
+			if close > j {
+				return typeEnd(toks, close+1)
+			}
+		}
+		return i + 1
+
+	case t.is("func"):
+		// 函数类型：func 参数表 [结果]
+		j := nextSig(toks, i+1)
+		if j < 0 || toks[j].Text != "(" {
+			return i + 1
+		}
+		close := matchDelimSkipSpace(toks, j, "(", ")")
+		if close <= j {
+			return close
+		}
+		// 结果：紧跟 '(' 表示多值结果 (B, C)；否则是单个类型表达式 B。
+		r := nextSig(toks, close+1)
+		if r < 0 {
+			return close + 1
+		}
+		if toks[r].Text == "(" {
+			rc := matchDelimSkipSpace(toks, r, "(", ")")
+			if rc > r {
+				return rc + 1
+			}
+			return r + 1
+		}
+		if isTypeStartTok(toks[r]) && !isTypeBoundaryTok(toks[r]) {
+			return typeEnd(toks, r)
+		}
+		return close + 1
+
+	case t.is("struct") || t.is("interface"):
+		// struct{...} / interface{...}
+		j := nextSig(toks, i+1)
+		if j >= 0 && toks[j].Text == "{" {
+			close := matchDelimSkipSpace(toks, j, "{", "}")
+			if close > j {
+				return close + 1
+			}
+		}
+		return i + 1
+
+	case t.Text == "[":
+		// 切片 []T 或数组 [N]T：解析 ']' 后的元素类型
+		close := matchDelimSkipSpace(toks, i, "[", "]")
 		if close <= i {
-			return i
+			return i + 1
 		}
 		return typeEnd(toks, close+1)
-	}
-	if toks[i].Kind != Ident {
+
+	case t.Text == "(":
+		// 括号类型 (T)
+		close := matchDelimSkipSpace(toks, i, "(", ")")
+		if close > i {
+			return close + 1
+		}
+		return i + 1
+
+	case t.Kind == Ident:
+		// 具名类型 / 包限定 / 泛型实例
+		i++
+		j := nextSig(toks, i)
+		if j >= 0 && j+1 < len(toks) && toks[j].Text == "." && toks[j+1].Kind == Ident {
+			i = j + 2
+		}
+		j = nextSig(toks, i)
+		if j >= 0 && toks[j].Text == "[" {
+			close := matchDelimSkipSpace(toks, j, "[", "]")
+			if close > j {
+				return close + 1
+			}
+		}
 		return i
+
+	default:
+		return i + 1
 	}
-	base := toks[i].Text
-	i++
-	// 包限定 pkg.Type
-	if i+1 < len(toks) && toks[i].Text == "." && toks[i+1].Kind == Ident {
-		i += 2
+}
+
+// isTypeBoundaryTok 标记那些既可能是类型起始、也可能是一个类型表达式结束边界
+// 的 token。用于 func 结果判定时避免误吞 ',' ')' ']' '}' 等分隔符。
+func isTypeBoundaryTok(t Token) bool {
+	if t.Kind != Operator {
+		return false
 	}
-	// 方括号后缀：map[K]V 需连值类型一起吞掉；Foo[T]/[N] 实例化到此为止
-	if i < len(toks) && toks[i].Text == "[" {
-		close := matchBracket(toks, i)
-		if close <= i {
-			return i
+	switch t.Text {
+	case ",", ")", "]", "}", ";", "=", "{":
+		return true
+	}
+	return false
+}
+
+// matchDelimSkipSpace 与 matchDelim 相同，但 l/open 通过 nextSig 跳过空白定位；
+// 返回配对的右括号下标，失败返回 open。
+func matchDelimSkipSpace(toks []Token, open int, l, r string) int {
+	if open >= len(toks) || toks[open].Text != l {
+		return open
+	}
+	d := 0
+	for i := open; i < len(toks); i++ {
+		switch toks[i].Text {
+		case l:
+			d++
+		case r:
+			d--
+			if d == 0 {
+				return i
+			}
 		}
-		i = close + 1
-		if base == "map" {
-			return typeEnd(toks, i)
-		}
 	}
-	return i
+	return open
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 func matchBracket(toks []Token, open int) int {
