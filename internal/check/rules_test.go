@@ -433,3 +433,101 @@ func f(v MyU) {
 		}
 	}
 }
+
+// ---------- 作用域与收窄一致性回归（审查 P2 #8）----------
+
+func TestScopeNestedShadowNoFalsePositive(t *testing.T) {
+	// 内层 value := true 遮蔽外层联合变量，内层 println(value) 不应误报联合。
+	src := `package main
+func main() {
+    var value int | string
+    {
+        value := true
+        println(value)
+    }
+    println(value)
+}
+`
+	diags := checkGx(t, src)
+	if len(diags) != 0 {
+		t.Fatalf("嵌套遮蔽不应产生误报: %v", diags)
+	}
+}
+
+func TestScopeNarrowDoesNotLeakOutOfBlock(t *testing.T) {
+	// 内层 if 收窄 v，块结束后外层 v 仍是联合，参与 + 应报错。
+	src := `package main
+func f(v int | string) {
+    {
+        if v is int {
+            println(v)
+        }
+    }
+    println(v + 1)
+}
+func main() { f(1) }
+`
+	diags := checkGx(t, src)
+	hasDiag(t, diags, "union-operand", "v")
+}
+
+func TestScopeClosureCaptureKeepsUnion(t *testing.T) {
+	// 闭包捕获外部联合变量，未收窄就参与运算应报错。
+	src := `package main
+func f(v int | string) {
+    g := func() { println(v + 1) }
+    g()
+}
+func main() { f(1) }
+`
+	diags := checkGx(t, src)
+	hasDiag(t, diags, "union-operand", "v")
+}
+
+func TestScopeShortDeclShadowsParamNoFalsePositive(t *testing.T) {
+	// 局部 v := "hello" 遮蔽联合参数，后续 println(v) 不应误报联合。
+	src := `package main
+func f(v int | string) {
+    v := "hello"
+    println(v)
+}
+func main() { f(1) }
+`
+	diags := checkGx(t, src)
+	if len(diags) != 0 {
+		t.Fatalf("短声明遮蔽参数不应误报: %v", diags)
+	}
+}
+
+func TestScopeNarrowRestoredAfterIfElse(t *testing.T) {
+	// if/else 各自收窄，分支结束后 v 恢复为联合，参与运算应报错。
+	src := `package main
+func f(v int | string) {
+    if v is int {
+        println(v)
+    } else {
+        println(v)
+    }
+    println(v + 1)
+}
+func main() { f(1) }
+`
+	diags := checkGx(t, src)
+	hasDiag(t, diags, "union-operand", "v")
+}
+
+func TestScopeLoopReassignKeepsUnion(t *testing.T) {
+	// 循环内重新赋兼容值，变量声明类型仍是联合，未收窄参与运算应报错。
+	src := `package main
+func f() {
+    var v int | string = 1
+    for i := 0; i < 3; i++ {
+        v = i
+    }
+    println(v + 1)
+}
+func main() { f() }
+`
+	diags := checkGx(t, src)
+	hasDiag(t, diags, "union-operand", "v")
+}
