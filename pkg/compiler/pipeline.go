@@ -48,6 +48,7 @@ func CompileWithModule(file, src, module string) (*Result, error) {
 	toks := New(src).AllTokens()
 	analysis := Analyze(toks) // desugar 之前的 GX 语义层（联合未擦除）
 	names := map[string]string{} // 小写原名 → 大写导出名（自身 pub 符号）
+	toks = transformTemplates(toks)
 	toks = runUnion(toks)
 	toks = transformTypeGuard(toks, analysis)
 	if err := checkStrandedIs(toks); err != nil {

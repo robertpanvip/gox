@@ -17,6 +17,7 @@ const (
 	Ident             // 标识符 / 关键字
 	Number            // 数字字面量
 	String            // 字符串字面量（含引号）
+	Template          // 模板字符串字面量（含反引号，内部有 ${...} 插值）
 	Rune              // rune 字面量
 	Comment           // 行注释或块注释
 	Operator          // 运算符 / 标点
@@ -36,6 +37,8 @@ func (k Kind) String() string {
 		return "number"
 	case String:
 		return "string"
+	case Template:
+		return "template"
 	case Rune:
 		return "rune"
 	case Comment:

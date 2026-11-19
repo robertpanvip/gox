@@ -150,6 +150,7 @@ func ReconcileImports(in []Token, module string) []Token {
 		{placeholder: "list", path: listImportPath(module)},
 		{placeholder: "gxvdom", path: "github.com/robertpanvip/gox/runtime/vdom"},
 		{placeholder: "strconv", path: "strconv"},
+		{placeholder: "fmt", path: "fmt"},
 	}
 	renames := map[string]string{}
 	for _, d := range deps {

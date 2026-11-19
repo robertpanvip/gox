@@ -185,7 +185,13 @@ func (l *Lexer) next() Token {
 				break
 			}
 		}
-		return Token{Kind: String, Text: b.String(), Pos: p}
+		kind := String
+		if strings.Contains(b.String(), "${") {
+			kind = Template
+		}
+		t := Token{Kind: kind, Text: b.String(), Pos: p}
+		l.prev = "`" // 模板/raw string 可作为表达式结尾，供后续 '<' 消歧
+		return t
 	}
 
 	// JSX：'<' 紧跟字母，且上下文不像比较表达式

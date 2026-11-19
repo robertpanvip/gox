@@ -167,6 +167,23 @@ func main() {
 	}
 }
 
+func TestIntegrationTemplateString(t *testing.T) {
+	// 模板字符串：静态段 + 多插值 + 嵌套表达式，真实运行校验拼接结果。
+	src := `package main
+import "strconv"
+func main() {
+	name := "gx"
+	score := 95
+	msg := ` + "`hello ${name}, score=${score}, double=${strconv.itoa(score * 2)}`" + `
+	println(msg)
+}
+`
+	out := runGX(t, src)
+	if !strings.Contains(out, "hello gx, score=95, double=190") {
+		t.Errorf("模板字符串输出不符, got:\n%s", out)
+	}
+}
+
 func TestIntegrationLocalSliceNoDoubleWrap(t *testing.T) {
 	// 本地 []T 字面量已提升为 List，链式调用不应再 list.Of（golden 语义）。
 	src := `package main
