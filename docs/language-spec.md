@@ -1,6 +1,6 @@
 # GoX 语言规范
 
-GoX（`.gx`）= Go 语法 + 十一项语法糖（pub / enum / JSX / 外部符号还原 / 集合链式 / is 守卫 / 联合类型 / 模板字符串 / 参数默认值 / Lambda / 对象字面量）。转译产物是标准 Go 源码，交给官方工具链编译。**需要 Go 1.27+**。
+GoX（`.gx`）= Go 语法 + 十二项语法糖（pub / enum / JSX / 外部符号还原 / 集合链式 / is 守卫 / 联合类型 / 模板字符串 / 参数默认值 / Lambda / 对象字面量 / 对象解构）。转译产物是标准 Go 源码，交给官方工具链编译。**需要 Go 1.27+**。
 
 ## 书写约定（最重要）
 
@@ -110,7 +110,17 @@ labels := nums.map(fn).filter(keep).reduce(0, add)
 
 `{ name: "x", age: 1 }` → Go 匿名结构体字面量。无期望类型时从值反推字段类型（`"x"`→string、`1`→int、`3.5`→float64、`true`→bool、嵌套 `{...}`→嵌套 struct、否则 any），生成 `struct{ name string; age int }{...}`。有期望类型时（函数实参 / 变量声明 / 赋值 / return——即明确标注参数或返回类型的上下文）省略结构体类型名，用期望类型补全为 `point{...}` 并校验字段：未知字段 / 缺失字段 / 类型不兼容均报带 GX 坐标的编译错误。无类型常量按 Go 可赋值规则放宽。支持嵌套（由内向外逐层补全）。期望类型为 `any` / `interface{}` 时视为无有效期望类型（不携带字段结构，`any{...}` 非法），按匿名结构体处理。
 
-## 10. sourcemap / LSP / 编译检查
+## 10. 对象解构
+
+`{ name, age } := p` / `var { name, age } = p` → 逐字段生成 `name := p.name; age := p.age` / `var name = p.name; var age = p.age`。复用 `var`/`:=` 语法，不引入新关键字。
+
+- 解构模式是**纯标识符列表**（逗号分隔、无冒号）；与对象字面量（`key: value`）在词法上严格区分，互不干扰。
+- **类型检查**：右值类型可从本文件推断时（具名 struct 或匿名 struct 字面量），每个解构字段必须属于 `fields(T)`，否则报带 GX 坐标的编译错误。
+- **构造后立刻解构**：构造字段集 S₁ 由对象字面量层校验 ⊆ `fields(T)`，解构字段集 S₂ 由本层校验 ⊆ `fields(T)`，故 `S₁ ∪ S₂ ⊆ fields(T)`。
+- 右值类型未知（如外部包函数返回）→ 宽松生成 `x.field`，字段存在性交由 Go 编译器检查。
+- 解构变量遵循 Go 的作用域与 `:=` 重声明规则（同作用域重复声明由 Go 判错）。
+
+## 11. sourcemap / LSP / 编译检查
 
 - `.gx ↔ .go` 双向位置映射（最近邻），可 JSON 序列化。
 - LSP：initialize / didOpen / didChange / definition / hover / completion / documentSymbol / rename，诊断经 sourcemap 回投到 `.gx`。

@@ -222,6 +222,42 @@ func main() {
 	}
 }
 
+func TestIntegrationObjectDestructure(t *testing.T) {
+	// 构造后立刻解构：S₁={name,age} 构造、S₂={name,age} 解构，均 ⊆ fields(student)。
+	// 覆盖短声明 / var 形式 / 匿名 struct / 部分字段解构。
+	src := `package main
+import "fmt"
+type student struct {
+	name string
+	age  int
+	city string
+}
+func main() {
+	{
+		var p student = { name: "x", age: 1, city: "SZ" }
+		{ name, age } := p
+		fmt.Println(name, age)
+	}
+	{
+		var q student = { name: "y", age: 2, city: "BJ" }
+		var { name, city } = q
+		fmt.Println(name, city)
+	}
+	{
+		anon := { name: "z", age: 3 }
+		{ name, age } := anon
+		fmt.Println(name, age)
+	}
+}
+`
+	out := runGX(t, src)
+	for _, want := range []string{"x 1", "y BJ", "z 3"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("对象解构输出应包含 %q, got:\n%s", want, out)
+		}
+	}
+}
+
 func TestIntegrationLambda(t *testing.T) {
 	// Lambda 最简箭头：表达式反推（int/bool）、显式参数、集合回调、函数实参。
 	src := `package main

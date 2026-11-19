@@ -21,6 +21,7 @@
 | **Lambda** | `x => x+1` | `func(x int) int { return x+1 }`（类型从上下文/表达式推断） |
 | **模板字符串** | `` `hi ${name}` `` | `"hi " + fmt.Sprint(name)`（拼接，自动 import fmt） |
 | **对象字面量** | `{ name: "x", age: 1 }` | `struct{ name string; age int }{...}`，有期望类型时用 `point{...}` |
+| **对象解构** | `{ name, age } := p` / `var { name, age } = p` | `name := p.name; age := p.age`（逐字段，校验字段存在） |
 
 ## 1. 可见性：`pub`
 
@@ -231,13 +232,29 @@ func make() point { return { name: "x", age: 1 } }  // 按返回类型补全
 - **期望类型为 `any` / `interface{}` 时不补全**：这类类型不携带字段结构，`any{...}` 是非法 Go，故按匿名结构体处理（如 `func make() any { return { name: "x" } }` → `return struct{ name string }{ name: "x" }`）。
 - 支持嵌套对象字面量（由内向外逐层补全）。
 
-## 12. Sourcemap / LSP / 编译检查
+## 12. 对象解构
+
+`{ name, age } := p` / `var { name, age } = p` 把结构体字段解构为同名的局部变量，逐字段生成 Go 声明：
+
+```gx
+type student struct { name string; age int; city string }
+var p student = { name: "x", age: 1, city: "SZ" }
+{ name, age } := p        // → name := p.name; age := p.age
+var { name, city } = q    // → var name = q.name; var city = q.city
+```
+
+- **类型检查**：右值类型可从本文件推断时（具名 struct 或匿名 struct 字面量），每个解构字段必须真实存在，否则报**编译错误**（带 GX 坐标）。
+- **构造后立刻解构**：构造侧字段集 S₁ 由对象字面量层校验，解构侧 S₂ 由本层校验，二者都是 `fields(T)` 的子集，故 `S₁ ∪ S₂ ⊆ fields(T)`。
+- **右值类型未知**（如外部包函数返回）：宽松生成 `x.field`，字段存在性交给 Go 编译期检查。
+- 复用 `var`/`:=` 语法，不引入新关键字；解构变量遵循 Go 的作用域与 `:=` 重声明规则。
+
+## 13. Sourcemap / LSP / 编译检查
 
 - 自带 `.gx ↔ .go` **双向精确位置映射**（`sourcemap` / `map-lookup`）。
 - LSP：跳转 / 补全 / 悬停 / 文档符号 / **重命名**（枚举成员三种拼写派生新名）。
 - 真实 `go build` 检查（`buildcheck`，可取消 + LRU），错误经 sourcemap **回投到 `.gx`**。
 
-## 13. GX 类型检查（方案 B：AST + side table）
+## 14. GX 类型检查（方案 B：AST + side table）
 
 GX 把联合 `A|B` 擦除为 `any` 后，`go/types` 眼里只剩 `any`，**永远看不到联合契约被违反**。因此类型检查的主战场放在 desugar 之前的 GX 层——这正是 TS 对 JS 的关系：类型是本层的责任，`go build` 只兜底「降级代码是否合法」。
 

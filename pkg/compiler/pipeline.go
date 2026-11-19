@@ -34,6 +34,10 @@ func (r *Result) Validate() error {
 // → collections(集合链式) → scope(作用域符号收集) → restoreRefs(自身 pub 符号)
 // → external(外部符号机械还原) → emit。
 //
+// 对象字面量与对象解构在 desugar 早期处理：对象字面量（transformObjectLits）
+// 先展开为 struct 形态，对象解构（expandDestructures）随后把 {a,b} := p 改写为
+// 逐字段声明，并借此做「解构字段 ⊆ 构造类型字段」的编译期校验。
+//
 // analyze 必须在 union 之前：此时联合类型 A|B 尚未被擦除，is 守卫仍是原貌，
 // 语义层才能建立真实的联合类型环境并做收窄。typeguard 消费 analyze 的产物，
 // 只负责生成 comma-ok 断言，不再自行判定守卫。
@@ -55,6 +59,12 @@ func CompileWithModule(file, src, module string) (*Result, error) {
 	toks = transformLambdas(toks, analysis)
 	// 对象字面量：期望类型校验失败时返回带 GX 坐标的错误。
 	toks, err := transformObjectLits(toks, analysis)
+	if err != nil {
+		return nil, err
+	}
+	// 对象解构：{ name, age } := p → name := p.name; age := p.age
+	// 放在对象字面量之后，右值声明类型（含 struct{...}{...} 展开形态）已可见。
+	toks, err = expandDestructures(toks)
 	if err != nil {
 		return nil, err
 	}
@@ -143,6 +153,10 @@ func CompileStage(src, stage string) (string, error) {
 		toks = expandDefaults(toks, defaultDefs)
 		toks = transformLambdas(toks, analysis)
 		toks, err := transformObjectLits(toks, analysis)
+		if err != nil {
+			return "", err
+		}
+		toks, err = expandDestructures(toks)
 		if err != nil {
 			return "", err
 		}
