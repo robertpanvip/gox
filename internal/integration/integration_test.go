@@ -141,3 +141,44 @@ func main() {
 		t.Fatalf("未找到回投到 GX 第 4 行的 undefined 诊断: %v", diags)
 	}
 }
+
+func TestIntegrationStdlibSliceChaining(t *testing.T) {
+	// 标准库返回原生 []T，链式调用应自动 list.Of 包装（架构问题 #13）。
+	src := `package main
+
+import (
+	"fmt"
+	"strings"
+)
+
+func main() {
+	xs := strings.Fields("hello brave world")
+	upper := xs.map(func(s string) string { return strings.ToUpper(s) })
+	fmt.Println(upper[0], upper[1], upper[2])
+	total := xs.map(func(s string) int { return len(s) }).reduce(0, func(a int, b int) int { return a + b })
+	fmt.Println(total)
+}
+`
+	out := runGX(t, src)
+	for _, want := range []string{"HELLO", "BRAVE", "WORLD", "15"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("输出应包含 %q, got:\n%s", want, out)
+		}
+	}
+}
+
+func TestIntegrationLocalSliceNoDoubleWrap(t *testing.T) {
+	// 本地 []T 字面量已提升为 List，链式调用不应再 list.Of（golden 语义）。
+	src := `package main
+import "fmt"
+func main() {
+	xs := []int{1, 2, 3, 4}
+	total := xs.map(func(x int) int { return x * 2 }).reduce(0, func(a int, b int) int { return a + b })
+	fmt.Println(total)
+}
+`
+	out := runGX(t, src)
+	if !strings.Contains(out, "20") {
+		t.Errorf("本地切片链式结果应为 20, got:\n%s", out)
+	}
+}

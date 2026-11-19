@@ -30,7 +30,111 @@ func listImportPath(module string) string {
 func transformCollections(in []Token, module string) []Token {
 	out := upperChainMethods(in)
 	out, _ = promoteAllSlices(out, "list")
+	out = wrapChainReceivers(out, collectListVars(out))
 	// import 由 ReconcileImports 统一注入（按实际使用情况），此处不再注入。
+	return out
+}
+
+// collectListVars 收集所有「已提升为 list.List 的变量名」：声明/初始化/参数中
+// 紧邻 list.List[...] 类型之前的标识符。这些变量已是 List，无需再 list.Of 包装。
+func collectListVars(toks []Token) map[string]bool {
+	vars := map[string]bool{}
+	for i := 0; i < len(toks); i++ {
+		if !toks[i].is("list") {
+			continue
+		}
+		j := nextSig(toks, i+1)
+		if j < 0 || toks[j].Text != "." {
+			continue
+		}
+		j = nextSig(toks, j+1)
+		if j < 0 || !toks[j].is("List") {
+			continue
+		}
+		// list.List 前可能是：':=' / 'var' / 变量名（参数）。
+		p := prevSig(toks, i-1)
+		if p < 0 {
+			continue
+		}
+		if toks[p].Text == ":=" || toks[p].is("var") {
+			// 赋值/声明：变量名在 := / var 之前
+			v := prevSig(toks, p-1)
+			if v >= 0 && toks[v].Kind == Ident && !isGoKeyword(toks[v].Text) {
+				vars[toks[v].Text] = true
+			}
+		} else if toks[p].Kind == Ident && !isGoKeyword(toks[p].Text) {
+			// 参数形态 xs list.List[T]
+			vars[toks[p].Text] = true
+		}
+	}
+	return vars
+}
+
+// wrapChainReceivers 给「标识符接收者」的链式方法调用插入 list.Of(...) 包装，
+// 使标准库/外部函数返回的原生 []T 也能使用 Map/Filter/Reduce/Each。
+//
+// 转译：xs.map(f)            → list.Of(xs).Map(f)
+//
+// 只包装链首（接收者是裸标识符、前面不是 '.' 或已有包装）。后续链环
+// xs.map(f).filter(g) 的 filter 接收者是上一环结果（已是 List），无需包装。
+// 复杂接收者（如 strings.Fields(x).map(f)）暂不处理——保持原样，不劣化。
+func wrapChainReceivers(in []Token, listVars map[string]bool) []Token {
+	chainSet := map[string]bool{"Map": true, "Filter": true, "Reduce": true, "Each": true}
+	// 先标记需要包装的位置（接收者标识符下标 → 方法调用右括号下标）
+	type wrap struct{ recv, close int }
+	var wraps []wrap
+	for i := 0; i < len(in); i++ {
+		if in[i].Kind != Operator || in[i].Text != "." {
+			continue
+		}
+		// '.' 后是链式方法名
+		j := nextSig(in, i+1)
+		if j < 0 || in[j].Kind != Ident || !chainSet[in[j].Text] {
+			continue
+		}
+		// 方法名后必须是 '('（方法调用）
+		paren := nextSig(in, j+1)
+		if paren < 0 || in[paren].Text != "(" {
+			continue
+		}
+		close := matchDelimSkipSpace(in, paren, "(", ")")
+		if close <= paren {
+			continue
+		}
+		// '.' 前的接收者必须是标识符
+		recv := prevSig(in, i-1)
+		if recv < 0 || in[recv].Kind != Ident {
+			continue
+		}
+		// 排除字段访问（接收者前是 '.'）、关键字、已有包装/包限定
+		before := prevSig(in, recv-1)
+		if before >= 0 && in[before].Text == "." {
+			continue
+		}
+		if isGoKeyword(in[recv].Text) || in[recv].Text == "list" || in[recv].Text == "gxvdom" {
+			continue
+		}
+		// 已是 List 的变量（来自提升的 []T 字面量/参数）无需包装
+		if listVars[in[recv].Text] {
+			continue
+		}
+		wraps = append(wraps, wrap{recv: recv, close: close})
+	}
+	if len(wraps) == 0 {
+		return in
+	}
+	// 从后往前插入，避免下标漂移
+	out := append([]Token(nil), in...)
+	for k := len(wraps) - 1; k >= 0; k-- {
+		w := wraps[k]
+		p := out[w.recv].Pos
+		// 接收者前插 'list.Of('，接收者后（'.' 前）插 ')'：list.Of(xs).Map(f)
+		out = append(out[:w.recv+1], append([]Token{tokOp(")", p)}, out[w.recv+1:]...)...)
+		open := []Token{
+			tokIdent("list", p), tokOp(".", p), tokIdent("Of", p), tokOp("(", p),
+		}
+		out = append(out[:w.recv], append(open, out[w.recv:]...)...)
+	}
 	return out
 }
 

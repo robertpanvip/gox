@@ -433,3 +433,44 @@ func TestSourcemapUnicodeByteColumns(t *testing.T) {
 		}
 	}
 }
+
+func TestChainWrapExternalSlice(t *testing.T) {
+	// 外部变量（未提升）的链式调用应插入 list.Of 包装
+	src := `package main
+import "strings"
+func main() {
+	xs := strings.Fields("a b")
+	_ = xs.map(func(s string) string { return s })
+}
+`
+	res, err := CompileSource(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(res.GoSource, "list.Of(xs).Map") {
+		t.Errorf("外部切片应插入 list.Of 包装:\n%s", res.GoSource)
+	}
+	if err := res.Validate(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestChainNoWrapPromotedSlice(t *testing.T) {
+	// 本地提升的切片变量不应重复包装
+	src := `package main
+func main() {
+	xs := []int{1, 2}
+	_ = xs.map(func(x int) int { return x })
+}
+`
+	res, err := CompileSource(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(res.GoSource, "list.Of(xs)") {
+		t.Errorf("已提升切片不应重复 list.Of 包装:\n%s", res.GoSource)
+	}
+	if !strings.Contains(res.GoSource, "xs.Map") {
+		t.Errorf("应保留 xs.Map 链式调用:\n%s", res.GoSource)
+	}
+}
