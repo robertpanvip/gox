@@ -181,6 +181,17 @@ func oneDeclRoot(toks []Token, start, limit int, isTypeDecl bool) int {
 		if k < 0 || (limit > 0 && k >= limit) {
 			return -1
 		}
+		// 泛型类型声明 type Foo[T any] = T|E：跳过 [T any] 参数列表
+		if toks[k].Text == "[" {
+			close := matchDelimSkipSpace(toks, k, "[", "]")
+			if close <= k {
+				return -1
+			}
+			k = nextSig(toks, close+1)
+			if k < 0 || (limit > 0 && k >= limit) {
+				return -1
+			}
+		}
 		if toks[k].Text == "=" {
 			k = nextSig(toks, k+1)
 		}
@@ -240,6 +251,14 @@ func funcRoots(toks []Token, fi int) []int {
 		return roots
 	}
 	j = nextSig(toks, j+1)
+	// 泛型函数 func f[T any](...)：跳过 [T any] 参数列表再找 '('
+	if j >= 0 && toks[j].Text == "[" {
+		close := matchDelimSkipSpace(toks, j, "[", "]")
+		if close <= j {
+			return nil
+		}
+		j = nextSig(toks, close+1)
+	}
 	if j >= 0 && toks[j].Text == "(" {
 		c := matchDelim(toks, j, "(", ")")
 		roots = append(roots, paramRoots(toks, j, c)...)

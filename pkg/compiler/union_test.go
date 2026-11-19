@@ -317,3 +317,43 @@ func main() { process(1, "x", 2) }
 		}
 	}
 }
+
+func TestUnionGenericTypeAlias(t *testing.T) {
+	// 泛型类型别名中的联合应被擦除：type Result[T any] = T | error → = any
+	src := `package main
+type Result[T any] = T | error
+func main() {}
+`
+	res, err := CompileSource(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(res.GoSource, "type Result[T any] = any") {
+		t.Errorf("泛型类型别名的联合应擦除为 any:\n%s", res.GoSource)
+	}
+	if strings.Contains(res.GoSource, "| error") || strings.Contains(res.GoSource, "T |") {
+		t.Errorf("不应残留联合语法:\n%s", res.GoSource)
+	}
+	if err := res.Validate(); err != nil {
+		t.Fatalf("生成代码语法无效: %v\n%s", err, res.GoSource)
+	}
+}
+
+func TestUnionGenericFuncParam(t *testing.T) {
+	// 泛型函数参数中的联合应被擦除：func f[T any](b Box[T] | string) → b any
+	src := `package main
+type Box[T any] struct { v T }
+func unwrap[T any](b Box[T] | string) {}
+func main() {}
+`
+	res, err := CompileSource(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(res.GoSource, "b any") {
+		t.Errorf("泛型函数参数的联合应擦除为 any:\n%s", res.GoSource)
+	}
+	if err := res.Validate(); err != nil {
+		t.Fatalf("生成代码语法无效: %v\n%s", err, res.GoSource)
+	}
+}
