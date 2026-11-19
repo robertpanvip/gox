@@ -86,7 +86,8 @@ func promoteAllSlices(toks []Token, alias string) ([]Token, bool) {
 	return res, changed
 }
 
-// typeEnd 解析一个类型表达式的结束下标（exclusive），支持指针/嵌套切片/map/包限定/泛型实例化。
+// typeEnd 解析一个类型表达式的结束下标（exclusive）。
+// 支持指针、嵌套切片/数组、包限定、泛型实例化、map[K]V 的值类型。
 func typeEnd(toks []Token, start int) int {
 	i := start
 	if i >= len(toks) {
@@ -94,21 +95,37 @@ func typeEnd(toks []Token, start int) int {
 	}
 	if toks[i].Text == "*" {
 		i++
+		if i >= len(toks) {
+			return i
+		}
 	}
-	if i >= len(toks) {
-		return i
+	// 切片/数组类型 [...]T：递归解析元素类型（[]int、[3]int、[][]int…）
+	if toks[i].Text == "[" {
+		close := matchBracket(toks, i)
+		if close <= i {
+			return i
+		}
+		return typeEnd(toks, close+1)
 	}
 	if toks[i].Kind != Ident {
 		return i
 	}
+	base := toks[i].Text
 	i++
 	// 包限定 pkg.Type
 	if i+1 < len(toks) && toks[i].Text == "." && toks[i+1].Kind == Ident {
 		i += 2
 	}
-	// 泛型实例化 Foo[T] 或数组/切片 [N] —— 跳过整个方括号
+	// 方括号后缀：map[K]V 需连值类型一起吞掉；Foo[T]/[N] 实例化到此为止
 	if i < len(toks) && toks[i].Text == "[" {
-		i = matchBracket(toks, i) + 1
+		close := matchBracket(toks, i)
+		if close <= i {
+			return i
+		}
+		i = close + 1
+		if base == "map" {
+			return typeEnd(toks, i)
+		}
 	}
 	return i
 }

@@ -83,14 +83,14 @@ func BuildSymbolMap(src string) *SymbolMap {
 		if enumPrefix != "" {
 			enumSeg.WriteString(" ")
 			enumSeg.WriteString(trimmed)
-			if strings.Contains(trimmed, "}") {
-				// 去掉 '{' ... '}' 之间的内容交给成员解析：取 '{' 之后、'}' 之前
-				seg := enumSeg.String()
+			if ci := strings.Index(enumSeg.String(), "}"); ci >= 0 {
+				// 首行已把 '{' 之后的内容写入 enumSeg，这里直接取 '}' 之前的部分。
+				// 若同一行还含 '{'（如 enum x { a, b } 跨到该行才闭合），再剥掉它。
+				seg := enumSeg.String()[:ci]
 				if oi := strings.Index(seg, "{"); oi >= 0 {
-					if ci := strings.Index(seg, "}"); ci > oi {
-						addMember(seg[oi+1:ci], enumMemberBase)
-					}
+					seg = seg[oi+1:]
 				}
+				addMember(seg, enumMemberBase)
 				enumSeg.Reset()
 				enumPrefix = ""
 			}
@@ -106,26 +106,29 @@ func BuildSymbolMap(src string) *SymbolMap {
 			}
 			prefix := upperFirstLocal(typeName)
 			add(name, 10, i, col+strings.Index(line, name), "enum", "枚举 "+name)
-			// 单行 enum { ... }：当场解析成员
-			if oi := strings.Index(line, "{"); oi >= 0 {
-				if ci := strings.Index(line, "}"); ci > oi {
-					memberLine := i
-					seg := line[oi+1 : ci]
-					enumPrefix = prefix
-					enumMemberBase = memberLine
-					addMember(seg, memberLine)
-					enumPrefix = ""
-				}
+		// 单行 enum { ... }：当场解析成员；多行 enum { ：进入累积状态
+		if oi := strings.Index(line, "{"); oi >= 0 {
+			if ci := strings.Index(line, "}"); ci > oi {
+				memberLine := i
+				seg := line[oi+1 : ci]
+				enumPrefix = prefix
+				enumMemberBase = memberLine
+				addMember(seg, memberLine)
+				enumPrefix = ""
 			} else {
+				// 有 '{' 无 '}'：多行 enum，记录已出现的成员文本
 				enumPrefix = prefix
 				enumMemberBase = i
 				enumSeg.Reset()
-				open := strings.Index(line, "{")
-				if open >= 0 {
-					enumSeg.WriteString(line[open+1:])
-				}
+				enumSeg.WriteString(line[oi+1:])
 			}
-			continue
+		} else {
+			// 无 '{'（罕见的宽松写法）：同样进入累积状态
+			enumPrefix = prefix
+			enumMemberBase = i
+			enumSeg.Reset()
+		}
+		continue
 		}
 		if r := reFunc.FindStringSubmatch(trimmed); r != nil {
 			name := r[1]

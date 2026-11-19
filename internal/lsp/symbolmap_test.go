@@ -105,3 +105,91 @@ func TestFindIdentifierEditsEnumRename(t *testing.T) {
 		t.Errorf("派生替换不正确: %+v", edits)
 	}
 }
+
+func TestBuildSymbolMapEmpty(t *testing.T) {
+	sm := BuildSymbolMap("")
+	if len(sm.Symbols) != 0 {
+		t.Errorf("空源码符号表应为空, got %+v", sm.Symbols)
+	}
+	if len(sm.Names()) != 0 {
+		t.Errorf("空源码 Names 应为空, got %v", sm.Names())
+	}
+}
+
+func TestAtOutOfBounds(t *testing.T) {
+	sm := BuildSymbolMap(sample)
+	lines := splitLines(sample)
+	if sm.At(lines, -1, 0) != nil {
+		t.Error("负行号应返回 nil")
+	}
+	if sm.At(lines, 999, 0) != nil {
+		t.Error("越界行号应返回 nil")
+	}
+	if sm.At(lines, 0, -1) != nil {
+		t.Error("负列号应返回 nil")
+	}
+	// 空白位置无符号
+	if sm.At(lines, 1, 0) != nil {
+		t.Error("空行应返回 nil")
+	}
+}
+
+func TestAtUnknownIdentifier(t *testing.T) {
+	sm := BuildSymbolMap(sample)
+	lines := splitLines(sample)
+	// 第 11 行 "import "fmt"" 中的 fmt 非定义符号
+	if sym := sm.At(lines, 2, 8); sym != nil {
+		t.Errorf("未知标识符不应命中符号, got %+v", sym)
+	}
+}
+
+func TestSymbolKinds(t *testing.T) {
+	sm := BuildSymbolMap(sample)
+	want := map[string]int{
+		"color": 10, // enum
+		"point": 5,  // type
+		"greet": 12, // func
+		"main":  12, // func
+	}
+	for name, kind := range want {
+		syms := sm.Lookup(name)
+		if len(syms) == 0 {
+			t.Errorf("未找到符号 %q", name)
+			continue
+		}
+		if syms[0].Kind != kind {
+			t.Errorf("%q Kind = %d, want %d", name, syms[0].Kind, kind)
+		}
+	}
+}
+
+func TestNamesIncludeAllSpelling(t *testing.T) {
+	sm := BuildSymbolMap(sample)
+	names := map[string]bool{}
+	for _, n := range sm.Names() {
+		names[n] = true
+	}
+	for _, n := range []string{"green", "ColorGreen", "colorGreen", "red", "ColorRed", "colorRed"} {
+		if !names[n] {
+			t.Errorf("Names 应包含 %q", n)
+		}
+	}
+}
+
+func TestMultiLineEnumMembers(t *testing.T) {
+	src := "package main\npub enum color {\n  red,\n  green,\n  blue,\n}\n"
+	sm := BuildSymbolMap(src)
+	for _, spelling := range []string{"red", "ColorRed", "colorRed", "blue", "ColorBlue"} {
+		if len(sm.Lookup(spelling)) == 0 {
+			t.Errorf("多行 enum 成员拼写 %q 未命中", spelling)
+		}
+	}
+}
+
+func TestCRLFSource(t *testing.T) {
+	src := "package main\r\npub func greet() {}\r\nfunc main() { greet() }\r\n"
+	sm := BuildSymbolMap(src)
+	if len(sm.Lookup("greet")) == 0 {
+		t.Error("CRLF 源码应正确识别函数符号")
+	}
+}

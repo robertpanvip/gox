@@ -1,6 +1,9 @@
 package gxvdom
 
-import "testing"
+import (
+	"reflect"
+	"testing"
+)
 
 func TestRender(t *testing.T) {
 	node := CreateElement("div", map[string]any{"class": "box", "disabled": true}, "hi ", "there")
@@ -28,5 +31,139 @@ func TestDiff(t *testing.T) {
 	}
 	if seen[OpSetProp] != 1 || seen[OpSetText] != 1 || seen[OpAppend] != 1 {
 		t.Fatalf("期望 set-prop/set-text/append 各一条，实际 %+v", seen)
+	}
+}
+
+func TestRenderVoidTags(t *testing.T) {
+	node := CreateElement("br", nil)
+	if got := Render(node); got != "<br>" {
+		t.Errorf("void 标签渲染 = %q, want <br>", got)
+	}
+	// void 标签即使有 children 也不渲染闭合标签
+	node2 := CreateElement("img", map[string]any{"src": "x.png"}, "ignored")
+	want := `<img src="x.png">`
+	if got := Render(node2); got != want {
+		t.Errorf("void 标签带子节点 = %q, want %q", got, want)
+	}
+}
+
+func TestRenderEscaping(t *testing.T) {
+	node := CreateElement("div", map[string]any{"title": `a"b&c<d`}, `<script>alert("x")</script>`)
+	got := Render(node)
+	want := `<div title="a&#34;b&amp;c&lt;d">&lt;script&gt;alert(&#34;x&#34;)&lt;/script&gt;</div>`
+	if got != want {
+		t.Errorf("HTML 转义 = %q, want %q", got, want)
+	}
+}
+
+func TestRenderSkipsProps(t *testing.T) {
+	fn := func() {}
+	node := CreateElement("div", map[string]any{
+		"children": "should-not-render",
+		"onClick":  fn,
+		"hidden":   false,
+		"z":        "last",
+		"a":        "first",
+	}, "body")
+	got := Render(node)
+	want := `<div a="first" z="last">body</div>`
+	if got != want {
+		t.Errorf("属性过滤/排序 = %q, want %q", got, want)
+	}
+}
+
+func TestRenderScalarChildren(t *testing.T) {
+	node := CreateElement("p", nil, "n=", 42, " ", true, []any{"a", "b"})
+	got := Render(node)
+	want := "<p>n=42 trueab</p>"
+	if got != want {
+		t.Errorf("标量/切片子节点 = %q, want %q", got, want)
+	}
+}
+
+func TestRenderNilNode(t *testing.T) {
+	var nilNode *VNode
+	cases := []any{nil, nilNode, ""}
+	for _, c := range cases {
+		if got := Render(c); got != "" {
+			t.Errorf("Render(%v) = %q, want empty", c, got)
+		}
+	}
+}
+
+func TestDiffReplaceDifferentTag(t *testing.T) {
+	a := CreateElement("div", nil, "x")
+	b := CreateElement("span", nil, "x")
+	patches := Diff(a, b)
+	if len(patches) != 1 || patches[0].Op != OpReplace || len(patches[0].Path) != 0 {
+		t.Fatalf("不同标签应整体替换: %+v", patches)
+	}
+}
+
+func TestDiffTextToElementReplace(t *testing.T) {
+	a := CreateElement("div", nil, "text")
+	b := CreateElement("div", nil, CreateElement("span", nil))
+	patches := Diff(a, b)
+	found := false
+	for _, p := range patches {
+		if p.Op == OpReplace && len(p.Path) == 1 && p.Path[0] == 0 {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("文本→元素应产生 replace at [0]: %+v", patches)
+	}
+}
+
+func TestDiffRemovePropAndChild(t *testing.T) {
+	a := CreateElement("div", map[string]any{"class": "box", "id": "x"}, "keep", "drop")
+	b := CreateElement("div", map[string]any{"class": "box"}, "keep")
+	patches := Diff(a, b)
+	seen := map[PatchOp]int{}
+	for _, p := range patches {
+		seen[p.Op]++
+		if p.Op == OpRemoveProp && p.Key != "id" {
+			t.Errorf("应删除 id 属性, got %q", p.Key)
+		}
+		if p.Op == OpRemove && (len(p.Path) != 1 || p.Path[0] != 1) {
+			t.Errorf("应删除子节点 [1], got %v", p.Path)
+		}
+	}
+	if seen[OpRemoveProp] != 1 || seen[OpRemove] != 1 {
+		t.Fatalf("期望 remove-prop/remove 各一条: %+v", seen)
+	}
+}
+
+func TestDiffNestedPath(t *testing.T) {
+	childA := CreateElement("span", nil, "old")
+	childB := CreateElement("span", nil, "new")
+	a := CreateElement("div", nil, CreateElement("section", nil, childA))
+	b := CreateElement("div", nil, CreateElement("section", nil, childB))
+	patches := Diff(a, b)
+	found := false
+	for _, p := range patches {
+		if p.Op == OpSetText && reflect.DeepEqual(p.Path, []int{0, 0, 0}) {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("嵌套文本变化路径应为 [0,0,0]: %+v", patches)
+	}
+}
+
+func TestDiffIdenticalTreesNoPatches(t *testing.T) {
+	a := CreateElement("div", map[string]any{"class": "box"}, "hello", CreateElement("span", nil, "x"))
+	b := CreateElement("div", map[string]any{"class": "box"}, "hello", CreateElement("span", nil, "x"))
+	if patches := Diff(a, b); len(patches) != 0 {
+		t.Fatalf("相同树应无补丁, got %+v", patches)
+	}
+}
+
+func TestDiffSetPropValueChange(t *testing.T) {
+	a := CreateElement("input", map[string]any{"value": "1"})
+	b := CreateElement("input", map[string]any{"value": "2"})
+	patches := Diff(a, b)
+	if len(patches) != 1 || patches[0].Op != OpSetProp || patches[0].Key != "value" || patches[0].Value != "2" {
+		t.Fatalf("属性变更应产生 set-prop: %+v", patches)
 	}
 }
