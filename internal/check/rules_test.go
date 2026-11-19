@@ -531,3 +531,35 @@ func main() { f() }
 	diags := checkGx(t, src)
 	hasDiag(t, diags, "union-operand", "v")
 }
+
+func TestNestedUnionAliasCallNoFalsePositive(t *testing.T) {
+	// 嵌套联合别名扁平化后，兼容的实参不应被误报。
+	src := `package main
+type Num = int | int64
+type Val = Num | string
+func f(v Val) { println(v) }
+func main() { f(1) }
+`
+	diags := checkGx(t, src)
+	if len(diags) != 0 {
+		t.Fatalf("嵌套联合兼容实参不应误报: %v", diags)
+	}
+}
+
+func TestNestedUnionStillNarrowedInElse(t *testing.T) {
+	// Val = Num|string，is string 的 else 分支仍是 int|int64（联合），参与 + 应报错。
+	src := `package main
+type Num = int | int64
+type Val = Num | string
+func f(v Val) {
+    if v is string {
+        println(v)
+    } else {
+        println(v + 1)
+    }
+}
+func main() { f(1) }
+`
+	diags := checkGx(t, src)
+	hasDiag(t, diags, "union-operand", "v")
+}

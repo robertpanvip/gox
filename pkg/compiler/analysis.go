@@ -601,7 +601,16 @@ func typeFromTokensResolved(toks []Token, s, e int, resolveNamed func(string) (T
 	if len(mems) >= 2 {
 		t := Type{}
 		for _, m := range mems {
-			t.Members = append(t.Members, resolveMember(m, resolveNamed))
+			rm := resolveMember(m, resolveNamed)
+			if rm.IsUnion() {
+				// 扁平化嵌套联合：type Num = int|int64; type Val = Num|string
+				// 应得到 Val = int|int64|string，而非 (int|int64)|string。
+				// 否则 Has/Accepts 对成员做精确字符串匹配时会把 "int|int64"
+				// 当成一个类型，导致 f(1) 这类合法调用被误报。
+				t.Members = append(t.Members, rm.Members...)
+			} else {
+				t.Members = append(t.Members, rm)
+			}
 		}
 		return t
 	}

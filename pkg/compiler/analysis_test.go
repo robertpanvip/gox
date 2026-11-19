@@ -369,3 +369,26 @@ func f() {
 		t.Errorf("变量名为 is 不应被误判: %v", err)
 	}
 }
+
+func TestNestedUnionFlattened(t *testing.T) {
+	// type Num = int|int64; type Val = Num|string
+	// Val 应扁平化为 int|int64|string，否则 Has/Accepts 把 "int|int64" 当单一成员误报。
+	src := `package main
+type Num = int | int64
+type Val = Num | string
+func f(v Val) { println(v) }
+func main() { f(1) }
+`
+	res, err := Compile("nested.gx", src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sig, ok := res.Analysis.FuncSig("f")
+	if !ok {
+		t.Fatal("缺少函数 f 签名")
+	}
+	got := sig.Params[0].String()
+	if got != "int|int64|string" {
+		t.Errorf("嵌套联合应扁平化为 int|int64|string, got %q", got)
+	}
+}
