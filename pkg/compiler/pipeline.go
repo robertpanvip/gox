@@ -85,9 +85,13 @@ func emit(toks []Token, file string) (string, *sourcemap.SourceMap) {
 				OutLine: line, OutCol: col, InLine: t.Pos.Line, InCol: t.Pos.Col,
 			})
 		}
-		for _, r := range t.Text {
-			b.WriteRune(r)
-			if r == '\n' {
+		// Go 编译器的列号是 UTF-8 字节列，因此这里按字节递增 col，
+		// 与 lexer 的 l.col（同样按字节）保持一致；否则含中文/emoji 的
+		// 行会产生 sourcemap 列偏移，导致 buildcheck 诊断回投错位。
+		for i := 0; i < len(t.Text); i++ {
+			c := t.Text[i]
+			b.WriteByte(c)
+			if c == '\n' {
 				line++
 				col = 1
 			} else {

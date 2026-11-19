@@ -412,3 +412,24 @@ func main() {
 		t.Errorf("使用的 map 应注入 list import:\n%s", res.GoSource)
 	}
 }
+
+func TestSourcemapUnicodeByteColumns(t *testing.T) {
+	// 含多字节字符时，GX 输入列与 Go 输出列都应是「UTF-8 字节列」。
+	// 若 emit 按 rune 计列、lexer 按字节计列，则中文之后的 token 映射会错位。
+	src := "package main\nfunc main() { message := \"中文😀\"; println(message) }\n"
+	res, err := CompileSource(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 找到 println token 对应的映射：它的输入列应按字节计算。
+	// 直接逐映射核对：未被 desugar 改写的 token，输出列应等于输入列。
+	for _, mp := range res.SourceMap.Mappings() {
+		if mp.Generated.Line != mp.Original.Line {
+			continue
+		}
+		if mp.Generated.Column != mp.Original.Column {
+			t.Errorf("第 %d 行未改写 token 的列应一致: go=%d gx=%d\n(疑似 Unicode 列按 rune 计)",
+				mp.Generated.Line, mp.Generated.Column, mp.Original.Column)
+		}
+	}
+}
