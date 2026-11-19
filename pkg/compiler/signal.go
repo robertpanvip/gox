@@ -243,8 +243,10 @@ func rewriteSignals(toks []Token, sigs map[string]bool) []Token {
 func isAssignOp(s string) bool { return s == "=" }
 
 // compoundAssignOps 是 signal 写需要展开为 name(name() op expr) 的复合赋值运算符。
+// 覆盖 Go 全部复合赋值：算术(+ - * / %)与位运算(& | ^ << >> &^)。
 var compoundAssignOps = map[string]bool{
 	"+=": true, "-=": true, "*=": true, "/=": true, "%=": true,
+	"&=": true, "|=": true, "^=": true, "<<=": true, ">>=": true, "&^=": true,
 }
 
 // isSignalDeclTarget 判断位置 i 是否是变量声明/短声明的左侧目标。
@@ -333,7 +335,7 @@ func signalExprEnd(toks []Token, start int) int {
 				return i
 			}
 		}
-		if t.Kind == Newline && depth == 0 {
+		if (t.Kind == Newline || t.Kind == Comment) && depth == 0 {
 			return i
 		}
 		if t.Kind == EOF {

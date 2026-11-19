@@ -120,7 +120,7 @@ func lambdaBodyEnd(toks []Token, start int) int {
 				return i
 			}
 		}
-		if t.Kind == Newline && depth == 0 {
+		if (t.Kind == Newline || t.Kind == Comment) && depth == 0 {
 			return i
 		}
 		if t.Kind == EOF {

@@ -400,6 +400,27 @@ func main() {
 	}
 }
 
+func TestIntegrationSignalBitwiseCompound(t *testing.T) {
+	// 位运算复合赋值：&= / |= / ^= / <<= / >>= / &^= 真实运行结果。
+	src := `package main
+import "fmt"
+signal n = 0
+func main() {
+    n |= 12        // 12
+    n &= 10        // 8
+    n ^= 3         // 11
+    n <<= 1        // 22
+    n >>= 2        // 5
+    n &^= 1        // 4
+    fmt.Println("n", n)
+}
+`
+	out := runGX(t, src)
+	if !strings.Contains(out, "n 4") {
+		t.Errorf("位复合赋值最终结果应为 4, got:\n%s", out)
+	}
+}
+
 func TestIntegrationSignalMultipleEffects(t *testing.T) {
 	// 多个 signal、多个 effect，依赖追踪互不串扰。
 	src := `package main

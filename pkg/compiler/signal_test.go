@@ -124,6 +124,33 @@ func main() {
 	)
 }
 
+func TestSignalBitwiseCompoundAssign(t *testing.T) {
+	// Go 全部位运算复合赋值都应展开为 name(name() op expr)
+	src := `package main
+signal n = 0
+func main() {
+    n &= 3
+    n |= 8
+    n ^= 2
+    n <<= 1
+    n >>= 1
+    n &^= 1
+}
+`
+	got := compileOK(t, "sigbit.gx", src)
+	containsAll(t, got,
+		`n(n() & 3)`,
+		`n(n() | 8)`,
+		`n(n() ^ 2)`,
+		`n(n() << 1)`,
+		`n(n() >> 1)`,
+		`n(n() &^ 1)`,
+	)
+	if strings.Contains(got, "n() &=") || strings.Contains(got, "n() <<=") {
+		t.Errorf("位复合赋值不应落到读改写: %s", got)
+	}
+}
+
 func TestSignalImportReuseAlias(t *testing.T) {
 	// 源码已用别名导入 signal 路径 → 生成代码复用该别名
 	src := `package main
