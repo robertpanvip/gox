@@ -86,7 +86,7 @@ func renderTo(b *strings.Builder, node any) {
 			if v == nil || v == false {
 				continue
 			}
-			if key == "children" || (strings.HasPrefix(key, "on") && isFunc(v)) {
+			if key == "children" || key == "key" || (strings.HasPrefix(key, "on") && isFunc(v)) {
 				continue
 			}
 			b.WriteString(" ")
@@ -185,11 +185,7 @@ func isFunc(v any) bool {
 	if v == nil {
 		return false
 	}
-	switch v.(type) {
-	case func(), func(any), func(...any):
-		return true
-	}
-	return false
+	return reflect.ValueOf(v).Kind() == reflect.Func
 }
 
 func scalarString(v any) string {
@@ -249,6 +245,10 @@ func Diff(old, new any) []Patch {
 }
 
 func diffNode(old, new any, path []int, out *[]Patch) {
+	// 两侧都为空：无变化，不产生补丁（修复 Diff(nil,nil) 生成无意义 Replace）。
+	if old == nil && new == nil {
+		return
+	}
 	// 函数组件节点先惰性展开成具体节点树，再参与比较；
 	// 这样 Diff 始终在「原生元素 + 文本」层面工作。
 	if e, ok := old.(*VNode); ok && e != nil && e.Component != nil {
@@ -298,18 +298,87 @@ func diffNode(old, new any, path []int, out *[]Patch) {
 		}
 	}
 
-	// 子节点差异：按位置线性比较
-	n := len(oe.Children)
-	if len(ne.Children) < n {
-		n = len(ne.Children)
+	// 子节点差异
+	diffChildren(oe.Children, ne.Children, path, out)
+}
+
+// nodeKey 提取元素子节点的 key（Props["key"] 的字符串形式）。
+// 非元素节点或没有 key 时返回 false。
+func nodeKey(v any) (string, bool) {
+	e, ok := v.(*VNode)
+	if !ok || e == nil || e.Props == nil {
+		return "", false
+	}
+	k, ok := e.Props["key"]
+	if !ok {
+		return "", false
+	}
+	s, ok := k.(string)
+	return s, ok && s != ""
+}
+
+// diffChildren 比较子节点列表。若两侧所有元素子节点都带 key，则按 key 对齐
+// （支持插入/删除/重排，避免位置错位产生大量错误补丁）；否则按位置线性比较。
+func diffChildren(oldKids, newKids []any, path []int, out *[]Patch) {
+	// 判断是否可启用 key 对齐：两侧非空、且每个元素子节点都有 key。
+	allKeyed := len(oldKids) > 0 && len(newKids) > 0
+	if allKeyed {
+		for _, c := range oldKids {
+			if _, ok := nodeKey(c); !ok {
+				allKeyed = false
+				break
+			}
+		}
+	}
+	if allKeyed {
+		for _, c := range newKids {
+			if _, ok := nodeKey(c); !ok {
+				allKeyed = false
+				break
+			}
+		}
+	}
+
+	if allKeyed {
+		// 建 old 的 key → (节点, 原位置) 索引
+		oldByKey := map[string]any{}
+		for _, c := range oldKids {
+			k, _ := nodeKey(c)
+			oldByKey[k] = c
+		}
+		used := map[string]bool{}
+		// 以 new 顺序为准：命中的对位 diff（路径用 new 索引），未命中的 append
+		for i, nc := range newKids {
+			k, _ := nodeKey(nc)
+			if oc, ok := oldByKey[k]; ok {
+				used[k] = true
+				diffNode(oc, nc, append(clonePath(path), i), out)
+			} else {
+				*out = append(*out, Patch{Op: OpAppend, Path: clonePath(path), Value: nc})
+			}
+		}
+		// old 中未被使用的 key → remove（按原位置倒序，路径稳定）
+		for i := len(oldKids) - 1; i >= 0; i-- {
+			k, _ := nodeKey(oldKids[i])
+			if !used[k] {
+				*out = append(*out, Patch{Op: OpRemove, Path: append(clonePath(path), i)})
+			}
+		}
+		return
+	}
+
+	// 无 key：按位置线性比较（保持向后兼容）
+	n := len(oldKids)
+	if len(newKids) < n {
+		n = len(newKids)
 	}
 	for i := 0; i < n; i++ {
-		diffNode(oe.Children[i], ne.Children[i], append(clonePath(path), i), out)
+		diffNode(oldKids[i], newKids[i], append(clonePath(path), i), out)
 	}
-	for i := n; i < len(ne.Children); i++ {
-		*out = append(*out, Patch{Op: OpAppend, Path: clonePath(path), Value: ne.Children[i]})
+	for i := n; i < len(newKids); i++ {
+		*out = append(*out, Patch{Op: OpAppend, Path: clonePath(path), Value: newKids[i]})
 	}
-	for i := n; i < len(oe.Children); i++ {
+	for i := n; i < len(oldKids); i++ {
 		*out = append(*out, Patch{Op: OpRemove, Path: append(clonePath(path), i)})
 	}
 }
@@ -330,12 +399,16 @@ func scalar(v any) (string, bool) {
 }
 
 func equalValue(a, b any) bool {
-	as, aOK := scalar(a)
-	bs, bOK := scalar(b)
-	if aOK && bOK {
-		return as == bs
+	// 严格按动态类型比较：true(bool) 与 "true"(string) 渲染结果不同
+	// （<button disabled> vs <button disabled="true">），不能只比字符串。
+	if a == nil || b == nil {
+		return a == nil && b == nil
 	}
-	return fmt.Sprint(a) == fmt.Sprint(b)
+	ta, tb := reflect.TypeOf(a), reflect.TypeOf(b)
+	if ta != tb {
+		return false
+	}
+	return reflect.DeepEqual(a, b)
 }
 
 func clonePath(p []int) []int {

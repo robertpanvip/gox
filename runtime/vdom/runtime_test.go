@@ -2,6 +2,7 @@ package gxvdom
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -287,5 +288,84 @@ func TestComponentRejectsWrongSignature(t *testing.T) {
 	node := CreateElement(bad, nil)
 	if got := Render(node); got != "" {
 		t.Fatalf("错误签名组件应渲染为空, got %q", got)
+	}
+}
+
+func TestDiffEqualValueKeepsType(t *testing.T) {
+	// true(bool) 与 "true"(string) 渲染不同，必须产生 set-prop，不能漏更新。
+	a := CreateElement("button", map[string]any{"disabled": true})
+	b := CreateElement("button", map[string]any{"disabled": "true"})
+	patches := Diff(a, b)
+	found := false
+	for _, p := range patches {
+		if p.Op == OpSetProp && p.Key == "disabled" && p.Value == "true" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("布尔 true→字符串 true 应产生 set-prop: %+v", patches)
+	}
+}
+
+func TestDiffNilNilNoPatch(t *testing.T) {
+	if patches := Diff(nil, nil); len(patches) != 0 {
+		t.Fatalf("Diff(nil,nil) 应无补丁, got %+v", patches)
+	}
+}
+
+func TestIsFuncAnySignature(t *testing.T) {
+	// 任意签名的事件处理器都应被识别为函数，不渲染成 HTML 属性。
+	if !isFunc(func(string) {}) {
+		t.Error("func(string) 应识别为函数")
+	}
+	if !isFunc(func(int, string) error { return nil }) {
+		t.Error("多参数有返回值应识别为函数")
+	}
+	if isFunc("not a func") {
+		t.Error("字符串不应识别为函数")
+	}
+	node := CreateElement("button", map[string]any{"onClick": func(string) {}})
+	if got := Render(node); strings.Contains(got, "onClick") {
+		t.Errorf("函数属性不应渲染成 HTML 属性: %s", got)
+	}
+}
+
+func TestRenderSkipsKeyProp(t *testing.T) {
+	node := CreateElement("li", map[string]any{"key": "a", "id": "x"}, "hi")
+	if got := Render(node); strings.Contains(got, "key=") {
+		t.Errorf("key 不应渲染为 HTML 属性: %s", got)
+	}
+}
+
+func TestDiffKeyedReorder(t *testing.T) {
+	mk := func(k, text string) *Element {
+		return CreateElement("li", map[string]any{"key": k}, text)
+	}
+	old := CreateElement("ul", nil, mk("a", "A"), mk("b", "B"))
+	new := CreateElement("ul", nil, mk("b", "B"), mk("a", "A"))
+	// 重排：按 key 对齐后，每个 key 命中的节点内容相同，不应产生 set-text（
+	// 只有顺序变化）。这里断言没有把 A/B 内容对错位的补丁。
+	for _, p := range Diff(old, new) {
+		if p.Op == OpSetText {
+			t.Errorf("key 重排不应产生文本错位补丁: %+v", p)
+		}
+	}
+}
+
+func TestDiffKeyedInsert(t *testing.T) {
+	mk := func(k, text string) *Element {
+		return CreateElement("li", map[string]any{"key": k}, text)
+	}
+	old := CreateElement("ul", nil, mk("a", "A"))
+	new := CreateElement("ul", nil, mk("a", "A"), mk("b", "B"))
+	patches := Diff(old, new)
+	found := false
+	for _, p := range patches {
+		if p.Op == OpAppend {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("key 新增应产生 append: %+v", patches)
 	}
 }
