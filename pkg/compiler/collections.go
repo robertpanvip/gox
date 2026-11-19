@@ -63,7 +63,7 @@ func promoteAllSlices(toks []Token, alias string) ([]Token, bool) {
 		// 识别空方括号：'[' 紧随 ']'（切片类型 []T 的形态，严格相邻）
 		if t.Kind == Operator && t.Text == "[" && i+1 < len(toks) && toks[i+1].Text == "]" && !toks[i+1].IsGen {
 			te := typeEnd(toks, i+2)
-			if te > i+2 { // ']' 后确有类型表达式
+			if te > i+2 && verifyTypeExprAt(toks, i+2, te) { // ']' 后须是合法 Go 类型表达式
 				p := t.Pos
 				gen := []Token{
 					tokIdent(alias, p), tokOp(".", p), tokIdent("List", p), tokOp("[", p),
