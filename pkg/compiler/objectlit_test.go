@@ -228,3 +228,46 @@ func TestIsAnyLikeType(t *testing.T) {
 		}
 	}
 }
+
+func TestObjectLitIdentFieldTypes(t *testing.T) {
+	// 标识符字段值应从声明推断类型，而非降级为 any。
+	cases := []struct {
+		name string
+		src  string
+		want string
+	}{
+		{"loopvar", `package main
+func main() {
+	s := 0
+	for i := 0; i < 3; i++ { p := { a: i, b: i * 2 }; s += p.a + p.b }
+	_ = s
+}
+`, `struct{ a int; b int }{ a: i, b: i * 2 }`},
+		{"param", `package main
+func mk(n int) any { return { val: n, name: "x" } }
+`, `struct{ val int; name string }{ val: n, name: "x" }`},
+		{"var", `package main
+func main() {
+	var age int = 20
+	p := { a: age }
+	_ = p
+}
+`, `struct{ a int }{ a: age }`},
+		{"shortstr", `package main
+func main() {
+	s := "hi"
+	p := { v: s }
+	_ = p
+}
+`, `struct{ v string }{ v: s }`},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := compileOK(t, "objident_"+c.name+".gx", c.src)
+			containsAll(t, got, c.want)
+			if strings.Contains(got, " a: any") || strings.Contains(got, " v: any") || strings.Contains(got, " val: any") {
+				t.Errorf("标识符字段不应推断为 any:\n%s", got)
+			}
+		})
+	}
+}
