@@ -2,7 +2,7 @@ package main
 
 import (
     "fmt"
-    gxvdom "github.com/robertpanvip/gox/vdom"
+    gxvdom "github.com/robertpanvip/gox/runtime/vdom"
 )
 
 pub func card(title string, items []string) any {

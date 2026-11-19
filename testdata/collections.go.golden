@@ -1,6 +1,6 @@
 package main
 
-import "github.com/robertpanvip/gox/list"
+import "github.com/robertpanvip/gox/runtime/list"
 
 import (
     "fmt"

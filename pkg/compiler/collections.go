@@ -12,7 +12,7 @@ import "strconv"
 // 天然不误伤：数组 [3]T（方括号非空）、索引 a[i]、切片表达式 a[1:2]、
 // map[K]V（map 的方括号非空）、泛型实例 Foo[T]（方括号非空）。
 //
-// import 路径由 module 决定：<module>/list。
+// import 路径由 module 决定：<module>/runtime/list。
 
 var chainMethods = map[string]string{
 	"map": "Map", "filter": "Filter", "reduce": "Reduce",
@@ -24,7 +24,7 @@ func listImportPath(module string) string {
 	if module == "" {
 		module = defaultModule
 	}
-	return module + "/list"
+	return module + "/runtime/list"
 }
 
 func transformCollections(in []Token, module string) []Token {

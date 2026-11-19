@@ -64,7 +64,7 @@ pub enum perm { read = 1 << iota, write, exec }  // 位标志 1,2,4
 | `<br/>` 空元素 | `CreateElement("br", map[string]any{})` |
 | `<Foo/>` 组件 | `CreateElement(Foo, …)` |
 
-运行时 `vdom/`：`VNode`（`Element` 为其别名）、`CreateElement`、`Render`、`Diff`。`Diff(old,new)` 产出 `[]Patch`（set-text / set-prop / remove-prop / replace / append / remove），只描述"做什么"，不含调度。
+运行时 `runtime/vdom/`：`VNode`（`Element` 为其别名）、`CreateElement`、`Render`、`Diff`。`Diff(old,new)` 产出 `[]Patch`（set-text / set-prop / remove-prop / replace / append / remove），只描述"做什么"，不含调度。
 
 ## 4. 外部 Go 符号
 
@@ -90,7 +90,7 @@ labels := nums.map(fn).filter(keep).reduce(0, add)
 
 - `List[T]` 与 `[]T` 底层相同，双向可直接赋值/传参。
 - **仅匹配空方括号 `[]` 紧跟类型**（切片类型独有形态），故不误伤：数组 `[3]T`、索引 `a[i]`、切片表达式 `a[1:2]`、`map[K]V`、`Foo[T]`。
-- 只有实际发生提升时才注入 `<module>/list` import；`-module` 指定 module 路径。
+- 只有实际发生提升时才注入 `<module>/runtime/list` import；`-module` 指定 module 路径。
 
 ## 6. sourcemap / LSP / 编译检查
 

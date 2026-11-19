@@ -82,7 +82,7 @@ func TestNoSliceNoListImport(t *testing.T) {
 pub func f() { println("no slice here") }
 `
 	got := compileOK(t, "noslice2.gx", src)
-	assertNotContains(t, got, "gox/list", "无切片时不应注入 list import")
+	assertNotContains(t, got, "gox/runtime/list", "无切片时不应注入 list import")
 	assertNotContains(t, got, "list.List", "无切片时不应出现 List 类型")
 }
 
@@ -98,20 +98,20 @@ pub func f() { xs := []int{1}; _ = xs }
 	if err := res.Validate(); err != nil {
 		t.Fatalf("生成代码语法错误: %v\n%s", err, res.GoSource)
 	}
-	containsAll(t, res.GoSource, `import "example.com/myapp/list"`)
-	assertNotContains(t, res.GoSource, "github.com/robertpanvip/gox/list", "自定义 module 不应使用默认路径")
+	containsAll(t, res.GoSource, `import "example.com/myapp/runtime/list"`)
+	assertNotContains(t, res.GoSource, "github.com/robertpanvip/gox/runtime/list", "自定义 module 不应使用默认路径")
 }
 
 func TestListImportNotDuplicated(t *testing.T) {
 	// 源码已手写 list import，转译器不应重复注入
 	src := `package main
 
-import "github.com/robertpanvip/gox/list"
+import "github.com/robertpanvip/gox/runtime/list"
 
 pub func f() { xs := []int{1}; _ = xs }
 `
 	got := compileOK(t, "dupimp.gx", src)
-	if n := strings.Count(got, `import "github.com/robertpanvip/gox/list"`); n != 1 {
+	if n := strings.Count(got, `import "github.com/robertpanvip/gox/runtime/list"`); n != 1 {
 		t.Errorf("list import 应恰好出现 1 次, got %d\n%s", n, got)
 	}
 }

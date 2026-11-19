@@ -85,7 +85,7 @@ pub func view(name string) any {
 `
 	got := compileOK(t, "jsx.gx", src)
 	containsAll(t, got,
-		`import gxvdom "github.com/robertpanvip/gox/vdom"`,
+		`import gxvdom "github.com/robertpanvip/gox/runtime/vdom"`,
 		"gxvdom.CreateElement", `"div"`, `"class"`, `"box"`,
 		`"id": name`, `"disabled": true`, `"hello"`,
 		"gxvdom.CreateElement(\"span\"", "gxvdom.CreateElement(\"br\"")
@@ -168,7 +168,7 @@ pub func f() {
 `
 	got := compileOK(t, "coll.gx", src)
 	containsAll(t, got,
-		`import "github.com/robertpanvip/gox/list"`,
+		`import "github.com/robertpanvip/gox/runtime/list"`,
 		"list.List[int]",
 		"nums.Map(strconv.Itoa).Filter(",
 		"nums.Filter(keep).Reduce(0,",

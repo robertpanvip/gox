@@ -48,7 +48,7 @@ pub enum perm { read = 1 << iota, write }  // 位标志 1,2
 
 ## 3. JSX
 
-`<tag>` 转成 `gxvdom.CreateElement(tag, props, children...)` 嵌套调用。运行时 [`vdom/`](vdom/) 提供 `VNode` / `CreateElement` / `Render` / `Diff`（Diff 产出结构化补丁，不含调度）。
+`<tag>` 转成 `gxvdom.CreateElement(tag, props, children...)` 嵌套调用。运行时 [`runtime/vdom/`](runtime/vdom/) 提供 `VNode` / `CreateElement` / `Render` / `Diff`（Diff 产出结构化补丁，不含调度）。
 
 ```gx
 pub func render(name string) any {
@@ -91,7 +91,7 @@ total := nums.filter(even).reduce(0, func(acc, x int) int { return acc + x })
 
 - `List[T]` 与 `[]T` 底层相同，可双向赋值；标准库返回的 `[]T` 也能用方法。
 - **不误伤**：数组 `[3]T`、索引 `a[i]`、切片表达式 `a[1:2]`、`map[K]V`、`Foo[T]` 都不是切片类型形态，不会被提升。
-- 用 `-module` 指定运行时 import 路径（默认 `github.com/robertpanvip/gox` → `.../list`）。运行时见 [`list/`](list/)。
+- 用 `-module` 指定运行时 import 路径（默认 `github.com/robertpanvip/gox` → `.../runtime/list`）。运行时见 [`runtime/list/`](runtime/list/)。
 
 ## 6. is 类型守卫
 
@@ -218,8 +218,9 @@ gox/
 ├── examples/           .gx 示例
 ├── testdata/           golden 产物 + LSP 端到端驱动脚本
 ├── docs/               设计与集成文档
-├── vdom/               VNode / CreateElement / Render / Diff
-└── list/               List[T] + 泛型 Map/Filter/Reduce 运行时
+└── runtime/            运行时组件（统一收纳，便于未来扩展）
+    ├── vdom/           VNode / CreateElement / Render / Diff
+    └── list/           List[T] + 泛型 Map/Filter/Reduce 运行时
 ```
 
 分层：`pkg` 是对外稳定 API，`internal` 仅供本仓库 cmd 使用；IDEA 插件等前端通过 `bindings/cabi` 或直接 import `pkg` 接入，不碰 `internal`。

@@ -43,7 +43,7 @@ func Compile(file, src string) (*Result, error) {
 	return CompileWithModule(file, src, defaultModule)
 }
 
-// CompileWithModule 以指定 module 转译。<module>/list 作为集合运行时 import 路径。
+// CompileWithModule 以指定 module 转译。<module>/runtime/list 作为集合运行时 import 路径。
 func CompileWithModule(file, src, module string) (*Result, error) {
 	toks := New(src).AllTokens()
 	analysis := Analyze(toks) // desugar 之前的 GX 语义层（联合未擦除）

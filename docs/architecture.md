@@ -14,7 +14,8 @@ internal/            仅本仓库 cmd 使用
   lsp/               协议 / server / 诊断 / 符号映射 / 重命名
   buildcheck/        真实 go build 检查（可取消 + LRU）
 bindings/cabi/       C-ABI 共享库（JNA）
-vdom/ list/          运行时
+runtime/             运行时组件（统一收纳）
+  vdom/ list/        具体运行时
 ```
 
 外部前端（IDEA 插件）通过 `bindings/cabi` 或直接 import `pkg` 接入，不碰 `internal`。
@@ -67,7 +68,7 @@ emit               拼装 Go 源码，同时记录输出 token → 输入位置�
 - 把 Go 源码写入临时 module（`go.mod` 声明 `go 1.27`），执行 `go build`；
 - 解析 `file:line:col: msg` 为结构化诊断；
 - `context` 可取消；结果按源码 hash 做 LRU 缓存；
-- `AddReplace` 注入 `go.mod replace`，使生成代码能解析到本地运行时（vdom/list）。
+- `AddReplace` 注入 `go.mod replace`，使生成代码能解析到本地运行时（runtime/vdom、runtime/list）。
 
 诊断的 Go 坐标经 `sourcemap.GoToGx` 转成 `.gx` 坐标后输出（CLI `-check` 与 LSP 诊断共用此路径）。
 

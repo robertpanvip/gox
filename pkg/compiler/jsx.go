@@ -577,7 +577,7 @@ func hasVdomImport(toks []Token) bool {
 	for i, t := range toks {
 		if t.is("import") {
 			for j := i; j < len(toks) && j < i+60; j++ {
-				if toks[j].Kind == String && strings.Contains(toks[j].Text, "gox/vdom") {
+				if toks[j].Kind == String && strings.Contains(toks[j].Text, "gox/runtime/vdom") {
 					return true
 				}
 			}
@@ -606,7 +606,7 @@ func injectVdomImport(toks []Token, p Pos) []Token {
 	imp := []Token{
 		tokNewline(p),
 		tokIdent("import", p), tokSpace(" ", p), tokIdent("gxvdom", p), tokSpace(" ", p),
-		tokString(strconv.Quote("github.com/robertpanvip/gox/vdom"), p), tokNewline(p),
+		tokString(strconv.Quote("github.com/robertpanvip/gox/runtime/vdom"), p), tokNewline(p),
 	}
 	out := append([]Token{}, toks[:insert]...)
 	out = append(out, imp...)
