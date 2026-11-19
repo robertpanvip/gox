@@ -14,6 +14,9 @@ type Result struct {
 	File      string
 	GoSource  string
 	SourceMap *sourcemap.SourceMap
+	// Analysis 是 desugar 之前 GX 语义层的产物（符号表 / 收窄 / 诊断）。
+	// 供 CLI / LSP 消费 GX 原生诊断；仅 Compile 路径填充，CompileStage 为 nil。
+	Analysis  *Analysis
 }
 
 // Validate 用 Go 解析器校验生成源码的语法（不检查类型/符号）。
@@ -26,12 +29,14 @@ func (r *Result) Validate() error {
 }
 
 // Compile 执行完整管线：
-// lex → union(联合类型擦除) → typeguard(is 类型守卫) → enum → pub → jsx
+// lex → analyze(GX 语义层：符号表 / 收窄 / 诊断) → union(联合类型擦除)
+// → typeguard(is 类型守卫，消费 analyze 结果) → enum → pub → jsx
 // → collections(集合链式) → scope(作用域符号收集) → restoreRefs(自身 pub 符号)
 // → external(外部符号机械还原) → emit。
 //
-// union/typeguard 必须在最前：分别把 A|B 擦除为 any、把 is 改写为 Go 原生
-// comma-ok 断言后，后续各层无需特殊处理。
+// analyze 必须在 union 之前：此时联合类型 A|B 尚未被擦除，is 守卫仍是原貌，
+// 语义层才能建立真实的联合类型环境并做收窄。typeguard 消费 analyze 的产物，
+// 只负责生成 comma-ok 断言，不再自行判定守卫。
 // scope 必须在 pub 之后（pub 名已大写，不会被误收为私有）、
 // jsx/collections 之后（它们注入的 import 也要被识别为包名）。
 func Compile(file, src string) (*Result, error) {
@@ -41,9 +46,10 @@ func Compile(file, src string) (*Result, error) {
 // CompileWithModule 以指定 module 转译。<module>/list 作为集合运行时 import 路径。
 func CompileWithModule(file, src, module string) (*Result, error) {
 	toks := New(src).AllTokens()
+	analysis := Analyze(toks) // desugar 之前的 GX 语义层（联合未擦除）
 	names := map[string]string{} // 小写原名 → 大写导出名（自身 pub 符号）
 	toks = runUnion(toks)
-	toks = transformTypeGuard(toks)
+	toks = transformTypeGuard(toks, analysis)
 	toks = transformEnum(toks, names)
 	toks = transformPub(toks, names)
 	toks = transformJSX(toks)
@@ -53,7 +59,7 @@ func CompileWithModule(file, src, module string) (*Result, error) {
 	toks = transformExternal(toks, scope, names)
 	toks = transformCompositeFields(toks, scope)
 	goSrc, sm := emit(toks, file)
-	return &Result{File: file, GoSource: goSrc, SourceMap: sm}, nil
+	return &Result{File: file, GoSource: goSrc, SourceMap: sm, Analysis: analysis}, nil
 }
 
 // CompileSource 以默认文件名转译源码。
@@ -97,7 +103,7 @@ func CompileStage(src, stage string) (string, error) {
 	case "union":
 		toks = runUnion(toks)
 	case "typeguard":
-		toks = transformTypeGuard(toks)
+		toks = transformTypeGuard(toks, Analyze(toks))
 	case "enum":
 		toks = transformEnum(toks, names)
 	case "jsx":
@@ -111,8 +117,9 @@ func CompileStage(src, stage string) (string, error) {
 		toks = transformExternal(toks, scope, names)
 		toks = transformCompositeFields(toks, scope)
 	case "all":
+		analysis := Analyze(toks)
 		toks = runUnion(toks)
-		toks = transformTypeGuard(toks)
+		toks = transformTypeGuard(toks, analysis)
 		toks = transformEnum(toks, names)
 		toks = transformPub(toks, names)
 		toks = transformJSX(toks)

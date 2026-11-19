@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/robertpanvip/gox/internal/buildcheck"
+	"github.com/robertpanvip/gox/internal/check"
 	"github.com/robertpanvip/gox/internal/lsp"
 	"github.com/robertpanvip/gox/pkg/compiler"
 	"github.com/robertpanvip/gox/pkg/sourcemap"
@@ -26,6 +27,8 @@ func main() {
 	switch cmd {
 	case "build":
 		err = cmdBuild(args)
+	case "check":
+		err = cmdCheck(args)
 	case "union", "typeguard", "jsx", "pub", "enum", "collections", "external", "all":
 		err = cmdStage(cmd, args)
 	case "sourcemap":
@@ -60,6 +63,7 @@ func usage() {
        -check    转译后执行真实 go build，并把错误回投到 .gx 位置
        -replace  go.mod replace 指令，可重复（module=本地目录）
   gox union|typeguard|jsx|pub|enum|collections|external|all <file.gx>   单步 / 全管线调试
+  gox check <file.gx>                                   GX 语义层类型检查（AST + side table，GX 坐标诊断）
   gox sourcemap <file.gx> [-o map.json]                 输出 GX↔Go 位置映射 JSON
   gox map-lookup [-to-go] <map.json> <line> <col>        位置反查（默认 Go→GX）
   gox lsp-map <dir-or-file>                              项目符号映射 JSON
@@ -179,6 +183,36 @@ func runCheck(goSrc string, sm *sourcemap.SourceMap, replaces []string) error {
 		fmt.Fprintf(os.Stderr, "  %d:%d: %s\n", pos.Line, pos.Column, d.Message)
 	}
 	return fmt.Errorf("编译检查未通过")
+}
+
+// cmdCheck 用 GX 语义层检查器分析 .gx：降级为 Go 后用 go/parser 拿 AST，
+// 坐标映射回 GX 后查 side table，产出 GX 原生诊断（联合赋值等规则）。
+func cmdCheck(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("check: 需要 <file.gx>")
+	}
+	src, err := readFile(args[0])
+	if err != nil {
+		return err
+	}
+	res, err := compiler.Compile(args[0], src)
+	if err != nil {
+		return err
+	}
+	c := check.New(res.SourceMap, res.Analysis)
+	diags, err := c.CheckAll(res.GoSource)
+	if err != nil {
+		return err
+	}
+	if len(diags) == 0 {
+		fmt.Println("GX 语义检查通过：无错误")
+		return nil
+	}
+	fmt.Fprintf(os.Stderr, "GX 语义检查发现 %d 条问题:\n", len(diags))
+	for _, d := range diags {
+		fmt.Fprintf(os.Stderr, "  %d:%d: %s: %s\n", d.Line, d.Col, d.Code, d.Message)
+	}
+	return fmt.Errorf("GX 语义检查未通过")
 }
 
 func cmdStage(stage string, args []string) error {

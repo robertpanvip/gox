@@ -144,8 +144,7 @@ func Describe(v any) string {
 - 守卫只加在**函数参数**的联合上；局部变量/类型别名/只有返回值的联合仅擦除，不插守卫（无入口可检查）。
 - panic 消息含函数名、参数名与期望类型，不打印实际类型（避免引入 `fmt` 依赖）。
 - **限制（务必知晓）**：
-  - **守卫在运行时**，不是编译期——传错类型能编译，但调用时立即 panic；
-  - **无穷尽性检查**：联合有 3 个成员但只守卫 2 个，编译器不会提示遗漏；
+  - **参数守卫在运行时**——静态传错类型由下一节的 `gox check` 拦，绕过检查直接编译时调用时立即 panic；
   - `any` 上不能直接运算，须先 is 守卫窄化；
   - 不处理 interface/struct 内联、函数类型签名内部、以及「嵌套联合」（`[]int|string` 按 Go 优先级解析为 `([]int)|string`，整段擦除）。
 - 若需要真正的编译期类型安全，后续可升级为泛型约束方案（`[T int|string]`）。
@@ -155,6 +154,39 @@ func Describe(v any) string {
 - 自带 `.gx ↔ .go` **双向精确位置映射**（`sourcemap` / `map-lookup`）。
 - LSP：跳转 / 补全 / 悬停 / 文档符号 / **重命名**（枚举成员三种拼写派生新名）。
 - 真实 `go build` 检查（`buildcheck`，可取消 + LRU），错误经 sourcemap **回投到 `.gx`**。
+
+## 9. GX 类型检查（方案 B：AST + side table）
+
+GX 把联合 `A|B` 擦除为 `any` 后，`go/types` 眼里只剩 `any`，**永远看不到联合契约被违反**。因此类型检查的主战场放在 desugar 之前的 GX 层——这正是 TS 对 JS 的关系：类型是本层的责任，`go build` 只兜底「降级代码是否合法」。
+
+```
+GX 源码 ─lex→ token ─Analyze→ side table（符号 / 联合 / 收窄，GX 坐标索引）
+                                    │
+                    desugar（擦除 A|B→any，is→comma-ok）
+                                    ↓
+                              Go 源码 ─go/parser→ 完整 AST
+                                    ↓
+              AST 节点 Go 坐标 ─sourcemap→ GX 坐标 ─查 side table→ GX 诊断
+```
+
+- **结构**用 `go/parser` 白拿（嵌套 / 作用域 / 控制流都现成），**类型语义**用我们自己的 side table，两者靠 sourcemap 坐标缝合，**不自己写 parser**。
+- 诊断统一为 **GX 源码坐标**（不经回投），CLI 与 LSP 同源呈现。
+
+运行 `gox check <file.gx>` 查看诊断；示例见 `examples/typecheck.gx`。
+
+| 诊断码 | 规则 | 触发示例 |
+|---|---|---|
+| `union-assign` | 联合变量赋值的成员兼容性 | `var x int\|string = true` |
+| `union-call-arg` | 函数调用实参落在联合参数内 | `f(true)` 而 `f(v int\|string)` |
+| `union-return` | 返回值落在联合返回类型内 | `return true` 而函数返回 `int\|string` |
+| `union-operand` | 联合参与运算前须 is 收窄 | `x+1` 而 x 仍是 `int\|string` |
+| `non-exhaustive` | type switch / if-is 链的联合穷尽性 | 漏掉某成员的分支 |
+| `union-member` | is 守卫目标不是联合成员 | `x is bool` 而 x 是 `int\|string` |
+| `redundant-guard` | 已收窄类型上的重复守卫 | 嵌套 `if x is int { if x is int {} }` |
+
+**防误报原则**：右侧类型推断不出来（如未知函数调用）时一律放过；非联合变量交给 `go/types`；`any`/`unknown` 不做成员约束。
+
+**收窄边界（M2 既定）**：is 守卫只在其**块内**注入 `x := __gx_v` shadow。因此运算收窄要用正向守卫块（`if x is int { x+1 }`）；`else` 分支的收窄事实仅供穷尽性分析，不注入 shadow，块内直接运算会被 `go build` 拒绝——需再写一个正向 is 守卫。
 
 ## 目录结构
 
@@ -168,6 +200,7 @@ gox/
 │   ├── compiler/       转译引擎：词法 / union / typeguard / JSX / pub / enum / scope / external / collections / pipeline
 │   └── sourcemap/      双向位置映射（无业务依赖）
 ├── internal/           工具内部实现
+│   ├── check/          GX 类型检查器：go/parser AST + side table + 7 类诊断规则
 │   ├── lsp/            LSP 协议 / server / 诊断 / 符号映射 / 重命名
 │   └── buildcheck/     真实 go build 检查（可取消 + LRU）
 ├── bindings/cabi/      C-ABI 共享库（供 IDEA 插件经 JNA 调用）

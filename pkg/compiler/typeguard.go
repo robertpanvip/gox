@@ -10,15 +10,14 @@ import "strconv"
 //	}                                        fmt.println(x + 1)
 //	                                     }
 //
-// 设计要点：
-//   - `is` 不占全局关键字，仅在 if 守卫模式中识别；作普通变量名时不受影响。
-//   - 被守卫者必须是简单标识符（x），暂不支持 obj.field 等复合左值。
-//   - 目标类型 T 复用 typeEnd 解析，支持 float64 / pkg.Type / []T / *T / map[K]V 等。
-//   - 只支持「整个条件就是一个 is 守卫」；复合条件（x is T && y）不转换，
-//     保留原样交给 Go 解析器报错（GX 不做类型检查）。
-//   - 临时变量按 if 的位置命名，保证同一文件内唯一、可复现、无全局状态（并发安全）。
-//   - 块首插入 `x := __gx_v` 做 shadow，使分支内 x 具有 T 的类型。
-//   - 位置：应在管线最前（lex 之后），使后续层看到的是标准 Go comma-ok 断言。
+// 职责边界（M2 起）：
+//   - 「什么是一个 is 守卫」「守卫目标类型是什么」由 GX 语义层 Analyze 判定，
+//     结果存在 Analysis 里；本文件只按 Analysis.GuardAt(pos) 的语义生成代码。
+//   - parseTypeGuard 退化为分析层内部的「语法形态识别」，不再被 desugar 直接调用。
+//   - 临时变量按 if 位置命名，保证同文件唯一、可复现、无全局状态（并发安全）。
+//   - 块首插入 `x := __gx_v` 做 shadow，使分支内 x 具有收窄后的类型。
+//   - 本阶段应在 runUnion 之后：union 擦除与守卫插入不改变 if / '{' 的原始 Pos，
+//     故 GuardAt(pos) 仍能精确命中（用 EndPos 定位块跳过点，不受下标漂移影响）。
 
 type typeGuard struct {
 	start    int    // if 的下标
@@ -28,7 +27,8 @@ type typeGuard struct {
 	typeToks []Token // 目标类型 T 的原始 token（保留位置）
 }
 
-// parseTypeGuard 判断 toks[i] 是否为一个可转换的 is 守卫，并给出改写所需信息。
+// parseTypeGuard 判断 toks[i] 是否为一个语法上可转换的 is 守卫。
+// 仅做 token 形态识别，不做类型判定；语义由 analysis.go 的 parseGuardAt 补全。
 func parseTypeGuard(toks []Token, i int) (typeGuard, bool) {
 	if !toks[i].is("if") {
 		return typeGuard{}, false
@@ -96,17 +96,22 @@ func parseTypeGuard(toks []Token, i int) (typeGuard, bool) {
 	}, true
 }
 
-// transformTypeGuard 扫描 token 流，转换所有可识别的 is 守卫。
-func transformTypeGuard(in []Token) []Token {
+// transformTypeGuard 消费 Analysis，把每个已识别的 is 守卫改写为 comma-ok 断言。
+// 守卫的识别与语义（recv / 目标类型）完全来自 an；本函数只负责生成 token。
+func transformTypeGuard(in []Token, an *Analysis) []Token {
 	out := make([]Token, 0, len(in))
 	for i := 0; i < len(in); i++ {
-		g, ok := parseTypeGuard(in, i)
+		if !in[i].is("if") {
+			out = append(out, in[i])
+			continue
+		}
+		g, ok := an.GuardAt(in[i].Pos)
 		if !ok {
 			out = append(out, in[i])
 			continue
 		}
 
-		p := in[g.start].Pos
+		p := g.Pos
 		suffix := strconv.Itoa(p.Line) + "_" + strconv.Itoa(p.Col)
 		vName := "__gx_v_" + suffix
 		okName := "__gx_ok_" + suffix
@@ -116,18 +121,25 @@ func transformTypeGuard(in []Token) []Token {
 			tokIdent("if", p), tokSpace(" ", p),
 			tokIdent(vName, p), tokOp(",", p), tokSpace(" ", p),
 			tokIdent(okName, p), tokSpace(" ", p), tokOp(":=", p), tokSpace(" ", p),
-			tokIdent(g.recv, g.recvPos), tokOp(".", p), tokOp("(", p),
+			tokIdent(g.Recv, g.RecvPos), tokOp(".", p), tokOp("(", p),
 		)
-		out = append(out, g.typeToks...)
+		out = append(out, g.TypeToks...)
 		out = append(out,
 			tokOp(")", p), tokOp(";", p), tokSpace(" ", p),
 			tokIdent(okName, p), tokSpace(" ", p), tokOp("{", p),
 			tokSpace(" ", p),
-			tokIdent(g.recv, g.recvPos), tokSpace(" ", p), tokOp(":=", p), tokSpace(" ", p),
+			tokIdent(g.Recv, g.RecvPos), tokSpace(" ", p), tokOp(":=", p), tokSpace(" ", p),
 			tokIdent(vName, p), tokOp(";", p),
 		)
 
-		i = g.end // 跳过原 'if ... {' 区间；块内其余 token 原样保留
+		// 跳过原 `if ... {` 区间：用 EndPos 定位块 '{'（不受 runUnion 的下标漂移影响）。
+		j := i + 1
+		for j < len(in) && !(in[j].Text == "{" && in[j].Pos.Line == g.EndPos.Line && in[j].Pos.Col == g.EndPos.Col) {
+			j++
+		}
+		if j > i {
+			i = j // 循环末尾 i++ 后从块内第一条继续
+		}
 	}
 	return out
 }

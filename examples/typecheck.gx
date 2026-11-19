@@ -1,0 +1,42 @@
+// GX 类型检查示例（方案 B：go/parser AST + side table）。
+//
+// 运行 `gox check examples/typecheck.gx` 应输出「无错误」。
+// 联合类型在 desugar 后擦除为 any，以下契约由 GX 语义层检查器负责：
+//   - union-assign     联合变量赋值成员兼容
+//   - union-call-arg   联合参数实参兼容
+//   - union-return     联合返回值兼容
+//   - union-operand    联合参与运算前必须 is 收窄
+//   - non-exhaustive   type switch / if-is 链需穷尽联合成员
+package main
+
+import "strconv"
+
+func describe(v int | string) string {
+    switch v.(type) {
+    case int:
+        return "int"
+    case string:
+        return "string"
+    }
+    return ""
+}
+
+func double(v int | string) string {
+    // 每个分支用正向 is 守卫收窄——守卫块内 v 已具有具体类型，可安全运算。
+    if v is int {
+        return strconv.Itoa(v + v)
+    }
+    if v is string {
+        return v + v
+    }
+    return ""
+}
+
+func main() {
+    var x int | string = 42
+    x = "hi"
+
+    println(describe(x))
+    println(double(3))
+    println(double("ok"))
+}
