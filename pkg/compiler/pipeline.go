@@ -52,6 +52,7 @@ func CompileWithModule(file, src, module string) (*Result, error) {
 	analysis := Analyze(toks) // desugar 之前的 GX 语义层（联合未擦除）
 	names := map[string]string{} // 小写原名 → 大写导出名（自身 pub 符号）
 	toks = expandDefaults(toks, defaultDefs)
+	toks = transformLambdas(toks, analysis)
 	toks = transformTemplates(toks)
 	toks = runUnion(toks)
 	toks = transformTypeGuard(toks, analysis)
@@ -135,6 +136,7 @@ func CompileStage(src, stage string) (string, error) {
 		toks, defaultDefs := stripDefaults(toks)
 		analysis := Analyze(toks)
 		toks = expandDefaults(toks, defaultDefs)
+		toks = transformLambdas(toks, analysis)
 		toks = transformTemplates(toks)
 		toks = runUnion(toks)
 		toks = transformTypeGuard(toks, analysis)

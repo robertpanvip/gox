@@ -187,3 +187,48 @@ func TestLexEOFAlwaysPresent(t *testing.T) {
 		t.Error("token 流末尾应有 EOF")
 	}
 }
+
+func TestLexArrowToken(t *testing.T) {
+	// '=>' 应作为单个 Operator token（Lambda 语法依赖），且不与 '>=' 混淆。
+	toks := sigToks("x => x >= 1")
+	hasArrow := false
+	for _, tok := range toks {
+		if tok.Kind == Operator && tok.Text == "=>" {
+			hasArrow = true
+		}
+		if tok.Kind == Operator && tok.Text == ">=" {
+			continue
+		}
+	}
+	if !hasArrow {
+		t.Errorf("应识别 '=>' 为单 token: %s", tokSignature(toks))
+	}
+	// 单独验证 >= 未被 => 吞掉
+	toks2 := sigToks("a >= b")
+	for _, tok := range toks2 {
+		if tok.Kind == Operator && tok.Text == ">=" {
+			return
+		}
+	}
+	t.Errorf("'>=' 应仍识别为单 token: %s", tokSignature(toks2))
+}
+
+func TestLexTemplateToken(t *testing.T) {
+	// 含 ${ 的反引号串是 Template token；无插值的仍是 String。
+	toks := sigToks("x := `hi ${name}`")
+	hasTpl := false
+	for _, tok := range toks {
+		if tok.Kind == Template {
+			hasTpl = true
+		}
+	}
+	if !hasTpl {
+		t.Errorf("含 ${} 的反引号串应为 Template: %s", tokSignature(toks))
+	}
+	toks2 := sigToks("x := `raw string`")
+	for _, tok := range toks2 {
+		if tok.Kind == Template {
+			t.Errorf("无插值的反引号串不应是 Template: %s", tokSignature(toks2))
+		}
+	}
+}

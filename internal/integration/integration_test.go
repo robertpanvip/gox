@@ -167,6 +167,30 @@ func main() {
 	}
 }
 
+func TestIntegrationLambda(t *testing.T) {
+	// Lambda 最简箭头：表达式反推（int/bool）、显式参数、集合回调、函数实参。
+	src := `package main
+import "fmt"
+func apply(f func(int) int, v int) int { return f(v) }
+func main() {
+	double := x => x * 2
+	isBig := x => x > 10
+	add := (a int, b int) => a + b
+	fmt.Println(double(7), isBig(20), add(3, 4))
+	fmt.Println(apply(x => x + 1, 41))
+	xs := []int{1, 2, 3, 4}
+	ys := xs.map(x => x * 2).filter(x => x > 4)
+	fmt.Println(len(ys), ys[0], ys[1])
+}
+`
+	out := runGX(t, src)
+	for _, want := range []string{"14 true 7", "42", "2 6 8"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("Lambda 输出应包含 %q, got:\n%s", want, out)
+		}
+	}
+}
+
 func TestIntegrationDefaultParams(t *testing.T) {
 	// TS 语义核心：未传用默认值，显式传 0/"" 用零值而非默认值。
 	src := `package main

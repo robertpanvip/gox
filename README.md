@@ -6,7 +6,7 @@
 >
 > **书写约定核心：声明用 `pub` 显式导出；标识符一律「只首字母小写，其余驼峰照抄」。** 转译器机械还原大小写，无需类型推导、无需读取第三方包符号表。
 
-## 七项特性速览
+## 十项特性速览
 
 | 特性 | GX 写法 | 生成的 Go |
 |---|---|---|
@@ -17,6 +17,9 @@
 | **集合链式** | `xs.map(f).filter(g)` | `list.List[T].Map(f).Filter(g)`，切片 `[]T` 全局提升 |
 | **is 类型守卫** | `if (x is float64) { … }` | `if v, ok := x.(float64); ok { x := v; … }`（块内 x 窄化为 float64） |
 | **联合类型** | `func f(v int \| string)` | `func f(v any)`（擦除为 any，配合 is 守卫窄化） |
+| **参数默认值** | `func f(x int = 5)` | 调用点补全：`f()` → `f(5)`（TS 语义，区分未传与零值） |
+| **Lambda** | `x => x+1` | `func(x int) int { return x+1 }`（类型从上下文/表达式推断） |
+| **模板字符串** | `` `hi ${name}` `` | `"hi " + fmt.Sprint(name)`（拼接，自动 import fmt） |
 
 ## 1. 可见性：`pub`
 
@@ -149,13 +152,63 @@ func Describe(v any) string {
   - 不处理 interface/struct 内联、函数类型签名内部、以及「嵌套联合」（`[]int|string` 按 Go 优先级解析为 `([]int)|string`，整段擦除）。
 - 若需要真正的编译期类型安全，后续可升级为泛型约束方案（`[T int|string]`）。
 
-## 8. Sourcemap / LSP / 编译检查
+## 8. 参数默认值
+
+函数参数可写 `= 默认值`，采用 **TS 语义**：调用点按缺失的**尾部参数**补全默认值。关键区别是「未传」用默认值、「显式传零值」用零值——Go 原生零值无法替代这一点。
+
+```gx
+func greet(name string = "world", times int = 2) string {
+    out := ""
+    for i := 0; i < times; i++ { out += name + " " }
+    return out
+}
+// greet()          → greet("world", 2)
+// greet("gx")      → greet("gx", 2)
+// greet("gx", 1)   → 原样
+// greet("", 1)     → 原样（显式空串不被默认值覆盖）
+```
+
+- 声明处默认值被剥离，生成干净的 Go 签名；调用点补全发生在类型分析之后、联合擦除之前，默认值表达式仍流经全部语法糖变换（可含外部符号调用、模板、联合等）。
+- **限制**：只补全尾部连续缺失参数（中间无默认值的参数不补）；仅顶层函数调用匹配，方法调用 `obj.f()` 不补（避免同名误伤）；同名局部遮蔽/函数值间接调用不补。
+
+## 9. Lambda 表达式
+
+最简箭头 `params => expr` 编译为 Go 函数字面量。参数与返回类型由转译器推断：
+
+```gx
+double := x => x * 2          // func(x int) int { return x*2 }
+isBig := x => x > 10          // func(x int) bool { return x>10 }
+add := (a int, b int) => a+b  // 显式参数类型
+answer := () => 42            // func() int { return 42 }
+apply(x => x + 1, 41)         // 函数实参：从形参签名推断
+xs.map(x => x * 2)            // 集合回调：从元素类型推断
+```
+
+**类型推断来源**（优先级从高到低）：参数显式标注 → 上下文函数类型（`func(int) int` 形参 / 变量类型标注）→ 集合回调元素类型 → 表达式反推（数值字面量→`int`、比较→`bool`、`len`→`int`、字符串→`string`）。
+
+- 推断不出时降级 `any`（联合参数也擦除为 `any`），仍产出合法 Go。
+- 只能写**单表达式** body（`=>` 后一个表达式）；多语句体请写原生 `func(...) T { ... }`。
+
+## 10. 模板字符串
+
+反引号内含 `${...}` 插值时识别为模板字符串，编译为**字符串拼接**（`fmt.Sprint`），静态段自动转义。`fmt` 由 ImportManager 统一托管：源码已导入则复用别名，否则自动注入。
+
+```gx
+name := "gx"; score := 95
+msg := `hello ${name}, score=${score}`   // "hello " + fmt.Sprint(name) + ", score=" + fmt.Sprint(score)
+```
+
+- 无插值的反引号串仍是 Go 原生 raw string，原样输出。
+- 插值内是完整表达式，可含外部符号调用、集合链式、嵌套字面量；花括号深度与字符串/反引号内的 `}` 会被正确跳过。
+- **限制**：暂不处理 `\${` 转义。
+
+## 11. Sourcemap / LSP / 编译检查
 
 - 自带 `.gx ↔ .go` **双向精确位置映射**（`sourcemap` / `map-lookup`）。
 - LSP：跳转 / 补全 / 悬停 / 文档符号 / **重命名**（枚举成员三种拼写派生新名）。
 - 真实 `go build` 检查（`buildcheck`，可取消 + LRU），错误经 sourcemap **回投到 `.gx`**。
 
-## 9. GX 类型检查（方案 B：AST + side table）
+## 12. GX 类型检查（方案 B：AST + side table）
 
 GX 把联合 `A|B` 擦除为 `any` 后，`go/types` 眼里只剩 `any`，**永远看不到联合契约被违反**。因此类型检查的主战场放在 desugar 之前的 GX 层——这正是 TS 对 JS 的关系：类型是本层的责任，`go build` 只兜底「降级代码是否合法」。
 

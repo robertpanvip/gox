@@ -1,6 +1,6 @@
 # GoX 语言规范
 
-GoX（`.gx`）= Go 语法 + 五项语法糖。转译产物是标准 Go 源码，交给官方工具链编译。**需要 Go 1.27+**。
+GoX（`.gx`）= Go 语法 + 十项语法糖（pub / enum / JSX / 外部符号还原 / 集合链式 / is 守卫 / 联合类型 / 模板字符串 / 参数默认值 / Lambda）。转译产物是标准 Go 源码，交给官方工具链编译。**需要 Go 1.27+**。
 
 ## 书写约定（最重要）
 
@@ -92,7 +92,19 @@ labels := nums.map(fn).filter(keep).reduce(0, add)
 - **仅匹配空方括号 `[]` 紧跟类型**（切片类型独有形态），故不误伤：数组 `[3]T`、索引 `a[i]`、切片表达式 `a[1:2]`、`map[K]V`、`Foo[T]`。
 - 只有实际发生提升时才注入 `<module>/runtime/list` import；`-module` 指定 module 路径。
 
-## 6. sourcemap / LSP / 编译检查
+## 6. 模板字符串
+
+反引号内含 `${...}` 时为模板字符串，编译为字符串拼接：` `hi ${name}` ` → `"hi " + fmt.Sprint(name)`。静态段用 `strconv.Quote` 转义；插值内是完整表达式，递归词法分析后流经全部 transform；`fmt` import 由 ImportManager 统一托管（已导入则复用别名）。无插值的反引号串仍是 Go raw string。
+
+## 7. 参数默认值
+
+`func f(x int = 5)` 采用 TS 语义：调用点在缺失的**尾部参数**处补全默认值，`f()` → `f(5)`，而 `f(0)` 保留显式的零值。声明处默认值被剥离，Analyze 前完成（避免默认值被算进参数类型），调用点在 Analyze 后补全。仅顶层函数调用匹配，方法/selector 调用不补。
+
+## 8. Lambda 表达式
+
+`x => x+1` → `func(x int) int { return x+1 }`。类型来源优先级：参数显式标注 → 上下文函数类型 → 集合回调元素类型 → 表达式反推（数值→int、比较→bool、len→int、字符串→string）；推断不出降级 `any`。仅支持单表达式 body，多语句用原生 func 字面量。
+
+## 9. sourcemap / LSP / 编译检查
 
 - `.gx ↔ .go` 双向位置映射（最近邻），可 JSON 序列化。
 - LSP：initialize / didOpen / didChange / definition / hover / completion / documentSymbol / rename，诊断经 sourcemap 回投到 `.gx`。
