@@ -170,9 +170,47 @@ pub func f() {
 	containsAll(t, got,
 		`import "github.com/robertpanvip/gox/runtime/list"`,
 		"list.List[int]",
-		"nums.Map(strconv.Itoa).Filter(",
+		"nums.MapFilter(strconv.Itoa,",
 		"nums.Filter(keep).Reduce(0,",
 		"func(acc int, x int) int { return acc + x }")
+}
+
+func TestMapFilterFusion(t *testing.T) {
+	src := `package main
+
+func keep(x int) bool { return x > 0 }
+func double(x int) int { return x * 2 }
+
+pub func f() {
+    xs := []int{1, 2, 3}
+    ys := xs.map(double).filter(keep)
+    _ = ys
+}
+`
+	got := compileOK(t, "fuse.gx", src)
+	containsAll(t, got, "xs.MapFilter(double, keep)")
+	if strings.Contains(got, "xs.Map(double)") || strings.Contains(got, ".Filter(keep)") {
+		t.Errorf("融合后仍残留独立的 Map/Filter 链:\n%s", got)
+	}
+}
+
+func TestMapFilterFusionNonAdjacent(t *testing.T) {
+	src := `package main
+
+func keep(x int) bool { return x > 0 }
+func double(x int) int { return x * 2 }
+
+pub func f() {
+    xs := []int{1, 2, 3}
+    ys := xs.filter(keep).map(double)
+    _ = ys
+}
+`
+	got := compileOK(t, "nofuse.gx", src)
+	containsAll(t, got, "xs.Filter(keep).Map(double)")
+	if strings.Contains(got, "MapFilter") {
+		t.Errorf("非相邻的 filter().map() 不应融合:\n%s", got)
+	}
 }
 
 func TestCollectionsMake(t *testing.T) {
