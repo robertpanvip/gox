@@ -28,7 +28,7 @@ func main() {
 `
 	got := compileOK(t, "tpl2.gx", src)
 	containsAll(t, got,
-		`"a="+fmt.Sprint(a)+" b="+fmt.Sprint(b)+" done"`,
+		`"a="+strconv.Itoa(a)+" b="+strconv.Itoa(b)+" done"`,
 	)
 }
 
@@ -41,14 +41,14 @@ func main() {
 }
 `
 	got := compileOK(t, "tpl3.gx", src)
-	containsAll(t, got, `fmt.Sprint(x)`)
+	containsAll(t, got, `strconv.Itoa(x)`)
 }
 
 func TestTemplateReuseExistingFmtImport(t *testing.T) {
 	src := `package main
 import "fmt"
 func main() {
-	x := 1
+	x := "gx"
 	msg := ` + "`v=${x}`" + `
 	fmt.Println(msg)
 }
@@ -91,7 +91,7 @@ func main() {
 }
 `
 	got := compileOK(t, "tpl6.gx", src)
-	containsAll(t, got, `"say \"hi\" "+fmt.Sprint(x)`)
+	containsAll(t, got, `"say \"hi\" "+strconv.Itoa(x)`)
 }
 
 func TestTemplateInterpWithQuotedString(t *testing.T) {
@@ -104,4 +104,51 @@ func main() {
 `
 	got := compileOK(t, "tpl7.gx", src)
 	containsAll(t, got, `"a"+fmt.Sprint("x")+"b"`)
+}
+
+func TestTemplateIntSpecialization(t *testing.T) {
+	// 可静态判为 int 的插值用 strconv.Itoa（避免 fmt.Sprint 反射装箱），
+	// 其余类型保持 fmt.Sprint。
+	cases := []struct {
+		name string
+		src  string
+		want string
+	}{
+		{"intvar", `package main
+func main() {
+	i := 42
+	msg := ` + "`v=${i}`" + `
+	println(msg)
+}
+`, `strconv.Itoa(i)`},
+		{"intlit", `package main
+func main() {
+	msg := ` + "`v=${7}`" + `
+	println(msg)
+}
+`, `strconv.Itoa(7)`},
+		{"intparam", `package main
+func f(n int) { msg := ` + "`v=${n}`" + `; println(msg) }
+`, `strconv.Itoa(n)`},
+		{"floatstaysfmt", `package main
+func main() {
+	x := 3.5
+	msg := ` + "`v=${x}`" + `
+	println(msg)
+}
+`, `fmt.Sprint(x)`},
+		{"strstaysfmt", `package main
+func main() {
+	n := "gx"
+	msg := ` + "`v=${n}`" + `
+	println(msg)
+}
+`, `fmt.Sprint(n)`},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := compileOK(t, "tplint_"+c.name+".gx", c.src)
+			containsAll(t, got, c.want)
+		})
+	}
 }
