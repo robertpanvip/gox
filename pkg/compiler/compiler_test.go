@@ -253,3 +253,28 @@ func demo(req *config) {
 		t.Errorf("类型名 config 不应进私有表（它不是 selector 右侧会引用的字段）")
 	}
 }
+
+func TestJSXComponentGeneratesCallableFirstArg(t *testing.T) {
+	src := `package main
+func Foo(props map[string]any) any { return nil }
+func main() { _ = <Foo title="hi"/> }
+`
+	res, err := CompileSource(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 组件名 Foo 应作为标识符（可调用的函数）传入，而不是被引号包成字符串标签。
+	if !strings.Contains(res.GoSource, "CreateElement(Foo") {
+		t.Fatalf("组件应生成 CreateElement(Foo, ...):\n%s", res.GoSource)
+	}
+	// 原生标签仍应是字符串字面量。
+	native, _ := CompileSource(`package main
+func main() { _ = <div/> }
+`)
+	if !strings.Contains(native.GoSource, `CreateElement("div"`) {
+		t.Fatalf("原生标签应生成字符串 tag:\n%s", native.GoSource)
+	}
+	if err := res.Validate(); err != nil {
+		t.Fatalf("生成代码语法无效: %v", err)
+	}
+}

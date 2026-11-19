@@ -167,3 +167,80 @@ func TestDiffSetPropValueChange(t *testing.T) {
 		t.Fatalf("属性变更应产生 set-prop: %+v", patches)
 	}
 }
+
+// ---- 函数组件（JSX <Foo/>）回归测试 ----
+
+func TestCreateElementComponentVsTag(t *testing.T) {
+	native := CreateElement("div", nil)
+	if native.Tag != "div" || native.Component != nil {
+		t.Fatalf("string 参数应生成原生元素节点: %+v", native)
+	}
+	comp := CreateElement(func(map[string]any) any { return nil }, nil)
+	if comp.Tag != "" || comp.Component == nil {
+		t.Fatalf("函数参数应生成组件节点: %+v", comp)
+	}
+}
+
+func TestRenderComponent(t *testing.T) {
+	// 组件签名与 GX 生成的函数组件一致：func(map[string]any) *Element
+	greet := func(props map[string]any) *Element {
+		name, _ := props["name"].(string)
+		return CreateElement("span", nil, "hello ", name)
+	}
+	node := CreateElement(greet, map[string]any{"name": "gx"})
+	got := Render(node)
+	want := "<span>hello gx</span>"
+	if got != want {
+		t.Fatalf("组件渲染 = %q, want %q", got, want)
+	}
+}
+
+func TestRenderComponentWithChildren(t *testing.T) {
+	wrap := func(props map[string]any) any {
+		kids, _ := props["children"].([]any)
+		return CreateElement("div", map[string]any{"class": "wrap"}, kids...)
+	}
+	node := CreateElement(wrap, nil, "a", CreateElement("b", nil))
+	got := Render(node)
+	want := `<div class="wrap">a<b></b></div>`
+	if got != want {
+		t.Fatalf("组件 children 渲染 = %q, want %q", got, want)
+	}
+}
+
+func TestRenderComponentDoesNotMutateProps(t *testing.T) {
+	noop := func(props map[string]any) any { return CreateElement("i", nil, "x") }
+	props := map[string]any{"id": "k"}
+	node := CreateElement(noop, props, "child")
+	_ = Render(node)
+	if _, ok := props["children"]; ok {
+		t.Fatalf("渲染不应把 children 写回调用方 props: %+v", props)
+	}
+}
+
+func TestDiffExpandsComponent(t *testing.T) {
+	// 组件随 props 变化产出不同子树；Diff 必须展开后再比较。
+	mk := func(text string) any {
+		return func(map[string]any) any { return CreateElement("p", nil, text) }
+	}
+	a := CreateElement(mk("old"), nil)
+	b := CreateElement(mk("new"), nil)
+	patches := Diff(a, b)
+	found := false
+	for _, p := range patches {
+		if p.Op == OpSetText && p.Value == "new" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("组件展开后应产生 set-text(new), got %+v", patches)
+	}
+}
+
+func TestRenderNonFuncComponentIsSafe(t *testing.T) {
+	// 组件位不是函数时不应 panic，渲染为空。
+	node := CreateElement(42, nil)
+	if got := Render(node); got != "" {
+		t.Fatalf("非函数组件应渲染为空, got %q", got)
+	}
+}

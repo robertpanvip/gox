@@ -8,25 +8,44 @@ package gxvdom
 import (
 	"fmt"
 	"html"
+	"reflect"
 	"sort"
 	"strings"
 )
 
 // VNode 是一个虚拟节点。Props 为 nil 表示无属性。
+//
+// 一个节点要么是「原生元素节点」（Tag 非空、Component 为 nil），
+// 要么是「函数组件节点」（Component 为函数、Tag 为空）。两者由
+// CreateElement 的第一个参数区分：string 视为标签，其余（函数）视为组件。
 type VNode struct {
-	Tag      string
-	Props    map[string]any
-	Children []any
+	Tag       string
+	Component any            // 函数组件；非 nil 时本节点在 Render/Diff 阶段展开
+	Props     map[string]any
+	Children  []any
 }
 
 // Element 是 VNode 的兼容别名（早期版本使用 Element 这一名称）。
 type Element = VNode
 
-// CreateElement 由 JSX 转译结果调用。签名刻意保持简单：
+// CreateElement 由 JSX 转译结果调用。
 //
-//	CreateElement(tag string, props map[string]any, children ...any) *Element
-func CreateElement(tag string, props map[string]any, children ...any) *Element {
-	return &Element{Tag: tag, Props: props, Children: children}
+// 第一个参数是 string 时创建原生元素节点；是函数时创建函数组件节点：
+//
+//	CreateElement("div", props, children...)   // 原生 <div>
+//	CreateElement(Foo, props, children...)     // 函数组件 <Foo/>
+//
+// 函数组件不在创建时执行，而在 Render/Diff 阶段惰性展开：CreateElement
+// 只产出「描述」，这与 React createElement 的语义一致，也让 Diff 能比较
+// 展开后的具体节点。
+func CreateElement(tagOrComponent any, props map[string]any, children ...any) *Element {
+	n := &Element{Props: props, Children: children}
+	if tag, ok := tagOrComponent.(string); ok {
+		n.Tag = tag
+	} else {
+		n.Component = tagOrComponent
+	}
+	return n
 }
 
 var voidTags = map[string]bool{
@@ -48,6 +67,11 @@ func renderTo(b *strings.Builder, node any) {
 		return
 	case *Element:
 		if n == nil {
+			return
+		}
+		if n.Component != nil {
+			// 函数组件惰性展开：调用组件函数得到节点树，再渲染其结果。
+			renderTo(b, invokeComponent(n))
 			return
 		}
 		b.WriteString("<")
@@ -92,6 +116,49 @@ func renderTo(b *strings.Builder, node any) {
 	default:
 		b.WriteString(html.EscapeString(fmt.Sprint(n)))
 	}
+}
+
+// invokeComponent 调用一个函数组件节点，返回它产出的节点树。
+// 约定组件签名为 func(map[string]any) any（或返回 *Element 等具体类型）；
+// props 原样传入，children 以 "children" 键附加。用反射以兼容不同返回类型。
+// 若组件不是可调用对象或调用失败，返回 nil（渲染为空），不 panic。
+func invokeComponent(n *Element) any {
+	v := reflect.ValueOf(n.Component)
+	if !v.IsValid() || v.Kind() != reflect.Func {
+		return nil
+	}
+	t := v.Type()
+	if t.NumIn() != 1 || t.In(0).Kind() != reflect.Map {
+		return nil
+	}
+	props := n.Props
+	if props == nil {
+		props = map[string]any{}
+	} else {
+		// 复制一份，避免把 children 写回调用方的 props
+		cp := make(map[string]any, len(props)+1)
+		for k, val := range props {
+			cp[k] = val
+		}
+		props = cp
+	}
+	if len(n.Children) > 0 {
+		props["children"] = n.Children
+	}
+	// 用 map[string]any 形态构造参数；组件参数若为兼容的 map 类型可直接传入。
+	arg := reflect.ValueOf(props)
+	if !arg.Type().AssignableTo(t.In(0)) {
+		if arg.Type().ConvertibleTo(t.In(0)) {
+			arg = arg.Convert(t.In(0))
+		} else {
+			return nil
+		}
+	}
+	res := v.Call([]reflect.Value{arg})
+	if len(res) == 0 {
+		return nil
+	}
+	return res[0].Interface()
 }
 
 func isFunc(v any) bool {
@@ -162,6 +229,15 @@ func Diff(old, new any) []Patch {
 }
 
 func diffNode(old, new any, path []int, out *[]Patch) {
+	// 函数组件节点先惰性展开成具体节点树，再参与比较；
+	// 这样 Diff 始终在「原生元素 + 文本」层面工作。
+	if e, ok := old.(*VNode); ok && e != nil && e.Component != nil {
+		old = invokeComponent(e)
+	}
+	if e, ok := new.(*VNode); ok && e != nil && e.Component != nil {
+		new = invokeComponent(e)
+	}
+
 	// 文本 / 标量节点
 	os, oText := scalar(old)
 	ns, nText := scalar(new)
