@@ -115,3 +115,39 @@ func main() {
 	got := compileOK(t, "lambda8.gx", src)
 	containsAll(t, got, `Map(func(s string) int {return len(s)})`)
 }
+
+func TestLambdaVoidBuiltinBody(t *testing.T) {
+	// body 是无返回值调用 → 生成 func(){...}，不能是 return println(...)
+	src := `package main
+func main() {
+	f := () => println(1)
+	f()
+}
+`
+	got := compileOK(t, "lambdavoid.gx", src)
+	containsAll(t, got, `func() {println(1)}`)
+}
+
+func TestLambdaVoidEffectContext(t *testing.T) {
+	// effect 回调上下文强制 void，即便 body 是有返回值的表达式
+	src := `package main
+func main() {
+	Signal.effect(() => println(1))
+}
+`
+	got := compileOK(t, "lambdavoid2.gx", src)
+	containsAll(t, got, `func() {println(1)}`)
+}
+
+func TestLambdaVoidDeclaredFunc(t *testing.T) {
+	// 本文件声明的无返回值函数作为 body → void
+	src := `package main
+func logIt(x int) { println(x) }
+func main() {
+	f := x => logIt(x)
+	f(1)
+}
+`
+	got := compileOK(t, "lambdavoid3.gx", src)
+	containsAll(t, got, `func(x any) {logIt(x)}`)
+}

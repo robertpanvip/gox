@@ -202,6 +202,12 @@ func inferLambdaTypes(toks []Token, l *lambdaExpr, an *Analysis) {
 	if l.bodyResult != "" {
 		return
 	}
+	// 无返回值 body（如 () => println(count) / effect 回调）必须先判，
+	// 否则会生成非法的 `return println(...)`（println 无返回值）。
+	if bodyIsVoid(toks, l) {
+		l.bodyResult = "void"
+		return
+	}
 	if ctxResult != "" {
 		l.bodyResult = ctxResult
 		return
@@ -210,6 +216,89 @@ func inferLambdaTypes(toks []Token, l *lambdaExpr, an *Analysis) {
 	if l.bodyResult == "" {
 		l.bodyResult = "any"
 	}
+}
+
+// voidBuiltins 是调用后不返回任何值的 Go 内建函数。
+// 作为 lambda body 时必须生成 func(){...} 而非 return <call>（后者非法）。
+var voidBuiltins = map[string]bool{
+	"print": true, "println": true, "panic": true,
+	"delete": true, "close": true,
+}
+
+// voidCallbackNames 是期望无返回值回调（func()/func(T)）的上下文调用名。
+var voidCallbackNames = map[string]bool{
+	"effect": true, "Effect": true,
+}
+
+// bodyIsVoid 判断 lambda body 是否应生成无返回值的 func(){...}。
+// 1) body 顶层是已知无返回值调用（println / 本文件声明的无返回值函数）；
+// 2) lambda 处于 effect 这类 void 回调上下文中。
+func bodyIsVoid(toks []Token, l *lambdaExpr) bool {
+	first := nextSigIn(toks, l.bodyFrom, l.bodyTo)
+	if first >= 0 && toks[first].Kind == Ident {
+		callee := toks[first].Text
+		n := nextSigIn(toks, first+1, l.bodyTo)
+		// selector 调用 a.b()：callee 取 b
+		if n >= 0 && toks[n].Text == "." {
+			if m := nextSigIn(toks, n+1, l.bodyTo); m >= 0 && toks[m].Kind == Ident {
+				callee = toks[m].Text
+				n = nextSigIn(toks, m+1, l.bodyTo)
+			}
+		}
+		if n >= 0 && toks[n].Text == "(" {
+			if voidBuiltins[callee] || declaredVoidFunc(toks, callee) {
+				return true
+			}
+		}
+	}
+	return inVoidCallbackContext(toks, l)
+}
+
+// declaredVoidFunc 扫描本文件是否声明了名为 name 的无返回值函数 func name(...) {...}。
+func declaredVoidFunc(toks []Token, name string) bool {
+	for i := 0; i < len(toks); i++ {
+		if !toks[i].is("func") {
+			continue
+		}
+		j := nextSig(toks, i+1)
+		if j < 0 || toks[j].Text != name {
+			continue
+		}
+		op := nextSig(toks, j+1)
+		if op < 0 || toks[op].Text != "(" {
+			continue
+		}
+		cl := matchDelim(toks, op, "(", ")")
+		if cl <= op {
+			continue
+		}
+		if k := nextSig(toks, cl+1); k >= 0 && toks[k].Text == "{" {
+			return true
+		}
+	}
+	return false
+}
+
+// inVoidCallbackContext 判断 lambda 是否直接位于某个 void 回调调用的参数位置。
+func inVoidCallbackContext(toks []Token, l *lambdaExpr) bool {
+	// () => ... : paramOpen 即 '('，其前是调用名（如 effect）
+	p := prevSig(toks, l.paramOpen)
+	if p >= 0 && toks[p].Kind == Ident && voidCallbackNames[toks[p].Text] {
+		return true
+	}
+	// (x) => ... / x => ... : 调用名在外层 '(' 之前
+	q := l.paramOpen
+	if toks[q].Text == "(" {
+		q = prevSig(toks, q - 1)
+	} else {
+		q = prevSig(toks, q - 1)
+	}
+	if q >= 0 && toks[q].Text == "(" {
+		if m := prevSig(toks, q-1); m >= 0 && toks[m].Kind == Ident && voidCallbackNames[toks[m].Text] {
+			return true
+		}
+	}
+	return false
 }
 
 // inferContextFuncType 尝试从上下文拿到 lambda 的参数类型与返回类型。
@@ -466,11 +555,16 @@ func transformLambdas(in []Token, an *Analysis) []Token {
 			parts = append(parts, tokIdent(param.name, p), tokSpace(" ", p))
 			parts = append(parts, tokenizeTypeText(param.typeText, p)...)
 		}
-		parts = append(parts, tokOp(")", p), tokSpace(" ", p))
-		if l.bodyResult != "" && l.bodyResult != "void" {
+		parts = append(parts, tokOp(")", p))
+		isVoid := l.bodyResult == "void"
+		if !isVoid && l.bodyResult != "" {
+			parts = append(parts, tokSpace(" ", p))
 			parts = append(parts, tokenizeTypeText(l.bodyResult, p)...)
 		}
-		parts = append(parts, tokSpace(" ", p), tokOp("{", p), tokIdent("return", p), tokSpace(" ", p))
+		parts = append(parts, tokSpace(" ", p), tokOp("{", p))
+		if !isVoid {
+			parts = append(parts, tokIdent("return", p), tokSpace(" ", p))
+		}
 		for k := l.bodyFrom; k < l.bodyTo; k++ {
 			parts = append(parts, in[k])
 		}
