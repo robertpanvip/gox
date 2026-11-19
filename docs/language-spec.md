@@ -1,6 +1,6 @@
 # GoX 语言规范
 
-GoX（`.gx`）= Go 语法 + 十二项语法糖（pub / enum / JSX / 外部符号还原 / 集合链式 / is 守卫 / 联合类型 / 模板字符串 / 参数默认值 / Lambda / 对象字面量 / 对象解构）。转译产物是标准 Go 源码，交给官方工具链编译。**需要 Go 1.27+**。
+GoX（`.gx`）= Go 语法 + 十三项语法糖（pub / enum / JSX / 外部符号还原 / 集合链式 / is 守卫 / 联合类型 / 模板字符串 / 参数默认值 / Lambda / 对象字面量 / 对象解构 / Signal 响应式）。转译产物是标准 Go 源码，交给官方工具链编译。**需要 Go 1.27+**。
 
 ## 书写约定（最重要）
 
@@ -120,7 +120,27 @@ labels := nums.map(fn).filter(keep).reduce(0, add)
 - 右值类型未知（如外部包函数返回）→ 宽松生成 `x.field`，字段存在性交由 Go 编译器检查。
 - 解构变量遵循 Go 的作用域与 `:=` 重声明规则（同作用域重复声明由 Go 判错）。
 
-## 11. sourcemap / LSP / 编译检查
+## 11. Signal 响应式
+
+`signal` 声明源信号，`Signal.computed` 派生只读信号，`Signal.effect` 注册副作用；依赖变化时 effect 自动重跑。底层为函数式 signal（`Signal[T] = func(...T) T`，无参读、带参写）+ 依赖追踪运行时 `runtime/signal`。
+
+```gx
+signal count = 0
+let doubled = Signal.computed(() => count * 2)   // → Signal[int] 派生信号
+Signal.effect(() => println(count))               // → func(){ println(count()) }，count 变化时重跑
+count = 5                                          // → count(5)，触发依赖失效
+println(doubled)                                   // → println(doubled())，惰性重算得 10
+```
+
+- **声明**：`signal n = v` → `var n = Signal.New(v)`；`let n = v` → `n := v`（let 即短声明，无新语义）。
+- **读写改写**：signal 变量的读（裸标识符）自动补 `()`；写改写 `n = v` → `n(v)`、`n += v` → `n(n() + v)`、`n++` → `n(n() + 1)`。
+- **作用域排除**：selector `obj.n`、复合字段键 `{n: ...}`、struct 字段、函数参数、已显式调用 `n()` 均不改写。
+- **computed**：惰性求值 + 缓存，仅依赖变化时失效；链式派生正确传播。
+- **effect**：立即执行一次，依赖变化时重跑；每次重跑动态重建依赖集合（条件分支依赖可增删）。
+- **并发安全**：全局互斥锁保护观察者栈与依赖图，用户回调在锁外执行。
+- **import**：`Signal` 占位包名由 ImportManager 统一解析为 `import Signal "<module>/runtime/signal"`；源码已用别名导入则复用。
+
+## 12. sourcemap / LSP / 编译检查
 
 - `.gx ↔ .go` 双向位置映射（最近邻），可 JSON 序列化。
 - LSP：initialize / didOpen / didChange / definition / hover / completion / documentSymbol / rename，诊断经 sourcemap 回投到 `.gx`。

@@ -22,6 +22,7 @@
 | **模板字符串** | `` `hi ${name}` `` | `"hi " + fmt.Sprint(name)`（拼接，自动 import fmt） |
 | **对象字面量** | `{ name: "x", age: 1 }` | `struct{ name string; age int }{...}`，有期望类型时用 `point{...}` |
 | **对象解构** | `{ name, age } := p` / `var { name, age } = p` | `name := p.name; age := p.age`（逐字段，校验字段存在） |
+| **Signal 响应式** | `signal n = 0` / `Signal.effect(() => ...)` | `Signal.New(0)` + 函数式读写 + 依赖追踪自动重跑 |
 
 ## 1. 可见性：`pub`
 
@@ -248,13 +249,42 @@ var { name, city } = q    // → var name = q.name; var city = q.city
 - **右值类型未知**（如外部包函数返回）：宽松生成 `x.field`，字段存在性交给 Go 编译期检查。
 - 复用 `var`/`:=` 语法，不引入新关键字；解构变量遵循 Go 的作用域与 `:=` 重声明规则。
 
-## 13. Sourcemap / LSP / 编译检查
+## 13. Signal 响应式
+
+`signal` 声明源信号，`Signal.computed` 派生只读信号，`Signal.effect` 注册副作用；依赖变化时 effect 自动重跑。底层是函数式 signal（`func(...T) T`：无参读、带参写）+ 依赖追踪运行时（`runtime/signal`）。
+
+```gx
+signal count = 0
+func main() {
+    let doubled = Signal.computed(() => count * 2)
+    Signal.effect(() => println("count=", count))   // count 变化时自动重跑
+    count = 5                                         // 写 → 触发 effect + computed 失效
+    println(doubled)                                  // → 10（读自动加 ()）
+}
+```
+
+降级为标准 Go：
+
+```go
+var count = Signal.New(0)
+doubled := Signal.Computed(func() int { return count() * 2 })
+Signal.Effect(func() { println("count=", count()) })
+count(5)
+println(doubled())
+```
+
+- **语法糖**：`signal n = v` → `var n = Signal.New(v)`；`let n = v` → `n := v`；signal 变量**读**自动补 `()`、**写**（`=`/`+=`/`++` 等）改写为调用式。
+- **作用域安全**：selector `obj.count`、复合字段键 `{count: 1}`、struct 字段、函数参数、已显式调用 `count()` 均不误改。
+- **依赖追踪**：`computed` 惰性缓存，`effect` 立即执行一次并在依赖变化时重跑，条件分支依赖会动态重建；运行时并发安全。
+- `Signal` 作为运行时包名由 ImportManager 统一注入 `import Signal "<module>/runtime/signal"`，源码已用别名导入则复用。
+
+## 14. Sourcemap / LSP / 编译检查
 
 - 自带 `.gx ↔ .go` **双向精确位置映射**（`sourcemap` / `map-lookup`）。
 - LSP：跳转 / 补全 / 悬停 / 文档符号 / **重命名**（枚举成员三种拼写派生新名）。
 - 真实 `go build` 检查（`buildcheck`，可取消 + LRU），错误经 sourcemap **回投到 `.gx`**。
 
-## 14. GX 类型检查（方案 B：AST + side table）
+## 15. GX 类型检查（方案 B：AST + side table）
 
 GX 把联合 `A|B` 擦除为 `any` 后，`go/types` 眼里只剩 `any`，**永远看不到联合契约被违反**。因此类型检查的主战场放在 desugar 之前的 GX 层——这正是 TS 对 JS 的关系：类型是本层的责任，`go build` 只兜底「降级代码是否合法」。
 

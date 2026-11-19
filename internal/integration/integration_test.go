@@ -351,3 +351,71 @@ func main() {
 		t.Errorf("本地切片链式结果应为 20, got:\n%s", out)
 	}
 }
+
+func TestIntegrationSignal(t *testing.T) {
+	// signal 声明 + computed 派生 + effect 自动重跑 + 读/写改写 + 函数式运行时。
+	src := `package main
+signal count = 0
+func main() {
+    let doubled = Signal.computed(() => count * 2)
+    Signal.effect(() => println("effect:", count))
+    println("d0", doubled)
+    count = 5
+    println("d1", doubled)
+}
+`
+	out := runGX(t, src)
+	for _, want := range []string{
+		"effect: 0", // effect 首次执行
+		"d0 0",
+		"effect: 5", // count=5 后 effect 自动重跑
+		"d1 10",     // computed 派生值随 count 更新
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("输出应包含 %q, got:\n%s", want, out)
+		}
+	}
+	// effect 首次 + 写入重跑，共两次
+	if n := strings.Count(out, "effect:"); n != 2 {
+		t.Errorf("effect 应执行 2 次, got %d:\n%s", n, out)
+	}
+}
+
+func TestIntegrationSignalCompoundWrite(t *testing.T) {
+	// 复合赋值/自增自减写 signal，computed 与 effect 应观察到最终结果。
+	src := `package main
+import "fmt"
+signal n = 0
+func main() {
+    let v = Signal.computed(() => n)
+    n += 3
+    n++
+    n--
+    fmt.Println("v", v)
+}
+`
+	out := runGX(t, src)
+	if !strings.Contains(out, "v 3") {
+		t.Errorf("n=0 +=3 ++ -- 应为 3, got:\n%s", out)
+	}
+}
+
+func TestIntegrationSignalMultipleEffects(t *testing.T) {
+	// 多个 signal、多个 effect，依赖追踪互不串扰。
+	src := `package main
+signal a = 1
+signal b = 10
+func main() {
+    Signal.effect(() => println("A", a))
+    Signal.effect(() => println("B", b))
+    a = 2
+    b = 20
+}
+`
+	out := runGX(t, src)
+	for _, want := range []string{"A 1", "B 10", "A 2", "B 20"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("输出应包含 %q, got:\n%s", want, out)
+		}
+	}
+}
