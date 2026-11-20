@@ -553,3 +553,46 @@ func main() {
 		t.Errorf("Hidden 只应出现在 HIDE 阶段: %s", out)
 	}
 }
+
+func TestIntegrationJSXSceneFor(t *testing.T) {
+	// 阶段3：<For> keyed 列表——增删/渲染，每元素独立 Owner。
+	src := `package main
+import (
+	gxscene "github.com/robertpanvip/gox/runtime/scene"
+	"fmt"
+)
+type User struct { id int; name string }
+func main() {
+	signal users = []User{{1,"Tom"},{2,"Jack"}}
+	view := <ul>
+		<For each={users} key={(u) => u.id}>
+			{(u User) => <li>{u.name}</li>}
+		</For>
+	</ul>
+	view.BindReactive(Signal.Effect)
+	fmt.Print("INIT:", view)
+	users = []User{{2,"Jack"},{1,"Tom"},{3,"Ann"}}
+	fmt.Print("ADD:", view)
+	users = []User{{1,"Tom"}}
+	fmt.Print("DEL:", view)
+}
+`
+	out := runGXScene(t, src)
+	for _, want := range []string{
+		`INIT:<ul>`, `"Tom"`, `"Jack"`,
+		`ADD:<ul>`, `"Ann"`,
+		`DEL:<ul>`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("输出应包含 %q, got:\n%s", want, out)
+		}
+	}
+	// DEL 阶段应只剩 Tom，不含 Jack/Ann（用最后一次 DEL 输出段断言）。
+	idx := strings.LastIndex(out, "DEL:")
+	if idx >= 0 {
+		seg := out[idx:]
+		if strings.Contains(seg, "Jack") || strings.Contains(seg, "Ann") {
+			t.Errorf("DEL 阶段应只剩 Tom:\n%s", seg)
+		}
+	}
+}

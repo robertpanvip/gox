@@ -347,3 +347,31 @@ func main() {
 		}
 	}
 }
+
+// Keyed For：JSX <For> 编译成 OpFor + ForGetterOf[T]。
+func TestJSXSceneFor(t *testing.T) {
+	res, err := CompileScene("for.gx", `package main
+import gxscene "github.com/robertpanvip/gox/runtime/scene"
+type User struct { id int; name string }
+func main() {
+	signal users = []User{{1,"Tom"}}
+	_ = <ul><For each={users} key={(u) => u.id}>{(u User) => <li>{u.name}</li>}</For></ul>
+}
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := res.GoSource
+	for _, want := range []string{
+		"gxscene.OpFor", "Slot:0", "N:1",
+		"gxscene.ForGetterOf[User]",
+		"func() []User", "users()",
+		"func(u User) any", "u.id",
+		"func(u User) *gxscene.Instance",
+		`Arg:"li"`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("For 产物应包含 %q, got:\n%s", want, out)
+		}
+	}
+}

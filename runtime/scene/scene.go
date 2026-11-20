@@ -35,7 +35,8 @@ const (
 	OpDynChild                // 动态子节点插槽：Slot=索引
 	OpDynAttr                 // 动态属性插槽：Key=属性名, Slot=索引
 	OpComp                    // 复合组件插槽：Arg=组件名, Slot=索引；getter 返回一个 *Instance
-	OpBranch                  // 条件分支插槽：Slot=索引；getter 返回一个 *Branch，按条件动态重建子树
+	OpBranch                  // 条件分支插槽：Slot=索引；getter 返回一个动态子树控制器（*Branch）
+	OpFor                     // Keyed 列表插槽：Slot=索引；getter 返回一个动态子树控制器（*For）
 )
 
 // Op 是一条 opcode 指令。Arg/Key/Slot 的含义由 Code 决定。
@@ -70,19 +71,26 @@ const (
 	slotChild slotKind = iota
 	slotAttr
 	slotComp   // 复合组件：getter 返回一个 *Instance，挂载为子树，Update 递归驱动
-	slotBranch // 条件分支：getter 返回一个 *Branch，条件变化时在独立 Owner 中重建子树
+	slotBranch // 动态子树：getter 返回 subtreeController（*Branch 条件分支 / *For keyed 列表）
 )
+
+// subtreeController 是动态子树控制器的公共契约：Branch（条件分支）与 For（keyed 列表）
+// 都实现它。Resolve 在当前 effect 上下文求值并重建子树，Dispose 级联清理所有元素 Owner。
+type subtreeController interface {
+	Resolve() *Instance
+	Dispose()
+}
 
 // slot 描述一个动态插槽在场景树中的位置与绑定。
 type slot struct {
-	kind   slotKind
-	path   []int  // 从根到目标节点的子节点索引路径
-	attr   string // slotAttr 时的属性名
-	get    func() any
-	last   any
-	node   *Node     // clone 后回填的实际节点
-	child  *Instance // slotComp 时挂载的子组件实例
-	branch *Branch   // slotBranch 时挂载的条件分支控制器
+	kind  slotKind
+	path  []int  // 从根到目标节点的子节点索引路径
+	attr  string // slotAttr 时的属性名
+	get   func() any
+	last  any
+	node  *Node             // clone 后回填的实际节点
+	child *Instance         // slotComp 时挂载的子组件实例
+	ctrl  subtreeController // slotBranch/OpFor 时挂载的动态子树控制器
 }
 
 // compiledTemplate 是解析 opcode 一次得到的静态骨架（只解析一次，全局缓存）。
@@ -167,9 +175,9 @@ func compile(t Template) *compiledTemplate {
 			if op.Slot >= 0 && op.Slot < t.N {
 				slots[op.Slot] = &slot{kind: slotComp, path: append(childPath(cur), idx)}
 			}
-		case OpBranch:
-			// 条件分支也是透明包装节点（Kind=#frag 语义），其子节点由当前
-			// 命中的分支子树在应用时嫁接而来；编译期只有空壳。
+		case OpBranch, OpFor:
+			// 条件分支 / keyed 列表都是透明包装节点（Kind=#frag 语义），
+			// 其子节点由控制器在应用时嫁接而来；编译期只有空壳。
 			idx := childOfStack(cur)
 			n := cur.Children[idx]
 			n.Kind = "#frag"
@@ -452,20 +460,20 @@ func (i *Instance) applyAll() {
 		case slotComp:
 			mountComp(s, v)
 		case slotBranch:
-			attachBranch(i, s, v)
+			attachController(i, s, v)
 		}
 	}
 }
 
-// attachBranch 把 getter 产出的 *Branch 绑定到 slot，并首次求值、嫁接子树。
-// getter 每次返回同一个 *Branch（闭包捕获的稳定对象），因此只在首次绑定。
-func attachBranch(i *Instance, s *slot, v any) {
-	br, ok := v.(*Branch)
-	if !ok || br == nil {
+// attachController 把 getter 产出的动态子树控制器（*Branch / *For）绑定到 slot，
+// 并首次求值、嫁接子树。getter 每次返回同一稳定对象（工厂闭包捕获），因此绑定一次即可。
+func attachController(i *Instance, s *slot, v any) {
+	ctrl, ok := v.(subtreeController)
+	if !ok || ctrl == nil {
 		return
 	}
-	s.branch = br
-	mountBranch(s, br.Resolve())
+	s.ctrl = ctrl
+	mountBranch(s, ctrl.Resolve())
 }
 
 // Update 重算所有插槽，只把变化的写回节点。返回本次写入的节点数。
@@ -564,15 +572,15 @@ func (i *Instance) SetPart(slot int, v any) {
 		return
 	}
 	s := i.slots[slot]
-	// 条件分支：v 是 *Branch（getter 每次返回同一稳定对象）。读 selector（在
-	// 当前 effect 上下文登记依赖），命中变化时切换 Owner 并嫁接新子树。
+	// 动态子树控制器（条件分支 / keyed 列表）：v 是 subtreeController（getter
+	// 每次返回同一稳定对象）。Resolve 在当前 effect 上下文读依赖并重建/复用子树。
 	if s.kind == slotBranch {
-		br, ok := v.(*Branch)
-		if !ok || br == nil {
+		ctrl, ok := v.(subtreeController)
+		if !ok || ctrl == nil {
 			return
 		}
-		s.branch = br
-		mountBranch(s, br.Resolve())
+		s.ctrl = ctrl
+		mountBranch(s, ctrl.Resolve())
 		i.Writes++
 		return
 	}
@@ -641,8 +649,8 @@ func (i *Instance) Dispose() {
 		if sl.kind == slotComp && sl.child != nil {
 			sl.child.Dispose()
 		}
-		if sl.kind == slotBranch && sl.branch != nil {
-			sl.branch.Dispose()
+		if sl.kind == slotBranch && sl.ctrl != nil {
+			sl.ctrl.Dispose()
 		}
 	}
 }

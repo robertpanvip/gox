@@ -214,7 +214,13 @@ func walkSceneChildren(n *jsxNode, ops *[]sceneOp, getters *[]sceneGetter, slotC
 			*ops = append(*ops, sceneOp{code: "OpDynChild", slot: s})
 			*getters = append(*getters, sceneGetter{expr: c.text, pos: c.pos})
 		case childElement:
-			if c.node.component {
+			if c.node.name == "For" {
+				// Keyed 列表：发射 OpFor 插槽，getter 是 ForGetterOf(...) 工厂。
+				s := *slotCounter
+				*slotCounter++
+				*ops = append(*ops, sceneOp{code: "OpFor", slot: s})
+				*getters = append(*getters, sceneGetter{pos: c.node.pos, call: forTokens(c.node, ctx), raw: true})
+			} else if c.node.component {
 				// 复合组件：发射 OpComp 插槽，getter 是一次组件调用。
 				s := *slotCounter
 				*slotCounter++
@@ -285,6 +291,147 @@ func branchGetterTokens(c *jsxCond, ctx *jsxSceneCtx) []Token {
 	}
 	out = append(out, tokOp(")", p))
 	return out
+}
+
+// forTokens 为 <For> 节点生成 gxscene.ForGetterOf[T](each, key, render)。
+//
+// 语法（render lambda 的参数须带元素类型注解，供泛型实例化）：
+//
+//	<For each={users} key={(u) => u.id}>
+//	    {(u User) => <li>{u.name}</li>}
+//	</For>
+//
+// 生成：
+//
+//	gxscene.ForGetterOf[User](
+//	    func() []User { return users() },
+//	    func(u User) any { return u.id },
+//	    func(u User) *gxscene.Instance { return <li>..</li> },
+//	)
+//
+// key lambda 的参数若不写类型，复用 render 的元素类型。
+func forTokens(n *jsxNode, ctx *jsxSceneCtx) []Token {
+	p := n.pos
+	var eachExpr, keyLambda string
+	for _, a := range n.attrs {
+		switch a.name {
+		case "each":
+			eachExpr = a.value
+		case "key":
+			keyLambda = a.value
+		}
+	}
+	// children 里的首个表达式是 render lambda。
+	renderLambda := ""
+	for _, c := range n.children {
+		if c.kind == childExpr {
+			renderLambda = c.text
+			break
+		}
+	}
+
+	rParams, rBody, rOK := parseForLambda(renderLambda)
+	elemType, paramName := "any", "it"
+	if rOK {
+		if rParams.typ != "" {
+			elemType = rParams.typ
+		}
+		if rParams.name != "" {
+			paramName = rParams.name
+		}
+	}
+
+	out := []Token{
+		tokIdent("gxscene", p), tokOp(".", p), tokIdent("ForGetterOf", p), tokOp("[", p),
+		tokIdent(strings.TrimSpace(elemType), p), tokOp("]", p), tokOp("(", p),
+	}
+
+	// each getter: func() []T { return <eachExpr> }
+	out = append(out, tokIdent("func", p), tokOp("(", p), tokOp(")", p), tokSpace(" ", p),
+		tokOp("[", p), tokOp("]", p), tokIdent(strings.TrimSpace(elemType), p), tokSpace(" ", p),
+		tokOp("{", p), tokSpace(" ", p), tokIdent("return", p), tokSpace(" ", p))
+	out = append(out, lexExprScene(eachExpr, p, ctx)...)
+	out = append(out, tokSpace(" ", p), tokOp("}", p), tokOp(",", p))
+
+	// key: func(T) any { return <keyBody> }；无 key 时为 nil。
+	if keyLambda == "" {
+		out = append(out, tokIdent("nil", p))
+	} else {
+		kParams, kBody, kOK := parseForLambda(keyLambda)
+		kName, kType := paramName, elemType
+		if kOK {
+			if kParams.name != "" {
+				kName = kParams.name
+			}
+			if kParams.typ != "" {
+				kType = kParams.typ
+			}
+		}
+		out = append(out, tokIdent("func", p), tokOp("(", p), tokIdent(kName, p), tokSpace(" ", p),
+			tokIdent(kType, p), tokOp(")", p), tokSpace(" ", p), tokIdent("any", p), tokSpace(" ", p),
+			tokOp("{", p), tokSpace(" ", p), tokIdent("return", p), tokSpace(" ", p))
+		// key body 是以 kName 为自由变量的表达式，需补 signal 读 ()。
+		bodyToks := New(kBody).AllTokens()
+		if len(ctx.sigs) > 0 {
+			bodyToks = rewriteJSXInterpSignals(bodyToks, ctx.sigs)
+		}
+		for _, t := range bodyToks {
+			if t.Kind == EOF {
+				continue
+			}
+			t.Pos = p
+			t.IsGen = true
+			out = append(out, t)
+		}
+		out = append(out, tokSpace(" ", p), tokOp("}", p))
+	}
+	out = append(out, tokOp(",", p))
+
+	// render: func(T) *gxscene.Instance { return <renderBody JSX> }
+	out = append(out, tokIdent("func", p), tokOp("(", p), tokIdent(paramName, p), tokSpace(" ", p),
+		tokIdent(elemType, p), tokOp(")", p), tokSpace(" ", p),
+		tokOp("*", p), tokIdent("gxscene", p), tokOp(".", p), tokIdent("Instance", p), tokSpace(" ", p),
+		tokOp("{", p), tokSpace(" ", p), tokIdent("return", p), tokSpace(" ", p))
+	// renderBody 是 JSX（如 <li>{u.name}</li>），走 scene 表达式转换。
+	bodyToks := New(rBody).AllTokens()
+	bodyToks = transformJSXScene(bodyToks, ctx)
+	for _, t := range bodyToks {
+		if t.Kind == EOF {
+			continue
+		}
+		t.Pos = p
+		t.IsGen = true
+		out = append(out, t)
+	}
+	out = append(out, tokSpace(" ", p), tokOp("}", p))
+	out = append(out, tokOp(")", p))
+	return out
+}
+
+// forLambdaParam 是 For 的 lambda 参数解析结果。
+type forLambdaParam struct {
+	name string
+	typ  string
+}
+
+// parseForLambda 解析 `(u User) => body` / `(u) => body` 形式，返回参数与 body。
+func parseForLambda(src string) (forLambdaParam, string, bool) {
+	arrow := strings.Index(src, "=>")
+	if arrow < 0 {
+		return forLambdaParam{}, src, false
+	}
+	params := strings.TrimSpace(src[:arrow])
+	body := strings.TrimSpace(src[arrow+2:])
+	params = strings.TrimSpace(strings.TrimPrefix(strings.TrimSuffix(params, ")"), "("))
+	fields := strings.Fields(params)
+	fp := forLambdaParam{}
+	if len(fields) >= 1 {
+		fp.name = fields[0]
+	}
+	if len(fields) >= 2 {
+		fp.typ = strings.Join(fields[1:], " ")
+	}
+	return fp, body, true
 }
 
 // sceneOpTokens 把一个 sceneOp 转成 Go token 序列：
@@ -363,6 +510,9 @@ func getterTokens(g sceneGetter, ctx *jsxSceneCtx) []Token {
 // genSceneExpr 为一个 JSX 根元素生成完整的表达式 token 序列。
 // 根是复合组件时产出一次组件调用（返回 *Instance）；否则产出 gxscene.Render(...)。
 func genSceneExpr(node *jsxNode, ctx *jsxSceneCtx) []Token {
+	if node.name == "For" {
+		return forTokens(node, ctx)
+	}
 	if node.component {
 		return compCallTokens(node, ctx)
 	}
