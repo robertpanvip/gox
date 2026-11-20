@@ -6,7 +6,7 @@
 >
 > **书写约定核心：声明用 `pub` 显式导出；标识符按 Go 真实拼写书写，全大写缩写（如 `URL`）直接写大写、原样保留。** 小写形式兼容旧写法、机械还原，无需类型推导、无需读取第三方包符号表。
 
-## 十一项特性速览
+## 特性速览
 
 | 特性 | GX 写法 | 生成的 Go |
 |---|---|---|
@@ -23,6 +23,7 @@
 | **对象字面量** | `{ name: "x", age: 1 }` | `struct{ name string; age int }{...}`，有期望类型时用 `point{...}` |
 | **对象解构** | `{ name, age } := p` / `var { name, age } = p` | `name := p.name; age := p.age`（逐字段，校验字段存在） |
 | **Signal 响应式** | `signal n = 0` / `Signal.effect(() => ...)` | `Signal.New(0)` + 函数式读写 + 依赖追踪自动重跑 |
+| **应用入口** | `gxapp.Open(<div/>, cfg)` | `gxapp.Open(gxscene.Render(...), cfg)` + Window 抽象 + signal 自动重绘 |
 
 ## 1. 可见性：`pub`
 
@@ -217,6 +218,54 @@ n := view.Update()                      // 更新，返回写入节点数
 | 8 | 绘制后端目前只有 `TextBackend` | 经 `Backend` 接口抽象，Skia / wgpu 可后续接入，编译器无需改动 |
 
 API：`CompileScene` / `CompileSceneWithModule`（对应默认的 `Compile` / `CompileWithModule`）；调试单步用 `gox jsxscene`。运行时见 [`runtime/scene/`](runtime/scene/)，完整示例见 `examples/jsxscene.gx`。
+
+##### 应用入口：`gxapp.Open`（类比 `ReactDOM.render`）
+
+`gxapp.Open` 把一棵 JSX 场景树挂到「窗口」上，是应用外壳层——类比 React 的 `ReactDOM.render(element, container)`：
+
+| 参数 | 含义 |
+|---|---|
+| 第一个 | **JSX**（编译后即 `gxscene.Render(...)` → `*gxscene.Instance`） |
+| 第二个 | **窗口配置** `gxapp.WindowConfig`（标题、尺寸、位置、全屏、后端提示） |
+
+```gx
+// gox build demo.gx -jsx=scene
+import gxapp "github.com/robertpanvip/gox/runtime/app"
+
+app, err := gxapp.Open(<div id="app">hello</div>, gxapp.WindowConfig{
+    Title: "Demo", Width: 800, Height: 600,
+})
+if err != nil { panic(err) }
+defer app.Close()
+app.Run()
+```
+
+`WindowConfig` 字段：`Title` / `Width` / `Height` / `X` / `Y` / `Resizable` / `Fullscreen` / `Backend`。零值尺寸自动补 800×600，`Backend` 空值补 `"headless"`；`gxapp.DefaultConfig()` 返回一份带默认值的配置。
+
+**窗口后端是接口**，第一版内置 Headless（用 `TextBackend` 绘制到 `io.Writer`，沙箱/CI 可跑通）：
+
+| API | 作用 |
+|---|---|
+| `gxapp.Open(view, cfg)` | 打开默认 Headless 窗口并绘制首帧，返回 `(*App, error)` |
+| `gxapp.OpenWith(view, cfg, win)` | 注入自定义窗口后端（实现 `Window` 接口） |
+| `Window` 接口 | `Open(cfg)` / `Draw(root)` / `Run()` / `Close()` / `Config()` |
+| `App.Draw()` / `App.Update()` | 手动重绘一帧 / 更新场景树并重绘 |
+| `App.BindReactive(effect)` | signal 变化时自动更新 + 重绘一帧（批处理，见下） |
+| `App.Run()` / `App.Close()` | 进入事件循环 / 关闭（幂等） |
+| `gxapp.RenderText(view)` | 不建窗口，直接把场景树绘制成字符串（测试用） |
+
+**signal 自动重绘**：`app.BindReactive(signal.Effect)` 建一个聚合 effect——`Instance.Update()` 递归读所有 getter 登记依赖并裁剪写入，随后 `Draw()` 一帧。一次 signal 写入 = **一帧**，不会出现「部分插槽已更新」的中间态画面（这是应用入口该有的批处理语义，区别于底层 `Instance.BindReactive` 的逐插槽精确模式）。
+
+```gx
+signal count = 0
+let doubled = Signal.computed(func() int { return count() * 2 })
+view := <div><span>{count}</span><b>{doubled}</b></div>
+app, _ := gxapp.Open(view, gxapp.DefaultConfig())
+app.BindReactive(signal.Effect)   // 接线（抑制首帧重复绘制）
+count = 5                          // 自动更新 + 只画一帧：count=5、doubled=10 一致
+```
+
+> **接入真实 GUI**：实现 `Window` 接口的 `Open/Draw/Run/Close/Config`，用 `OpenWith` 注入即可——Skia / wgpu / GLFW 后端无需改动 `gxapp` 或编译器。当前 Headless 后端让整条链路在无 GUI 环境端到端可验证。完整示例见 [`examples/jsxapp.gx`](examples/jsxapp.gx)，运行时见 [`runtime/app/`](runtime/app/)。
 
 ## 4. 外部 Go 符号：按真实拼写书写
 

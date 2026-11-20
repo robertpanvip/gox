@@ -306,6 +306,36 @@ n := view.<span class="fn">Update</span>()                      <span class="cm"
 }</pre>
 <div class="note"><b>取舍</b>：强类型属性是快照值（组件只执行一次、字段是普通值），写变量后<b>不会</b>自动刷新——要响应式请用 getter-map + <code>BindReactive</code>。两种形态可在同一文件混用，按组件各自签名判定。验证见 <code>pkg/compiler/jsxscene_test.go</code> 的 <code>TestJSXSceneTypedProps*</code>。</div>
 
+<h2>三·补充三、应用入口 gxapp.Open（类比 ReactDOM.render）</h2>
+<p>前面都在讲「一棵场景树怎么建、怎么更新」。<code>gxapp.Open</code> 是再上一层的<b>应用外壳</b>——把 JSX 挂到「窗口」上，正如 <code>ReactDOM.render(element, container)</code>。两个参数正好是：</p>
+<table>
+  <tr><th>参数</th><th>含义</th></tr>
+  <tr><td>第一个</td><td><b>JSX</b>（编译后即 <code>gxscene.Render(...)</code> → <code>*Instance</code>）</td></tr>
+  <tr><td>第二个</td><td><b>窗口配置</b> <code>gxapp.WindowConfig</code>（标题、尺寸、位置、全屏、后端提示）</td></tr>
+</table>
+<pre class="code"><span class="cm">// gox build demo.gx -jsx=scene   ·   examples/jsxapp.gx</span>
+<span class="kw">import</span> gxapp <span class="st">"github.com/robertpanvip/gox/runtime/app"</span>
+
+app, err := gxapp.<span class="fn">Open</span>(&lt;<span class="tag">div</span> id=<span class="st">"app"</span>&gt;hello&lt;/<span class="tag">div</span>&gt;, gxapp.WindowConfig{
+    Title:<span class="st">"Demo"</span>, Width:800, Height:600,
+})
+<span class="kw">if</span> err != nil { <span class="fn">panic</span>(err) }
+<span class="kw">defer</span> app.<span class="fn">Close</span>()
+app.<span class="fn">Run</span>()</pre>
+<p><b>窗口后端是接口</b>，第一版内置 Headless（用 TextBackend 绘制到 <code>io.Writer</code>，沙箱 / CI 可跑通）。<code>WindowConfig</code> 字段：<code>Title</code> / <code>Width</code> / <code>Height</code> / <code>X</code> / <code>Y</code> / <code>Resizable</code> / <code>Fullscreen</code> / <code>Backend</code>；零值尺寸自动补 800×600，<code>Backend</code> 空值补 <code>"headless"</code>。</p>
+<table>
+  <tr><th>API</th><th>作用</th></tr>
+  <tr><td><code>gxapp.Open(view, cfg)</code></td><td>打开默认 Headless 窗口 + 绘制首帧，返回 <code>(*App, error)</code></td></tr>
+  <tr><td><code>gxapp.OpenWith(view, cfg, win)</code></td><td>注入自定义窗口后端（实现 <code>Window</code> 接口）</td></tr>
+  <tr><td><code>Window</code> 接口</td><td><code>Open/Draw/Run/Close/Config</code> — Skia / wgpu / GLFW 按此接入</td></tr>
+  <tr><td><code>App.Draw() / Update()</code></td><td>手动重绘一帧 / 更新场景树并重绘</td></tr>
+  <tr><td><code>App.BindReactive(effect)</code></td><td>signal 变化 → 自动更新 + 重绘一帧（批处理，见下）</td></tr>
+  <tr><td><code>App.Run() / Close()</code></td><td>事件循环 / 关闭（幂等）</td></tr>
+  <tr><td><code>gxapp.RenderText(view)</code></td><td>不建窗口，直接绘制成字符串（测试用）</td></tr>
+</table>
+<div class="note"><b>signal 自动重绘（批处理）</b>：<code>app.BindReactive(signal.Effect)</code> 建一个<b>聚合 effect</b>——<code>Instance.Update()</code> 递归读所有 getter 登记依赖并裁剪写入，随后 <code>Draw()</code> 一帧。一次 signal 写入 = <b>一帧</b>，不会出现「部分插槽已更新」的中间态画面（这是应用入口该有的语义，区别于底层 <code>Instance.BindReactive</code> 的逐插槽精确模式）。接线时首帧被抑制，避免与 Open 的首帧重复。真实实测：<code>count=5</code> 后一帧内 <code>count=5</code> 与 <code>doubled=10</code> 一致。</div>
+<div class="note"><b>接入真实 GUI</b>：实现 <code>Window</code> 的 <code>Open/Draw/Run/Close/Config</code>，用 <code>OpenWith</code> 注入即可——Skia / wgpu / GLFW 后端无需改动 <code>gxapp</code> 或编译器。当前 Headless 后端让整条链路在无 GUI 环境端到端可验证。</div>
+
 <h2>四、约束清单</h2>
 <ol class="constraints">
   <li><b>组件签名二选一</b> <code>func(gxscene.Props) *gxscene.Instance</code>（getter-map，保鲜）或 <code>func(T) *gxscene.Instance</code>（T 为本文件具名 struct，强类型快照）；返回类型不匹配则不是合法组件。</li>
@@ -367,6 +397,17 @@ n := view.<span class="fn">Update</span>()                      <span class="cm"
 <div>&lt;/<span class="tag">div</span>&gt;</div>
 </div>
 
+<p>应用入口示例（<code>examples/jsxapp.gx</code>）：<code>count=5</code> 后<b>只画一帧</b>，<code>count</code> 与 <code>doubled</code> 一致更新（无中间态帧）：</p>
+<div class="term">
+<div><span class="cmd">$ gox build examples/jsxapp.gx -jsx=scene -o main.go &amp;&amp; go run .</span></div>
+<div><span class="cm">// 第 1 帧：Open 首帧</span></div>
+<div>&lt;<span class="tag">div</span> id=<span class="st">"app"</span>&gt; … &lt;<span class="tag">span</span>&gt;<span class="out">"count = "</span><span class="out">"0"</span>&lt;/<span class="tag">span</span>&gt; &lt;<span class="tag">b</span>&gt;<span class="out">"doubled = "</span><span class="out">"0"</span>&lt;/<span class="tag">b</span>&gt; … &lt;/<span class="tag">div</span>&gt;</div>
+<div><span class="cm">// 第 2 帧：count=5 → 聚合 effect 一帧更新（含 doubled=10）</span></div>
+<div>&lt;<span class="tag">div</span> id=<span class="st">"app"</span>&gt; … &lt;<span class="tag">span</span>&gt;<span class="out">"count = "</span><span class="out">"5"</span>&lt;/<span class="tag">span</span>&gt;&nbsp;&nbsp;<span class="cm">← count</span></div>
+<div>&nbsp;&nbsp;&lt;<span class="tag">b</span>&gt;<span class="out">"doubled = "</span><span class="out">"10"</span>&lt;/<span class="tag">b</span>&gt;&nbsp;&nbsp;<span class="cm">← doubled (computed)</span></div>
+<div>&lt;/<span class="tag">div</span>&gt;</div>
+</div>
+
 <h2>六、API 速查</h2>
 <table>
   <tr><th>API</th><th>作用</th></tr>
@@ -378,12 +419,15 @@ n := view.<span class="fn">Update</span>()                      <span class="cm"
   <tr><td>Instance.BindReactive(effect)</td><td>把 signal.Effect 接到所有插槽：signal 写入自动精确更新，免手动 Update</td></tr>
   <tr><td>Instance.Root / String / Writes / Updates</td><td>场景树根 / 文本绘制 / 观测指标</td></tr>
   <tr><td>Backend / TextBackend</td><td>绘制抽象 / 当前唯一实现</td></tr>
+  <tr><td>gxapp.Open / OpenWith</td><td>应用入口：JSX + 窗口配置 → App（类比 ReactDOM.render）</td></tr>
+  <tr><td>WindowConfig / Window / HeadlessWindow</td><td>窗口配置 / 后端接口 / Headless 实现</td></tr>
+  <tr><td>App.BindReactive / Run / Close / Draw / Update</td><td>应用生命周期 + signal 自动重绘（批处理）</td></tr>
 </table>
 
 <footer>
-  源码：<code>runtime/scene/</code>（运行时） · <code>pkg/compiler/jsxscene.go</code>（编译器） ·
-  <code>examples/jsxscene.gx</code>（getter-map 示例） · <code>examples/jsxscene-signal.gx</code>（signal 响应式） ·
-  <code>examples/jsxscene-typed.gx</code>（强类型契约） · <code>docs/scene-components-guide.html</code>（本文档）
+  源码：<code>runtime/scene/</code>（场景运行时） · <code>runtime/app/</code>（应用入口） · <code>pkg/compiler/jsxscene.go</code>（编译器） ·
+  <code>examples/jsxscene.gx</code>（getter-map） · <code>examples/jsxscene-signal.gx</code>（signal 响应式） ·
+  <code>examples/jsxscene-typed.gx</code>（强类型契约） · <code>examples/jsxapp.gx</code>（应用入口） · <code>docs/scene-components-guide.html</code>（本文档）
 </footer>
 
 </div>
