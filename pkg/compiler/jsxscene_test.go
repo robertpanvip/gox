@@ -70,6 +70,49 @@ func main() {
 	}
 }
 
+func TestJSXSceneCompositeChild(t *testing.T) {
+	out, err := CompileStage(`package main
+func main() {
+	title := "hi"
+	_ = <div><Card title={title} class="x">hello</Card></div>
+}
+`, "jsxscene")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"gxscene.OpComp", `Arg:"Card"`, "Slot:0", "N:1",
+		"Card(gxscene.Props{",
+		`"title":func() any{ return title }`,
+		`"class":"x"`,
+		`"children":func() any{ return gxscene.Render`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("产物应包含 %q, got:\n%s", want, out)
+		}
+	}
+	// Card 的静态属性不应变成 OpAttr（组件属性走 Props，不落在场景节点上）
+	if strings.Contains(out, `gxscene.OpAttr`) {
+		t.Errorf("组件不应生成 OpAttr, got:\n%s", out)
+	}
+}
+
+func TestJSXSceneCompositeRoot(t *testing.T) {
+	out, err := CompileStage(`package main
+func main() { _ = <ui.Card n={1}/> }
+`, "jsxscene")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 根是组件：直接产出一次组件调用，不再包一层 gxscene.Render
+	if !strings.Contains(out, "ui.Card(gxscene.Props{") {
+		t.Errorf("根组件应产出限定名调用, got:\n%s", out)
+	}
+	if !strings.Contains(out, `"n":func() any{ return 1 }`) {
+		t.Errorf("动态属性应为 getter, got:\n%s", out)
+	}
+}
+
 func TestJSXSceneNested(t *testing.T) {
 	out, err := CompileStage(`package main
 func main() { _ = <ul><li>a</li><li>b</li></ul> }

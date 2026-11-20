@@ -32,6 +32,7 @@ const (
 	OpChildText               // 静态文本子节点：Arg=文本
 	OpDynChild                // 动态子节点插槽：Slot=索引
 	OpDynAttr                 // 动态属性插槽：Key=属性名, Slot=索引
+	OpComp                    // 复合组件插槽：Arg=组件名, Slot=索引；getter 返回一个 *Instance
 )
 
 // Op 是一条 opcode 指令。Arg/Key/Slot 的含义由 Code 决定。
@@ -65,16 +66,18 @@ type slotKind uint8
 const (
 	slotChild slotKind = iota
 	slotAttr
+	slotComp // 复合组件：getter 返回一个 *Instance，挂载为子树，Update 递归驱动
 )
 
 // slot 描述一个动态插槽在场景树中的位置与绑定。
 type slot struct {
-	kind slotKind
-	path []int  // 从根到目标节点的子节点索引路径
-	attr string // slotAttr 时的属性名
-	get  func() any
-	last any
-	node *Node // clone 后回填的实际节点
+	kind  slotKind
+	path  []int  // 从根到目标节点的子节点索引路径
+	attr  string // slotAttr 时的属性名
+	get   func() any
+	last  any
+	node  *Node     // clone 后回填的实际节点
+	child *Instance // slotComp 时挂载的子组件实例
 }
 
 // compiledTemplate 是解析 opcode 一次得到的静态骨架（只解析一次，全局缓存）。
@@ -147,6 +150,17 @@ func compile(t Template) *compiledTemplate {
 			cur.Props[op.Key] = nil
 			if op.Slot >= 0 && op.Slot < t.N {
 				slots[op.Slot] = &slot{kind: slotAttr, path: childPath(cur), attr: op.Key}
+			}
+		case OpComp:
+			// 组件在场景树里是一个逻辑包装节点（Kind=组件名）。它的子节点在
+			// applyAll 时由子组件实例的根 children 嫁接而来；编译期只有空壳。
+			idx := childOfStack(cur)
+			n := cur.Children[idx]
+			n.Kind = op.Arg
+			n.Props = map[string]any{}
+			n.parent = cur
+			if op.Slot >= 0 && op.Slot < t.N {
+				slots[op.Slot] = &slot{kind: slotComp, path: append(childPath(cur), idx)}
 			}
 		}
 	}
@@ -269,6 +283,117 @@ func valueText(v any) string {
 	}
 }
 
+// Props 是传给复合组件的属性包。动态属性（attr={expr}）以 func() any 形式存放，
+// 组件函数只执行一次，因此需用 getter 读取才能在 Update 时看到最新值。
+// 静态属性以字面值存放。
+type Props map[string]any
+
+// Prop 读一个属性并规整为 getter：动态属性直接返回其 getter，
+// 静态属性/缺失属性返回一个恒值/空值 getter。组件体里统一写 `Prop(p,"x")()`。
+func Prop(p Props, key string) func() any {
+	if p == nil {
+		return func() any { return nil }
+	}
+	if v, ok := p[key]; ok {
+		if g, ok := v.(func() any); ok {
+			return g
+		}
+		return func() any { return v }
+	}
+	return func() any { return nil }
+}
+
+// Get 是 Prop 的泛型版本：把属性 getter 的结果断言为 T，便于类型安全地读取。
+func Get[T any](p Props, key string) func() T {
+	g := Prop(p, key)
+	return func() T {
+		v := g()
+		if t, ok := v.(T); ok {
+			return t
+		}
+		var zero T
+		return zero
+	}
+}
+
+// Child 读取组件的 children（由编译器放入 "children" 属性，值为一个 *Instance getter）。
+func Child(p Props) func() any { return Prop(p, "children") }
+
+// graftNode 把 src 挂到 dst 下；#root/#frag 这类透明节点会把自己的 children 摊平，
+// 不引入额外标签层。
+func graftNode(dst *Node, src *Node) {
+	if src == nil {
+		return
+	}
+	if src.Kind == "#root" || src.Kind == "#frag" {
+		for _, c := range src.Children {
+			graftNode(dst, c)
+		}
+		return
+	}
+	src.parent = dst
+	dst.Children = append(dst.Children, src)
+}
+
+// embedValue 把一个动态值写入子节点槽位。结构性值（*Instance/*Node/切片）按节点嫁接，
+// 标量退化为文本节点——这让 `{childJSX}` 和 `{普通值}` 走同一套 slot。
+func embedValue(s *slot, v any) {
+	s.node.Children = nil
+	s.child = nil
+	switch x := v.(type) {
+	case *Instance:
+		s.node.Kind = "#frag"
+		s.child = x
+		graftNode(s.node, x.root)
+	case *Node:
+		s.node.Kind = "#frag"
+		graftNode(s.node, x)
+	case []any:
+		s.node.Kind = "#frag"
+		for _, e := range x {
+			embedAnyChild(s.node, e)
+		}
+	default:
+		s.node.Kind = "#text"
+		s.node.Text = valueText(v)
+	}
+}
+
+func embedAnyChild(dst *Node, v any) {
+	switch x := v.(type) {
+	case *Instance:
+		graftNode(dst, x.root)
+	case *Node:
+		graftNode(dst, x)
+	case []any:
+		for _, e := range x {
+			embedAnyChild(dst, e)
+		}
+	default:
+		n := &Node{Kind: "#text", Text: valueText(v), parent: dst}
+		dst.Children = append(dst.Children, n)
+	}
+}
+
+// mountComp 把一个组件实例的根 children 嫁接到槽位包装节点下。
+// 组件函数只在首次 applyAll 时通过 getter 调用一次；之后靠递归 Update 保鲜。
+func mountComp(s *slot, v any) {
+	if s.node == nil {
+		return
+	}
+	s.node.Children = nil
+	s.child = nil
+	inst, ok := v.(*Instance)
+	if !ok || inst == nil {
+		return
+	}
+	s.child = inst
+	for _, c := range inst.root.Children {
+		c.parent = s.node
+		s.node.Children = append(s.node.Children, c)
+	}
+}
+
 // applyAll 首次填充所有插槽（不计入 Writes——那是「更新」指标）。
 func (i *Instance) applyAll() {
 	for _, s := range i.slots {
@@ -279,9 +404,11 @@ func (i *Instance) applyAll() {
 		s.last = v
 		switch s.kind {
 		case slotChild:
-			s.node.Text = valueText(v)
+			embedValue(s, v)
 		case slotAttr:
 			s.node.Props[s.attr] = v
+		case slotComp:
+			mountComp(s, v)
 		}
 	}
 }
@@ -292,9 +419,28 @@ func (i *Instance) Update() int {
 	i.Updates++
 	written := 0
 	for _, s := range i.slots {
+		// 复合组件：getter 只在首次渲染调用一次（组件实例常驻），
+		// 之后递归驱动子组件自身的细粒度更新；不重新 mount、不重建子树。
+		if s.kind == slotComp {
+			if s.child != nil {
+				w := s.child.Update()
+				written += w
+				i.Writes += w
+			}
+			continue
+		}
 		var v any
 		if s.get != nil {
 			v = s.get()
+		}
+		// 动态子节点里内嵌的组件/JSX：getter 每次会产出新实例，这里按结构回填，
+		// 但不重复计数子树写入（子树自身 Update 时会计入）。
+		if s.kind == slotChild {
+			if _, ok := v.(*Instance); ok {
+				s.last = v
+				embedValue(s, v)
+				continue
+			}
 		}
 		if equalValue(s.last, v) {
 			continue
@@ -302,7 +448,7 @@ func (i *Instance) Update() int {
 		s.last = v
 		switch s.kind {
 		case slotChild:
-			s.node.Text = valueText(v)
+			embedValue(s, v)
 		case slotAttr:
 			s.node.Props[s.attr] = v
 		}
@@ -358,9 +504,11 @@ func (i *Instance) SetPart(slot int, v any) {
 	s.last = v
 	switch s.kind {
 	case slotChild:
-		s.node.Text = valueText(v)
+		embedValue(s, v)
 	case slotAttr:
 		s.node.Props[s.attr] = v
+	case slotComp:
+		mountComp(s, v)
 	}
 	s.node.dirty = true
 	i.Writes++
@@ -391,6 +539,13 @@ func paintNode(b *strings.Builder, n *Node, depth int) {
 	if n.Kind == "#text" {
 		if n.Text != "" {
 			b.WriteString(indent + strconv.Quote(n.Text) + "\n")
+		}
+		return
+	}
+	if n.Kind == "#frag" {
+		// 透明包装：只绘制子节点，不产生标签层。
+		for _, c := range n.Children {
+			paintNode(b, c, depth)
 		}
 		return
 	}

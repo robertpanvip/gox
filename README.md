@@ -78,18 +78,35 @@ JSX 有两种降级后端，按场景选择（默认 `vdom`）：
 
 `scene` 后端借鉴 lit-html 的「静态模板 + 动态 part」：`gxscene.Render` 按 opcode 结构缓存静态骨架，clone 得到常驻场景树；每个 `{expr}` / `attr={expr}` 是一个 getter 插槽。数据变化后调 `Update()` 只回写变化节点（可观测指标 `Instance.Writes`）。绘制经 `Backend` 接口抽象，第一版提供 `TextBackend`，Skia / wgpu 后端可后续接入，编译器与场景树无需改动。
 
+#### 复合组件（SolidJS 模型）
+
+`<Card/>` 这类大写/带点标签是**复合组件**，不是字符串标签。约定：
+
+| 项 | 规则 |
+|---|---|
+| 组件签名 | `func(props gxscene.Props) *gxscene.Instance` |
+| 编译产物 | `OpComp` 插槽 + 一次 `Card(gxscene.Props{...})` 调用；组件**只执行一次** |
+| 动态属性 | `attr={expr}` 包成 `func() any` getter；组件体用 `gxscene.Get[T](props,"attr")()` 读最新值 |
+| 静态属性 | 直接放字面值，`gxscene.Get[T]` 同样可读 |
+| children | 编成一个子 `Instance`，经 `props["children"]` 传入，组件体用 `gxscene.Child(props)()` 读取 |
+| 更新 | 父 `Instance.Update()` 递归驱动所有子组件 `Update()`；组件 getter 不重复调用、子树不重建 |
+
 ```gx
 // gox build demo.gx -jsx=scene
 import gxscene "github.com/robertpanvip/gox/runtime/scene"
-func card(title func() string) *gxscene.Instance {
-    return <div class="card"><h1>{title()}</h1></div>  // getter 读共享数据源（signal）
+func Card(props gxscene.Props) *gxscene.Instance {
+    title := gxscene.Get[string](props, "title")
+    return <div class="card"><h1>{title()}</h1></div>
 }
-// title 数据变化后：view.Update() → 只写 title 对应的文本节点
+// 使用：<div id="app"><Card title={title}/></div>
+// title 变化后：view.Update() → 递归进 Card，只写 title 对应的文本节点
 ```
+
+原生元素与组件的区分同 `vdom` 后端：标签名首字母大写或含 `.` 视为组件，其余视为原生标签。
 
 API：`CompileScene` / `CompileSceneWithModule`（对应默认的 `Compile` / `CompileWithModule`）；调试单步用 `gox jsxscene`。运行时见 [`runtime/scene/`](runtime/scene/)，示例见 `examples/jsxscene.gx`。
 
-> MVP 边界：`scene` 后端的 `<Foo/>` 组件按字符串标签渲染（不做函数组件展开）；动态插值建议绑定 getter / signal（读共享引用），直接捕获局部值参数不会随外部修改变化。
+> 提示：`scene` 后端动态插值应绑定 getter / signal（读共享引用），这样 `Update()` 才能读到最新值；直接捕获局部值快照不会随外部修改变化。复合组件的 `Props` getter 机制正是为此设计。
 
 ## 4. 外部 Go 符号：只首字母小写
 
