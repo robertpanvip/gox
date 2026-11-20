@@ -131,3 +131,71 @@ func main() { _ = <ul><li>a</li><li>b</li></ul> }
 		t.Errorf("嵌套标签名缺失:\n%s", out)
 	}
 }
+
+// 以下用例走完整管线（CompileScene），验证 signal 语法糖与 JSX 插值交汇：
+// transformSignals 无法穿透 JSX 整体 token，插值里的 signal 读应由 JSX 转换补 ()。
+
+func TestJSXSceneSignalInterpolation(t *testing.T) {
+	res, err := CompileScene("sig.gx", `package main
+func main() {
+	signal count = 0
+	_ = <div><span>{count}</span></div>
+}
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := res.GoSource
+	for _, want := range []string{
+		"var count = Signal.New(0)",
+		"func() any{ return count() }", // 关键：插值里的 signal 读补全 ()
+		"gxscene.OpDynChild",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("产物应包含 %q, got:\n%s", want, out)
+		}
+	}
+	// 不应把 signal 函数对象本身当值（return count 缺 ()）
+	if strings.Contains(out, "func() any{ return count }") {
+		t.Errorf("signal 插值漏了读调用 (), got:\n%s", out)
+	}
+}
+
+func TestJSXSceneSignalAttrAndComputed(t *testing.T) {
+	res, err := CompileScene("sig.gx", `package main
+func main() {
+	signal title = "hi"
+	let upper = Signal.computed(func() string { return title() })
+	_ = <a href={title}>{upper}</a>
+}
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := res.GoSource
+	for _, want := range []string{
+		"func() any{ return title() }", // 动态属性里的 signal 读
+		"func() any{ return upper() }", // 派生 signal 插值读
+		"Signal.Computed",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("产物应包含 %q, got:\n%s", want, out)
+		}
+	}
+}
+
+func TestJSXSceneSignalInCompositeProps(t *testing.T) {
+	res, err := CompileScene("sig.gx", `package main
+func main() {
+	signal n = 1
+	_ = <Card count={n}/>
+}
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := res.GoSource
+	if !strings.Contains(out, `"count":func() any{ return n() }`) {
+		t.Errorf("组件属性里的 signal 读应补全 (), got:\n%s", out)
+	}
+}

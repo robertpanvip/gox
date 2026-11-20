@@ -61,6 +61,8 @@
   .kw{color:var(--pink)} .fn{color:var(--blue)} .ty{color:var(--yellow,var(--amber))}
   .st{color:var(--green)} .jx{color:var(--cyan)} .cm{color:var(--sub);font-style:italic}
   .con{color:var(--amber);font-weight:600}
+  .note{background:rgba(166,227,161,.07);border-left:3px solid var(--green);border-radius:0 8px 8px 0;
+        padding:12px 16px;margin:16px 0;font-size:14px;line-height:1.7;color:var(--fg)}
 
   /* 表格 */
   table{width:100%;border-collapse:collapse;margin:16px 0;font-size:14px}
@@ -227,14 +229,14 @@ N:1</pre>
 <table>
   <tr><th>方式</th><th>用法</th><th>适用</th></tr>
   <tr>
-    <td>闭包 getter<br><span style="color:var(--green)">推荐</span></td>
+    <td>闭包 getter</td>
     <td><code>title={title}</code> 编成 <code>func() any{return title}</code>；改变量后调 <code>view.Update()</code></td>
-    <td>绝大多数场景；配合 signal 最自然</td>
+    <td>外部普通变量；手动驱动</td>
   </tr>
   <tr>
-    <td>signal 外接</td>
-    <td>运行时不含依赖追踪。在 getter 里登记订阅、signal 变化时调 <code>view.Update()</code></td>
-    <td>需要自动响应式的 UI（signal 由你的响应式库提供，scene 只消费）</td>
+    <td>signal 自动接线<br><span style="color:var(--green)">推荐</span></td>
+    <td><code>view.BindReactive(signal.Effect)</code> 一行接线；之后 <code>count(5)</code> 写 signal 即自动精确更新，无需 <code>Update()</code></td>
+    <td>响应式 UI；signal 沿 Props 传到叶子，叶子在插槽里读</td>
   </tr>
   <tr>
     <td>命令式<br><code>SetPart</code></td>
@@ -247,7 +249,29 @@ fmt.<span class="fn">Println</span>(view)                       <span class="cm"
 n := view.<span class="fn">Update</span>()                      <span class="cm">// 更新，返回写入节点数</span>
 <span class="cm">// 只需渲染一次、不更新时：gxscene.RenderText(tpl, getters...) 直接返回 string</span></pre>
 <p><code>Update()</code> 返回本次<b>实际写入的节点数</b>，值没变则写 0（<code>equalValue</code> 按类型严格比较）。
-观测指标：<code>Instance.Writes</code>（累计写入）、<code>Instance.Updates</code>（Update 调用次数）。</p>
+观测指标：<code>Instance.Writes</code>（累计写入，各 Instance 独立、不跨子树累加）、<code>Instance.Updates</code>（Update 调用次数）。</p>
+
+<h2>三·补充、signal 自动接线（一行搞定响应式）</h2>
+<p>scene 核心<b>不依赖</b>任何响应式库：<code>BindReactive(effect)</code> 接受一个形如 <code>signal.Effect</code> 的 effect 原语注入。它为每个插槽建一个 effect——普通插槽读 getter 后直接 <code>SetPart</code>（signal 变化只精确命中依赖它的插槽，不遍历全树）；复合组件插槽则<b>递归进子组件</b>接线（组件不重建）。signal 从根经 Props getter 一路传到叶子、在叶子的动态插槽里读取，写入即自动刷新。</p>
+<pre class="code"><span class="cm">// 完整可运行示例：examples/jsxscene-signal.gx</span>
+<span class="kw">import</span> (
+    gxscene <span class="st">"github.com/robertpanvip/gox/runtime/scene"</span>
+    "github.com/robertpanvip/gox/runtime/signal"
+)
+
+<span class="kw">func</span> <span class="fn">main</span>() {
+    <span class="kw">signal</span> count = 0
+    <span class="kw">let</span> doubled = Signal.<span class="fn">computed</span>(<span class="kw">func</span>() <span class="kw">int</span> { <span class="kw">return</span> count() * 2 })
+
+    <span class="cm">// JSX 插值 {count}/{doubled} 由编译器编成 getter 并自动补读调用</span>
+    view := <span class="jx">&lt;div id="app"&gt;&lt;span&gt;{count}&lt;/span&gt;&lt;b&gt;{doubled}&lt;/b&gt;&lt;/div&gt;</span>
+
+    view.<span class="fn">BindReactive</span>(signal.Effect)   <span class="cm">// 一行接线</span>
+
+    count = 5   <span class="cm">// 自动更新：count→"5"、doubled→"10"，无需 view.Update()</span>
+}</pre>
+<div class="note"><b>编译器细节</b>：<code>signal</code> 语法糖在管线早期消除声明并改写读写，但 JSX 插值当时是整体 token、改写穿透不到。JSX 后端重新词法化插值时拿到同一份 signal 变量集合，补上读调用——<code>{count}</code> 正确编成 <code>count()</code> 而非把 signal 函数对象当值。scene / vdom 两个后端都已覆盖。</div>
+<div class="note"><b>链路验证</b>（<code>runtime/scene/reactive_test.go</code> + <code>pkg/compiler/jsxscene_test.go</code>）：signal 经<b>两层组件 Props</b> 传到叶子 → 叶子在插槽里消费 → 写入后自动刷新、组件只执行一次不重建 → 写相同值因 <code>equalValue</code> 裁剪零冗余写入 → Computed 派生信号同样驱动；编译器侧验证插值/属性/组件 Props 里的 signal 读补全。</div>
 
 <h2>四、约束清单</h2>
 <ol class="constraints">
@@ -256,7 +280,7 @@ n := view.<span class="fn">Update</span>()                      <span class="cm"
   <li><b>动态数据必须是 getter</b> 属性传变量（<code>title={title}</code>）而非快照字面量；组件体用 <code>Get[T]()()</code> 读。<code>Get</code> 断言失败返回零值，不 panic。</li>
   <li><b>大写/带点 = 组件</b> 其余 = 原生标签；与 vdom 后端判定一致。</li>
   <li><b>children 用 <code>gxscene.Child(props)()</code> 读</b> 值是子 <code>Instance</code>，透明摊平，无多余标签层。</li>
-  <li><b>更新靠 <code>Update()</code> 显式驱动</b> scene 不内置响应式；signal 库负责「变化时调 Update」。</li>
+  <li><b>更新靠 <code>Update()</code> 或 <code>BindReactive</code> 驱动</b> scene 不内置响应式；<code>BindReactive(signal.Effect)</code> 可把 signal 直接接到插槽，免手动 Update。</li>
   <li><b><code>SetPart</code>/<code>SetGetter</code> 用插槽下标</b> 下标由编译期分配，手写 opcode 时才需要；JSX 开发中优先用 getter。</li>
   <li><b>绘制后端目前只有 <code>TextBackend</code></b> 经 <code>Backend</code> 接口抽象，Skia / wgpu 可后续接入，编译器无需改动。</li>
 </ol>
@@ -278,6 +302,22 @@ n := view.<span class="fn">Update</span>()                      <span class="cm"
 <div>&lt;<span class="tag">div</span> id="app"&gt; … &lt;<span class="tag">h1</span>&gt;<span class="out">"Gox"</span>&lt;/<span class="tag">h1</span>&gt; … &lt;<span class="tag">span</span>&gt;<span class="out">"2"</span>&lt;/<span class="tag">span</span>&gt; … &lt;/<span class="tag">div</span>&gt;</div>
 </div>
 
+<p>signal 示例（<code>examples/jsxscene-signal.gx</code>）的真实输出——<code>count = 5</code> 后两个插槽自动刷新，Computed 同步更新：</p>
+<div class="term">
+<div><span class="cmd">$ gox build examples/jsxscene-signal.gx -jsx=scene -o main.go &amp;&amp; go run .</span></div>
+<div>初始：</div>
+<div>&lt;<span class="tag">div</span> id="app"&gt;</div>
+<div>&nbsp;&nbsp;&lt;<span class="tag">span</span>&gt;<span class="out">"0"</span>&lt;/<span class="tag">span</span>&gt;</div>
+<div>&nbsp;&nbsp;&lt;<span class="tag">b</span>&gt;<span class="out">"0"</span>&lt;/<span class="tag">b</span>&gt;</div>
+<div>&lt;/<span class="tag">div</span>&gt;</div>
+<div>&nbsp;</div>
+<div>count=5 后（自动更新）：</div>
+<div>&lt;<span class="tag">div</span> id="app"&gt;</div>
+<div>&nbsp;&nbsp;&lt;<span class="tag">span</span>&gt;<span class="out">"5"</span>&lt;/<span class="tag">span</span>&gt;&nbsp;&nbsp;<span class="cm">← count</span></div>
+<div>&nbsp;&nbsp;&lt;<span class="tag">b</span>&gt;<span class="out">"10"</span>&lt;/<span class="tag">b</span>&gt;&nbsp;&nbsp;<span class="cm">← doubled (computed)</span></div>
+<div>&lt;/<span class="tag">div</span>&gt;</div>
+</div>
+
 <h2>六、API 速查</h2>
 <table>
   <tr><th>API</th><th>作用</th></tr>
@@ -286,6 +326,7 @@ n := view.<span class="fn">Update</span>()                      <span class="cm"
   <tr><td>gxscene.Props / Get[T] / Prop / Child</td><td>组件 props 读取（getter 语义）</td></tr>
   <tr><td>gxscene.Render / RenderText</td><td>渲染模板：返回 *Instance / 直接返回 string</td></tr>
   <tr><td>Instance.Update / SetPart / SetGetter</td><td>更新：全量重算 / 单插槽写 / 改绑 getter</td></tr>
+  <tr><td>Instance.BindReactive(effect)</td><td>把 signal.Effect 接到所有插槽：signal 写入自动精确更新，免手动 Update</td></tr>
   <tr><td>Instance.Root / String / Writes / Updates</td><td>场景树根 / 文本绘制 / 观测指标</td></tr>
   <tr><td>Backend / TextBackend</td><td>绘制抽象 / 当前唯一实现</td></tr>
 </table>

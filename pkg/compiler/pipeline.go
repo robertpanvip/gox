@@ -16,7 +16,7 @@ type Result struct {
 	SourceMap *sourcemap.SourceMap
 	// Analysis 是 desugar 之前 GX 语义层的产物（符号表 / 收窄 / 诊断）。
 	// 供 CLI / LSP 消费 GX 原生诊断；仅 Compile 路径填充，CompileStage 为 nil。
-	Analysis  *Analysis
+	Analysis *Analysis
 }
 
 // Validate 用 Go 解析器校验生成源码的语法（不检查类型/符号）。
@@ -83,8 +83,11 @@ func compileWithMode(file, src, module string, mode jsxMode) (*Result, error) {
 	toks, defaultDefs := stripDefaults(toks)
 	// Signal 语法糖：signal/let 声明消除 + signal 变量读写改写为调用式。
 	// 放在 Analyze 之前，让语义层看到标准 Go（signal/let 已消除、读写已是调用）。
+	// 先收集 signal 变量名并透传给 JSX 转换：JSX 插值 {count} 在此时是整体 token，
+	// 信号改写穿透不到；scene/vdom 后端重新词法化插值时需据此补上读调用 count()。
+	sigs := collectSignalVars(toks)
 	toks = transformSignals(toks)
-	analysis := Analyze(toks) // desugar 之前的 GX 语义层（联合未擦除）
+	analysis := Analyze(toks)    // desugar 之前的 GX 语义层（联合未擦除）
 	names := map[string]string{} // 小写原名 → 大写导出名（自身 pub 符号）
 	toks = expandDefaults(toks, defaultDefs)
 	toks = transformLambdas(toks, analysis)
@@ -108,9 +111,9 @@ func compileWithMode(file, src, module string, mode jsxMode) (*Result, error) {
 	toks = transformEnum(toks, names)
 	toks = transformPub(toks, names)
 	if mode == jsxScene {
-		toks = transformJSXScene(toks)
+		toks = transformJSXScene(toks, sigs)
 	} else {
-		toks = transformJSX(toks)
+		toks = transformJSX(toks, sigs)
 	}
 	toks = transformCollections(toks, module)
 	// 统一 import 别名：源码若已用别名导入 list/vdom/strconv，生成代码的占位包名
@@ -173,9 +176,9 @@ func CompileStage(src, stage string) (string, error) {
 	case "enum":
 		toks = transformEnum(toks, names)
 	case "jsx":
-		toks = transformJSX(toks)
+		toks = transformJSX(toks, nil)
 	case "jsxscene":
-		toks = transformJSXScene(toks)
+		toks = transformJSXScene(toks, nil)
 		toks = ReconcileImports(toks, defaultModule)
 	case "pub":
 		toks = transformPub(toks, names)
@@ -187,6 +190,7 @@ func CompileStage(src, stage string) (string, error) {
 		toks = transformCompositeFields(toks, scope)
 	case "all":
 		toks, defaultDefs := stripDefaults(toks)
+		sigs := collectSignalVars(toks)
 		toks = transformSignals(toks)
 		analysis := Analyze(toks)
 		toks = expandDefaults(toks, defaultDefs)
@@ -204,7 +208,7 @@ func CompileStage(src, stage string) (string, error) {
 		toks = transformTypeGuard(toks, analysis)
 		toks = transformEnum(toks, names)
 		toks = transformPub(toks, names)
-		toks = transformJSX(toks)
+		toks = transformJSX(toks, sigs)
 		toks = transformCollections(toks, defaultModule)
 		toks = ReconcileImports(toks, defaultModule)
 		scope := collectScope(toks)

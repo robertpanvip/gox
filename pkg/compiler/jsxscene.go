@@ -48,7 +48,7 @@ type sceneGetter struct {
 // 动态属性包成 getter（组件只执行一次，靠 getter 读最新值）；
 // 静态属性直接放字面值；children 若存在则编成一个独立的子 Render 实例，
 // 通过 "children" 属性传入（组件体用 gxscene.Child(props)() 读取）。
-func compCallTokens(n *jsxNode) []Token {
+func compCallTokens(n *jsxNode, sigs map[string]bool) []Token {
 	p := n.pos
 	var out []Token
 	// 组件名支持带点的限定名（如 ui.Card）
@@ -70,14 +70,14 @@ func compCallTokens(n *jsxNode) []Token {
 		case attrString:
 			out = append(out, tokString(normalizeStringLit(a.value), a.pos))
 		case attrExpr:
-			out = append(out, getterCallTokens(a.value, a.pos)...)
+			out = append(out, getterCallTokens(a.value, a.pos, sigs)...)
 		}
 		out = append(out, tokOp(",", p))
 	}
 
 	if len(n.children) > 0 {
 		out = append(out, tokString(strconv.Quote("children"), p), tokOp(":", p))
-		out = append(out, childrenGetterTokens(n)...)
+		out = append(out, childrenGetterTokens(n, sigs)...)
 		out = append(out, tokOp(",", p))
 	}
 
@@ -87,32 +87,32 @@ func compCallTokens(n *jsxNode) []Token {
 
 // childrenGetterTokens 把组件子节点编成 `func() any{ return <Render 表达式> }`，
 // 直接发射 token，避免经由源码字符串往返重新词法化。
-func childrenGetterTokens(n *jsxNode) []Token {
+func childrenGetterTokens(n *jsxNode, sigs map[string]bool) []Token {
 	p := n.pos
 	wrap := &jsxNode{name: "#frag", pos: p, children: n.children}
 	out := []Token{
 		tokIdent("func", p), tokOp("(", p), tokOp(")", p), tokSpace(" ", p),
 		tokIdent("any", p), tokOp("{", p), tokSpace(" ", p), tokIdent("return", p), tokSpace(" ", p),
 	}
-	out = append(out, genSceneExpr(wrap)...)
+	out = append(out, genSceneExpr(wrap, sigs)...)
 	out = append(out, tokSpace(" ", p), tokOp("}", p))
 	return out
 }
 
 // getterCallTokens 生成 `func() any{ return <expr> }`，expr 可为源码或已经在 toks 中的表达式。
-func getterCallTokens(expr string, pos Pos) []Token {
+func getterCallTokens(expr string, pos Pos, sigs map[string]bool) []Token {
 	out := []Token{
 		tokIdent("func", pos), tokOp("(", pos), tokOp(")", pos), tokSpace(" ", pos),
 		tokIdent("any", pos), tokOp("{", pos), tokSpace(" ", pos), tokIdent("return", pos), tokSpace(" ", pos),
 	}
-	out = append(out, lexExprScene(expr, pos)...)
+	out = append(out, lexExprScene(expr, pos, sigs)...)
 	out = append(out, tokSpace(" ", pos), tokOp("}", pos))
 	return out
 }
 
 // walkScene 深度优先遍历 jsxNode，产出 opcode 序列与 getter 列表。
 // slotCounter 在各子节点间共享，保证插槽索引连续。
-func walkScene(n *jsxNode, ops *[]sceneOp, getters *[]sceneGetter, slotCounter *int) {
+func walkScene(n *jsxNode, ops *[]sceneOp, getters *[]sceneGetter, slotCounter *int, sigs map[string]bool) {
 	// 原生元素：打开标签。
 	*ops = append(*ops, sceneOp{code: "OpElem", argQuote: strconv.Quote(n.name), slot: -1})
 
@@ -130,13 +130,13 @@ func walkScene(n *jsxNode, ops *[]sceneOp, getters *[]sceneGetter, slotCounter *
 		}
 	}
 
-	walkSceneChildren(n, ops, getters, slotCounter)
+	walkSceneChildren(n, ops, getters, slotCounter, sigs)
 
 	*ops = append(*ops, sceneOp{code: "OpClose", slot: -1})
 }
 
 // walkSceneChildren 遍历子节点；复合组件子节点发射 OpComp 插槽。
-func walkSceneChildren(n *jsxNode, ops *[]sceneOp, getters *[]sceneGetter, slotCounter *int) {
+func walkSceneChildren(n *jsxNode, ops *[]sceneOp, getters *[]sceneGetter, slotCounter *int, sigs map[string]bool) {
 	for _, c := range n.children {
 		switch c.kind {
 		case childText:
@@ -156,9 +156,9 @@ func walkSceneChildren(n *jsxNode, ops *[]sceneOp, getters *[]sceneGetter, slotC
 				s := *slotCounter
 				*slotCounter++
 				*ops = append(*ops, sceneOp{code: "OpComp", argQuote: strconv.Quote(c.node.name), slot: s})
-				*getters = append(*getters, sceneGetter{pos: c.node.pos, call: compCallTokens(c.node)})
+				*getters = append(*getters, sceneGetter{pos: c.node.pos, call: compCallTokens(c.node, sigs)})
 			} else {
-				walkScene(c.node, ops, getters, slotCounter)
+				walkScene(c.node, ops, getters, slotCounter, sigs)
 			}
 		}
 	}
@@ -190,9 +190,14 @@ func sceneOpTokens(op sceneOp, p Pos) []Token {
 func tokNumber(s string, p Pos) Token { return Token{Kind: Number, Text: s, Pos: p, IsGen: true} }
 
 // lexExprScene 把 {expr} 内源码词法化；若含嵌套 JSX 则递归走 scene 转换。
-func lexExprScene(expr string, base Pos) []Token {
+// sigs 非空时对插值里的 signal 变量补读调用（{count} → count()），
+// 弥补 transformSignals 无法穿透 JSX 整体 token 的盲区。
+func lexExprScene(expr string, base Pos, sigs map[string]bool) []Token {
 	toks := New(expr).AllTokens()
-	toks = transformJSXScene(toks)
+	if len(sigs) > 0 {
+		toks = rewriteSignals(toks, sigs)
+	}
+	toks = transformJSXScene(toks, sigs)
 	var out []Token
 	for _, t := range toks {
 		if t.Kind == EOF {
@@ -207,7 +212,7 @@ func lexExprScene(expr string, base Pos) []Token {
 
 // getterTokens 生成 func() any { return <expr> } token 序列。
 // 复合组件槽位的 expr 是一整次调用，直接发射已构造好的 call token。
-func getterTokens(g sceneGetter) []Token {
+func getterTokens(g sceneGetter, sigs map[string]bool) []Token {
 	p := g.pos
 	out := []Token{
 		tokIdent("func", p), tokOp("(", p), tokOp(")", p), tokSpace(" ", p),
@@ -216,7 +221,7 @@ func getterTokens(g sceneGetter) []Token {
 	if len(g.call) > 0 {
 		out = append(out, g.call...)
 	} else {
-		out = append(out, lexExprScene(g.expr, p)...)
+		out = append(out, lexExprScene(g.expr, p, sigs)...)
 	}
 	out = append(out, tokSpace(" ", p), tokOp("}", p))
 	return out
@@ -224,15 +229,15 @@ func getterTokens(g sceneGetter) []Token {
 
 // genSceneExpr 为一个 JSX 根元素生成完整的表达式 token 序列。
 // 根是复合组件时产出一次组件调用（返回 *Instance）；否则产出 gxscene.Render(...)。
-func genSceneExpr(node *jsxNode) []Token {
+func genSceneExpr(node *jsxNode, sigs map[string]bool) []Token {
 	if node.component {
-		return compCallTokens(node)
+		return compCallTokens(node, sigs)
 	}
 	p := node.pos
 	var ops []sceneOp
 	var getters []sceneGetter
 	slot := 0
-	walkScene(node, &ops, &getters, &slot)
+	walkScene(node, &ops, &getters, &slot, sigs)
 
 	// gxscene.Render(gxscene.Template{Ops: []gxscene.Op{ ... }, N: n}, getters...)
 	out := []Token{
@@ -249,7 +254,7 @@ func genSceneExpr(node *jsxNode) []Token {
 	out = append(out, tokIdent("N", p), tokOp(":", p), tokNumber(strconv.Itoa(len(getters)), p), tokOp(",", p), tokOp("}", p))
 	for _, g := range getters {
 		out = append(out, tokOp(",", p), tokSpace(" ", p))
-		out = append(out, getterTokens(g)...)
+		out = append(out, getterTokens(g, sigs)...)
 	}
 	out = append(out, tokOp(")", p))
 	return out
@@ -257,7 +262,7 @@ func genSceneExpr(node *jsxNode) []Token {
 
 // transformJSXScene 把 token 流里的 JSX 元素替换为 gxscene opcode 渲染表达式。
 // 与 transformJSX 并列，由管线按模式二选一调用。
-func transformJSXScene(in []Token) []Token {
+func transformJSXScene(in []Token, sigs map[string]bool) []Token {
 	found := false
 	for _, t := range in {
 		if t.Kind == JSX {
@@ -273,7 +278,7 @@ func transformJSXScene(in []Token) []Token {
 		if t.Kind == JSX {
 			parser := newJSXParser(t.Text, t.Pos)
 			node := parser.parseElement()
-			out = append(out, genSceneExpr(node)...)
+			out = append(out, genSceneExpr(node, sigs)...)
 			continue
 		}
 		out = append(out, t)

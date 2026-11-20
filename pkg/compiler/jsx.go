@@ -493,9 +493,12 @@ func normalizeText(s string) string {
 
 // lexExpr 把 {expr} 内的源码重新词法化；若 expr 内含 JSX 则递归转换。
 // 所有 token 的位置统一归一到 base（JSON sourcemap 只需粗粒度到元素起点）。
-func lexExpr(expr string, base Pos) []Token {
+func lexExpr(expr string, base Pos, sigs map[string]bool) []Token {
 	toks := New(expr).AllTokens()
-	toks = transformJSXCore(toks, false)
+	if len(sigs) > 0 {
+		toks = rewriteSignals(toks, sigs)
+	}
+	toks = transformJSXCore(toks, false, sigs)
 	var out []Token
 	for _, t := range toks {
 		if t.Kind == EOF {
@@ -508,7 +511,7 @@ func lexExpr(expr string, base Pos) []Token {
 	return out
 }
 
-func genJSXNode(n *jsxNode) []Token {
+func genJSXNode(n *jsxNode, sigs map[string]bool) []Token {
 	p := n.pos
 	out := []Token{
 		tokIdent("gxvdom", p), tokOp(".", p), tokIdent("CreateElement", p), tokOp("(", p),
@@ -544,7 +547,7 @@ func genJSXNode(n *jsxNode) []Token {
 			case attrString:
 				out = append(out, tokString(normalizeStringLit(a.value), a.pos))
 			case attrExpr:
-				out = append(out, lexExpr(a.value, a.pos)...)
+				out = append(out, lexExpr(a.value, a.pos, sigs)...)
 			}
 		}
 		out = append(out, tokOp("}", p))
@@ -560,9 +563,9 @@ func genJSXNode(n *jsxNode) []Token {
 			}
 			add = append(add, tokString(strconv.Quote(txt), c.pos))
 		case childExpr:
-			add = append(add, lexExpr(c.text, c.pos)...)
+			add = append(add, lexExpr(c.text, c.pos, sigs)...)
 		case childElement:
-			add = append(add, genJSXNode(c.node)...)
+			add = append(add, genJSXNode(c.node, sigs)...)
 		}
 		out = append(out, add...)
 	}
@@ -615,7 +618,7 @@ func injectVdomImport(toks []Token, p Pos) []Token {
 }
 
 // transformJSXCore 替换 JSX token；injectImport 控制是否注入 vdom import。
-func transformJSXCore(in []Token, injectImport bool) []Token {
+func transformJSXCore(in []Token, injectImport bool, sigs map[string]bool) []Token {
 	found := false
 	for _, t := range in {
 		if t.Kind == JSX {
@@ -631,7 +634,7 @@ func transformJSXCore(in []Token, injectImport bool) []Token {
 		if t.Kind == JSX {
 			parser := newJSXParser(t.Text, t.Pos)
 			node := parser.parseElement()
-			out = append(out, genJSXNode(node)...)
+			out = append(out, genJSXNode(node, sigs)...)
 			continue
 		}
 		out = append(out, t)
@@ -643,4 +646,6 @@ func transformJSXCore(in []Token, injectImport bool) []Token {
 }
 
 // transformJSX 是管线入口。import 由 ReconcileImports 统一注入。
-func transformJSX(in []Token) []Token { return transformJSXCore(in, false) }
+func transformJSX(in []Token, sigs map[string]bool) []Token {
+	return transformJSXCore(in, false, sigs)
+}

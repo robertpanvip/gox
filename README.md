@@ -127,11 +127,42 @@ scene 后端**没有 Diff、没有重建**。更新 = 重新求值 getter + 只�
 
 | 方式 | 用法 | 适用 |
 |---|---|---|
-| **闭包 getter（推荐）** | `title={title}` 编成 `func() any{return title}`；改变量后调 `view.Update()` | 绝大多数场景；配合 signal 最自然 |
-| **signal 外接** | 运行时不含依赖追踪。在 getter 里登记订阅、signal 变化时调 `view.Update()` 即可 | 需要自动响应式的 UI（signal 由你的响应式库提供，scene 只消费） |
+| **闭包 getter** | `title={title}` 编成 `func() any{return title}`；改变量后调 `view.Update()` | 外部普通变量；手动驱动 |
+| **signal 自动接线（推荐）** | `view.BindReactive(signal.Effect)` 一行接线；之后 `count(5)` 写 signal 即自动精确更新，无需 `Update()` | 响应式 UI；signal 沿 Props 传到叶子，叶子在插槽里读 |
 | **命令式 `SetPart`** | `view.SetPart(slot, value)` 按插槽下标直接写，绕过 getter | 事件回调里精确改一个值；需知道 slot 下标，较少用 |
 
-`Update()` 返回本次**实际写入的节点数**，值没变则写 0（`equalValue` 按类型严格比较）。观测指标：`Instance.Writes`（累计写入）、`Instance.Updates`（Update 调用次数）。
+`Update()` 返回本次**实际写入的节点数**，值没变则写 0（`equalValue` 按类型严格比较）。观测指标：`Instance.Writes`（累计写入，各 `Instance` 独立，不跨子树累加）、`Instance.Updates`（Update 调用次数）。
+
+##### signal 自动接线（一行搞定响应式）
+
+scene 核心**不依赖**任何响应式库——`BindReactive(effect)` 接受一个形如 `signal.Effect` 的 effect 原语注入。它为每个插槽建一个 effect：普通插槽读 getter 后直接 `SetPart`（signal 变化只精确命中依赖它的插槽，不遍历全树）；复合组件插槽则递归进子组件接线（组件不重建）。signal 从根经 Props getter 一路传到叶子、在叶子的动态插槽里读取，写入即自动刷新。
+
+完整可运行示例见 [`examples/jsxscene-signal.gx`](examples/jsxscene-signal.gx)：
+
+```gx
+// gox build demo.gx -jsx=scene
+import (
+    gxscene "github.com/robertpanvip/gox/runtime/scene"
+    "github.com/robertpanvip/gox/runtime/signal"
+)
+
+func main() {
+    signal count = 0
+    let doubled = Signal.computed(func() int { return count() * 2 })
+
+    // JSX 插值 {count} / {doubled} 由编译器编成 getter 并自动补读调用：
+    //   func() any { return count() } / { return doubled() }
+    view := <div id="app"><span>{count}</span><b>{doubled}</b></div>
+
+    view.BindReactive(signal.Effect)  // 一行接线
+
+    count = 5   // 自动更新：count→"5"、doubled→"10"，无需 view.Update()
+}
+```
+
+> **编译器细节**：`signal` 语法糖在管线早期消除声明并改写读写，但 JSX 插值当时是整体 token、信号改写穿透不到。JSX 后端重新词法化插值时会拿到同一个 signal 变量集合，补上读调用——因此 `{count}` 正确编成 `count()` 而非把 signal 函数对象当值。scene 与 vdom 两个后端都已覆盖。
+
+验证见 [`runtime/scene/reactive_test.go`](runtime/scene/reactive_test.go)（运行时：signal 经两层组件 Props 传到叶子、写入自动刷新、组件不重建、写同值零冗余写入）与 `pkg/compiler/jsxscene_test.go`（编译器：插值/属性/组件 Props 里的 signal 读补全）。
 
 ```go
 view := gxscene.Render(tpl, getters...) // 返回 *Instance，常驻场景树
@@ -149,7 +180,7 @@ n := view.Update()                      // 更新，返回写入节点数
 | 3 | 动态数据必须是 getter | 属性传变量（`title={title}`）而非快照字面量；组件体用 `Get[T]()()` 读。`Get` 断言失败返回零值，不 panic |
 | 4 | 大写/带点 = 组件，其余 = 原生标签 | 与 `vdom` 后端判定一致 |
 | 5 | children 用 `gxscene.Child(props)()` 读 | 值是子 `Instance`，透明摊平，无多余标签层 |
-| 6 | 更新靠 `Update()` 显式驱动 | scene 不内置响应式；signal 库负责「变化时调 Update」 |
+| 6 | 更新靠 `Update()` 或 `BindReactive` 驱动 | scene 不内置响应式；`BindReactive(signal.Effect)` 可把 signal 直接接到插槽，免手动 Update |
 | 7 | `SetPart` / `SetGetter` 用插槽下标 | 下标由编译期分配，手写 opcode 时才需要；JSX 开发中优先用 getter |
 | 8 | 绘制后端目前只有 `TextBackend` | 经 `Backend` 接口抽象，Skia / wgpu 可后续接入，编译器无需改动 |
 

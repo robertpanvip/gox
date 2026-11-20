@@ -514,6 +514,42 @@ func (i *Instance) SetPart(slot int, v any) {
 	i.Writes++
 }
 
+// BindReactive 把整棵场景树的动态插槽接到外部响应式系统的 effect 原语上。
+//
+// effect 形如 signal.Effect：传入的函数立即执行一次，并在它读到的响应式数据源
+// 变化时自动重跑。BindReactive 为每个插槽建立一个这样的 effect：
+//
+//   - 普通插槽（slotChild / slotAttr）：effect 体读 getter 后直接 SetPart，
+//     因此某个 signal 变化只精确命中依赖它的那个插槽——不遍历全树、不重建子树；
+//   - 复合组件插槽（slotComp）：组件实例常驻，递归对子组件做同样接线，
+//     不重新调用组件函数、不重新挂载子树。
+//
+// 于是 signal 从根经 Props getter 一路传到叶子、在叶子的动态插槽里被读取，
+// signal 写入即可自动更新，无需手调 Instance.Update()。signal 写相同值虽会
+// 触发 effect 重跑，但 SetPart 的 equalValue 裁剪保证不产生多余写入。
+//
+// scene 核心不依赖任何具体响应式库：effect 由调用方注入（如 signal.Effect），
+// 渲染与响应式解耦——这也是 scene 后端从一开始就留白的那层。
+func (i *Instance) BindReactive(effect func(func())) {
+	if effect == nil {
+		return
+	}
+	for s, sl := range i.slots {
+		if sl.kind == slotComp {
+			if sl.child != nil {
+				sl.child.BindReactive(effect)
+			}
+			continue
+		}
+		if sl.get == nil {
+			continue
+		}
+		slot := s
+		getter := sl.get
+		effect(func() { i.SetPart(slot, getter()) })
+	}
+}
+
 // ---------- Backend：绘制抽象，为 Skia / wgpu 留接口 ----------
 
 // Backend 把常驻场景树绘制到具体输出。第一版提供 TextBackend 便于测试；

@@ -89,9 +89,9 @@ func main() {
 `
 	got := compileOK(t, "sig6.gx", src)
 	containsAll(t, got,
-		`Box{count: 1}`,       // 复合字段键不改写
-		`println(b.count)`,    // selector 不改写
-		`return count`,        // 函数参数不改写（保持裸标识符）
+		`Box{count: 1}`,    // 复合字段键不改写
+		`println(b.count)`, // selector 不改写
+		`return count`,     // 函数参数不改写（保持裸标识符）
 	)
 }
 
@@ -162,5 +162,21 @@ func main() { println(count()) }
 	containsAll(t, got, `S.New(0)`)
 	if strings.Count(got, "runtime/signal") != 1 {
 		t.Errorf("signal 路径应只出现一次（复用已有 import）: %s", got)
+	}
+}
+
+func TestSignalReadRewriteInJSXInterpolation(t *testing.T) {
+	// vdom 后端同样要补齐 JSX 插值里的 signal 读
+	res, err := CompileSource(`package main
+func main() {
+	signal n = 1
+	_ = <p>{n}</p>
+}
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(res.GoSource, "n()") {
+		t.Errorf("vdom JSX 插值里的 signal 读应补全 (), got:\n%s", res.GoSource)
 	}
 }
