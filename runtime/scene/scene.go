@@ -638,6 +638,32 @@ func (i *Instance) BindReactive(effect func(func()) Computation) {
 	}
 }
 
+// BindStructural 仅为「动态结构插槽」（slotBranch：条件分支 / keyed 列表）接线，
+// 不触碰普通叶子插槽。它与 app 层的聚合 effect 配合使用：
+//   - 叶子插槽由聚合 effect（Instance.Update）统一求值，保证一帧内状态一致；
+//   - 结构插槽由这里的独立 effect 驱动：selector/each 变化时重建/复用子树。
+//
+// 传入的 effect 可包装额外副作用（如 app 层的窗口重绘）——结构变化后调用方
+// 往往需要重新绘制。返回的 Computation 句柄由 Instance 保存，Dispose 时清理。
+func (i *Instance) BindStructural(effect func(func()) Computation) {
+	if effect == nil {
+		return
+	}
+	for s, sl := range i.slots {
+		if sl.kind != slotBranch {
+			continue
+		}
+		slot := s
+		getter := sl.get
+		if getter == nil {
+			continue
+		}
+		if c := effect(func() { i.SetPart(slot, getter()) }); c != nil {
+			i.comps = append(i.comps, c)
+		}
+	}
+}
+
 // Dispose 销毁该实例通过 BindReactive 建立的所有响应式计算，停止订阅并清理。
 // 幂等：多次调用只清理一次。复合子组件的计算由其自身实例负责。
 func (i *Instance) Dispose() {

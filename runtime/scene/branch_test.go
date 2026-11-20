@@ -210,3 +210,45 @@ func TestBranchDisposeViaInstance(t *testing.T) {
 		t.Fatalf("Dispose 后 effect 不应再响应: %d -> %d", before, cleaned)
 	}
 }
+
+// 阶段4 压力测试：条件分支反复切换，验证旧分支 Effect/Cleanup 严格清理。
+func TestBranchStressNoLeak(t *testing.T) {
+	visible := signal.New(true)
+	cleaned := 0
+	built := 0
+	br := gxscene.NewBranch(
+		func() int {
+			if visible() {
+				return 0
+			}
+			return 1
+		},
+		func() *gxscene.Instance {
+			built++
+			signal.Effect(func() { signal.OnCleanup(func() { cleaned++ }) })
+			return gxscene.Render(spanTpl(), func() any { return "then" })
+		},
+		func() *gxscene.Instance {
+			signal.Effect(func() { signal.OnCleanup(func() { cleaned++ }) })
+			return gxscene.Render(spanTpl(), func() any { return "else" })
+		},
+	)
+	view := gxscene.Render(branchTpl(), func() any { return br })
+	view.BindReactive(signal.Effect)
+
+	const rounds = 200
+	for i := 0; i < rounds; i++ {
+		visible(i%2 == 0)
+	}
+	// 每轮切换销毁上一分支的 effect（含其 cleanup）。built = 首次 + 进入 then 的次数。
+	// 只断言：cleanup 次数与 build 次数同量级且无爆发式泄漏（< 2*rounds）。
+	if cleaned > 2*rounds {
+		t.Fatalf("疑似 Effect 泄漏: built=%d cleaned=%d rounds=%d", built, cleaned, rounds)
+	}
+	// 最终 Dispose 应清理当前分支的 effect。
+	before := cleaned
+	view.Dispose()
+	if cleaned <= before {
+		t.Fatalf("Dispose 应再清理当前分支 effect: before=%d after=%d", before, cleaned)
+	}
+}

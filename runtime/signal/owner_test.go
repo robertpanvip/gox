@@ -158,3 +158,38 @@ func TestNestedOwnerDispose(t *testing.T) {
 		t.Fatalf("runs=%d, want 1 (子 Owner 已级联销毁)", got)
 	}
 }
+
+// 阶段4 压力测试：反复创建/销毁 Owner，验证 cleanup 严格配对，无泄漏、无重复。
+func TestOwnerStressNoLeak(t *testing.T) {
+	const rounds = 500
+	totalCleaned := 0
+	for i := 0; i < rounds; i++ {
+		src := New(0)
+		cleaned := 0
+		o := CreateRoot(func(o *Owner) {
+			Effect(func() {
+				_ = src()
+				OnCleanup(func() { cleaned++ })
+			})
+		})
+		// 每轮内多次重跑该 effect，cleanup 应在每次重跑前执行（配对）。
+		for j := 1; j <= 5; j++ {
+			src(j)
+		}
+		o.Dispose()
+		// 该 effect：首次 + 5 次重跑 = 6 次执行；每次重跑前清理上一次，
+		// Dispose 再清理最后一次 → 共 6 次 cleanup。
+		if cleaned != 6 {
+			t.Fatalf("轮 %d: cleanup 应严格配对为 6, got %d", i, cleaned)
+		}
+		// Dispose 后写信号不应再触发任何 cleanup。
+		src(999)
+		if cleaned != 6 {
+			t.Fatalf("轮 %d: Dispose 后不应再 cleanup, got %d", i, cleaned)
+		}
+		totalCleaned += cleaned
+	}
+	if totalCleaned != rounds*6 {
+		t.Fatalf("总 cleanup 数不符: %d", totalCleaned)
+	}
+}

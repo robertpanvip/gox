@@ -204,3 +204,83 @@ func TestRenderTextHelper(t *testing.T) {
 		t.Fatalf("RenderText 应输出场景树文本, got:\n%s", got)
 	}
 }
+
+// 阶段4：条件分支 / keyed 列表的结构变化也应触发窗口重绘。
+// 场景树结构由 scene 层的独立 effect 直接改写（不经过 app 的聚合 effect），
+// 因此需要一个「结构变化 → 请求重绘」的回连机制。
+func TestStructuralChangeTriggersRedraw(t *testing.T) {
+	var buf strings.Builder
+	visible := signal.New(true)
+	count := signal.New(10)
+
+	br := gxscene.NewBranch(
+		func() int {
+			if visible() {
+				return 0
+			}
+			return 1
+		},
+		func() *gxscene.Instance {
+			return gxscene.Render(gxscene.Template{Ops: []gxscene.Op{
+				{Code: gxscene.OpElem, Arg: "span"}, {Code: gxscene.OpDynChild, Slot: 0}, {Code: gxscene.OpClose},
+			}, N: 1}, func() any { return count() })
+		},
+		func() *gxscene.Instance {
+			return gxscene.Render(gxscene.Template{Ops: []gxscene.Op{
+				{Code: gxscene.OpElem, Arg: "b"}, {Code: gxscene.OpChildText, Arg: "Hidden"}, {Code: gxscene.OpClose},
+			}, N: 0})
+		},
+	)
+	inst := gxscene.Render(gxscene.Template{Ops: []gxscene.Op{
+		{Code: gxscene.OpElem, Arg: "div"}, {Code: gxscene.OpBranch, Slot: 0}, {Code: gxscene.OpClose},
+	}, N: 1}, func() any { return br })
+
+	win := &gxapp.HeadlessWindow{Out: &buf}
+	app, _ := gxapp.OpenWith(inst, gxapp.DefaultConfig(), win)
+	defer app.Close()
+	app.BindReactive(signal.Effect)
+	framesAfterBind := win.Frames()
+
+	// 切分支：应触发重绘，且最后一帧含 Hidden。
+	visible(false)
+	if win.Frames() <= framesAfterBind {
+		t.Errorf("分支切换应触发重绘, before=%d now=%d", framesAfterBind, win.Frames())
+	}
+	last := lastFrameOf(buf.String(), "<div>")
+	if !strings.Contains(last, "Hidden") {
+		t.Fatalf("最后一帧应含 Hidden:\n%s", last)
+	}
+}
+
+// 阶段4：Batch 合并同一轮的多次 signal 写入为一帧重绘。
+func TestBatchCoalescesRedraw(t *testing.T) {
+	var buf strings.Builder
+	a := signal.New("A")
+	b := signal.New("B")
+
+	inst := gxscene.Render(gxscene.Template{Ops: []gxscene.Op{
+		{Code: gxscene.OpElem, Arg: "div"},
+		{Code: gxscene.OpDynChild, Slot: 0},
+		{Code: gxscene.OpDynChild, Slot: 1},
+		{Code: gxscene.OpClose},
+	}, N: 2}, func() any { return a() }, func() any { return b() })
+
+	win := &gxapp.HeadlessWindow{Out: &buf}
+	app, _ := gxapp.OpenWith(inst, gxapp.DefaultConfig(), win)
+	defer app.Close()
+	app.BindReactive(signal.Effect)
+	base := win.Frames()
+
+	// 一个批次写两个 signal：应合并为一帧。
+	signal.Batch(func() {
+		a("A2")
+		b("B2")
+	})
+	if win.Frames() != base+1 {
+		t.Errorf("Batch 应合并为一帧重绘, base=%d now=%d", base, win.Frames())
+	}
+	last := lastFrameOf(buf.String(), "<div>")
+	if !strings.Contains(last, `"A2"`) || !strings.Contains(last, `"B2"`) {
+		t.Fatalf("批次后应一致更新 A2/B2:\n%s", last)
+	}
+}

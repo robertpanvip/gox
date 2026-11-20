@@ -151,7 +151,7 @@ func (a *App) BindReactive(effect func(func()) gxscene.Computation) {
 	}
 	a.reactivePriming = true
 	if c := effect(func() {
-		_ = a.inst.Update() // 递归读所有 getter 登记依赖 + 裁剪写入
+		_ = a.inst.Update() // 递归读所有叶子 getter 登记依赖 + 裁剪写入
 		if a.reactivePriming {
 			// 首次执行（接线时立即触发）只登记依赖；Open 已画首帧，避免重复绘制。
 			a.reactivePriming = false
@@ -163,6 +163,24 @@ func (a *App) BindReactive(effect func(func()) gxscene.Computation) {
 	}); c != nil {
 		a.reactive = append(a.reactive, c)
 	}
+
+	// 动态结构插槽（条件分支 / keyed 列表）由 scene 层独立 effect 直接改写场景树，
+	// 不经过上面的聚合 Update。这里为它们单独接线，并用「重绘包装」的 effect：
+	// selector/each 变化时重建子树后，顺带画一帧，避免结构变了却没刷新窗口。
+	structuralPriming := true
+	structuralEffect := func(f func()) gxscene.Computation {
+		return effect(func() {
+			f() // Resolve：读 selector/each（登记依赖）+ 重建/复用子树
+			if structuralPriming {
+				structuralPriming = false
+				return // 首次接线由 Open 画过首帧
+			}
+			if !a.closed {
+				_ = a.Draw()
+			}
+		})
+	}
+	a.inst.BindStructural(structuralEffect)
 }
 
 // Run 进入窗口事件循环，直到窗口关闭。Headless 后端立即返回 nil。
@@ -184,6 +202,9 @@ func (a *App) Close() error {
 		c.Dispose()
 	}
 	a.reactive = nil
+	// 清理 scene 层为动态结构插槽（Branch/For）建立的 effect 与元素 Owner。
+	// BindStructural 的句柄存在 inst.comps 中，不由 a.reactive 覆盖。
+	a.inst.Dispose()
 	return a.win.Close()
 }
 
