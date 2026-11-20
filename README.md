@@ -267,7 +267,7 @@ app.BindReactive(signal.Effect)   // 接线（抑制首帧重复绘制）
 count = 5                          // 自动更新 + 只画一帧：count=5、doubled=10 一致
 ```
 
-> **接入真实 GUI**：实现 `Window` 接口的 `Open/Draw/Run/Close/Config`，用 `OpenWith` 注入即可——Skia / wgpu / GLFW 后端无需改动 `gxapp` 或编译器。当前 Headless 后端让整条链路在无 GUI 环境端到端可验证。完整示例见 [`examples/jsxapp.gx`](examples/jsxapp.gx)，运行时见 [`runtime/app/`](runtime/app/)。
+> **接入真实 GUI**：实现 `Window` 接口的 `Open/Draw/Run/Close/Config`，用 `OpenWith` 注入即可——Skia / wgpu / GLFW 后端无需改动 `gxapp` 或编译器。当前 Headless 后端让整条链路在无 GUI 环境端到端可验证。最小示例见 [`examples/jsxapp.gx`](examples/jsxapp.gx)；**复合组件 + signal 响应式 + open 的完整实战**见 [`examples/jsxapp-full.gx`](examples/jsxapp-full.gx)（含两层组件、signal 沿 Props 传递、两帧实测输出，HTML 指南「三·实战」章节有逐段拆解），运行时见 [`runtime/app/`](runtime/app/)。
 
 ## 4. 外部 Go 符号：按真实拼写书写
 

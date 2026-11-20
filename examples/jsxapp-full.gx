@@ -1,0 +1,61 @@
+// 完整实战：复合组件设计 + Signal 响应式 + gxapp.open 应用入口，一条龙。
+// 构建：gox build examples/jsxapp-full.gx -jsx=scene -o main.go && go run .
+//
+// 这个例子把前面所有的点串起来：
+//   1. 复合组件：大写标签 = 组件；Props getter-map 让数据在组件树里保鲜
+//   2. 响应式：signal + Signal.computed，signal 沿 Props getter 传到叶子插槽
+//   3. 应用入口：gxapp.open（源码小写，编译器还原为 gxapp.Open）+ 一行 BindReactive
+// 写入 count=5 后，count 与 doubled 两行自动刷新到新帧，组件不重建。
+package main
+
+import (
+    gxscene "github.com/robertpanvip/gox/runtime/scene"
+    gxapp "github.com/robertpanvip/gox/runtime/app"
+    "github.com/robertpanvip/gox/runtime/signal"
+)
+
+// Stat 是叶子展示组件：从 Props 取 getter，在 JSX 插槽里读值。
+// Get[string]/Get[int] 返回 getter（func() T），写成 value() 才读当前值；
+// 若写成 value（函数值）就成快照、不会更新。
+pub func Stat(props gxscene.Props) *gxscene.Instance {
+    label := gxscene.Get[string](props, "label")
+    value := gxscene.Get[int](props, "value")
+    return <div class="stat"><span>{label()}</span><b>{value()}</b></div>
+}
+
+// Dashboard 是中间组件：把上层传来的 getter 原样转发给两个 Stat。
+// count()/doubled() 在 Props getter 里读取——app.BindReactive 的聚合 effect
+// 重跑时会读到 signal 并登记依赖，因此 signal 变化能穿透组件树命中叶子插槽。
+pub func Dashboard(props gxscene.Props) *gxscene.Instance {
+    count   := gxscene.Get[int](props, "count")
+    doubled := gxscene.Get[int](props, "doubled")
+    return <section id="dash">
+        <h1>Dashboard</h1>
+        <Stat label="count"   value={count()}/>
+        <Stat label="doubled" value={doubled()}/>
+    </section>
+}
+
+func main() {
+    // signal 源 + computed 派生（源码小写 computed，编译器还原为 Computed）
+    signal count = 0
+    let doubled = Signal.computed(func() int { return count() * 2 })
+
+    // 组合根视图：count/doubled 在插值里读，编成 getter 传给 Dashboard
+    view := <div id="app"><Dashboard count={count} doubled={doubled}/></div>
+
+    // 应用入口：源码 gxapp.open / gxapp.windowConfig（编译器还原大写）
+    app, err := gxapp.open(view, gxapp.windowConfig{
+        Title:  "Gox Dashboard",
+        Width:  800,
+        Height: 600,
+    })
+    if err != nil { panic(err) }
+    defer app.Close()
+
+    // 一行接线：signal 变化 → 精确更新插槽 → 自动重绘一帧
+    app.BindReactive(signal.Effect)
+
+    // count=5 后，count→5、doubled→10，两行在同一次重绘里一致更新
+    count = 5
+}
