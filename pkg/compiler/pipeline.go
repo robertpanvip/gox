@@ -54,12 +54,16 @@ func Compile(file, src string) (*Result, error) {
 // CompileWithModule 以指定 module 转译。<module>/runtime/list 作为集合运行时 import 路径。
 func CompileWithModule(file, src, module string) (*Result, error) {
 	toks := New(src).AllTokens()
+	// 统一绑定表：lex 之后、任何 transform 之前构建一次，贯穿整条管线。
+	// 以 Pos.Offset 为稳定身份，不受后续 desugar 增删 token 的下标漂移影响。
+	bindings := Bind(toks)
 	// 默认值：声明处先物理剥离（否则 Analyze 会把 `= default` 算进类型），
 	// 调用点在 Analyze 之后补全（补全表达式仍流经后续全部 transform）。
 	toks, defaultDefs := stripDefaults(toks)
 	// Signal 语法糖：signal/let 声明消除 + signal 变量读写改写为调用式。
 	// 放在 Analyze 之前，让语义层看到标准 Go（signal/let 已消除、读写已是调用）。
-	toks = transformSignals(toks)
+	// P1：传入 bindings，用 ResolveAt 做遮蔽判断（P1-1 根治）。
+	toks = transformSignals(toks, bindings)
 	analysis := Analyze(toks)    // desugar 之前的 GX 语义层（联合未擦除）
 	names := map[string]string{} // 小写原名 → 大写导出名（自身 pub 符号）
 	toks = expandDefaults(toks, defaultDefs)
@@ -89,7 +93,7 @@ func CompileWithModule(file, src, module string) (*Result, error) {
 	// 需替换为实际别名；否则各 transform 注入的 import 会与生成引用对不上。
 	toks = ReconcileImports(toks, module)
 	scope := collectScope(toks)
-	toks = restoreRefs(toks, names)
+	toks = restoreRefs(toks, names, bindings)
 	toks = transformExternal(toks, scope, names)
 	toks = transformCompositeFields(toks, scope)
 	goSrc, sm := emit(toks, file)
@@ -155,8 +159,9 @@ func CompileStage(src, stage string) (string, error) {
 		toks = transformExternal(toks, scope, names)
 		toks = transformCompositeFields(toks, scope)
 	case "all":
+		bindings := Bind(toks)
 		toks, defaultDefs := stripDefaults(toks)
-		toks = transformSignals(toks)
+		toks = transformSignals(toks, bindings)
 		analysis := Analyze(toks)
 		toks = expandDefaults(toks, defaultDefs)
 		toks = transformLambdas(toks, analysis)
@@ -177,7 +182,7 @@ func CompileStage(src, stage string) (string, error) {
 		toks = transformCollections(toks, defaultModule)
 		toks = ReconcileImports(toks, defaultModule)
 		scope := collectScope(toks)
-		toks = restoreRefs(toks, names)
+		toks = restoreRefs(toks, names, bindings)
 		toks = transformExternal(toks, scope, names)
 		toks = transformCompositeFields(toks, scope)
 		// all 分支内 toks 被 := 重新声明（见上方 stripDefaults），必须在此作用域内
