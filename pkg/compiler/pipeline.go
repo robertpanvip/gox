@@ -130,7 +130,7 @@ func compileWithMode(file, src, module string, mode jsxMode) (*Result, error) {
 			return nil, err
 		}
 	} else {
-		toks = transformJSX(toks, sigs)
+		toks = transformJSX(toks, bindings)
 	}
 	toks = transformCollections(toks, module)
 	// 统一 import 别名：源码若已用别名导入 list/vdom/strconv，生成代码的占位包名
@@ -209,7 +209,6 @@ func CompileStage(src, stage string) (string, error) {
 		bindings := Bind(toks)
 		templateAST := ParseTemplateExprs(toks)
 		toks, defaultDefs := stripDefaults(toks)
-		sigs := collectSignalVars(toks)
 		toks = transformSignals(toks, bindings)
 		analysis := Analyze(toks)
 		toks = expandDefaults(toks, defaultDefs)
@@ -227,7 +226,7 @@ func CompileStage(src, stage string) (string, error) {
 		toks = transformTypeGuard(toks, analysis)
 		toks = transformEnum(toks, names)
 		toks = transformPub(toks, names)
-		toks = transformJSX(toks, sigs)
+		toks = transformJSX(toks, bindings)
 		toks = transformCollections(toks, defaultModule)
 		toks = ReconcileImports(toks, defaultModule)
 		scope := collectScope(toks)

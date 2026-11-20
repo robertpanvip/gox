@@ -493,16 +493,15 @@ func normalizeText(s string) string {
 
 // lexExpr 把 {expr} 内的源码重新词法化；若 expr 内含 JSX 则递归转换。
 // 所有 token 的位置统一归一到 base（JSON sourcemap 只需粗粒度到元素起点）。
-func lexExpr(expr string, base Pos, sigs map[string]bool) []Token {
+func lexExpr(expr string, base Pos) []Token {
 	toks := New(expr).AllTokens()
-	if len(sigs) > 0 {
-		toks = rewriteJSXInterpSignals(toks, sigs)
-	}
 	// 对象字面量自动推断（同 scene 后端）：插值里的 { k: v } 编成带类型匿名 struct。
 	if converted, err := transformObjectLitExpr(toks); err == nil {
 		toks = converted
 	}
-	toks = transformJSXCore(toks, false, sigs)
+	// 插值内可能含嵌套 JSX，递归展开即可；signal 读改写由最外层
+	// transformJSXCore 对展开结果统一补做（传 nil 避免此处重复改写）。
+	toks = transformJSXCore(toks, false, nil)
 	var out []Token
 	for _, t := range toks {
 		if t.Kind == EOF {
@@ -515,7 +514,10 @@ func lexExpr(expr string, base Pos, sigs map[string]bool) []Token {
 	return out
 }
 
-func genJSXNode(n *jsxNode, sigs map[string]bool) []Token {
+// genJSXNode 生成 createElement token。b/at 用于对插值表达式补 signal 读改写：
+// at 是整个 JSX token 在原始源码中的位置（全局 Offset），用于 ResolveAt 判遮蔽。
+// 改写只作用于 attrExpr/childExpr 插值片段，不碰组件名/标签名/属性名/文本。
+func genJSXNode(n *jsxNode, b *Bindings, at Pos) []Token {
 	p := n.pos
 	out := []Token{
 		tokIdent("gxvdom", p), tokOp(".", p), tokIdent("CreateElement", p), tokOp("(", p),
@@ -551,7 +553,8 @@ func genJSXNode(n *jsxNode, sigs map[string]bool) []Token {
 			case attrString:
 				out = append(out, tokString(normalizeStringLit(a.value), a.pos))
 			case attrExpr:
-				out = append(out, lexExpr(a.value, a.pos, sigs)...)
+				frag := lexExpr(a.value, a.pos)
+				out = append(out, rewriteSignalReadsInTemplateExpr(frag, b, at)...)
 			}
 		}
 		out = append(out, tokOp("}", p))
@@ -567,9 +570,10 @@ func genJSXNode(n *jsxNode, sigs map[string]bool) []Token {
 			}
 			add = append(add, tokString(strconv.Quote(txt), c.pos))
 		case childExpr:
-			add = append(add, lexExpr(c.text, c.pos, sigs)...)
+			frag := lexExpr(c.text, c.pos)
+			add = append(add, rewriteSignalReadsInTemplateExpr(frag, b, at)...)
 		case childElement:
-			add = append(add, genJSXNode(c.node, sigs)...)
+			add = append(add, genJSXNode(c.node, b, at)...)
 		}
 		out = append(out, add...)
 	}
@@ -622,7 +626,11 @@ func injectVdomImport(toks []Token, p Pos) []Token {
 }
 
 // transformJSXCore 替换 JSX token；injectImport 控制是否注入 vdom import。
-func transformJSXCore(in []Token, injectImport bool, sigs map[string]bool) []Token {
+// b 非 nil 时，对展开后的插值表达式补 signal 读改写（name → name()）：
+// JSX 在 lexer 阶段被整块吞成一个 token，transformSignals 阶段扫不到内部的
+// signal 引用，等这里展开成普通 token 时读取写阶段已过。用 ResolveAt(name, at)
+// 按名字 + JSX 原始位置补改写，遮蔽/形态排除与主流改写一致。
+func transformJSXCore(in []Token, injectImport bool, b *Bindings) []Token {
 	found := false
 	for _, t := range in {
 		if t.Kind == JSX {
@@ -638,7 +646,9 @@ func transformJSXCore(in []Token, injectImport bool, sigs map[string]bool) []Tok
 		if t.Kind == JSX {
 			parser := newJSXParser(t.Text, t.Pos)
 			node := parser.parseElement()
-			out = append(out, genJSXNode(node, sigs)...)
+			// 补 signal 读改写：只对插值片段做，组件名/标签名/属性名/文本不动。
+			// t.Pos 是整块 JSX 在原始源码的位置（全局 Offset），用于 ResolveAt 判遮蔽。
+			out = append(out, genJSXNode(node, b, t.Pos)...)
 			continue
 		}
 		out = append(out, t)
@@ -650,6 +660,4 @@ func transformJSXCore(in []Token, injectImport bool, sigs map[string]bool) []Tok
 }
 
 // transformJSX 是管线入口。import 由 ReconcileImports 统一注入。
-func transformJSX(in []Token, sigs map[string]bool) []Token {
-	return transformJSXCore(in, false, sigs)
-}
+func transformJSX(in []Token, b *Bindings) []Token { return transformJSXCore(in, false, b) }

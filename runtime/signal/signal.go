@@ -151,7 +151,11 @@ func withObserver(n *node, fn func()) {
 	defer func() {
 		mu.Lock()
 		st := observers[id]
-		observers[id] = st[:len(st)-1] // 弹出栈顶（n 必为最后压入者）
+		if len(st) <= 1 {
+			delete(observers, id) // 栈空即删除条目，避免长期积累空栈（goroutine id 不复用时尤其明显）
+		} else {
+			observers[id] = st[:len(st)-1] // 弹出栈顶（n 必为最后压入者）
+		}
 		mu.Unlock()
 	}()
 
@@ -204,16 +208,18 @@ func Computed[T any](f func() T) Signal[T] {
 			mu.Unlock()
 			panic("gx/signal: 检测到循环依赖：computed 直接或间接读取了自身")
 		}
+		// 关键：在同一个临界区内完成「检查 dirty」和「占用计算权」。
+		// 旧实现在这两步之间解锁了一次，形成竞争窗口：A、B 都能越过 dirty
+		// 检查，随后各自 computing=true（后者覆盖 computingBy），双双进入 f()。
+		// 现在于首次持锁期间即置 computing/computingBy，窗口消除（P1-1 修复）。
+		st.n.computing = true
+		st.n.computingBy = id
 		mu.Unlock()
 
 		// 计算直到「版本稳定」：若 f() 执行期间依赖又变化（被标脏 → version++），
 		// 则本次结果基于过期输入，丢弃并重试。这是 P1-2 的核心：不能让旧结果
 		// 写回时把计算期间新产生的 dirty 标记冲掉。
 		// computing 在整个重算期间保持为 true，defer 保证任何退出路径都复位。
-		mu.Lock()
-		st.n.computing = true
-		st.n.computingBy = id
-		mu.Unlock()
 		defer func() {
 			mu.Lock()
 			st.n.computing = false
@@ -282,6 +288,19 @@ func scheduleEffect(e *node) {
 	e.running = true
 	mu.Unlock()
 
+	// 用 defer 保证调度状态在「正常结束」和「用户回调 panic」两条路径上都复位。
+	// 旧实现只在循环正常退出时清 running；若 e.run()（用户 effect 回调）panic，
+	// running 会永久停留在 true，之后所有写信号都只会置 queued 而不再重跑（P2-2）。
+	// panic 本身继续向上传播（由调用方决定是否 recover），但本 effect 的调度状态
+	// 必须干净，否则该节点被永久「卡死」。queued 一并清除：panic 期间的请求丢弃，
+	// 与「回调未跑完」语义一致；后续新写入会重新触发一次正常调度。
+	defer func() {
+		mu.Lock()
+		e.running = false
+		e.queued = false
+		mu.Unlock()
+	}()
+
 	for {
 		e.run() // 用户回调在锁外执行
 		mu.Lock()
@@ -290,9 +309,8 @@ func scheduleEffect(e *node) {
 			mu.Unlock()
 			continue // 合并执行期间的请求，再跑一次
 		}
-		e.running = false
 		mu.Unlock()
-		return
+		return // defer 负责清 running/queued（含正常路径）
 	}
 }
 

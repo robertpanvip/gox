@@ -395,3 +395,147 @@ type point struct { x int }
 	}
 	// 旧扫描取「最近声明」会在某些下标下误报 int；这里断言绑定表正确性即可。
 }
+
+// ===== P1-2 / P2-1 回归：短变量声明显式可见性 + 控制语句作用域 =====
+
+func TestBindShortDeclRHSReferencesOuter(t *testing.T) {
+	// 回归 P1-2：`x := x + 1` 右侧的 x 必须引用外层 signal，而非刚声明的局部 x。
+	// 旧实现用 DeclPos.Offset <= off，右侧 x 会误命中新绑定，导致类型推断 /
+	// signal 读取改写出错。
+	src := `package main
+signal count = 10
+func f() {
+    count := count + 1
+    println(count)
+}
+`
+	toks := New(src).AllTokens()
+	b := Bind(toks)
+	// count 出现次序：1=signal声明 2=右侧(:=的RHS) 3=左侧声明 4=println
+	// 注意 lexer 先扫到 := 左侧还是 RHS 取决于文本顺序：源码是 "count := count + 1"，
+	// 故次序为 1=signal, 2=左侧声明, 3=右侧, 4=println。
+	rhsPos := posAtNthIdent(t, toks, "count", 3)
+	bd := b.ResolveAt("count", rhsPos)
+	if bd == nil {
+		t.Fatal("右侧 count 未解析到绑定")
+	}
+	if bd.Kind != BkSignal {
+		t.Errorf("`:=` 右侧 count 应解析到外层 BkSignal，实际 %s @line %d", bd.Kind, bd.DeclPos.Line)
+	}
+	if bd.DeclPos.Line != 2 {
+		t.Errorf("右侧 count 应引用第 2 行的 signal 声明，实际第 %d 行", bd.DeclPos.Line)
+	}
+	// 而 println(count) 应解析到新声明的局部变量（语句结束后可见）。
+	lhsUsePos := posAtNthIdent(t, toks, "count", 4)
+	bd2 := b.ResolveAt("count", lhsUsePos)
+	if bd2 == nil || bd2.Kind != BkLocal {
+		t.Errorf("println 的 count 应解析到 BkLocal，实际 %v", bd2)
+	}
+}
+
+func TestBindForInitDoesNotLeak(t *testing.T) {
+	// 回归 P2-1：`for i := 0; ...` 的 i 不得泄漏到循环外。
+	// 循环内引用解析到 SkFor 作用域的 init；循环外同名引用解析到外层。
+	src := `package main
+func f() {
+    for i := 0; i < 10; i++ {
+        println(i)
+    }
+    i := 5
+    println(i)
+}
+`
+	toks := New(src).AllTokens()
+	b := Bind(toks)
+	// i 次序：1=init声明 2=cond 3=post 4=body println 5=外层声明 6=外层 println
+	bodyPos := posAtNthIdent(t, toks, "i", 4)
+	bd := b.ResolveAt("i", bodyPos)
+	if bd == nil || bd.Scope == nil || bd.Scope.Kind != SkFor {
+		t.Fatalf("循环体内 i 应解析到 SkFor init，实际 %v scope=%v", bd, scopeKindOf(bd))
+	}
+	outerPos := posAtNthIdent(t, toks, "i", 6)
+	bd2 := b.ResolveAt("i", outerPos)
+	if bd2 == nil || bd2.Scope == nil || bd2.Scope.Kind == SkFor {
+		t.Fatalf("循环外 i 不应解析到 SkFor init，实际 %v scope=%v", bd2, scopeKindOf(bd2))
+	}
+	if bd2.DeclPos.Line != 6 {
+		t.Errorf("循环外 i 应解析到第 6 行的局部声明，实际第 %d 行", bd2.DeclPos.Line)
+	}
+}
+
+func TestBindIfInitScopedToChain(t *testing.T) {
+	// 回归 P2-1：`if x := f(); x > 0 {}` 的 x 在 if/else 链内可见，链外不可见。
+	src := `package main
+func get() int { return 1 }
+func f() {
+    if x := get(); x > 0 {
+        println(x)
+    } else {
+        println(x)
+    }
+    x := 9
+    println(x)
+}
+`
+	toks := New(src).AllTokens()
+	b := Bind(toks)
+	// x 次序：1=if init 2=cond 3=then println 4=else println 5=外层声明 6=外层 println
+	elsePos := posAtNthIdent(t, toks, "x", 4)
+	bd := b.ResolveAt("x", elsePos)
+	if bd == nil || bd.Scope == nil || bd.Scope.Kind != SkIf {
+		t.Fatalf("else 分支 x 应解析到 SkIf init，实际 %v scope=%v", bd, scopeKindOf(bd))
+	}
+	outerPos := posAtNthIdent(t, toks, "x", 6)
+	bd2 := b.ResolveAt("x", outerPos)
+	if bd2 == nil || bd2.Scope == nil || bd2.Scope.Kind == SkIf {
+		t.Fatalf("if 链外 x 不应解析到 SkIf init，实际 %v scope=%v", bd2, scopeKindOf(bd2))
+	}
+}
+
+func TestBindRangeCompositeLiteralBody(t *testing.T) {
+	// 回归：`for _, v := range []int{1,2}` 的无括号复合字面量不得干扰 body 定位。
+	// body 内 println(v) 必须解析到 range 迭代变量（BkRangeVar）。
+	src := `package main
+func f() {
+    for _, v := range []int{1, 2} {
+        println(v)
+    }
+}
+`
+	toks := New(src).AllTokens()
+	b := Bind(toks)
+	// v 次序：1=range 左侧声明 2=body println
+	usePos := posAtNthIdent(t, toks, "v", 2)
+	bd := b.ResolveAt("v", usePos)
+	if bd == nil {
+		t.Fatal("body 内 v 未解析到绑定")
+	}
+	if bd.Kind != BkRangeVar {
+		t.Errorf("body 内 v 应为 BkRangeVar，实际 %s", bd.Kind)
+	}
+}
+
+func scopeKindOf(bd *Binding) string {
+	if bd == nil || bd.Scope == nil {
+		return "<nil>"
+	}
+	switch bd.Scope.Kind {
+	case SkGlobal:
+		return "SkGlobal"
+	case SkFunc:
+		return "SkFunc"
+	case SkBlock:
+		return "SkBlock"
+	case SkStruct:
+		return "SkStruct"
+	case SkFor:
+		return "SkFor"
+	case SkIf:
+		return "SkIf"
+	case SkSwitch:
+		return "SkSwitch"
+	case SkSelect:
+		return "SkSelect"
+	}
+	return "?"
+}

@@ -1,6 +1,7 @@
 package signal
 
 import (
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -357,4 +358,76 @@ func TestNestedComputedConcurrentRead(t *testing.T) {
 		}(i)
 	}
 	wg.Wait()
+}
+
+// TestComputedComputesOncePerInvalidation 回归 P1-1（recompute 计算权竞争窗口）：
+// 旧实现「检查 dirty」与「设置 computing」分处两个临界区，中间窗口让并发读者
+// 都能越过检查、各自执行 f()。修复后计算权在同一临界区内原子占用，f() 永不并发。
+// 这里检测 f() 的最大并发执行数必须恒为 1；200 轮 × 8 读者提供足够并发压力。
+func TestComputedComputesOncePerInvalidation(t *testing.T) {
+	src := New(0)
+	var inFlight, maxInFlight int32
+	d := Computed(func() int {
+		cur := atomic.AddInt32(&inFlight, 1)
+		for {
+			m := atomic.LoadInt32(&maxInFlight)
+			if cur <= m || atomic.CompareAndSwapInt32(&maxInFlight, m, cur) {
+				break
+			}
+		}
+		v := src()
+		runtime.Gosched() // 放大重叠窗口（若有多个 f() 同时进入）
+		atomic.AddInt32(&inFlight, -1)
+		return v
+	})
+
+	const rounds, readers = 200, 8
+	var wg sync.WaitGroup
+	for r := 0; r < rounds; r++ {
+		src(r)
+		wg.Add(readers)
+		for i := 0; i < readers; i++ {
+			go func() {
+				defer wg.Done()
+				_ = d()
+			}()
+		}
+		wg.Wait()
+	}
+	if got := atomic.LoadInt32(&maxInFlight); got != 1 {
+		t.Fatalf("computed f() 发生并发执行：maxInFlight=%d, want 1", got)
+	}
+}
+
+// TestEffectRecoversAfterPanic 回归 P2-2（effect 回调 panic 永久卡死）：
+// effect 回调 panic 被外部 recover 后，该 effect 必须仍能在后续 signal 写入时重跑。
+// 旧实现 e.running 在 panic 路径不会复位，导致效果永久停留在 running=true。
+func TestEffectRecoversAfterPanic(t *testing.T) {
+	count := New(0)
+	var runs int64
+	Effect(func() {
+		atomic.AddInt64(&runs, 1)
+		v := count()
+		if v == 42 {
+			panic("effect panic")
+		}
+	})
+	if got := atomic.LoadInt64(&runs); got != 1 {
+		t.Fatalf("initial runs=%d, want 1", got)
+	}
+
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Fatal("effect 回调 panic 应向上传播")
+			}
+		}()
+		count(42) // 触发重跑，回调 panic
+	}()
+
+	// panic 恢复后，effect 调度状态必须干净：后续写入仍能触发重跑。
+	count(7)
+	if got := atomic.LoadInt64(&runs); got != 3 {
+		t.Fatalf("panic 后 effect 应能重跑：runs=%d, want 3", got)
+	}
 }
