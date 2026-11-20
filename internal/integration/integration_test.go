@@ -104,6 +104,73 @@ func main() {
 	}
 }
 
+// runGXScene 与 runGX 相同，但用 opcode 后端（CompileScene）转译。
+func runGXScene(t *testing.T, gxSrc string) string {
+	t.Helper()
+	res, err := compiler.CompileSceneWithModule("input.gx", gxSrc, modulePath)
+	if err != nil {
+		t.Fatalf("转译失败: %v", err)
+	}
+	if err := res.Validate(); err != nil {
+		t.Fatalf("生成 Go 语法无效: %v\n---\n%s", err, res.GoSource)
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "main.go"), []byte(res.GoSource), 0644); err != nil {
+		t.Fatal(err)
+	}
+	root, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	gomod := "module integration\n\ngo 1.27\n\nrequire " + modulePath + " v0.0.0\nreplace " + modulePath + " => " + root + "\n"
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte(gomod), 0644); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("go", "run", ".")
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "GOTOOLCHAIN=go1.27.3")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("go run 失败: %v\n--- output ---\n%s\n--- generated ---\n%s", err, out, res.GoSource)
+	}
+	return string(out)
+}
+
+func TestIntegrationJSXSceneFineGrained(t *testing.T) {
+	// 路线三：JSX → gxscene opcode 模板；静态结构缓存，动态插值细粒度更新。
+	src := `package main
+import (
+	gxscene "github.com/robertpanvip/gox/runtime/scene"
+	"fmt"
+)
+func card(title func() string, n func() int) *gxscene.Instance {
+	return <div class="card"><h1>{title()}</h1><span>{n()}</span></div>
+}
+func main() {
+	title := "alpha"
+	count := 1
+	view := card(func() string { return title }, func() int { return count })
+	fmt.Print(view)
+	// 只改 title：应只写 1 个节点
+	title = "beta"
+	fmt.Println("writes:", view.Update())
+	fmt.Print(view)
+	// 值未变：应写 0 个节点
+	fmt.Println("writes:", view.Update())
+}
+`
+	out := runGXScene(t, src)
+	for _, want := range []string{
+		"alpha", "beta", `"1"`,
+		"writes: 1", "writes: 0",
+		`<div class="card">`, "<h1>", "<span>",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("输出应包含 %q, got:\n%s", want, out)
+		}
+	}
+}
+
 func TestIntegrationBuildErrorMapsBackToGx(t *testing.T) {
 	// 中文出现在使用错误符号之前；诊断须回投到 GX 第 4 行（字节列修复验证）。
 	src := `package main

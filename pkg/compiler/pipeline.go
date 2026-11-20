@@ -28,6 +28,14 @@ func (r *Result) Validate() error {
 	return err
 }
 
+// jsxMode 选择 JSX 的降级后端：createElement(VNode+Diff) 或 opcode(常驻场景树)。
+type jsxMode int
+
+const (
+	jsxVNode jsxMode = iota // 默认：gxvdom.CreateElement
+	jsxScene                // 路线三：gxscene opcode 模板 + 细粒度更新
+)
+
 // Compile 执行完整管线：
 // lex → analyze(GX 语义层：符号表 / 收窄 / 诊断) → union(联合类型擦除)
 // → typeguard(is 类型守卫，消费 analyze 结果) → enum → pub → jsx
@@ -44,7 +52,23 @@ func Compile(file, src string) (*Result, error) {
 }
 
 // CompileWithModule 以指定 module 转译。<module>/runtime/list 作为集合运行时 import 路径。
+// JSX 默认降级为 gxvdom.CreateElement。
 func CompileWithModule(file, src, module string) (*Result, error) {
+	return compileWithMode(file, src, module, jsxVNode)
+}
+
+// CompileScene 以 opcode（路线三）后端转译 JSX：静态结构编译成 gxscene opcode 模板，
+// 动态插值变成 getter，运行时维护常驻场景树并做细粒度更新。
+func CompileScene(file, src string) (*Result, error) {
+	return CompileSceneWithModule(file, src, defaultModule)
+}
+
+// CompileSceneWithModule 同 CompileScene，可指定 module（决定 runtime import 路径）。
+func CompileSceneWithModule(file, src, module string) (*Result, error) {
+	return compileWithMode(file, src, module, jsxScene)
+}
+
+func compileWithMode(file, src, module string, mode jsxMode) (*Result, error) {
 	toks := New(src).AllTokens()
 	// 默认值：声明处先物理剥离（否则 Analyze 会把 `= default` 算进类型），
 	// 调用点在 Analyze 之后补全（补全表达式仍流经后续全部 transform）。
@@ -66,7 +90,11 @@ func CompileWithModule(file, src, module string) (*Result, error) {
 	}
 	toks = transformEnum(toks, names)
 	toks = transformPub(toks, names)
-	toks = transformJSX(toks)
+	if mode == jsxScene {
+		toks = transformJSXScene(toks)
+	} else {
+		toks = transformJSX(toks)
+	}
 	toks = transformCollections(toks, module)
 	// 统一 import 别名：源码若已用别名导入 list/vdom/strconv，生成代码的占位包名
 	// 需替换为实际别名；否则各 transform 注入的 import 会与生成引用对不上。
@@ -129,6 +157,9 @@ func CompileStage(src, stage string) (string, error) {
 		toks = transformEnum(toks, names)
 	case "jsx":
 		toks = transformJSX(toks)
+	case "jsxscene":
+		toks = transformJSXScene(toks)
+		toks = ReconcileImports(toks, defaultModule)
 	case "pub":
 		toks = transformPub(toks, names)
 	case "collections":
@@ -159,7 +190,7 @@ func CompileStage(src, stage string) (string, error) {
 		toks = transformExternal(toks, scope, names)
 		toks = transformCompositeFields(toks, scope)
 	default:
-		return "", fmt.Errorf("unknown stage %q (want lex/union/typeguard/enum/jsx/pub/collections/external/all)", stage)
+		return "", fmt.Errorf("unknown stage %q (want lex/union/typeguard/enum/jsx/jsxscene/pub/collections/external/all)", stage)
 	}
 	out, _ := emit(toks, "<stage>")
 	return out, nil

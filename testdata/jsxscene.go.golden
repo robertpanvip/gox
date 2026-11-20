@@ -1,0 +1,29 @@
+package main
+
+import (
+	gxscene "github.com/robertpanvip/gox/runtime/scene"
+	"fmt"
+)
+
+// card 的 JSX 被编译成 gxscene opcode 模板 + 两个动态 getter：
+// 静态结构（div/h1/span/class）只解析一次并缓存；getter 读的是共享数据源。
+// 这里用一个闭包 cell（等价于 signal）承载可变数据——getter 捕获的是它本身，
+// 而非值拷贝，因此外部改数据后 Update() 能读到新值。
+ func Card(title func() string, n func() int) *gxscene.Instance {
+	return gxscene.Render(gxscene.Template{Ops:[]gxscene.Op{gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpAttr,Arg:"card",Key:"class",},gxscene.Op{Code:gxscene.OpElem,Arg:"h1",},gxscene.Op{Code:gxscene.OpDynChild,Slot:0,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpElem,Arg:"span",},gxscene.Op{Code:gxscene.OpDynChild,Slot:1,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpClose,},},N:2,}, func() any{ return title() }, func() any{ return n() })
+}
+
+func main() {
+	title := "GX"
+	count := 1
+	view := Card(func() string { return title }, func() int { return count })
+
+	// 首次渲染：clone 缓存的静态骨架，绑定 getter，得到常驻场景树
+	fmt.Println(view)
+
+	// 数据变化：Update 只把变化的插槽写回对应节点（零 Diff、零整树重建）
+	title = "Gox"
+	count = 2
+	fmt.Println("写入节点数:", view.Update())
+	fmt.Println(view)
+}

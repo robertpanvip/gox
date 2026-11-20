@@ -27,6 +27,14 @@ func listImportPath(module string) string {
 	return module + "/runtime/list"
 }
 
+// sceneImportPath 是 gxscene op-code 运行时的 import 路径：<module>/runtime/scene。
+func sceneImportPath(module string) string {
+	if module == "" {
+		module = defaultModule
+	}
+	return module + "/runtime/scene"
+}
+
 func transformCollections(in []Token, module string) []Token {
 	out := upperChainMethods(in)
 	out, _ = promoteAllSlices(out, "list")

@@ -67,6 +67,30 @@ pub func render(name string) any {
 | `{name}` 表达式子节点 | 作为 child 参数 `name` |
 | `<Foo/>` 组件 | `CreateElement(Foo, …)`（不加引号） |
 
+### JSX 双后端（`-jsx`）
+
+JSX 有两种降级后端，按场景选择（默认 `vdom`）：
+
+| 后端 | 生成 | 更新方式 | 适合 |
+|---|---|---|---|
+| `vdom`（默认） | `gxvdom.CreateElement` 嵌套 | 每次重建整树 + `Diff` | SSR / 无状态 / 可移植 |
+| `scene`（路线三） | `gxscene.Template{Ops:[...]}` opcode 模板 + getter | 静态骨架只解析一次；`Instance.Update()` 只写变化的插槽，零 Diff | 桌面客户端 UI / 细粒度响应式 |
+
+`scene` 后端借鉴 lit-html 的「静态模板 + 动态 part」：`gxscene.Render` 按 opcode 结构缓存静态骨架，clone 得到常驻场景树；每个 `{expr}` / `attr={expr}` 是一个 getter 插槽。数据变化后调 `Update()` 只回写变化节点（可观测指标 `Instance.Writes`）。绘制经 `Backend` 接口抽象，第一版提供 `TextBackend`，Skia / wgpu 后端可后续接入，编译器与场景树无需改动。
+
+```gx
+// gox build demo.gx -jsx=scene
+import gxscene "github.com/robertpanvip/gox/runtime/scene"
+func card(title func() string) *gxscene.Instance {
+    return <div class="card"><h1>{title()}</h1></div>  // getter 读共享数据源（signal）
+}
+// title 数据变化后：view.Update() → 只写 title 对应的文本节点
+```
+
+API：`CompileScene` / `CompileSceneWithModule`（对应默认的 `Compile` / `CompileWithModule`）；调试单步用 `gox jsxscene`。运行时见 [`runtime/scene/`](runtime/scene/)，示例见 `examples/jsxscene.gx`。
+
+> MVP 边界：`scene` 后端的 `<Foo/>` 组件按字符串标签渲染（不做函数组件展开）；动态插值建议绑定 getter / signal（读共享引用），直接捕获局部值参数不会随外部修改变化。
+
 ## 4. 外部 Go 符号：只首字母小写
 
 **约定：按 Go 真实名字照抄，只把首字母改成小写。** 还原因此是机械的 `upperFirst`，零依赖、零歧义。
@@ -295,11 +319,12 @@ gox/
 │   ├── lsp/            LSP 协议 / server / 诊断 / 符号映射 / 重命名
 │   └── buildcheck/     真实 go build 检查（可取消 + LRU）
 ├── bindings/cabi/      C-ABI 共享库（供 IDEA 插件经 JNA 调用）
-├── examples/           .gx 示例
+├── examples/           .gx 示例（含 jsxscene.gx）
 ├── testdata/           golden 产物 + LSP 端到端驱动脚本
 ├── docs/               设计与集成文档
-└── runtime/            运行时组件（统一收纳，便于未来扩展）
-    ├── vdom/           VNode / CreateElement / Render / Diff
+└── runtime/            运行时组件
+    ├── vdom/           VNode / CreateElement / Render / Diff（JSX 默认后端）
+    ├── scene/          opcode 模板 + 常驻场景树 + 细粒度 Update（JSX scene 后端）
     └── list/           List[T] + 泛型 Map/Filter/Reduce 运行时
 ```
 
