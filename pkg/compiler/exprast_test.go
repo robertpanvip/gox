@@ -196,3 +196,76 @@ func main() {
 		}
 	}
 }
+
+// templateASTOf 从源码构建原始流 + TemplateAST。
+func templateASTOf(src string) ([]Token, *TemplateAST) {
+	toks := New(src).AllTokens()
+	return toks, ParseTemplateExprs(toks)
+}
+
+func TestExprASTTemplateNodes(t *testing.T) {
+	src := "package main\nfunc main() {\n a := 1\n s := `a=${a} b=${a+1}`\n p := `plain`\n println(s, p)\n}\n"
+	toks, ast := templateASTOf(src)
+	nodes := ast.Nodes()
+	// 只有含 ${ 的反引号串是 Template token；`plain` 是原生 raw string。
+	if len(nodes) != 1 {
+		t.Fatalf("模板节点应为 1（plain 是原生 raw string），got %d: %v", len(nodes), nodes)
+	}
+	n := nodes[0]
+	if n.Kind != ExTemplate || n.TplBody == "" {
+		t.Errorf("节点应为 ExTemplate 且持模板原文: %v", n)
+	}
+	// 节点 Pos.Offset 应命中原始流里对应 Template token。
+	hit := false
+	for _, tk := range toks {
+		if tk.Kind == Template && tk.Pos.Offset == n.Pos.Offset {
+			hit = true
+		}
+	}
+	if !hit {
+		t.Errorf("模板节点 offset=%d 未命中原始 Template token", n.Pos.Offset)
+	}
+}
+
+// TestExprASTTemplateOffsetThroughPipeline 固化 E2 关键前提：desugar 到
+// transformTemplates 之前，主流 Template token 的 Pos.Offset 仍能命中原始 AST。
+// 覆盖 signal/lambda/对象字面量/解构混合（这些 transform 会增删 token 造成下标漂移）。
+func TestExprASTTemplateOffsetThroughPipeline(t *testing.T) {
+	sources := []string{
+		"package main\nsignal n = 0\nfunc main() { s := `hi ${n}`; println(s) }\n",
+		"package main\nfunc f(x int) int { return x }\nfunc main() { a := 1; s := `a=${a} f=${f(a)}`; println(s) }\n",
+		"package main\ntype P struct{ name string }\nfunc main() { p := P{name: \"z\"}; { name, age := p.name, 1; s := `n=${name} a=${age}`; println(s) } }\n",
+	}
+	for si, src := range sources {
+		toks := New(src).AllTokens()
+		ast := ParseTemplateExprs(toks)
+		b := Bind(toks)
+		toks, defs := stripDefaults(toks)
+		toks = transformSignals(toks, b)
+		an := Analyze(toks)
+		toks = expandDefaults(toks, defs)
+		toks = transformLambdas(toks, an, b)
+		var err error
+		toks, err = transformObjectLits(toks, an, b)
+		if err != nil {
+			t.Fatalf("src%d objectlits: %v", si, err)
+		}
+		toks, err = expandDestructures(toks, b)
+		if err != nil {
+			t.Fatalf("src%d destruct: %v", si, err)
+		}
+		total, hit := 0, 0
+		for _, tk := range toks {
+			if tk.Kind != Template {
+				continue
+			}
+			total++
+			if ast.TemplateAt(tk.Pos.Offset) != nil {
+				hit++
+			}
+		}
+		if total == 0 || hit != total {
+			t.Errorf("src%d: 主流模板 offset 命中 %d/%d", si, hit, total)
+		}
+	}
+}

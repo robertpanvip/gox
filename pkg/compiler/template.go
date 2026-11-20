@@ -26,24 +26,32 @@ type tplPart struct {
 }
 
 // transformTemplates 把 token 流里的 Template token 就地展开为字符串拼接 token。
-func transformTemplates(in []Token, b *Bindings) []Token {
+//
+// E2：ast 是 lex 后、原始流上构建的 TemplateAST。主流中的顶层模板 token 以
+// Pos.Offset 命中节点（offset 稳定，token 下标因前面 transform 增删而漂移）；
+// 命中时把节点的 TplBody 作为展开原文（语义与 token.Text 一致，但语义来源归一到 AST）。
+// 递归展开内层模板时 ast 传 nil，内层模板复用父模板 Pos、无独立 offset，走 token 原文回退。
+func transformTemplates(in []Token, b *Bindings, ast *TemplateAST) []Token {
 	out := make([]Token, 0, len(in))
 	for i, t := range in {
 		if t.Kind != Template {
 			out = append(out, t)
 			continue
 		}
-		out = append(out, expandTemplate(t, in, i, b)...)
+		body := t.Text
+		if node := ast.TemplateAt(t.Pos.Offset); node != nil {
+			body = node.TplBody
+		}
+		out = append(out, expandTemplate(t, body, in, i, b)...)
 	}
 	return out
 }
 
 // expandTemplate 解析单个 Template token，返回展开后的 token 序列。
-// ctx/useIdx 为当前模板在主流中的位置：对可静态判为 int 的整插值用 strconv.Itoa
-// 替代 fmt.Sprint，避免 fmt.Sprint 的反射装箱开销（实测约 2x）。
-// 递归展开嵌套模板时 ctx 传 nil（保守用 fmt.Sprint）。
-func expandTemplate(t Token, ctx []Token, useIdx int, b *Bindings) []Token {
-	body := t.Text
+// body 是模板原文（主入口来自 AST 节点，递归来自 token 文本）；ctx/useIdx 为当前
+// 模板在主流中的位置：对可静态判为 int 的整插值用 strconv.Itoa 替代 fmt.Sprint，
+// 避免 fmt.Sprint 的反射装箱开销（实测约 2x）。递归展开嵌套模板时 ctx 传 nil。
+func expandTemplate(t Token, body string, ctx []Token, useIdx int, b *Bindings) []Token {
 	if len(body) >= 2 && body[0] == '`' && body[len(body)-1] == '`' {
 		body = body[1 : len(body)-1]
 	}
@@ -58,7 +66,7 @@ func expandTemplate(t Token, ctx []Token, useIdx int, b *Bindings) []Token {
 			if len(inner) > 0 && inner[len(inner)-1].Kind == EOF {
 				inner = inner[:len(inner)-1]
 			}
-			inner = transformTemplates(inner, nil)
+			inner = transformTemplates(inner, nil, nil)
 			// 子 token 用模板起始位置，避免相对坐标污染 sourcemap。
 			for i := range inner {
 				inner[i].Pos = t.Pos

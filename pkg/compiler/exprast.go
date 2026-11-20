@@ -30,6 +30,7 @@ const (
 	ExSignalWrite                    // 简单写：name = expr → name(expr)
 	ExSignalCompound                 // 复合写：name += expr → name(name()+expr)
 	ExSignalIncDec                   // 自增自减：name++ → name(name()+1)
+	ExTemplate                       // 模板字符串：`...${expr}...`
 )
 
 func (k ExprKind) String() string {
@@ -44,6 +45,8 @@ func (k ExprKind) String() string {
 		return "signal-compound"
 	case ExSignalIncDec:
 		return "signal-incdec"
+	case ExTemplate:
+		return "template"
 	}
 	return "?"
 }
@@ -60,6 +63,7 @@ type GXExpr struct {
 	Binding *Binding // 解析到的 signal/computed 声明；声明节点为自身绑定
 	RhsFrom int      // 右侧表达式起点（Decl/Write/Compound）；其余为 -1
 	RhsTo   int      // 右侧表达式终点（开区间）
+	TplBody string   // ExTemplate：模板原文（含反引号）
 }
 
 func (e *GXExpr) String() string {
@@ -199,3 +203,51 @@ func (a *SignalAST) Nodes() []*GXExpr {
 
 // SignalNames 返回声明为 signal/computed 的名字集合（对拍用）。
 func (a *SignalAST) SignalNames() map[string]bool { return a.signalNames }
+
+// TemplateAST 是一份源码里全部顶层模板表达式节点的集合。
+// 节点在原始流构建，byOffset 以模板 token 的 Pos.Offset 为键——desugar 中后段
+// 的 transformTemplates 可据此把主流 token 映射回原始 AST（offset 稳定，下标不稳定）。
+type TemplateAST struct {
+	byOffset map[int]*GXExpr
+	nodes    []*GXExpr
+}
+
+// ParseTemplateExprs 在原始 token 流上解析全部顶层模板 token。
+// 只登记原始 token（IsGen=false），避免生成 token 复用同一 Pos 造成键冲突。
+func ParseTemplateExprs(toks []Token) *TemplateAST {
+	a := &TemplateAST{byOffset: map[int]*GXExpr{}}
+	for i := 0; i < len(toks); i++ {
+		t := toks[i]
+		if t.Kind != Template || t.IsGen {
+			continue
+		}
+		node := &GXExpr{
+			Kind:    ExTemplate,
+			Name:    t.Text,
+			Idx:     i,
+			Pos:     t.Pos,
+			RhsFrom: -1,
+			RhsTo:   -1,
+			TplBody: t.Text,
+		}
+		a.byOffset[t.Pos.Offset] = node
+		a.nodes = append(a.nodes, node)
+	}
+	return a
+}
+
+// TemplateAt 返回 Pos.Offset 为 off 的模板节点，无则 nil。
+func (a *TemplateAST) TemplateAt(off int) *GXExpr {
+	if a == nil {
+		return nil
+	}
+	return a.byOffset[off]
+}
+
+// Nodes 返回全体模板节点（稳定顺序）。
+func (a *TemplateAST) Nodes() []*GXExpr {
+	if a == nil {
+		return nil
+	}
+	return a.nodes
+}

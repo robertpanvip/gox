@@ -407,7 +407,14 @@ signal transform 位于管线最前段（Analyze 之前），处理的是**原�
   3. **全量门禁**：`go test -race`/`go vet`/`go build ./...` 全绿，golden 无变化。
 - `collectSignalVars`/`isSignalRefAt` 仅留作对拍参照，生产路径已不调用。
 
-### 15.4 后续（E2/E3）
+### 15.4 E2：模板识别收敛到 AST（本轮）
 
-- **E2**：把 lambda / 对象字面量 / 解构 / 模板的 detect 逐个切到 AST 层，删除各自的扫 token 消歧补丁。这些 transform 在 desugar 中后段工作，需处理 offset→当前流下标的映射（signal 阶段不涉及），风险高于 E1，逐个做、各自对拍。
-- **E3**：Analysis 类型/诊断直接读 AST 节点（P6 已判 `idxNearGx` 收益低，暂缓）。
+模板 transform 没有 signal 那样的遮蔽/形态排除判定可收敛（`Kind==Template` 已是唯一识别条件，插值 `${}` 在 lex 阶段不产生独立 token、无法持有 Binding）。因此 E2 的价值定位在**打通中后段 offset 映射**——这是把 lambda/对象字面量/解构接进 AST 的命门：
+
+- **关键前提验证**（探针 + 正式测试 `TestExprASTTemplateOffsetThroughPipeline`）：desugar 到 `transformTemplates` 之前，主流中 Template token 的 `Pos.Offset` 对原始 AST **100% 命中**，覆盖 signal/lambda/对象字面量/解构混合场景。证明「原始流建 AST + 中后段按 offset 查节点」成立，token 下标漂移不再构成障碍。
+- 新增 `TemplateAST` + `ExTemplate` 节点（持模板原文 `TplBody`）；`ParseTemplateExprs` 在原始流一次构建、只登记非生成 token。`transformTemplates` 主入口按 offset 命中节点并以节点原文展开，递归内层模板（无独立 offset）回退 token 原文。
+- 等价性验证：节点解析测试 + offset 映射测试 + **12 样本端到端对拍**（基础/多插值/纯插值/文本混合/嵌套/引号/整数特化/signal/lambda/对象字面量/解构/原生 raw string）新旧输出逐字一致；race/vet/build/golden 全绿。
+
+### 15.5 后续（E3）
+
+- **E3**：把 lambda / 对象字面量 / 解构的 detect 逐个切到 AST（offset 映射已由 E2 验证打通），删除各自的扫 token 消歧补丁；之后 Analysis 类型/诊断直接读 AST 节点（P6 已判 `idxNearGx` 收益低，缓做）。

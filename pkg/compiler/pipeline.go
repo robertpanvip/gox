@@ -54,9 +54,10 @@ func Compile(file, src string) (*Result, error) {
 // CompileWithModule 以指定 module 转译。<module>/runtime/list 作为集合运行时 import 路径。
 func CompileWithModule(file, src, module string) (*Result, error) {
 	toks := New(src).AllTokens()
-	// 统一绑定表：lex 之后、任何 transform 之前构建一次，贯穿整条管线。
+	// 统一绑定表 + 表达式 AST：lex 之后、任何 transform 之前构建一次，贯穿整条管线。
 	// 以 Pos.Offset 为稳定身份，不受后续 desugar 增删 token 的下标漂移影响。
 	bindings := Bind(toks)
+	templateAST := ParseTemplateExprs(toks)
 	// 默认值：声明处先物理剥离（否则 Analyze 会把 `= default` 算进类型），
 	// 调用点在 Analyze 之后补全（补全表达式仍流经后续全部 transform）。
 	toks, defaultDefs := stripDefaults(toks)
@@ -79,7 +80,7 @@ func CompileWithModule(file, src, module string) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	toks = transformTemplates(toks, bindings)
+	toks = transformTemplates(toks, bindings, templateAST)
 	toks = runUnion(toks)
 	toks = transformTypeGuard(toks, analysis)
 	if err := checkStrandedIs(toks); err != nil {
@@ -160,6 +161,7 @@ func CompileStage(src, stage string) (string, error) {
 		toks = transformCompositeFields(toks, scope)
 	case "all":
 		bindings := Bind(toks)
+		templateAST := ParseTemplateExprs(toks)
 		toks, defaultDefs := stripDefaults(toks)
 		toks = transformSignals(toks, bindings)
 		analysis := Analyze(toks)
@@ -173,7 +175,7 @@ func CompileStage(src, stage string) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		toks = transformTemplates(toks, bindings)
+		toks = transformTemplates(toks, bindings, templateAST)
 		toks = runUnion(toks)
 		toks = transformTypeGuard(toks, analysis)
 		toks = transformEnum(toks, names)
