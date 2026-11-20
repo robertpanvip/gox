@@ -37,11 +37,19 @@ const (
 )
 
 // Compile 执行完整管线：
-// lex → analyze(GX 语义层：符号表 / 收窄 / 诊断) → union(联合类型擦除)
+// lex → stripDefaults → signals(Signal 语法糖：声明消除 + 读写调用式改写)
+// → analyze(GX 语义层：符号表 / 收窄 / 诊断) → union(联合类型擦除)
 // → typeguard(is 类型守卫，消费 analyze 结果) → enum → pub → jsx
 // → collections(集合链式) → scope(作用域符号收集) → restoreRefs(自身 pub 符号)
 // → external(外部符号机械还原) → emit。
 //
+// 对象字面量与对象解构在 desugar 早期处理：对象字面量（transformObjectLits）
+// 先展开为 struct 形态，对象解构（expandDestructures）随后把 {a,b} := p 改写为
+// 逐字段声明，并借此做「解构字段 ⊆ 构造类型字段」的编译期校验。
+//
+// Signal transform 在 analyze 之前：消除 signal/let 声明并把 signal 变量读写改为
+// 调用式（n / n=v → n() / n(v)），使语义层看到的是标准 Go；Signal 占位包名由
+// ReconcileImports 统一注入 import。
 // analyze 必须在 union 之前：此时联合类型 A|B 尚未被擦除，is 守卫仍是原貌，
 // 语义层才能建立真实的联合类型环境并做收窄。typeguard 消费 analyze 的产物，
 // 只负责生成 comma-ok 断言，不再自行判定守卫。
@@ -73,12 +81,21 @@ func compileWithMode(file, src, module string, mode jsxMode) (*Result, error) {
 	// 默认值：声明处先物理剥离（否则 Analyze 会把 `= default` 算进类型），
 	// 调用点在 Analyze 之后补全（补全表达式仍流经后续全部 transform）。
 	toks, defaultDefs := stripDefaults(toks)
+	// Signal 语法糖：signal/let 声明消除 + signal 变量读写改写为调用式。
+	// 放在 Analyze 之前，让语义层看到标准 Go（signal/let 已消除、读写已是调用）。
+	toks = transformSignals(toks)
 	analysis := Analyze(toks) // desugar 之前的 GX 语义层（联合未擦除）
 	names := map[string]string{} // 小写原名 → 大写导出名（自身 pub 符号）
 	toks = expandDefaults(toks, defaultDefs)
 	toks = transformLambdas(toks, analysis)
 	// 对象字面量：期望类型校验失败时返回带 GX 坐标的错误。
 	toks, err := transformObjectLits(toks, analysis)
+	if err != nil {
+		return nil, err
+	}
+	// 对象解构：{ name, age } := p → name := p.name; age := p.age
+	// 放在对象字面量之后，右值声明类型（含 struct{...}{...} 展开形态）已可见。
+	toks, err = expandDestructures(toks)
 	if err != nil {
 		return nil, err
 	}
@@ -170,10 +187,15 @@ func CompileStage(src, stage string) (string, error) {
 		toks = transformCompositeFields(toks, scope)
 	case "all":
 		toks, defaultDefs := stripDefaults(toks)
+		toks = transformSignals(toks)
 		analysis := Analyze(toks)
 		toks = expandDefaults(toks, defaultDefs)
 		toks = transformLambdas(toks, analysis)
 		toks, err := transformObjectLits(toks, analysis)
+		if err != nil {
+			return "", err
+		}
+		toks, err = expandDestructures(toks)
 		if err != nil {
 			return "", err
 		}

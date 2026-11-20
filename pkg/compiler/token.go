@@ -1,7 +1,7 @@
 // Package compiler 把 .gx 源码转译为等价的、可直接 go build 的标准 Go 源码。
 //
-// GX = Go 语法 + 十项语法糖（pub / enum / JSX / 外部符号小写调用 / is 类型守卫 /
-// 联合类型擦除 / 模板字符串 / 参数默认值 / Lambda / 对象字面量）。
+// GX = Go 语法 + 十三项语法糖（pub / enum / JSX / 外部符号小写调用 / is 类型守卫 /
+// 联合类型擦除 / 模板字符串 / 参数默认值 / Lambda / 对象字面量 / 对象解构 / Signal 响应式）。
 // 转译分两段：先由 analyze 建立 GX 语义层（符号表 / 联合类型 / is 收窄 / GX 原生诊断），
 // 再由各 desugar 层在 token 流上改写（每一层保留原始位置，emit 时产出 sourcemap 原始数据）。
 // 类型合法性由 GX 语义层主责；go/types（buildcheck）只兜底检查降级代码的合法性，如 TS 之于 JS。

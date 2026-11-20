@@ -4,7 +4,7 @@
 
 > 设计原则：**零运行时魔法**。JSX 只是嵌套的函数调用，枚举只是具名类型 + const + String/Parse，集合只是切片类型提升 + 泛型方法。生成代码可直接提交、阅读、调试。
 >
-> **书写约定核心：声明用 `pub` 显式导出；标识符一律「只首字母小写，其余驼峰照抄」。** 转译器机械还原大小写，无需类型推导、无需读取第三方包符号表。
+> **书写约定核心：声明用 `pub` 显式导出；标识符按 Go 真实拼写书写，全大写缩写（如 `URL`）直接写大写、原样保留。** 小写形式兼容旧写法、机械还原，无需类型推导、无需读取第三方包符号表。
 
 ## 十一项特性速览
 
@@ -13,7 +13,7 @@
 | **pub 导出** | `pub func greet(){}` | `func Greet(){}`（引用处作用域感知还原） |
 | **枚举** | `pub enum color { red, green }` | `type Color int` + `const(ColorRed…)` + `String()`/`ParseColor()` |
 | **JSX** | `<div class="box">hi</div>` | `gxvdom.CreateElement("div", …)` 嵌套 |
-| **外部符号** | `http.newRequest`、`uRL` | `http.NewRequest`、`URL`（机械首字母还原） |
+| **外部符号** | `http.NewRequest`、`URL` | 原样保留；小写形式 `http.newRequest`、`newRequest` 机械还原 |
 | **集合链式** | `xs.map(f).filter(g)` | `list.List[T].Map(f).Filter(g)`，切片 `[]T` 全局提升 |
 | **is 类型守卫** | `if (x is float64) { … }` | `if v, ok := x.(float64); ok { x := v; … }`（块内 x 窄化为 float64） |
 | **联合类型** | `func f(v int \| string)` | `func f(v any)`（擦除为 any，配合 is 守卫窄化） |
@@ -21,6 +21,8 @@
 | **Lambda** | `x => x+1` | `func(x int) int { return x+1 }`（类型从上下文/表达式推断） |
 | **模板字符串** | `` `hi ${name}` `` | `"hi " + fmt.Sprint(name)`（拼接，自动 import fmt） |
 | **对象字面量** | `{ name: "x", age: 1 }` | `struct{ name string; age int }{...}`，有期望类型时用 `point{...}` |
+| **对象解构** | `{ name, age } := p` / `var { name, age } = p` | `name := p.name; age := p.age`（逐字段，校验字段存在） |
+| **Signal 响应式** | `signal n = 0` / `Signal.effect(() => ...)` | `Signal.New(0)` + 函数式读写 + 依赖追踪自动重跑 |
 
 ## 1. 可见性：`pub`
 
@@ -153,21 +155,23 @@ n := view.Update()                      // 更新，返回写入节点数
 
 API：`CompileScene` / `CompileSceneWithModule`（对应默认的 `Compile` / `CompileWithModule`）；调试单步用 `gox jsxscene`。运行时见 [`runtime/scene/`](runtime/scene/)，完整示例见 `examples/jsxscene.gx`。
 
-## 4. 外部 Go 符号：只首字母小写
+## 4. 外部 Go 符号：按真实拼写书写
 
-**约定：按 Go 真实名字照抄，只把首字母改成小写。** 还原因此是机械的 `upperFirst`，零依赖、零歧义。
+**约定：按 Go 真实名字照抄即可。** 全大写缩写（`URL`、`StatusOK`）直接写大写、原样保留；小写形式（`newRequest`）也兼容，由机械的 `upperFirst` 还原。零依赖、零歧义。
 
 | GX 书写 | 生成 Go | 说明 |
 |---|---|---|
-| `http.newRequest(...)` | `http.NewRequest(...)` | 多词保留驼峰 |
-| `uRL` | `URL` | 全大写缩写只压首字母 |
-| `fmt.println(...)` | `fmt.Println(...)` | 单词 |
+| `http.NewRequest(...)` | `http.NewRequest(...)` | 真实拼写，原样保留 |
+| `r.URL` / `http.StatusOK` | `r.URL` / `http.StatusOK` | 全大写缩写，原样保留 |
+| `http.newRequest(...)` | `http.NewRequest(...)` | 小写形式，机械还原（兼容旧写法） |
 | `req.method` / `u.host` | `req.Method` / `u.Host` | 外部结构体字段 |
+| `fmt.println(...)` | `fmt.Println(...)` | 单词 |
 
-- **作用域感知**：自己的私有字段/变量（同样小写书写）不会被误改——转译器收集本文件的私有符号加以排除。
-- 裸标识符（内置 `println`/`len`/`make` 等）不碰；已写大写的不动。
+- **全大写不改写**：已经是大写的标识符（`URL`、`StatusOK`）在整条管线里透明通过，不会被首字母化破坏——用别人的 Go 代码时按真实拼写写即可。
+- **作用域感知**：自己的私有字段/变量（小写书写）不会被误改——转译器收集本文件的私有符号加以排除。
+- 裸标识符（内置 `println`/`len`/`make` 等）不碰。
 - 别名导入 `import h "net/http"` 支持。
-- 代价：需按 Go 真实名字照抄驼峰（`Itoa` 要写 `itoa`，不能写 `itoA`）。
+- 小写形式需按 Go 真实名字照抄驼峰（`Itoa` 写 `itoa`，不能写 `itoA`）；全大写写法无此约束。
 
 ## 5. 集合链式调用
 
@@ -303,11 +307,11 @@ p := { name: "x", age: 1, ok: true }
 **有期望类型**（明确标注了参数/返回/变量类型的上下文）：省略结构体类型名，由期望类型补全并校验字段：
 
 ```gx
-type point struct { name string; age int }
-var p point = { name: "x", age: 1 }   // → var p point = point{ name: "x", age: 1 }
-f({ name: "x", age: 1 })              // f(p point) → f(point{...})
+type Point struct { name string; age int }
+var p Point = { name: "x", age: 1 }   // → var p Point = Point{ name: "x", age: 1 }
+f({ name: "x", age: 1 })              // f(p Point) → f(Point{...})
 p = { name: "x", age: 1 }             // 赋值：按 p 的声明类型补全
-func make() point { return { name: "x", age: 1 } }  // 按返回类型补全
+func make() Point { return { name: "x", age: 1 } }  // 按返回类型补全
 ```
 
 - 校验：字段名未知、缺失字段、值类型不兼容均报**编译错误**（带 GX 源码坐标）。
@@ -315,13 +319,58 @@ func make() point { return { name: "x", age: 1 } }  // 按返回类型补全
 - **期望类型为 `any` / `interface{}` 时不补全**：这类类型不携带字段结构，`any{...}` 是非法 Go，故按匿名结构体处理（如 `func make() any { return { name: "x" } }` → `return struct{ name string }{ name: "x" }`）。
 - 支持嵌套对象字面量（由内向外逐层补全）。
 
-## 12. Sourcemap / LSP / 编译检查
+## 12. 对象解构
+
+`{ name, age } := p` / `var { name, age } = p` 把结构体字段解构为同名的局部变量，逐字段生成 Go 声明：
+
+```gx
+type Student struct { name string; age int; city string }
+var p Student = { name: "x", age: 1, city: "SZ" }
+{ name, age } := p        // → name := p.name; age := p.age
+var { name, city } = q    // → var name = q.name; var city = q.city
+```
+
+- **类型检查**：右值类型可从本文件推断时（具名 struct 或匿名 struct 字面量），每个解构字段必须真实存在，否则报**编译错误**（带 GX 坐标）。
+- **构造后立刻解构**：构造侧字段集 S₁ 由对象字面量层校验，解构侧 S₂ 由本层校验，二者都是 `fields(T)` 的子集，故 `S₁ ∪ S₂ ⊆ fields(T)`。
+- **右值类型未知**（如外部包函数返回）：宽松生成 `x.field`，字段存在性交给 Go 编译期检查。
+- 复用 `var`/`:=` 语法，不引入新关键字；解构变量遵循 Go 的作用域与 `:=` 重声明规则。
+
+## 13. Signal 响应式
+
+`signal` 声明源信号，`Signal.computed` 派生只读信号，`Signal.effect` 注册副作用；依赖变化时 effect 自动重跑。底层是函数式 signal（`func(...T) T`：无参读、带参写）+ 依赖追踪运行时（`runtime/signal`）。
+
+```gx
+signal count = 0
+func main() {
+    let doubled = Signal.computed(() => count * 2)
+    Signal.effect(() => println("count=", count))   // count 变化时自动重跑
+    count = 5                                         // 写 → 触发 effect + computed 失效
+    println(doubled)                                  // → 10（读自动加 ()）
+}
+```
+
+降级为标准 Go：
+
+```go
+var count = Signal.New(0)
+doubled := Signal.Computed(func() int { return count() * 2 })
+Signal.Effect(func() { println("count=", count()) })
+count(5)
+println(doubled())
+```
+
+- **语法糖**：`signal n = v` → `var n = Signal.New(v)`；`let n = v` → `n := v`；signal 变量**读**自动补 `()`、**写**（`=`/`+=`/`++` 等）改写为调用式。
+- **作用域安全**：selector `obj.count`、复合字段键 `{count: 1}`、struct 字段、函数参数、已显式调用 `count()` 均不误改。
+- **依赖追踪**：`computed` 惰性缓存，`effect` 立即执行一次并在依赖变化时重跑，条件分支依赖会动态重建；运行时并发安全。
+- `Signal` 作为运行时包名由 ImportManager 统一注入 `import Signal "<module>/runtime/signal"`，源码已用别名导入则复用。
+
+## 14. Sourcemap / LSP / 编译检查
 
 - 自带 `.gx ↔ .go` **双向精确位置映射**（`sourcemap` / `map-lookup`）。
 - LSP：跳转 / 补全 / 悬停 / 文档符号 / **重命名**（枚举成员三种拼写派生新名）。
 - 真实 `go build` 检查（`buildcheck`，可取消 + LRU），错误经 sourcemap **回投到 `.gx`**。
 
-## 13. GX 类型检查（方案 B：AST + side table）
+## 15. GX 类型检查（方案 B：AST + side table）
 
 GX 把联合 `A|B` 擦除为 `any` 后，`go/types` 眼里只剩 `any`，**永远看不到联合契约被违反**。因此类型检查的主战场放在 desugar 之前的 GX 层——这正是 TS 对 JS 的关系：类型是本层的责任，`go build` 只兜底「降级代码是否合法」。
 

@@ -142,15 +142,15 @@ func main() { _, _, _, _ = alpha, beta, gamma, delta }
 func TestPubMethodReceiver(t *testing.T) {
 	src := `package main
 
-type point struct{ x int }
+type Point struct{ x int }
 
-pub func (p point) distance() int { return p.x }
+pub func (p Point) distance() int { return p.x }
 
-func main() { p := point{x: 1}; _ = p.distance() }
+func main() { p := Point{x: 1}; _ = p.distance() }
 `
 	got := compileOK(t, "pubmethod.gx", src)
 	// pub 方法：接收者跳过，方法名大写
-	containsAll(t, got, "func (p point) Distance() int")
+	containsAll(t, got, "func (p Point) Distance() int")
 	// 调用处还原
 	containsAll(t, got, "p.Distance()")
 }
@@ -221,7 +221,7 @@ pub func f() colorGreen {
 // ---------- external 边界 ----------
 
 func TestExternalMultiwordCamel(t *testing.T) {
-	// uRL → URL：只首字母小写、其余驼峰照抄
+	// 小写形式照抄还原（兼容旧写法）：parse → Parse、host → Host、userinfo → Userinfo
 	src := `package main
 
 import "net/url"
@@ -238,20 +238,37 @@ pub func f() {
 	containsAll(t, got, "u.Userinfo")
 }
 
+func TestExternalAllCapsPreserved(t *testing.T) {
+	// 全大写符号（缩写词）直接写大写，生成 Go 时原样保留，不被 upperFirst 改写。
+	src := `package main
+
+import "net/http"
+
+pub func f(r *http.Request) int {
+    _ = r.URL
+    _ = r.Header
+    return http.StatusOK
+}
+`
+	got := compileOK(t, "allcaps.gx", src)
+	containsAll(t, got, "r.URL", "r.Header", "http.StatusOK")
+	assertNotContains(t, got, "r.Url", "全大写字段不应被改写成首字母大写")
+}
+
 func TestExternalPrivateFieldProtected(t *testing.T) {
 	// 端到端：自己声明的私有字段 host 不应被当成外部字段大写
 	src := `package main
 
-type config struct {
+type Config struct {
     host string
 }
 
-pub func f(c *config) string {
+pub func f(c *Config) string {
     return c.host
 }
 `
 	got := compileOK(t, "privfield.gx", src)
-	containsAll(t, got, "type config struct", "host string")
+	containsAll(t, got, "type Config struct", "host string")
 	// c.host 是自己的私有字段，必须保持小写
 	containsAll(t, got, "return c.host")
 	assertNotContains(t, got, "return c.Host", "自己的私有字段不应被大写")
@@ -306,19 +323,19 @@ func TestLocalCompositeLiteralFieldsUnchanged(t *testing.T) {
 	// 本包类型字面量的字段名是私有字段，必须保持小写
 	src := `package main
 
-type point struct{ x int; y int }
-type box struct{ v int }
+type Point struct{ x int; y int }
+type Box struct{ v int }
 
 func f() {
-    _ = point{x: 1, y: 2}
-    _ = box{v: 3}
-    p := point{x: 1}
+    _ = Point{x: 1, y: 2}
+    _ = Box{v: 3}
+    p := Point{x: 1}
     _ = p.x
 }
 `
 	got := compileOK(t, "loclit.gx", src)
-	containsAll(t, got, "point{x: 1, y: 2}", "box{v: 3}", "p.x")
-	assertNotContains(t, got, "point{X: 1", "本包私有字段不应大写")
+	containsAll(t, got, "Point{x: 1, y: 2}", "Box{v: 3}", "p.x")
+	assertNotContains(t, got, "Point{X: 1", "本包私有字段不应大写")
 }
 
 func TestExternalCompositeGenericTypeFields(t *testing.T) {
@@ -341,16 +358,16 @@ func TestCompositeFieldRestoreDoesNotTouchMapOrAnon(t *testing.T) {
 
 import "example.com/lib"
 
-type pair struct{ k int; v int }
+type Pair struct{ k int; v int }
 
 func f() {
     m := map[string]int{alpha: 1, beta: 2}
     _ = m
-    _ = pair{k: 1, v: 2}
-    _ = lib.box{value: 3, opt: pair{k: 4}}
+    _ = Pair{k: 1, v: 2}
+    _ = lib.box{value: 3, opt: Pair{k: 4}}
 }
 `
 	got := compileOK(t, "compmix.gx", src)
-	containsAll(t, got, "lib.Box{Value: 3, Opt: pair{k: 4}}")
-	containsAll(t, got, "map[string]int{alpha: 1, beta: 2}", "pair{k: 1, v: 2}")
+	containsAll(t, got, "lib.Box{Value: 3, Opt: Pair{k: 4}}")
+	containsAll(t, got, "map[string]int{alpha: 1, beta: 2}", "Pair{k: 1, v: 2}")
 }

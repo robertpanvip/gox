@@ -38,9 +38,90 @@ func sceneImportPath(module string) string {
 func transformCollections(in []Token, module string) []Token {
 	out := upperChainMethods(in)
 	out, _ = promoteAllSlices(out, "list")
+	out = fuseMapFilter(out)
 	out = wrapChainReceivers(out, collectListVars(out))
 	// import 由 ReconcileImports 统一注入（按实际使用情况），此处不再注入。
 	return out
+}
+
+// fuseMapFilter 把相邻的 .Map(f).Filter(g) 合并为 .MapFilter(f, g)。
+// 运行时的 MapFilter 一次遍历、一次分配完成两者语义，省去中间切片的分配
+// 与第二次 range。只融合紧跟的一对，连续链会逐对融合。
+func fuseMapFilter(in []Token) []Token {
+	out := append([]Token(nil), in...)
+	for i := 0; i < len(out); {
+		// 定位 '.' + Map + '('，Map 回调须是单参数（顶层无逗号）。
+		if out[i].Kind != Operator || out[i].Text != "." {
+			i++
+			continue
+		}
+		j := nextSig(out, i+1)
+		if j < 0 || out[j].Kind != Ident || out[j].Text != "Map" {
+			i++
+			continue
+		}
+		p1 := nextSig(out, j+1)
+		if p1 < 0 || out[p1].Text != "(" {
+			i++
+			continue
+		}
+		c1 := matchDelimSkipSpace(out, p1, "(", ")")
+		if c1 <= p1 || topLevelCommaCount(out, p1, c1) != 0 {
+			i++
+			continue
+		}
+		// ')' 后必须紧跟 '.' + Filter + '('，Filter 回调同样单参数。
+		d2 := nextSig(out, c1+1)
+		if d2 < 0 || out[d2].Text != "." {
+			i++
+			continue
+		}
+		k := nextSig(out, d2+1)
+		if k < 0 || out[k].Kind != Ident || out[k].Text != "Filter" {
+			i++
+			continue
+		}
+		p2 := nextSig(out, k+1)
+		if p2 < 0 || out[p2].Text != "(" {
+			i++
+			continue
+		}
+		c2 := matchDelimSkipSpace(out, p2, "(", ")")
+		if c2 <= p2 || topLevelCommaCount(out, p2, c2) != 0 {
+			i++
+			continue
+		}
+		// 合并：Map -> MapFilter，删除 [c1, p2]（')' + '.' + Filter + '('），
+		// 在原 ')' 处插入 ',' 分隔两个回调。
+		out[j].Text = "MapFilter"
+		pos := out[c1].Pos
+		merged := make([]Token, 0, len(out)-3)
+		merged = append(merged, out[:c1]...)
+		merged = append(merged, tokOp(",", pos), tokSpace(" ", pos))
+		merged = append(merged, out[p2+1:]...)
+		out = merged
+		i = j // 从合并后的 MapFilter 继续，支持连续链逐对融合
+	}
+	return out
+}
+
+// topLevelCommaCount 统计 open/close 括号内顶层的逗号个数（跳过嵌套括号/方括号/花括号）。
+// 用于确认回调是单参数，避免把 .Map(f, x).Filter(g) 误融合成三参数调用。
+func topLevelCommaCount(toks []Token, open, close int) int {
+	d, n := 0, 0
+	for i := open + 1; i < close; i++ {
+		switch toks[i].Text {
+		case "(", "[", "{":
+			d++
+		case ")", "]", "}":
+			d--
+		case ",":
+			if d == 0 {
+				n++
+			}
+		}
+	}
+	return n
 }
 
 // collectListVars 收集所有「已提升为 list.List 的变量名」：声明/初始化/参数中
@@ -87,7 +168,7 @@ func collectListVars(toks []Token) map[string]bool {
 // xs.map(f).filter(g) 的 filter 接收者是上一环结果（已是 List），无需包装。
 // 复杂接收者（如 strings.Fields(x).map(f)）暂不处理——保持原样，不劣化。
 func wrapChainReceivers(in []Token, listVars map[string]bool) []Token {
-	chainSet := map[string]bool{"Map": true, "Filter": true, "Reduce": true, "Each": true}
+	chainSet := map[string]bool{"Map": true, "Filter": true, "Reduce": true, "Each": true, "MapFilter": true}
 	// 先标记需要包装的位置（接收者标识符下标 → 方法调用右括号下标）
 	type wrap struct{ recv, close int }
 	var wraps []wrap

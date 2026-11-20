@@ -235,22 +235,32 @@ func inferValueType(toks []Token, from, to int) string {
 			return buildAnonymousStructType(toks, from, close)
 		}
 	}
-	if to-from == 1 {
-		switch toks[from].Kind {
-		case String, Template:
-			return "string"
-		case Rune:
-			return "rune"
-		case Number:
-			if strings.ContainsAny(toks[from].Text, ".eEpP") {
-				return "float64"
+	// 单有效 token 的值（允许前后空白）：字面量常量 / 标识符。
+	// 值区间常含尾随空白（如 `a: age `），不能用 to-from==1 判断。
+	firstSig := nextSigIn(toks, from, to)
+	if firstSig >= 0 {
+		lastSig := prevSigIn(toks, to-1, from)
+		if lastSig == firstSig {
+			switch toks[firstSig].Kind {
+			case String, Template:
+				return "string"
+			case Rune:
+				return "rune"
+			case Number:
+				if strings.ContainsAny(toks[firstSig].Text, ".eEpP") {
+					return "float64"
+				}
+				return "int"
+			case Ident:
+				// 标识符（循环变量 i / 函数参数 / var 变量）：从声明推断类型。
+				if t := inferIdentType(toks, toks[firstSig].Text, firstSig); t != "" {
+					return t
+				}
 			}
-			return "int"
 		}
 	}
 	// 已是展开后的 struct 字面量 / 类型（嵌套对象被内层替换后的形态）。
 	// 必须先于 bool 扫描：内层 struct 的值里可能含 true/false，不能误判为 bool。
-	firstSig := nextSigIn(toks, from, to)
 	if firstSig >= 0 && toks[firstSig].is("struct") {
 		open := nextSigIn(toks, firstSig+1, to)
 		if open >= 0 && toks[open].Text == "{" {

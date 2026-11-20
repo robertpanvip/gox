@@ -150,6 +150,7 @@ func ReconcileImports(in []Token, module string) []Token {
 		{placeholder: "list", path: listImportPath(module)},
 		{placeholder: "gxvdom", path: "github.com/robertpanvip/gox/runtime/vdom"},
 		{placeholder: "gxscene", path: sceneImportPath(module)},
+		{placeholder: "Signal", path: signalImportPath(module)},
 		{placeholder: "strconv", path: "strconv"},
 		{placeholder: "fmt", path: "fmt"},
 	}
