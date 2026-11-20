@@ -13,15 +13,15 @@ import (
 
 // Server 是 GX 语言服务器。
 type Server struct {
-	in     io.Reader
-	out    io.Writer
-	docs   map[string]*document // uri -> 文档状态
+	in      io.Reader
+	out     io.Writer
+	docs    map[string]*document // uri -> 文档状态
 	checker *buildcheck.Checker
 }
 
 type document struct {
-	Text   string
-	Symbols *SymbolMap
+	Text         string
+	Symbols      *SymbolMap
 	SymbolsDirty bool
 }
 
@@ -297,7 +297,11 @@ func readMessage(r *bufio.Reader) (*RequestMessage, []byte, error) {
 		}
 		if strings.HasPrefix(strings.ToLower(line), "content-length:") {
 			v := strings.TrimSpace(line[len("content-length:"):])
-			length, _ = strconv.Atoi(v)
+			n, err := strconv.Atoi(v)
+			if err != nil || n < 0 {
+				return nil, nil, fmt.Errorf("invalid Content-Length %q", v)
+			}
+			length = n
 			seen = true
 		}
 		// 忽略其它头（Content-Type 等）
@@ -323,7 +327,9 @@ func writeMessage(w *bufio.Writer, v any) error {
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(w, "Content-Length: %d\r\n\r\n", len(data))
+	if _, err := fmt.Fprintf(w, "Content-Length: %d\r\n\r\n", len(data)); err != nil {
+		return err
+	}
 	_, err = w.Write(data)
 	return err
 }

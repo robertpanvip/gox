@@ -25,8 +25,8 @@ import (
 // Type 是 GX 类型层的最小类型表示。联合用 Members（长度 >=2）表达，
 // 非联合用 Name 表达；"any" / "unknown" 是特殊名字，表示无约束或未能推断。
 type Type struct {
-	Name    string  // 非联合类型名；联合时为空
-	Members []Type  // 非空表示联合类型
+	Name    string // 非联合类型名；联合时为空
+	Members []Type // 非空表示联合类型
 }
 
 // IsUnion 报告是否为联合类型。
@@ -67,8 +67,14 @@ func (t Type) Has(member string) bool {
 // value 是值的类型文本，untyped 表示该值是 Go 无类型常量（字面量 / const）。
 // 遵循 Go 可赋值规则：无类型常量可隐式转换到兼容的类型族。
 func (t Type) Accepts(value string, untyped bool) bool {
-	if t.Name == "any" || value == "" {
-		return true // any 或未知类型放过，避免误报
+	if t.Name == "any" {
+		return true // any 接受一切
+	}
+	if value == "" {
+		// 无法确认值类型时不应静默放过（M-3）：让调用方报出"无法确认类型"
+		// 而不是误判为兼容。实际调用路径（check/rules.go）已用 known() 预过滤，
+		// 这里收紧只影响未来可能遗漏该检查的新调用点。
+		return false
 	}
 	candidates := []Type{t}
 	if t.IsUnion() {
@@ -141,9 +147,9 @@ func isUnsignedType(s string) bool {
 	return false
 }
 
-func isFloatType(s string) bool    { return s == "float32" || s == "float64" }
-func isComplexType(s string) bool  { return s == "complex64" || s == "complex128" }
-func isStringType(s string) bool   { return s == "string" }
+func isFloatType(s string) bool   { return s == "float32" || s == "float64" }
+func isComplexType(s string) bool { return s == "complex64" || s == "complex128" }
+func isStringType(s string) bool  { return s == "string" }
 
 // Without 从类型中排除一个成员（用于 else 分支收窄）。
 // 非联合类型无法做有意义的排除，原样返回；联合排空后记为 never。
@@ -171,11 +177,11 @@ func (t Type) Without(member string) Type {
 
 // Symbol 是变量声明的符号：名字、声明类型、声明下标与可见作用域（token 下标区间）。
 type Symbol struct {
-	Name       string
-	Type       Type
-	DeclIdx    int
-	ScopeFrom  int
-	ScopeTo    int
+	Name      string
+	Type      Type
+	DeclIdx   int
+	ScopeFrom int
+	ScopeTo   int
 }
 
 // NarrowFact 表示在 token 下标 [From, To) 内，变量 Var 的有效类型被收窄为 Type。
@@ -194,13 +200,13 @@ type NarrowFact struct {
 // Guard 是一个已识别的 is 守卫，供 desugar 生成 comma-ok 断言使用。
 // 所有位置均为原始源码位置（transforms 保留 Pos），因此不受 desugar 改写的下标漂移影响。
 type Guard struct {
-	Pos      Pos      // if token 位置（GuardAt 的键、临时变量命名锚点）
-	EndPos   Pos      // 守卫块 '{' 位置（desugar 用它定位跳过点）
-	Recv     string   // 被守卫变量
-	RecvPos  Pos      // 被守卫变量位置（shadow 生成复用）
-	Target       Type     // 目标类型
-	TypeToks     []Token  // 目标类型原始 token（保留位置，供 emit / sourcemap）
-	ThenUsesRecv bool     // then 块内是否引用了 recv；false 时不注入 shadow 避免未使用错误
+	Pos          Pos     // if token 位置（GuardAt 的键、临时变量命名锚点）
+	EndPos       Pos     // 守卫块 '{' 位置（desugar 用它定位跳过点）
+	Recv         string  // 被守卫变量
+	RecvPos      Pos     // 被守卫变量位置（shadow 生成复用）
+	Target       Type    // 目标类型
+	TypeToks     []Token // 目标类型原始 token（保留位置，供 emit / sourcemap）
+	ThenUsesRecv bool    // then 块内是否引用了 recv；false 时不注入 shadow 避免未使用错误
 }
 
 // ElseShadow 描述一个 else 分支可注入的 shadow。
@@ -236,19 +242,19 @@ type funcRange struct{ from, to int }
 
 // Analysis 是一份源码经 GX 语义层分析后的完整产物。
 type Analysis struct {
-	n         int
-	symbols   []Symbol
+	n           int
+	symbols     []Symbol
 	facts       []NarrowFact
 	guards      map[posKey]Guard
 	elseShadows map[posKey]ElseShadow // else 块 '{' 位置 → 可注入的排除法 shadow
 	diags       []GXDiagnostic
-	funcRange []funcRange
+	funcRange   []funcRange
 	// posToIdx 把 GX 坐标（行列）映射到 token 下标，供 AST 侧查询。
 	// 构建时不覆盖：同一坐标保留最小下标（首个 token）。
-	posToIdx map[posKey]int
-	lineIdx  map[int][]lineEntry // 行号 → 该行的有效 token（按列升序）
-	sigs       []FuncSig          // 函数签名索引（参数/返回值联合类型），供 AST 侧调用/返回规则使用
-	namedTypes map[string]Type    // 命名类型别名表：type MyU = int|string → MyU: 联合
+	posToIdx   map[posKey]int
+	lineIdx    map[int][]lineEntry // 行号 → 该行的有效 token（按列升序）
+	sigs       []FuncSig           // 函数签名索引（参数/返回值联合类型），供 AST 侧调用/返回规则使用
+	namedTypes map[string]Type     // 命名类型别名表：type MyU = int|string → MyU: 联合
 }
 
 type lineEntry struct {
@@ -263,8 +269,8 @@ func Analyze(toks []Token) *Analysis {
 		guards:      map[posKey]Guard{},
 		elseShadows: map[posKey]ElseShadow{},
 		posToIdx:    map[posKey]int{},
-		lineIdx:    map[int][]lineEntry{},
-		namedTypes: map[string]Type{},
+		lineIdx:     map[int][]lineEntry{},
+		namedTypes:  map[string]Type{},
 	}
 	a.funcRange = findFuncRanges(toks)
 	a.collectNamedTypes(toks) // 必须先于符号收集：变量类型解析要查别名表
@@ -525,7 +531,8 @@ func (a *Analysis) collectNamedTypes(toks []Token) {
 		}
 		lineStart := j + 1
 		for k := j + 1; k <= close; k++ {
-			if k == close || toks[k].Kind == Newline {
+			// L-5：分组 type 既可按换行分隔，也可按分号分隔（同行写多条）。
+			if k == close || toks[k].Kind == Newline || toks[k].Text == ";" {
 				nameIdx := nextSig(toks, lineStart)
 				if nameIdx >= 0 && nameIdx < k && toks[nameIdx].Kind == Ident {
 					t := nextSig(toks, nameIdx+1)
@@ -746,17 +753,24 @@ func (a *Analysis) collectSymbols(toks []Token) {
 	}
 
 	// := 短变量：类型未知（联合通常来自显式声明 / 参数，够用）。
+	// L-3：`a, b := ...` 要收集逗号前的每个名字，而非仅紧邻 := 的最后一个。
 	for i := 0; i < len(toks); i++ {
 		if toks[i].Text != ":=" {
 			continue
 		}
+		ff, ft := a.scopeOf(i)
 		p := prevSig(toks, i-1)
-		if p >= 0 && toks[p].Kind == Ident {
-			ff, ft := a.scopeOf(i)
+		for p >= 0 && toks[p].Kind == Ident {
 			a.symbols = append(a.symbols, Symbol{
 				Name: toks[p].Text, Type: Type{Name: "unknown"}, DeclIdx: p,
 				ScopeFrom: ff, ScopeTo: ft,
 			})
+			q := prevSig(toks, p-1)
+			if q >= 0 && toks[q].Text == "," {
+				p = prevSig(toks, q-1)
+			} else {
+				break
+			}
 		}
 	}
 }
@@ -765,9 +779,9 @@ func (a *Analysis) collectParams(toks []Token, open, close, ff, ft int) {
 	segStart := open + 1
 	for k := open + 1; k <= close; k++ {
 		if k == close || toks[k].Text == "," {
-		seg := parseParamSeg(toks, segStart, k)
-		if seg.nameIdx >= 0 {
-			typ := a.typeFromTokens(toks, seg.typeStart, typeRangeEnd(toks, seg.typeStart))
+			seg := parseParamSeg(toks, segStart, k)
+			if seg.nameIdx >= 0 {
+				typ := a.typeFromTokens(toks, seg.typeStart, typeRangeEnd(toks, seg.typeStart))
 				a.symbols = append(a.symbols, Symbol{
 					Name: toks[seg.nameIdx].Text, Type: typ, DeclIdx: seg.nameIdx,
 					ScopeFrom: ff, ScopeTo: ft,
@@ -879,11 +893,11 @@ func (a *Analysis) collectGuards(toks []Token) {
 		if _, ok := parseGuardAt(toks, i); !ok {
 			continue
 		}
-		// else-if 的 if 会在链首那次循环里一并处理，跳过。
-		if p := prevSig(toks, i-1); p >= 0 && toks[p].is("else") {
-			processed[i] = true
-			continue
-		}
+		// else-if 的 if：若链首是守卫，processChain 会在遍历链时把本 if 标记
+		// processed，上面的循环条件已跳过——能走到这里的 else-if 守卫必然
+		// 属于「链首非守卫」的情况（如 `if c {} else if v is T {}`），此前
+		// 被无条件 skip 导致守卫从未处理、残留 is 被误报（H-7）。这里把它
+		// 作为一条新链的起点单独处理。
 		a.processChain(toks, i, processed)
 	}
 }

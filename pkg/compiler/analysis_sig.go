@@ -182,11 +182,26 @@ func funcParamParens(toks []Token, fi int) (open, close int, ok bool) {
 }
 
 // parseSigParams 解析参数段为类型列表（联合完整保留，展开命名别名）。
+// 按顶层逗号切段，跳过嵌套括号/方括号/花括号内的逗号——否则函数类型参数
+// func(int, int) 内部的逗号会被误当参数分隔，把签名切碎（H-2 多参数回调）。
 func (a *Analysis) parseSigParams(toks []Token, open, close int) []Type {
 	var out []Type
 	segStart := open + 1
+	depth := 0
 	for k := open + 1; k <= close; k++ {
-		if k == close || toks[k].Text == "," {
+		if k < close {
+			switch toks[k].Text {
+			case "(", "[", "{":
+				depth++
+			case ")", "]", "}":
+				depth--
+			case ",":
+				if depth > 0 {
+					continue // 嵌套内的逗号不切段
+				}
+			}
+		}
+		if k == close || (toks[k].Text == "," && depth == 0) {
 			seg := parseParamSeg(toks, segStart, k)
 			if seg.typeStart >= 0 {
 				te := typeRangeEnd(toks, seg.typeStart)

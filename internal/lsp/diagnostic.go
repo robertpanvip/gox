@@ -48,7 +48,7 @@ func toGxDiagnostics(ds []check.Diagnostic) []Diagnostic {
 		p := Position{Line: line, Character: col}
 		code := d.Code
 		out = append(out, Diagnostic{
-			Range: Range{Start: p, End: p},
+			Range:    Range{Start: p, End: p},
 			Severity: 1, Source: "gox", Code: &code,
 			Message: d.Code + ": " + d.Message,
 		})

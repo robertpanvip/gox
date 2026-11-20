@@ -2,6 +2,9 @@ package compiler
 
 import (
 	"fmt"
+	"go/token"
+	"go/types"
+	"regexp"
 	"strconv"
 	"strings"
 )
@@ -156,13 +159,11 @@ func genEnumCode(info enumInfo, memberNames []string) string {
 		fmt.Fprintf(&b, "func (x %s) String() string {\n\tswitch x {\n", t)
 		for i, m := range info.members {
 			cn := p + upperFirst(m.name)
-			// 位标志（值含 <<）的组合不单独列 case，交给 default 返回数字
-			if strings.Contains(valueCode(m.value), "<<") {
-				continue
-			}
 			if duplicateValue[i] {
-				continue // 别名：跳过重复 case
+				continue // 值与其他成员相同（别名）：跳过重复 case，规范名取首个
 			}
+			// 每个成员（含位标志 read=1<<iota 及其省略值的后续成员、乃至组合值
+			// rw=read|write）都是独立的具名常量，值互异时都应有自己的 case。
 			fmt.Fprintf(&b, "\tcase %s:\n\t\treturn %s\n", cn, strconv.Quote(memberNames[i]))
 		}
 		b.WriteString("\t}\n\treturn strconv.Itoa(int(x))\n}\n")
@@ -201,15 +202,31 @@ func genEnumCode(info enumInfo, memberNames []string) string {
 	return b.String()
 }
 
+// iotaIdent 匹配常量表达式里的独立 iota 标识符（不误伤 myiota 等）。
+var iotaIdent = regexp.MustCompile(`\biota\b`)
+
+// evalIntConst 求值一个整数常量表达式（iota 已替换为字面量），返回规范值串；
+// 求值失败返回空串。用规范值而非表达式文本作键，才能识别 "1<<1" 与 "2" 同值、
+// 以及 "=1 后省略成员" 与前面成员同值——这类同值成员若都生成 String() case
+// 会导致 Go 编译器报 duplicate case。
+func evalIntConst(expr string) string {
+	tv, err := types.Eval(token.NewFileSet(), nil, token.NoPos, expr)
+	if err != nil || tv.Value == nil {
+		return ""
+	}
+	return tv.Value.String()
+}
+
 // computeDuplicateValues 返回每个成员是否与更早成员「值相同」。
 //
-// 整数枚举：以显式值表达式（去空白）为键。省略值的成员靠 iota 自增，值各不相同，
-// 用下标构造唯一键避免误判；只有显式写了相同表达式（如 =1 两次）才算重复。
+// 整数枚举：按 Go 的 const 规则计算每个成员的实际值——显式值更新 lastExpr，
+// 省略值重复 lastExpr；表达式中的 iota 用成员在 const 组内的行号（从 0）代入，
+// 再用 go/types 求值为规范常量串作键。值相同者视为别名，String() 只保留首个 case。
 // 字符串枚举：以显式字符串值（含引号）为键；省略值用成员名引号形式。
-// 重复者视为别名：规范名取第一个，String() 的 case 只保留第一个。
 func computeDuplicateValues(info enumInfo, memberNames []string) []bool {
 	out := make([]bool, len(info.members))
 	seen := map[string]bool{}
+	lastExpr := "iota"
 	for i, m := range info.members {
 		var key string
 		val := strings.TrimSpace(valueCode(m.value))
@@ -219,11 +236,16 @@ func computeDuplicateValues(info enumInfo, memberNames []string) []bool {
 			}
 			key = val
 		} else {
-			if val == "" {
-				// 无值成员（iota / 重复上一表达式）值互不相同，构造唯一键
-				key = "\x00iota#" + strconv.Itoa(i)
+			if val != "" {
+				lastExpr = val
+			}
+			// iota 为 const 组内从 0 开始的行序号；本生成器每成员占一行，故用 i。
+			resolved := iotaIdent.ReplaceAllString(lastExpr, strconv.Itoa(i))
+			if norm := evalIntConst(resolved); norm != "" {
+				key = norm
 			} else {
-				key = val
+				// 无法求值（含非 Go 常量表达式）时退化为解析后的文本，保守不合并。
+				key = "\x00expr#" + resolved
 			}
 		}
 		if seen[key] {

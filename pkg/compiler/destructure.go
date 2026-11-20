@@ -30,11 +30,11 @@ type destructName struct {
 
 // destructure 是一处对象解构声明。
 type destructure struct {
-	open, close int          // '{' / '}' 下标
-	from, to    int          // 整体替换区间 [from, to)
+	open, close int // '{' / '}' 下标
+	from, to    int // 整体替换区间 [from, to)
 	names       []destructName
-	rhsFrom     int          // 右值表达式 token 起点
-	useVar      bool         // true → 生成 var name = p.name；false → name := p.name
+	rhsFrom     int  // 右值表达式 token 起点
+	useVar      bool // true → 生成 var name = p.name；false → name := p.name
 }
 
 // destructError 是解构校验失败的错误，携带 GX 坐标。
@@ -272,8 +272,19 @@ func expandDestructures(in []Token) ([]Token, error) {
 				rhs = append(rhs, toks)
 			}
 		}
-		// 生成 name := p.name / var name = p.name，每个字段一行
+		// M-6：复杂右值（非单个标识符）只求值一次——先存临时变量，各字段从它取。
+		// 简单标识符（如 p）重复引用无副作用，保留原样以保持生成代码简洁。
+		base := rhs
 		var gen []Token
+		if len(rhs) != 1 || rhs[0].Kind != Ident {
+			tmp := fmt.Sprintf("__gx_ds_%d_%d", d.rhsFrom, len(d.names))
+			tp := rhs[0].Pos
+			gen = append(gen, tokIdent(tmp, tp), tokSpace(" ", tp), tokOp(":=", tp), tokSpace(" ", tp))
+			gen = append(gen, rhs...)
+			gen = append(gen, tokNewline(tp))
+			base = []Token{tokIdent(tmp, tp)}
+		}
+		// 生成 name := p.name / var name = p.name，每个字段一行
 		for _, nm := range d.names {
 			p := nm.pos
 			if d.useVar {
@@ -286,7 +297,7 @@ func expandDestructures(in []Token) ([]Token, error) {
 				gen = append(gen, tokOp(":=", p))
 			}
 			gen = append(gen, tokSpace(" ", p))
-			gen = append(gen, rhs...)
+			gen = append(gen, base...)
 			gen = append(gen, tokOp(".", p), tokIdent(nm.name, p), tokNewline(p))
 		}
 		out = append(out[:d.from], append(gen, out[d.to:]...)...)

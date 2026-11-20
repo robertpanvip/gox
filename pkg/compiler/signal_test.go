@@ -89,9 +89,9 @@ func main() {
 `
 	got := compileOK(t, "sig6.gx", src)
 	containsAll(t, got,
-		`Box{count: 1}`,       // 复合字段键不改写
-		`println(b.count)`,    // selector 不改写
-		`return count`,        // 函数参数不改写（保持裸标识符）
+		`Box{count: 1}`,    // 复合字段键不改写
+		`println(b.count)`, // selector 不改写
+		`return count`,     // 函数参数不改写（保持裸标识符）
 	)
 }
 
@@ -163,4 +163,54 @@ func main() { println(count()) }
 	if strings.Count(got, "runtime/signal") != 1 {
 		t.Errorf("signal 路径应只出现一次（复用已有 import）: %s", got)
 	}
+}
+
+// TestSignalRHSReads 回归 H-3：signal 声明/简单赋值/复合赋值右侧的裸 signal
+// 读取必须改写为调用式，否则类型/语义错误。
+func TestSignalRHSReads(t *testing.T) {
+	src := `package main
+func main() {
+	signal a = 1
+	signal b = a
+	signal c = 2
+	b = c
+	c += a
+	println(b(), c())
+}
+`
+	got := compileOK(t, "sigrhs.gx", src)
+	containsAll(t, got,
+		`var b = Signal.New(a())`,
+		`b(c())`,
+		`c(c() + a())`,
+	)
+}
+
+// TestSignalNoInitNotSwallowNext 回归 M-4：`signal x` 缺 '=' 时不得吞掉后续语句。
+func TestSignalNoInitNotSwallowNext(t *testing.T) {
+	src := `package main
+func main() {
+	signal x
+	println(1)
+}
+`
+	got := compileOK(t, "signoinit.gx", src)
+	containsAll(t, got, `var x any`, `println(1)`)
+	if strings.Contains(got, "Signal.New((") {
+		t.Errorf("不应把后续语句吞进 Signal.New: %s", got)
+	}
+}
+
+// TestSignalParamFirstInGroup 回归 L-6：`func f(a, b int)` 中逗号前的首参 a
+// 是 signal 同名时不得被误改写为 a()。
+func TestSignalParamFirstInGroup(t *testing.T) {
+	src := `package main
+func f(a, b int) { println(a, b) }
+func main() { signal a = 1; f(a, 2) }
+`
+	got := compileOK(t, "sigparam.gx", src)
+	if strings.Contains(got, "func f(a()") {
+		t.Errorf("函数参数 a 被误改写为 a(): %s", got)
+	}
+	containsAll(t, got, `f(a(), 2)`)
 }

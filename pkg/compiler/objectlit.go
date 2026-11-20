@@ -40,11 +40,11 @@ type objectLit struct {
 }
 
 type objField struct {
-	name     string
-	pos      Pos
-	valFrom  int // 值表达式 token 区间 [valFrom, valTo)
-	valTo    int
-	valType  string // 反推的值类型（延迟填充）
+	name    string
+	pos     Pos
+	valFrom int // 值表达式 token 区间 [valFrom, valTo)
+	valTo   int
+	valType string // 反推的值类型（延迟填充）
 }
 
 // collectStructTypes 扫描所有 `type X struct { ... }` 声明，建立 struct 字段结构表。

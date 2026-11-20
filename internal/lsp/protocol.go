@@ -52,7 +52,7 @@ type Location struct {
 // ---- initialize ----
 
 type InitializeParams struct {
-	RootURI  string `json:"rootUri"`
+	RootURI      string `json:"rootUri"`
 	Capabilities struct {
 	} `json:"capabilities"`
 }
@@ -63,13 +63,13 @@ type InitializeResult struct {
 }
 
 type ServerCapabilities struct {
-	TextDocumentSync         int                     `json:"textDocumentSync"` // 2 = incremental, 1 = full
-	DefinitionProvider       bool                    `json:"definitionProvider"`
-	HoverProvider            bool                    `json:"hoverProvider"`
-	CompletionProvider       *CompletionOptions      `json:"completionProvider,omitempty"`
-	DocumentSymbolProvider   bool                    `json:"documentSymbolProvider"`
-	RenameProvider           bool                    `json:"renameProvider"`
-	SemanticTokensProvider   *SemanticTokensOptions  `json:"semanticTokensProvider,omitempty"`
+	TextDocumentSync       int                    `json:"textDocumentSync"` // 2 = incremental, 1 = full
+	DefinitionProvider     bool                   `json:"definitionProvider"`
+	HoverProvider          bool                   `json:"hoverProvider"`
+	CompletionProvider     *CompletionOptions     `json:"completionProvider,omitempty"`
+	DocumentSymbolProvider bool                   `json:"documentSymbolProvider"`
+	RenameProvider         bool                   `json:"renameProvider"`
+	SemanticTokensProvider *SemanticTokensOptions `json:"semanticTokensProvider,omitempty"`
 }
 
 type CompletionOptions struct {
@@ -113,7 +113,7 @@ type DidOpenParams struct {
 }
 
 type DidChangeParams struct {
-	TextDocument VersionedTextDocumentIdentifier `json:"textDocument"`
+	TextDocument   VersionedTextDocumentIdentifier `json:"textDocument"`
 	ContentChanges []struct {
 		Text string `json:"text"`
 	} `json:"contentChanges"`
@@ -141,7 +141,7 @@ type MarkupContent struct {
 }
 
 type CompletionList struct {
-	IsIncomplete bool           `json:"isIncomplete"`
+	IsIncomplete bool             `json:"isIncomplete"`
 	Items        []CompletionItem `json:"items"`
 }
 

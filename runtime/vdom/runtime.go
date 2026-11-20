@@ -20,7 +20,7 @@ import (
 // CreateElement 的第一个参数区分：string 视为标签，其余（函数）视为组件。
 type VNode struct {
 	Tag       string
-	Component any            // 函数组件；非 nil 时本节点在 Render/Diff 阶段展开
+	Component any // 函数组件；非 nil 时本节点在 Render/Diff 阶段展开
 	Props     map[string]any
 	Children  []any
 
@@ -221,12 +221,12 @@ func sortedKeys(m map[string]any) []string {
 type PatchOp string
 
 const (
-	OpSetText    PatchOp = "set-text"     // 文本节点内容变化
-	OpReplace    PatchOp = "replace"      // 节点类型不同，整体替换
-	OpSetProp    PatchOp = "set-prop"     // 属性新增/修改
-	OpRemoveProp PatchOp = "remove-prop"  // 属性删除
-	OpAppend     PatchOp = "append"       // 新增子节点
-	OpRemove     PatchOp = "remove"       // 删除多余子节点
+	OpSetText    PatchOp = "set-text"    // 文本节点内容变化
+	OpReplace    PatchOp = "replace"     // 节点类型不同，整体替换
+	OpSetProp    PatchOp = "set-prop"    // 属性新增/修改
+	OpRemoveProp PatchOp = "remove-prop" // 属性删除
+	OpAppend     PatchOp = "append"      // 新增子节点
+	OpRemove     PatchOp = "remove"      // 删除多余子节点
 )
 
 // Patch 是一条补丁。Path 是自根节点的子节点索引路径，如 []int{0, 1}。

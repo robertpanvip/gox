@@ -92,6 +92,8 @@ const (
 )
 func (x Perm) String() string {
 	switch x {
+	case PermRead:
+		return "read"
 	case PermWrite:
 		return "write"
 	case PermExec:

@@ -148,3 +148,122 @@ func TestEffectCounterAtomic(t *testing.T) {
 		t.Fatalf("effect runs = %d, want 51", got)
 	}
 }
+
+func TestComputedCyclePanicsRecoverably(t *testing.T) {
+	// 回归 B-2：computed 自引用曾导致不可 recover 的 stack overflow；
+	// 现在应立即 panic 出可读错误，且可被 recover。
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("循环依赖应 panic")
+		}
+		msg, _ := r.(string)
+		if msg == "" || !containsChineseSubstr(msg, "循环依赖") {
+			t.Fatalf("panic 信息应说明循环依赖, got: %v", r)
+		}
+	}()
+	var c Signal[int]
+	c = Computed(func() int { return c() + 1 })
+	_ = c()
+}
+
+func TestComputedMutualCyclePanicsRecoverably(t *testing.T) {
+	// 间接环 a→b→a 同样应被检测。
+	defer func() {
+		if recover() == nil {
+			t.Fatal("相互循环依赖应 panic")
+		}
+	}()
+	var a, b Signal[int]
+	a = Computed(func() int { return b() + 1 })
+	b = Computed(func() int { return a() + 1 })
+	_ = a()
+}
+
+func TestComputedConcurrentReadComputesOnce(t *testing.T) {
+	// 回归 H-9：并发读同一个被标脏的 computed，f() 对每个脏周期只应执行一次，
+	// 且不能因其它 goroutine 正在重算而误判为循环依赖 panic。
+	src := New(1)
+	var calls int64
+	doubled := Computed(func() int {
+		atomic.AddInt64(&calls, 1)
+		return src() * 2
+	})
+	const readers = 16
+	var wg sync.WaitGroup
+	for i := 0; i < readers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if got := doubled(); got != 2 {
+				t.Errorf("doubled() = %d, want 2", got)
+			}
+		}()
+	}
+	wg.Wait()
+	if got := atomic.LoadInt64(&calls); got != 1 {
+		t.Fatalf("compute calls after concurrent first read = %d, want 1", got)
+	}
+
+	// 写脏后再并发读：仍只重算一次。
+	src(5)
+	atomic.StoreInt64(&calls, 0)
+	for i := 0; i < readers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if got := doubled(); got != 10 {
+				t.Errorf("doubled() = %d, want 10", got)
+			}
+		}()
+	}
+	wg.Wait()
+	if got := atomic.LoadInt64(&calls); got != 1 {
+		t.Fatalf("compute calls after concurrent invalidated read = %d, want 1", got)
+	}
+}
+
+func TestConcurrentEffectsIsolatedDeps(t *testing.T) {
+	// 回归 H-8：两个 goroutine 各自建立 effect 依赖，观察者栈必须隔离——
+	// 写 B 只应触发 B 的 effect，不得因共享全局 observer 而登记到 A 的 effect。
+	a := New(0)
+	b := New(0)
+	var runsA, runsB int64
+	ready := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		Effect(func() { atomic.AddInt64(&runsA, 1); _ = a() })
+		<-ready
+	}()
+	go func() {
+		defer wg.Done()
+		Effect(func() { atomic.AddInt64(&runsB, 1); _ = b() })
+		<-ready
+	}()
+	close(ready)
+	wg.Wait()
+
+	atomic.StoreInt64(&runsA, 0)
+	atomic.StoreInt64(&runsB, 0)
+	b(1)
+	if got := atomic.LoadInt64(&runsA); got != 0 {
+		t.Fatalf("effect A ran %d times on b write, want 0 (deps crossed goroutines)", got)
+	}
+	if got := atomic.LoadInt64(&runsB); got != 1 {
+		t.Fatalf("effect B ran %d times on b write, want 1", got)
+	}
+}
+
+func containsChineseSubstr(s, sub string) bool {
+	if len(sub) == 0 || len(s) < len(sub) {
+		return false
+	}
+	for i := 0; i+len(sub) <= len(s); i++ {
+		if s[i:i+len(sub)] == sub {
+			return true
+		}
+	}
+	return false
+}

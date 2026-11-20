@@ -108,9 +108,19 @@ func rewriteSignals(toks []Token, sigs map[string]bool) []Token {
 		// 1) signal 声明：signal name = expr → var name = Signal.New(expr)
 		if t.is("signal") {
 			if j := nextSig(toks, i+1); j >= 0 && toks[j].Kind == Ident && !isGoKeyword(toks[j].Text) {
+				// M-4：必须有显式 `=`。否则 `signal x` 的 nextSig 会指向后续语句，
+				// 把下一条语句吞进 Signal.New(...)。无 `=` 时只降级为 `var name`，
+				// 不消费后续 token（交给主循环原样输出）。
+				eq := nextSig(toks, j+1)
+				if eq < 0 || toks[eq].Text != "=" {
+					// 无初值：降级为 var name any（合法 Go），不吞后续语句。
+					out = append(out, tokIdent("var", t.Pos), tokSpace(" ", t.Pos), tokIdent(toks[j].Text, t.Pos),
+						tokSpace(" ", t.Pos), tokIdent("any", t.Pos))
+					i = j
+					continue
+				}
 				out = append(out, tokIdent("var", t.Pos), tokSpace(" ", t.Pos), tokIdent(toks[j].Text, t.Pos))
 				// 找 `=` 与表达式边界
-				eq := nextSig(toks, j+1)
 				end := signalExprEnd(toks, eq+1)
 				out = append(out, tokSpace(" ", t.Pos), tokOp("=", t.Pos), tokSpace(" ", t.Pos))
 				out = append(out, signalPkgToken(t.Pos), tokOp(".", t.Pos), tokIdent("New", t.Pos), tokOp("(", t.Pos))
@@ -119,9 +129,8 @@ func rewriteSignals(toks []Token, sigs map[string]bool) []Token {
 				for k < end && toks[k].Kind == Space {
 					k++
 				}
-				for ; k < end; k++ {
-					out = append(out, toks[k])
-				}
+				// 右侧表达式里的裸 signal 读取也要改写（H-3）：signal b = a → Signal.New(a())
+				out = append(out, rewriteSignalReads(toks[k:end], sigs)...)
 				out = append(out, tokOp(")", t.Pos))
 				i = end - 1
 				continue
@@ -194,9 +203,8 @@ func rewriteSignals(toks []Token, sigs map[string]bool) []Token {
 				for k < end && toks[k].Kind == Space {
 					k++
 				}
-				for ; k < end; k++ {
-					out = append(out, toks[k])
-				}
+				// 右侧表达式里的裸 signal 读取改写：a += b → a(a() + b())
+				out = append(out, rewriteSignalReads(toks[k:end], sigs)...)
 				out = append(out, tokOp(")", t.Pos))
 				i = end - 1
 				continue
@@ -222,9 +230,8 @@ func rewriteSignals(toks []Token, sigs map[string]bool) []Token {
 				for k < end && toks[k].Kind == Space {
 					k++
 				}
-				for ; k < end; k++ {
-					out = append(out, toks[k])
-				}
+				// 右侧表达式里的裸 signal 读取改写：a = b → a(b())
+				out = append(out, rewriteSignalReads(toks[k:end], sigs)...)
 				out = append(out, tokOp(")", t.Pos))
 				i = end - 1
 				continue
@@ -234,6 +241,43 @@ func rewriteSignals(toks []Token, sigs map[string]bool) []Token {
 			continue
 		}
 
+		out = append(out, t)
+	}
+	return out
+}
+
+// rewriteSignalReads 改写一段表达式 token 里的裸 signal 读取 name → name()。
+// 用于被整段拷贝出主循环的右侧表达式（signal 声明 / 简单赋值 / 复合赋值），
+// 这些片段不会经过 rewriteSignals 主循环的读改写，需在此补上（H-3）。
+// 排除规则与主循环一致：selector 右侧、复合字段键、已是调用、声明目标。
+func rewriteSignalReads(seg []Token, sigs map[string]bool) []Token {
+	out := make([]Token, 0, len(seg))
+	for i := range seg {
+		t := seg[i]
+		if t.Kind == Ident && sigs[t.Text] {
+			// selector 右侧 obj.name
+			if p := prevSig(seg, i-1); p >= 0 && seg[p].Text == "." {
+				out = append(out, t)
+				continue
+			}
+			// 复合字段键 {name: ...}
+			if n := nextSig(seg, i+1); n >= 0 && seg[n].Text == ":" {
+				out = append(out, t)
+				continue
+			}
+			// 声明目标 name := / name =（表达式片段内一般不会出现，保守排除）
+			if n := nextSig(seg, i+1); n >= 0 && (seg[n].Text == ":=" || seg[n].Text == "=") {
+				out = append(out, t)
+				continue
+			}
+			// 已是调用 name(...) 不重复改写
+			if n := nextSig(seg, i+1); n >= 0 && seg[n].Text == "(" {
+				out = append(out, t)
+				continue
+			}
+			out = append(out, t, tokOp("(", t.Pos), tokOp(")", t.Pos))
+			continue
+		}
 		out = append(out, t)
 	}
 	return out
@@ -278,9 +322,14 @@ func isSignalDeclTarget(toks []Token, i int) bool {
 // 其前是 func/函数名，或最近处于 struct{...} 块内，则视为声明区。
 // 同时用「i 后紧跟类型标识符」排除误伤（读表达式后通常跟运算符/分隔符）。
 func inDeclZone(toks []Token, i int) bool {
-	// 名字后紧跟类型标识符 → 可能是声明；结合左侧上下文确认
+	// 名字后紧跟「类型标识符」「逗号」「右括号」才可能是参数声明；
+	// 结合左侧括号上下文（func 定义 vs 调用）最终确认。
+	// 逗号/右括号是为 `func f(a, b int)` 的首参 a（后跟逗号）放宽（L-6）。
 	n := nextSig(toks, i+1)
-	if n < 0 || toks[n].Kind != Ident || isGoKeyword(toks[n].Text) {
+	if n < 0 {
+		return false
+	}
+	if !(toks[n].Kind == Ident && !isGoKeyword(toks[n].Text)) && toks[n].Text != "," && toks[n].Text != ")" {
 		return false
 	}
 	// 向左找最近的语句边界内的 '(' 或 '{'

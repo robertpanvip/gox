@@ -516,3 +516,126 @@ func main() {
 		t.Errorf("应保留 xs.Map 链式调用:\n%s", res.GoSource)
 	}
 }
+
+func TestCompileStageAllTransforms(t *testing.T) {
+	// 回归：CompileStage("all") 曾因 toks 被 := 遮蔽而原样输出，所有 transform 丢失。
+	src := `package main
+func f() { g := x => x + 1; println(g(1)) }
+`
+	out, err := CompileStage(src, "all")
+	if err != nil {
+		t.Fatalf("CompileStage(all) err: %v", err)
+	}
+	if !strings.Contains(out, "func(x int) int") {
+		t.Errorf("all 阶段应转译 lambda，got:\n%s", out)
+	}
+	if strings.Contains(out, "=>") {
+		t.Errorf("all 阶段不应残留 =>:\n%s", out)
+	}
+}
+
+func TestEnumOmittedValueAfterConstantDeduplicated(t *testing.T) {
+	// 回归 B-1：显式常量值后省略成员，Go const 规则会重复该常量值，
+	// 两者同值，String() 只能生成一个 case，否则 go build 报 duplicate case。
+	src := `package main
+pub enum E {
+    a = 1
+    b
+}
+func main() { println(EA.String()) }
+`
+	res, err := CompileSource(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(res.GoSource, "case EB:") {
+		t.Errorf("省略成员 b 与 a 同值，不应生成重复 case EB:\n%s", res.GoSource)
+	}
+	if strings.Count(res.GoSource, "case EA:") != 1 {
+		t.Errorf("规范名 case EA 应恰好一个:\n%s", res.GoSource)
+	}
+	if err := res.Validate(); err != nil {
+		t.Fatalf("生成代码语法无效: %v", err)
+	}
+}
+
+func TestEnumFlagMembersHaveStringCase(t *testing.T) {
+	// 回归 M-7：位标志定义（read = 1<<iota）及其省略值的后续成员都应有 String case。
+	src := `package main
+pub enum F {
+    read = 1 << iota
+    write
+}
+func main() { println(FRead.String(), FWrite.String()) }
+`
+	res, err := CompileSource(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []string{"case FRead:", "case FWrite:"} {
+		if !strings.Contains(res.GoSource, c) {
+			t.Errorf("位标志成员应有 String case %s:\n%s", c, res.GoSource)
+		}
+	}
+	if err := res.Validate(); err != nil {
+		t.Fatalf("生成代码语法无效: %v", err)
+	}
+}
+
+func TestStructSharedFieldNamesProtected(t *testing.T) {
+	// 回归 H-4：struct { a, b int } 的两个字段名都要受保护，
+	// 否则 t.b 会被 transformExternal 误大写为 t.B。
+	src := `package main
+type T struct { a, b int }
+func main() { var t T; println(t.a, t.b) }
+`
+	got := compileOK(t, "structfields.gx", src)
+	if strings.Contains(got, "t.B") {
+		t.Errorf("字段 b 被误大写:\n%s", got)
+	}
+	containsAll(t, got, `t.a, t.b`)
+}
+
+func TestImportAliasNotShadowedByLocal(t *testing.T) {
+	// 回归 H-5：局部变量名恰好是运行时占位别名时，不能被遮蔽。
+	src := `package main
+func main() {
+	list := "hi"
+	xs := []int{1, 2}
+	ys := xs.map(x => x * 2)
+	println(list, len(ys))
+}
+`
+	got := compileOK(t, "shadowlist.gx", src)
+	// 集合提升必须使用无冲突别名（list2 等），不能是被遮蔽的 list
+	if strings.Contains(got, "list.List[") {
+		t.Errorf("集合包名被局部变量 list 遮蔽:\n%s", got)
+	}
+	containsAll(t, got, `list := "hi"`, `.List[int]`)
+}
+
+func TestRestoreRefsSkipsLocalShadow(t *testing.T) {
+	// 回归 M-5：与 pub 同名的局部变量不得被 restoreRefs 大写。
+	src := `package main
+pub var foo int
+func f() { foo := 2; println(foo) }
+func main() { f(); println(foo) }
+`
+	got := compileOK(t, "localshadow.gx", src)
+	containsAll(t, got, `var Foo int`, `foo := 2`, `println(foo)`, `println(Foo)`)
+}
+
+func TestSelectorNotProtectedByLocalParam(t *testing.T) {
+	// 回归 L-7：局部参数名 name 不应保护 selector 右侧 o.name，
+	// 它是外部 struct 字段，应还原为大写 Name。
+	src := `package main
+func f(name int) { println(name) }
+func main() {
+	var o = struct{ Name int }{1}
+	println(o.name)
+	f(1)
+}
+`
+	got := compileOK(t, "selectorlocal.gx", src)
+	containsAll(t, got, `o.Name`)
+}

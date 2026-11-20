@@ -51,30 +51,36 @@ func collectUnionGuards(toks []Token) []unionGuard {
 		if !toks[i].is("func") {
 			continue
 		}
-		// 找参数列表的 '('，可能先有接收者 (r T)。
+		// 定位参数列表的 '('，区分三种 func：
+		//  1) func name(...)       —— j 是函数名，open 在其后；
+		//  2) func (r T) name(...) —— j 是接收者 '('，name 后才是参数 '('；
+		//  3) func(...)            —— 匿名函数，j 本身就是参数 '('（M-2）。
 		j := nextSig(toks, i+1)
 		if j < 0 {
 			continue
 		}
-		if toks[j].Text == "(" {
-			recvClose := matchDelim(toks, j, "(", ")")
-			after := nextSig(toks, recvClose+1)
-			if after >= 0 && toks[after].Kind == Ident {
-				// 方法：after 是方法名，再后面是参数的 '('
-				j = nextSig(toks, after+1)
-			} else {
-				// 匿名函数 func(...)：
-				j = -1
-				// 直接把 j 当作参数括号
-				j = recvClose + 1 // 占位，稍后单列处理
-			}
-		}
-		// 定位参数 '('
 		var open int
 		if toks[j].Text == "(" {
-			open = j
-		} else if j >= 0 {
-			open = nextSig(toks, j+1)
+			close1 := matchDelim(toks, j, "(", ")")
+			after := nextSig(toks, close1+1)
+			paren := -1
+			if after >= 0 && toks[after].Kind == Ident && !isGoKeyword(toks[after].Text) {
+				// 接收者后跟方法名：再后面是参数 '('
+				candidate := nextSig(toks, after+1)
+				if candidate >= 0 && toks[candidate].Text == "(" {
+					paren = candidate
+				}
+			}
+			if paren >= 0 {
+				open = paren // 方法
+			} else {
+				open = j // 匿名函数：首个 '(' 就是参数列表
+			}
+		} else if toks[j].Kind == Ident && !isGoKeyword(toks[j].Text) {
+			candidate := nextSig(toks, j+1)
+			if candidate >= 0 && toks[candidate].Text == "(" {
+				open = candidate // 普通函数
+			}
 		}
 		if open < 0 || open >= len(toks) || toks[open].Text != "(" {
 			continue
@@ -88,7 +94,7 @@ func collectUnionGuards(toks []Token) []unionGuard {
 		if brace < 0 {
 			continue
 		}
-		funcName := "?"
+		funcName := "anonymous" // 匿名函数（含 M-2 的 func(v int|string)）
 		if nameIdx := funcNameAt(toks, i); nameIdx >= 0 {
 			funcName = toks[nameIdx].Text
 		}

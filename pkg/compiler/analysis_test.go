@@ -392,3 +392,21 @@ func main() { f(1) }
 		t.Errorf("嵌套联合应扁平化为 int|int64|string, got %q", got)
 	}
 }
+
+func TestElseIfGuardWithNonGuardHead(t *testing.T) {
+	// 回归 H-7：`if c {} else if v is T {}` 链首非守卫时，else-if 守卫仍须处理，
+	// 不得误报 "is 守卫仅支持简单形态"。
+	src := `package main
+func f(v any) {
+	if v == nil { println(0) } else if v is int { println(v + 1) }
+}
+func main() { f(1) }
+`
+	res, err := CompileSource(src)
+	if err != nil {
+		t.Fatalf("合法 else-if 守卫被拒: %v", err)
+	}
+	if err := res.Validate(); err != nil {
+		t.Fatalf("生成代码语法无效: %v\n%s", err, res.GoSource)
+	}
+}

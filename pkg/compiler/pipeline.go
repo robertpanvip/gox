@@ -16,7 +16,7 @@ type Result struct {
 	SourceMap *sourcemap.SourceMap
 	// Analysis 是 desugar 之前 GX 语义层的产物（符号表 / 收窄 / 诊断）。
 	// 供 CLI / LSP 消费 GX 原生诊断；仅 Compile 路径填充，CompileStage 为 nil。
-	Analysis  *Analysis
+	Analysis *Analysis
 }
 
 // Validate 用 Go 解析器校验生成源码的语法（不检查类型/符号）。
@@ -60,7 +60,7 @@ func CompileWithModule(file, src, module string) (*Result, error) {
 	// Signal 语法糖：signal/let 声明消除 + signal 变量读写改写为调用式。
 	// 放在 Analyze 之前，让语义层看到标准 Go（signal/let 已消除、读写已是调用）。
 	toks = transformSignals(toks)
-	analysis := Analyze(toks) // desugar 之前的 GX 语义层（联合未擦除）
+	analysis := Analyze(toks)    // desugar 之前的 GX 语义层（联合未擦除）
 	names := map[string]string{} // 小写原名 → 大写导出名（自身 pub 符号）
 	toks = expandDefaults(toks, defaultDefs)
 	toks = transformLambdas(toks, analysis)
@@ -180,6 +180,10 @@ func CompileStage(src, stage string) (string, error) {
 		toks = restoreRefs(toks, names)
 		toks = transformExternal(toks, scope, names)
 		toks = transformCompositeFields(toks, scope)
+		// all 分支内 toks 被 := 重新声明（见上方 stripDefaults），必须在此作用域内
+		// 直接 emit 并返回，否则外层 emit 拿到的是未改写的原始 token。
+		out, _ := emit(toks, "<stage>")
+		return out, nil
 	default:
 		return "", fmt.Errorf("unknown stage %q (want lex/union/typeguard/enum/jsx/pub/collections/external/all)", stage)
 	}
