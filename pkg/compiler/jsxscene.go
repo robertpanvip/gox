@@ -50,6 +50,7 @@ type sceneGetter struct {
 	expr string
 	pos  Pos
 	call []Token // 非空时优先于 expr，用于组件调用 func() any { return <call> }
+	raw  bool    // 为 true 时 call 本身就是一个 func() any getter（如 BranchGetter），不再包 return
 }
 
 // componentNameTokens 发射组件名（支持带点的限定名，如 ui.Card）。
@@ -188,7 +189,7 @@ func walkScene(n *jsxNode, ops *[]sceneOp, getters *[]sceneGetter, slotCounter *
 			s := *slotCounter
 			*slotCounter++
 			*ops = append(*ops, sceneOp{code: "OpDynAttr", key: a.name, slot: s})
-			*getters = append(*getters, sceneGetter{a.value, a.pos, nil})
+			*getters = append(*getters, sceneGetter{expr: a.value, pos: a.pos})
 		}
 	}
 
@@ -211,7 +212,7 @@ func walkSceneChildren(n *jsxNode, ops *[]sceneOp, getters *[]sceneGetter, slotC
 			s := *slotCounter
 			*slotCounter++
 			*ops = append(*ops, sceneOp{code: "OpDynChild", slot: s})
-			*getters = append(*getters, sceneGetter{c.text, c.pos, nil})
+			*getters = append(*getters, sceneGetter{expr: c.text, pos: c.pos})
 		case childElement:
 			if c.node.component {
 				// 复合组件：发射 OpComp 插槽，getter 是一次组件调用。
@@ -222,8 +223,68 @@ func walkSceneChildren(n *jsxNode, ops *[]sceneOp, getters *[]sceneGetter, slotC
 			} else {
 				walkScene(c.node, ops, getters, slotCounter, ctx)
 			}
+		case childCond:
+			// 条件分支：发射 OpBranch 插槽，getter 是 gxscene.BranchGetter(...)。
+			s := *slotCounter
+			*slotCounter++
+			*ops = append(*ops, sceneOp{code: "OpBranch", slot: s})
+			*getters = append(*getters, sceneGetter{pos: c.cond.pos, call: branchGetterTokens(c.cond, ctx), raw: true})
 		}
 	}
+}
+
+// branchGetterTokens 为条件分支生成 getter 表达式：
+//
+//	gxscene.BranchGetter(
+//	    func() int { if <test0> { return 0 }; if <test1> { return 1 }; return 2 },
+//	    func() *gxscene.Instance { return <branch0 子树> },
+//	    func() *gxscene.Instance { return <branch1 子树> },
+//	    ...
+//	)
+//
+// 最后一条无 test 的分支是 else 兜底。若没有显式 else，selector 返回 -1，
+// Branch.Resolve 会渲染空。
+func branchGetterTokens(c *jsxCond, ctx *jsxSceneCtx) []Token {
+	p := c.pos
+	out := []Token{
+		tokIdent("gxscene", p), tokOp(".", p), tokIdent("BranchGetter", p), tokOp("(", p),
+	}
+	// selector
+	out = append(out, tokIdent("func", p), tokOp("(", p), tokOp(")", p), tokSpace(" ", p),
+		tokIdent("int", p), tokOp("{", p))
+	for i, br := range c.branches {
+		if br.test == "" {
+			continue // else 兜底，不进 if 链
+		}
+		out = append(out, tokIdent("if", p), tokSpace(" ", p))
+		out = append(out, lexExprScene(br.test, br.pos, ctx)...)
+		out = append(out, tokSpace(" ", p), tokOp("{", p), tokSpace(" ", p),
+			tokIdent("return", p), tokSpace(" ", p), tokNumber(strconv.Itoa(i), p), tokSpace(" ", p),
+			tokOp("}", p), tokNewline(p))
+	}
+	// 兜底返回值：有 else 分支则返回其索引，否则 -1（渲染空）。
+	fallback := "-1"
+	for i, br := range c.branches {
+		if br.test == "" {
+			fallback = strconv.Itoa(i)
+			break
+		}
+	}
+	out = append(out, tokIdent("return", p), tokSpace(" ", p), tokNumber(fallback, p), tokSpace(" ", p), tokOp("}", p))
+
+	// builders：每个分支一个 func() *gxscene.Instance { return <子树> }
+	for _, br := range c.branches {
+		out = append(out, tokOp(",", p), tokSpace(" ", p))
+		out = append(out, tokIdent("func", p), tokOp("(", p), tokOp(")", p), tokSpace(" ", p),
+			tokOp("*", p), tokIdent("gxscene", p), tokOp(".", p), tokIdent("Instance", p),
+			tokSpace(" ", p), tokOp("{", p), tokSpace(" ", p),
+			tokIdent("return", p), tokSpace(" ", p))
+		wrap := &jsxNode{name: "#frag", pos: br.pos, children: br.children}
+		out = append(out, genSceneExpr(wrap, ctx)...)
+		out = append(out, tokSpace(" ", p), tokOp("}", p))
+	}
+	out = append(out, tokOp(")", p))
+	return out
 }
 
 // sceneOpTokens 把一个 sceneOp 转成 Go token 序列：
@@ -281,6 +342,11 @@ func lexExprScene(expr string, base Pos, ctx *jsxSceneCtx) []Token {
 // 复合组件槽位的 expr 是一整次调用，直接发射已构造好的 call token。
 func getterTokens(g sceneGetter, ctx *jsxSceneCtx) []Token {
 	p := g.pos
+	// raw 模式：call 本身就是一个 func() any getter（BranchGetter 工厂的返回值），
+	// 直接发射，不能包一层 return——否则 getter 返回的会是 getter 函数本身而非 *Branch。
+	if g.raw && len(g.call) > 0 {
+		return g.call
+	}
 	out := []Token{
 		tokIdent("func", p), tokOp("(", p), tokOp(")", p), tokSpace(" ", p),
 		tokIdent("any", p), tokOp("{", p), tokSpace(" ", p), tokIdent("return", p), tokSpace(" ", p),

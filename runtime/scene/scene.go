@@ -35,6 +35,7 @@ const (
 	OpDynChild                // 动态子节点插槽：Slot=索引
 	OpDynAttr                 // 动态属性插槽：Key=属性名, Slot=索引
 	OpComp                    // 复合组件插槽：Arg=组件名, Slot=索引；getter 返回一个 *Instance
+	OpBranch                  // 条件分支插槽：Slot=索引；getter 返回一个 *Branch，按条件动态重建子树
 )
 
 // Op 是一条 opcode 指令。Arg/Key/Slot 的含义由 Code 决定。
@@ -68,18 +69,20 @@ type slotKind uint8
 const (
 	slotChild slotKind = iota
 	slotAttr
-	slotComp // 复合组件：getter 返回一个 *Instance，挂载为子树，Update 递归驱动
+	slotComp   // 复合组件：getter 返回一个 *Instance，挂载为子树，Update 递归驱动
+	slotBranch // 条件分支：getter 返回一个 *Branch，条件变化时在独立 Owner 中重建子树
 )
 
 // slot 描述一个动态插槽在场景树中的位置与绑定。
 type slot struct {
-	kind  slotKind
-	path  []int  // 从根到目标节点的子节点索引路径
-	attr  string // slotAttr 时的属性名
-	get   func() any
-	last  any
-	node  *Node     // clone 后回填的实际节点
-	child *Instance // slotComp 时挂载的子组件实例
+	kind   slotKind
+	path   []int  // 从根到目标节点的子节点索引路径
+	attr   string // slotAttr 时的属性名
+	get    func() any
+	last   any
+	node   *Node     // clone 后回填的实际节点
+	child  *Instance // slotComp 时挂载的子组件实例
+	branch *Branch   // slotBranch 时挂载的条件分支控制器
 }
 
 // compiledTemplate 是解析 opcode 一次得到的静态骨架（只解析一次，全局缓存）。
@@ -163,6 +166,17 @@ func compile(t Template) *compiledTemplate {
 			n.parent = cur
 			if op.Slot >= 0 && op.Slot < t.N {
 				slots[op.Slot] = &slot{kind: slotComp, path: append(childPath(cur), idx)}
+			}
+		case OpBranch:
+			// 条件分支也是透明包装节点（Kind=#frag 语义），其子节点由当前
+			// 命中的分支子树在应用时嫁接而来；编译期只有空壳。
+			idx := childOfStack(cur)
+			n := cur.Children[idx]
+			n.Kind = "#frag"
+			n.Props = map[string]any{}
+			n.parent = cur
+			if op.Slot >= 0 && op.Slot < t.N {
+				slots[op.Slot] = &slot{kind: slotBranch, path: append(childPath(cur), idx)}
 			}
 		}
 	}
@@ -402,6 +416,26 @@ func mountComp(s *slot, v any) {
 	}
 }
 
+// mountBranch 把条件分支当前命中的子树嫁接到槽位包装节点下。
+// 分支切换由 Branch.Resolve 负责销毁旧 Owner 并构建新子树；这里只做场景树的嫁接。
+func mountBranch(s *slot, sub *Instance) {
+	if s.node == nil {
+		return
+	}
+	s.node.Children = nil
+	s.child = nil
+	if sub == nil {
+		s.node.Kind = "#frag"
+		return
+	}
+	s.child = sub
+	s.node.Kind = "#frag"
+	for _, c := range sub.root.Children {
+		c.parent = s.node
+		s.node.Children = append(s.node.Children, c)
+	}
+}
+
 // applyAll 首次填充所有插槽（不计入 Writes——那是「更新」指标）。
 func (i *Instance) applyAll() {
 	for _, s := range i.slots {
@@ -417,8 +451,21 @@ func (i *Instance) applyAll() {
 			s.node.Props[s.attr] = v
 		case slotComp:
 			mountComp(s, v)
+		case slotBranch:
+			attachBranch(i, s, v)
 		}
 	}
+}
+
+// attachBranch 把 getter 产出的 *Branch 绑定到 slot，并首次求值、嫁接子树。
+// getter 每次返回同一个 *Branch（闭包捕获的稳定对象），因此只在首次绑定。
+func attachBranch(i *Instance, s *slot, v any) {
+	br, ok := v.(*Branch)
+	if !ok || br == nil {
+		return
+	}
+	s.branch = br
+	mountBranch(s, br.Resolve())
 }
 
 // Update 重算所有插槽，只把变化的写回节点。返回本次写入的节点数。
@@ -430,6 +477,17 @@ func (i *Instance) Update() int {
 		// 复合组件：getter 只在首次渲染调用一次（组件实例常驻），
 		// 之后递归驱动子组件自身的细粒度更新；不重新 mount、不重建子树。
 		if s.kind == slotComp {
+			if s.child != nil {
+				w := s.child.Update()
+				written += w
+				i.Writes += w
+			}
+			continue
+		}
+		// 条件分支：切换由 BindReactive 建立的独立 Effect 驱动（读 selector 登记
+		// 依赖并在变化时重建）。这里只递归驱动当前命中子树的细粒度更新，
+		// 不重新求值 selector——避免与独立 Effect 形成双重依赖追踪。
+		if s.kind == slotBranch {
 			if s.child != nil {
 				w := s.child.Update()
 				written += w
@@ -506,6 +564,18 @@ func (i *Instance) SetPart(slot int, v any) {
 		return
 	}
 	s := i.slots[slot]
+	// 条件分支：v 是 *Branch（getter 每次返回同一稳定对象）。读 selector（在
+	// 当前 effect 上下文登记依赖），命中变化时切换 Owner 并嫁接新子树。
+	if s.kind == slotBranch {
+		br, ok := v.(*Branch)
+		if !ok || br == nil {
+			return
+		}
+		s.branch = br
+		mountBranch(s, br.Resolve())
+		i.Writes++
+		return
+	}
 	if equalValue(s.last, v) {
 		return
 	}
@@ -570,6 +640,9 @@ func (i *Instance) Dispose() {
 	for _, sl := range i.slots {
 		if sl.kind == slotComp && sl.child != nil {
 			sl.child.Dispose()
+		}
+		if sl.kind == slotBranch && sl.branch != nil {
+			sl.branch.Dispose()
 		}
 	}
 }

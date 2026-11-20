@@ -203,12 +203,28 @@ const (
 	childText jsxChildKind = iota
 	childExpr
 	childElement
+	childCond // 条件分支：if cond { ... } else { ... }
 )
+
+// jsxCond 描述一个条件分支节点。它编译成 gxscene.BranchGetter：
+//   - branches[i].test 是第 i 个分支的选中条件（Go 表达式源码，最后一个分支 test 为空表示 else）
+//   - branches[i].children 是该分支命中时要渲染的 JSX 子节点
+type jsxCond struct {
+	branches []jsxCondBranch
+	pos      Pos
+}
+
+type jsxCondBranch struct {
+	test     string // 条件表达式源码；为空表示 else 兜底分支
+	children []jsxChild
+	pos      Pos
+}
 
 type jsxChild struct {
 	kind jsxChildKind
 	text string
 	node *jsxNode
+	cond *jsxCond
 	pos  Pos
 }
 
@@ -446,15 +462,167 @@ func (p *jsxParser) parseChildren(n *jsxNode) {
 			n.children = append(n.children, jsxChild{kind: childExpr, text: p.readBraced(), pos: cpos})
 			continue
 		}
+		// 条件分支：if <expr> { <children> } [else if <expr> { ... }]* [else { ... }]
+		if p.atIfKeyword() {
+			cpos := p.pos()
+			cond := p.parseCond()
+			if cond != nil {
+				cond.pos = cpos
+				n.children = append(n.children, jsxChild{kind: childCond, cond: cond, pos: cpos})
+				continue
+			}
+		}
 		cpos := p.pos()
 		var b strings.Builder
 		for !p.eof() && p.cur() != '<' && p.cur() != '{' {
+			// 若当前积累的文本全是空白，且遇到 if 关键字，则停下交给下一轮解析条件块。
+			if strings.TrimSpace(b.String()) == "" && p.atIfKeyword() {
+				break
+			}
 			b.WriteByte(p.advance())
 		}
 		if b.Len() > 0 {
 			n.children = append(n.children, jsxChild{kind: childText, text: b.String(), pos: cpos})
 		}
 	}
+}
+
+// atIfKeyword 判断当前位置是否是条件分支的 `if ` 起始：
+// 字面量 "if" 后必须跟空白（如 "if visible {"），避免误判标识符 "iffy"。
+func (p *jsxParser) atIfKeyword() bool {
+	if p.i+2 > len(p.src) || p.src[p.i:p.i+2] != "if" {
+		return false
+	}
+	return p.i+2 < len(p.src) && isHSpace(p.src[p.i+2])
+}
+
+// atElseKeyword 类似 atIfKeyword，识别 `else ` 后跟 `{` 或 `if`。
+func (p *jsxParser) atElseKeyword() bool {
+	if p.i+4 > len(p.src) || p.src[p.i:p.i+4] != "else" {
+		return false
+	}
+	if p.i+4 >= len(p.src) || !isHSpace(p.src[p.i+4]) {
+		return false
+	}
+	j := p.i + 4
+	for j < len(p.src) && isHSpace(p.src[j]) {
+		j++
+	}
+	if j >= len(p.src) {
+		return false
+	}
+	return p.src[j] == '{' || (j+2 <= len(p.src) && p.src[j:j+2] == "if")
+}
+
+// parseCond 解析 if/else if/else 条件块，返回 jsxCond。
+// 调用时 p.cur() 指向 "if"。
+func (p *jsxParser) parseCond() *jsxCond {
+	c := &jsxCond{}
+	for {
+		if !p.atIfKeyword() {
+			return nil
+		}
+		bpos := p.pos()
+		p.advance() // 'i'
+		p.advance() // 'f'
+		p.ws()
+		// 条件表达式：读到顶层 '{' 为止（括号内的 '{' 忽略，简化处理——
+		// GX 条件多为比较/信号读，不含复合字面量）。
+		exprStart := p.i
+		depth := 0
+		for !p.eof() {
+			ch := p.cur()
+			if ch == '(' || ch == '[' {
+				depth++
+			} else if ch == ')' || ch == ']' {
+				depth--
+			} else if ch == '{' && depth == 0 {
+				break
+			}
+			p.advance()
+		}
+		test := strings.TrimSpace(p.src[exprStart:p.i])
+		// 解析 then 块：{ ...children... }
+		var kids []jsxChild
+		if p.cur() == '{' {
+			kids = p.parseCondBlock()
+		}
+		c.branches = append(c.branches, jsxCondBranch{test: test, children: kids, pos: bpos})
+
+		// 跳过块之间的空白，检测 else。
+		save := p.i
+		p.ws()
+		if p.atElseKeyword() {
+			p.advance() // 'e'
+			p.advance() // 'l'
+			p.advance() // 's'
+			p.advance() // 'e'
+			p.ws()
+			if p.atIfKeyword() {
+				continue // else if：下一轮解析
+			}
+			if p.cur() == '{' {
+				elseKids := p.parseCondBlock()
+				c.branches = append(c.branches, jsxCondBranch{children: elseKids, pos: p.pos()})
+			}
+			break
+		}
+		p.i = save // 无 else：回退空白，交给外层继续
+		break
+	}
+	return c
+}
+
+// parseCondBlock 解析一个 { ... } 块内的 JSX children，遇到匹配的 '}' 结束。
+// 块内复用与 parseChildren 相同的子节点规则（元素 / 插值 / 文本 / 嵌套条件）。
+func (p *jsxParser) parseCondBlock() []jsxChild {
+	p.advance() // '{'
+	var kids []jsxChild
+	for !p.eof() {
+		if p.cur() == '}' {
+			p.advance()
+			return kids
+		}
+		if p.cur() == '<' && p.next() == '/' {
+			// 块内不应出现闭合标签，消费掉避免死循环。
+			for !p.eof() && p.cur() != '}' {
+				p.advance()
+			}
+			continue
+		}
+		if p.cur() == '<' && isIdentStart(p.next()) {
+			cpos := p.pos()
+			child := p.parseElement()
+			child.pos = cpos
+			kids = append(kids, jsxChild{kind: childElement, node: child, pos: cpos})
+			continue
+		}
+		if p.cur() == '{' {
+			cpos := p.pos()
+			kids = append(kids, jsxChild{kind: childExpr, text: p.readBraced(), pos: cpos})
+			continue
+		}
+		if p.atIfKeyword() {
+			cpos := p.pos()
+			cond := p.parseCond()
+			if cond != nil {
+				kids = append(kids, jsxChild{kind: childCond, cond: cond, pos: cpos})
+				continue
+			}
+		}
+		cpos := p.pos()
+		var b strings.Builder
+		for !p.eof() && p.cur() != '<' && p.cur() != '{' && p.cur() != '}' {
+			if strings.TrimSpace(b.String()) == "" && p.atIfKeyword() {
+				break
+			}
+			b.WriteByte(p.advance())
+		}
+		if b.Len() > 0 {
+			kids = append(kids, jsxChild{kind: childText, text: b.String(), pos: cpos})
+		}
+	}
+	return kids
 }
 
 // ---------------- JSX → createElement token 生成 ----------------

@@ -507,3 +507,49 @@ func main() {
 		}
 	}
 }
+
+func TestIntegrationJSXSceneConditionalBranch(t *testing.T) {
+	// 阶段2：JSX 条件分支 → OpBranch + BranchGetter。
+	// 验证：selector 依赖切换分支、分支内 signal 只更新叶子、组件不重建。
+	src := `package main
+import (
+	gxscene "github.com/robertpanvip/gox/runtime/scene"
+	"fmt"
+)
+func main() {
+	signal visible = true
+	signal count = 10
+	view := <div>
+		if visible {
+			<span>{count}</span>
+		} else {
+			<b>Hidden</b>
+		}
+	</div>
+	view.BindReactive(Signal.Effect)
+	fmt.Print("INIT:", view)
+	// 分支内 signal 更新：只改叶子，不切分支。
+	count = 20
+	fmt.Print("COUNT:", view)
+	// selector 依赖切换分支。
+	visible = false
+	fmt.Print("HIDE:", view)
+	visible = true
+	fmt.Print("SHOW:", view)
+}
+`
+	out := runGXScene(t, src)
+	for _, want := range []string{
+		`INIT:<div>`, `"10"`, "<span>",
+		`COUNT:<div>`, `"20"`,
+		`HIDE:<div>`, `"Hidden"`, "<b>",
+		`SHOW:<div>`, `"20"`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("输出应包含 %q, got:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "Hidden") && !strings.Contains(out, `HIDE:<div>`) {
+		t.Errorf("Hidden 只应出现在 HIDE 阶段: %s", out)
+	}
+}

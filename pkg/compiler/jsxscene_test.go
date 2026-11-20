@@ -283,3 +283,67 @@ func main() {
 		t.Errorf("老式组件动态属性应包 getter, got:\n%s", res.GoSource)
 	}
 }
+
+// 条件分支：JSX 内的 if/else 编译成 gxscene.OpBranch + BranchGetter。
+func TestJSXSceneConditional(t *testing.T) {
+	res, err := CompileScene("cond.gx", `package main
+func main() {
+	signal visible = true
+	signal count = 10
+	_ = <div>
+		if visible {
+			<span>{count}</span>
+		} else {
+			<b>Hidden</b>
+		}
+	</div>
+}
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := res.GoSource
+	for _, want := range []string{
+		"gxscene.OpBranch", "Slot:0", "N:1",
+		"gxscene.BranchGetter",
+		"if visible()", "return 0", "return 1",
+		`Arg:"span"`, `Arg:"b"`, `Arg:"Hidden"`,
+		"func() any{ return count() }", // 分支内 signal 读补 ()
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("条件分支产物应包含 %q, got:\n%s", want, out)
+		}
+	}
+}
+
+func TestJSXSceneConditionalElseIf(t *testing.T) {
+	res, err := CompileScene("cond.gx", `package main
+func main() {
+	signal n = 1
+	_ = <div>
+		if n == 1 {
+			<span>one</span>
+		} else if n == 2 {
+			<span>two</span>
+		} else {
+			<span>many</span>
+		}
+	</div>
+}
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := res.GoSource
+	for _, want := range []string{
+		"gxscene.BranchGetter",
+		"if n() == 1", "return 0",
+		"if n() == 2", "return 1",
+		"return 2", // else 兜底索引
+		`Arg:"one"`, `Arg:"two"`, `Arg:"many"`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("else-if 产物应包含 %q, got:\n%s", want, out)
+		}
+	}
+}
