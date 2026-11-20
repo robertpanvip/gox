@@ -33,17 +33,16 @@ import "strings"
 // transformSignals 执行 signal 语法糖降级，返回改写后的 token 流。
 // 放在 Analyze 之前：Analyze 看到的是标准 Go（signal/let 已消除、读写已是调用式）。
 //
-// P1：接收统一绑定表 bindings。sigs 仍是「哪些名字被声明为 signal」的快速候选集，
-// 但某一处标识符是否为真正的 signal 引用，改由 isSignalRefAt 查 ResolveAt 决定——
-// 这样函数参数 / 局部变量对 signal 名的遮蔽由词法作用域天然处理，删去手写的
-// collectSignalShadows / isShadowed（P1-1 根治）。inDeclZone / isSignalDeclTarget
-// 作为声明形态的防御层保留，避免 bindings 未覆盖的边界。
+// P1：接收统一绑定表 bindings，遮蔽由 ResolveAt 词法解析（P1-1 根治）。
+// E1（表达式 AST 阶段）：signal 声明与引用的识别收敛到 SignalAST —— 节点在原始流
+// 上一次构建、直接持有 Binding，主循环按节点 Kind 驱动改写，不再在主循环里重复
+// 「名字集合 + 遮蔽 + 形态排除」的扫 token 判定。sigs/isSignalRefAt 保留为对拍参照。
 func transformSignals(in []Token, b *Bindings) []Token {
-	sigs := collectSignalVars(in)
-	if len(sigs) == 0 {
+	ast := ParseSignalExprs(in, b)
+	if !ast.HasSignal() {
 		return in
 	}
-	return rewriteSignals(in, sigs, b)
+	return rewriteSignals(in, ast, b)
 }
 
 // isSignalRefAt 判断 pos 处对 name 的引用是否解析到 signal 绑定。
@@ -116,8 +115,9 @@ func computedAssignTarget(toks []Token, computedIdx int) string {
 }
 
 // rewriteSignals 生成改写后的 token 流。
-// P1：遮蔽判断改走 bindings（isSignalRefAt），删除手写的 collectSignalShadows。
-func rewriteSignals(toks []Token, sigs map[string]bool, b *Bindings) []Token {
+// E1：读写判定改由 AST 节点 Kind 驱动（ast.ExprAt(Pos.Offset)），主循环不再做
+// 「名字集合 + 遮蔽 + 形态排除」的重复扫 token —— 这些已在 ParseSignalExprs 一次完成。
+func rewriteSignals(toks []Token, ast *SignalAST, b *Bindings) []Token {
 	out := make([]Token, 0, len(toks))
 	for i := 0; i < len(toks); i++ {
 		t := toks[i]
@@ -147,7 +147,7 @@ func rewriteSignals(toks []Token, sigs map[string]bool, b *Bindings) []Token {
 					k++
 				}
 				// 右侧表达式里的裸 signal 读取也要改写（H-3）：signal b = a → Signal.New(a())
-				out = append(out, rewriteSignalReads(toks[k:end], sigs, b)...)
+				out = append(out, rewriteSignalReads(toks[k:end], ast)...)
 				out = append(out, tokOp(")", t.Pos))
 				i = end - 1
 				continue
@@ -182,40 +182,18 @@ func rewriteSignals(toks []Token, sigs map[string]bool, b *Bindings) []Token {
 			}
 		}
 
-		// 3) signal 变量读写改写
-		if t.Kind == Ident && sigs[t.Text] {
-			// P1-1：被同名函数参数 / 局部变量遮蔽时，保持原样（它是普通变量，不是 signal）
-			if !isSignalRefAt(b, t.Text, t.Pos) {
+		// 3) signal 变量读写改写：节点由 AST 按 Pos.Offset 命中；遮蔽/形态排除
+		// 已在 ParseSignalExprs 完成，这里只按 Kind 生成。
+		if t.Kind == Ident {
+			node := ast.ExprAt(t.Pos.Offset)
+			if node == nil || node.Kind == ExSignalDecl {
 				out = append(out, t)
 				continue
 			}
-			// 声明目标不改写（var name = ... / name := ...）
-			if isSignalDeclTarget(toks, i) {
-				out = append(out, t)
-				continue
-			}
-			// selector 右侧 obj.name 不改写
-			if p := prevSig(toks, i-1); p >= 0 && toks[p].Text == "." {
-				out = append(out, t)
-				continue
-			}
-			// 复合字段键 {name: ...} 不改写
-			if n := nextSig(toks, i+1); n >= 0 && toks[n].Text == ":" {
-				out = append(out, t)
-				continue
-			}
-			// 函数参数 / struct 字段声明不改写
-			if inDeclZone(toks, i) {
-				out = append(out, t)
-				continue
-			}
-			// 已是调用式 name(...) 不重复改写
-			if n := nextSig(toks, i+1); n >= 0 && toks[n].Text == "(" {
-				out = append(out, t)
-				continue
-			}
-			// 复合赋值：name += expr → name(name() + expr)；-=/*= 等类似
-			if n := nextSig(toks, i+1); n >= 0 && compoundAssignOps[toks[n].Text] {
+			switch node.Kind {
+			case ExSignalCompound:
+				// 复合赋值：name += expr → name(name() + expr)；-=/*= 等类似
+				n := nextSig(toks, i+1)
 				op := toks[n].Text
 				binOp := strings.TrimSuffix(op, "=") // "+=" → "+"
 				end := signalExprEnd(toks, n+1)
@@ -226,13 +204,12 @@ func rewriteSignals(toks []Token, sigs map[string]bool, b *Bindings) []Token {
 					k++
 				}
 				// 右侧表达式里的裸 signal 读取改写：a += b → a(a() + b())
-				out = append(out, rewriteSignalReads(toks[k:end], sigs, b)...)
+				out = append(out, rewriteSignalReads(toks[k:end], ast)...)
 				out = append(out, tokOp(")", t.Pos))
 				i = end - 1
-				continue
-			}
-			// 自增/自减：name++ → name(name() + 1)
-			if n := nextSig(toks, i+1); n >= 0 && (toks[n].Text == "++" || toks[n].Text == "--") {
+			case ExSignalIncDec:
+				// 自增/自减：name++ → name(name() + 1)
+				n := nextSig(toks, i+1)
 				op := "+"
 				if toks[n].Text == "--" {
 					op = "-"
@@ -241,10 +218,9 @@ func rewriteSignals(toks []Token, sigs map[string]bool, b *Bindings) []Token {
 				out = append(out, tokSpace(" ", t.Pos), tokOp(op, t.Pos), tokSpace(" ", t.Pos))
 				out = append(out, tokOp("1", t.Pos), tokOp(")", t.Pos))
 				i = n // 消费掉 ++/-- token
-				continue
-			}
-			// 写：name = expr → name(expr)
-			if n := nextSig(toks, i+1); n >= 0 && isAssignOp(toks[n].Text) {
+			case ExSignalWrite:
+				// 写：name = expr → name(expr)
+				n := nextSig(toks, i+1)
 				end := signalExprEnd(toks, n+1)
 				out = append(out, t, tokOp("(", t.Pos))
 				// 跳过表达式起始空白，避免 `count( 5)`
@@ -253,13 +229,13 @@ func rewriteSignals(toks []Token, sigs map[string]bool, b *Bindings) []Token {
 					k++
 				}
 				// 右侧表达式里的裸 signal 读取改写：a = b → a(b())
-				out = append(out, rewriteSignalReads(toks[k:end], sigs, b)...)
+				out = append(out, rewriteSignalReads(toks[k:end], ast)...)
 				out = append(out, tokOp(")", t.Pos))
 				i = end - 1
-				continue
+			case ExSignalRead:
+				// 读：name → name()
+				out = append(out, t, tokOp("(", t.Pos), tokOp(")", t.Pos))
 			}
-			// 读：name → name()
-			out = append(out, t, tokOp("(", t.Pos), tokOp(")", t.Pos))
 			continue
 		}
 
@@ -271,40 +247,18 @@ func rewriteSignals(toks []Token, sigs map[string]bool, b *Bindings) []Token {
 // rewriteSignalReads 改写一段表达式 token 里的裸 signal 读取 name → name()。
 // 用于被整段拷贝出主循环的右侧表达式（signal 声明 / 简单赋值 / 复合赋值），
 // 这些片段不会经过 rewriteSignals 主循环的读改写，需在此补上（H-3）。
-// 排除规则与主循环一致：selector 右侧、复合字段键、已是调用、声明目标。
-// P1：片段 token 保留原始 Pos，遮蔽判断直接查 bindings（无需 base/shadows）。
-func rewriteSignalReads(seg []Token, sigs map[string]bool, b *Bindings) []Token {
+// E1：片段 token 保留原始 Pos，直接按 Pos.Offset 查 AST 节点；只有 ExSignalRead
+// 类节点改写成调用式，其余（遮蔽/selector/字段键/声明目标/已调用）在 AST 解析
+// 阶段已被排除或未归类为 Read。
+func rewriteSignalReads(seg []Token, ast *SignalAST) []Token {
 	out := make([]Token, 0, len(seg))
 	for i := range seg {
 		t := seg[i]
-		if t.Kind == Ident && sigs[t.Text] {
-			// P1-1：右侧表达式内被参数/局部变量遮蔽的同名标识符保持原样
-			if !isSignalRefAt(b, t.Text, t.Pos) {
-				out = append(out, t)
+		if t.Kind == Ident {
+			if node := ast.ExprAt(t.Pos.Offset); node != nil && node.Kind == ExSignalRead {
+				out = append(out, t, tokOp("(", t.Pos), tokOp(")", t.Pos))
 				continue
 			}
-			// selector 右侧 obj.name
-			if p := prevSig(seg, i-1); p >= 0 && seg[p].Text == "." {
-				out = append(out, t)
-				continue
-			}
-			// 复合字段键 {name: ...}
-			if n := nextSig(seg, i+1); n >= 0 && seg[n].Text == ":" {
-				out = append(out, t)
-				continue
-			}
-			// 声明目标 name := / name =（表达式片段内一般不会出现，保守排除）
-			if n := nextSig(seg, i+1); n >= 0 && (seg[n].Text == ":=" || seg[n].Text == "=") {
-				out = append(out, t)
-				continue
-			}
-			// 已是调用 name(...) 不重复改写
-			if n := nextSig(seg, i+1); n >= 0 && seg[n].Text == "(" {
-				out = append(out, t)
-				continue
-			}
-			out = append(out, t, tokOp("(", t.Pos), tokOp(")", t.Pos))
-			continue
 		}
 		out = append(out, t)
 	}

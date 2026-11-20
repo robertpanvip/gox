@@ -381,3 +381,33 @@ P5 立项目标是「`Symbol` 由 `Binding` 派生、统一坐标基准、消除
 3. **坐标硬障碍**：signal 声明 Pos 在 transform 后漂移，Binding 的原始流 Pos 无法统一到 Analyze 后流坐标——这是「统一坐标基准」无法跨越的结构性问题（与 P4 的注入符号时序问题同类）。
 
 结论：**符号系统的架构合流（P4/P5 完整形态）在当前 token-transform 架构下不可行**，其收益要在「表达式 AST 阶段」才有实质载体——届时 AST 节点直接持有 Binding 引用，无需再靠 Pos 跨流映射。本次只落地了调研中发现的真实 bug 修复。
+
+---
+
+## 15. 表达式 AST 阶段（E0/E1，2026-11-20）
+
+前面的结论是：符号架构合流要等「表达式 AST」才有载体。本轮正式启动这一层，按「逐个替换、避免大爆炸」的节奏推进，先拿 signal 开刀。
+
+### 15.1 为什么 signal 是合适的首个切入点
+
+signal transform 位于管线最前段（Analyze 之前），处理的是**原始 token 流**——AST 节点用 `Pos.Offset` 索引，与原始 token 一一对应，**不存在 P4/P5 的坐标漂移**（那些问题都发生在 desugar 后流）。这让「AST 节点直接持有 Binding」第一次有了稳定载体。
+
+### 15.2 E0：AST 地基层（提交 a6ce1da）
+
+- 新增 `pkg/compiler/exprast.go`：`GXExpr` 节点持有 `Pos.Offset`（稳定锚点）+ `Binding` 引用 + token 区间；`SignalAST` 在原始流一次构建，`byOffset` 以 Offset 为键 O(1) 查询，不受 token 下标漂移影响。
+- `ParseSignalExprs` 解析 signal 声明/读/写/复合/自增节点，形态排除（selector 右侧、字段键、声明目标、声明区、已调用）与旧逻辑逐条对齐；遮蔽由 `ResolveAt` 的 `BkSignal`/`BkComputed` 判定天然处理。
+- 4 个单元测试：声明节点、读写分类、遮蔽、与旧判定全量对拍，全绿。**纯新增，不改任何 transform 行为**。
+
+### 15.3 E1：signal 识别收敛到 AST（本轮）
+
+- `transformSignals` 改为构建 `SignalAST`，早退条件用 `ast.HasSignal()`；`rewriteSignals`/`rewriteSignalReads` 消费 AST 节点 Kind 驱动改写，**主循环删除「名字集合 + 遮蔽 + 形态排除」的重复扫 token 判定**（净删 84 行）。
+- 等价性验证（三重）：
+  1. **节点级对拍** `TestExprASTParityWithLegacy`：AST 认定的 signal 引用 offset 集合与旧判定完全一致。
+  2. **端到端对拍**：16 个覆盖全分支的样本（声明/读写/复合/自增/RHS 读取/computed/effect/遮蔽/selector 排除/参数组/嵌套/链式赋值），新旧版本编译输出**逐字一致**。
+  3. **全量门禁**：`go test -race`/`go vet`/`go build ./...` 全绿，golden 无变化。
+- `collectSignalVars`/`isSignalRefAt` 仅留作对拍参照，生产路径已不调用。
+
+### 15.4 后续（E2/E3）
+
+- **E2**：把 lambda / 对象字面量 / 解构 / 模板的 detect 逐个切到 AST 层，删除各自的扫 token 消歧补丁。这些 transform 在 desugar 中后段工作，需处理 offset→当前流下标的映射（signal 阶段不涉及），风险高于 E1，逐个做、各自对拍。
+- **E3**：Analysis 类型/诊断直接读 AST 节点（P6 已判 `idxNearGx` 收益低，暂缓）。
