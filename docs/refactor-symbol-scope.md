@@ -345,3 +345,39 @@ goSrc, sm := emit(toks, file)
 - `inferExprLitType` 仍被 Binder 自身用于字面量类型推断（C 类，必要）；
 - `Analysis.FuncSig` 展开别名，不满足对象字面量「保留原始类型名」的需求，故 B 类回退也有价值。
 绑定表是主路径（回退率 0），旧扫描是安全网——这是「双轨过渡」的最终形态，而非未清理的死代码。
+
+---
+
+## 14. P5 调研与落地（2026-11-20）
+
+P5 立项目标是「`Symbol` 由 `Binding` 派生、统一坐标基准、消除 `collectSymbols` 重扫」。调研后按证据收窄了范围，并记录完整合流的障碍。
+
+### 14.1 调研发现（决定性证据）
+
+| 发现 | 证据 | 影响 |
+|---|---|---|
+| `Analysis.Symbols()` 生产代码零消费者 | grep 全仓：仅测试调用；LSP `symbolmap.go` 用独立正则扫描，不消费它 | "消除重扫"收益面比想象窄；真正消费符号数据的只有 `declaredTypeAt`（类型检查核心） |
+| `Symbol.Type` 是语义类型，`Binding.Type` 是词法文本 | `Type` 是 `{Name, Members}` 结构，联合/命名别名展开由 `typeFromTokens`+`namedTypes` 算；`Binding.Type` 只是字符串 | Binding 无法直接替代 Symbol 的 Type，语义计算必须在 Analysis 侧保留 |
+| signal 声明的 Pos 在 transform 后漂移 | `signal count = 0` → `var count = Signal.New(0)`，生成 token 复用 `signal` 的 off=13，而 Binding 的 `count` 声明是 off=20 | Binding.DeclPos 无法映射到 Analyze 后流的 token 下标，"统一坐标基准"对 signal 失效 |
+| `collectParams` 共享类型参数丢失 | `a, b int\|string` 只有 b 进符号表，a 的联合类型丢失 → `_ = a + 1` **漏报** union-operand | 真实 bug，有修复价值 |
+
+### 14.2 落地内容（收窄为高价值参数合流）
+
+- **`collectParams` 改用 `parseParamBindings`**（与 Binder 同源的共享类型切分），修复 `a, b int|string` 中 a 的参数符号与联合类型丢失。
+- 修复前红灯验证：`TestAnalyzeSharedTypeParams` 断言 a、b 都是 `int|string`，改动前失败（symbols 只有 `b:int|string`），改动后通过。
+- check 层回归 `TestSharedTypeParamBothUnions`：共享类型参数 a、b 的未收窄 `+` 运算都报 union-operand（改动前只报 b）。
+- 语义 Type 计算仍在 Analysis 侧（`typeFromTokens`），Binding 只提供同源的名字/类型段切分能力——不强行派生整个 Symbol。
+
+### 14.3 对拍与门禁
+
+- **基线快照对拍**（改动前后 `Symbols()`/`declaredTypeAt`/诊断逐项比对）：唯一差异是 SRC1 `a, b int` 多收了 `a`（预期修复），其余逐字一致。
+- golden 哈希无变更；`go test -race`/`vet`/`build ./...` 全绿，gofmt clean。
+
+### 14.4 完整 P5 合流暂缓的理由
+
+「Symbol 全部由 Binding 派生 + 统一坐标基准」不做，原因：
+1. **消费者缺失**：`Symbols()` 生产代码零调用，消除重扫的实际收益仅是去掉一个测试消费的中间数组。
+2. **语义分层**：`Symbol.Type`（联合/别名展开的语义类型）与 `Binding.Type`（词法文本）是不同抽象，强行派生会丢语义；Analysis 侧的 `typeFromTokens` 是必要的语义计算层。
+3. **坐标硬障碍**：signal 声明 Pos 在 transform 后漂移，Binding 的原始流 Pos 无法统一到 Analyze 后流坐标——这是「统一坐标基准」无法跨越的结构性问题（与 P4 的注入符号时序问题同类）。
+
+结论：**符号系统的架构合流（P4/P5 完整形态）在当前 token-transform 架构下不可行**，其收益要在「表达式 AST 阶段」才有实质载体——届时 AST 节点直接持有 Binding 引用，无需再靠 Pos 跨流映射。本次只落地了调研中发现的真实 bug 修复。

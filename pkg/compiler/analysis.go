@@ -776,19 +776,18 @@ func (a *Analysis) collectSymbols(toks []Token) {
 }
 
 func (a *Analysis) collectParams(toks []Token, open, close, ff, ft int) {
-	segStart := open + 1
-	for k := open + 1; k <= close; k++ {
-		if k == close || toks[k].Text == "," {
-			seg := parseParamSeg(toks, segStart, k)
-			if seg.nameIdx >= 0 {
-				typ := a.typeFromTokens(toks, seg.typeStart, typeRangeEnd(toks, seg.typeStart))
-				a.symbols = append(a.symbols, Symbol{
-					Name: toks[seg.nameIdx].Text, Type: typ, DeclIdx: seg.nameIdx,
-					ScopeFrom: ff, ScopeTo: ft,
-				})
-			}
-			segStart = k + 1
+	// P5：与绑定表共用 parseParamBindings，正确处理共享类型段 `a, b int|string`
+	// ——旧实现用 parseParamSeg 逐段切分，无类型的 `a` 段被跳过，导致 a 的参数
+	// 符号（及其联合类型）丢失，check 对 `a` 的联合运算漏报。
+	for _, pb := range parseParamBindings(toks, open, close) {
+		if pb.nameIdx < 0 || pb.typeStart < 0 {
+			continue
 		}
+		typ := a.typeFromTokens(toks, pb.typeStart, typeRangeEnd(toks, pb.typeStart))
+		a.symbols = append(a.symbols, Symbol{
+			Name: toks[pb.nameIdx].Text, Type: typ, DeclIdx: pb.nameIdx,
+			ScopeFrom: ff, ScopeTo: ft,
+		})
 	}
 }
 

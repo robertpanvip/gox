@@ -410,3 +410,22 @@ func main() { f(1) }
 		t.Fatalf("生成代码语法无效: %v\n%s", err, res.GoSource)
 	}
 }
+
+// TestAnalyzeSharedTypeParams 验证共享类型参数 `a, b int|string` 的两个名字
+// 都进入符号表并各自得到联合类型。collectParams 早先用 parseParamSeg 逐段切分，
+// 导致段 `a` 无类型被跳过、只有 b 拿到联合类型（P5 合流修复）。
+func TestAnalyzeSharedTypeParams(t *testing.T) {
+	src := "package main\nfunc f(a, b int|string) {}\n"
+	a := Analyze(New(src).AllTokens())
+	got := map[string]string{}
+	for _, s := range a.Symbols() {
+		got[s.Name] = s.Type.String()
+	}
+	for _, name := range []string{"a", "b"} {
+		if typ, ok := got[name]; !ok {
+			t.Errorf("共享类型参数 %q 未进符号表; symbols=%v", name, got)
+		} else if typ != "int|string" {
+			t.Errorf("参数 %q 类型 = %q, want int|string", name, typ)
+		}
+	}
+}
