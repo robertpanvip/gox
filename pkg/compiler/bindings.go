@@ -103,14 +103,24 @@ type BindScope struct {
 	Bindings map[string][]*Binding // 同名可多次声明（不同块），按 DeclPos.Offset 排序
 }
 
+// FuncSigRaw 是函数/方法声明的原始文本签名（供 B 类「调用点反查被调函数签名」）。
+// 类型文本用 exprText 原样拼接、不展开别名，与 Analysis.FuncSig 的语义展开互补。
+type FuncSigRaw struct {
+	Name       string
+	ParamTypes []string // 按参数位置；无名/共享类型以 "" 占位
+	ResultType string   // 首个返回类型文本；"" 表示无返回值
+	IsVoid     bool     // 无返回值（'(' 后直接 '{'）
+}
+
 // Bindings 是贯穿管线的绑定解析服务。一次构建，全局查询。
 type Bindings struct {
 	scopes       []*BindScope
 	byPos        map[int]*Binding // DeclPos.Offset → Binding，声明点 O(1) 命中
 	all          []*Binding
-	root         *BindScope            // SkGlobal
-	structScopes map[string]*BindScope // type 名 → 对应 struct 的 SkStruct scope（供 SelAt）
-	toks         []Token               // 原始 token 流（供 SelAt 反查接收者名）
+	root         *BindScope             // SkGlobal
+	structScopes map[string]*BindScope  // type 名 → 对应 struct 的 SkStruct scope（供 SelAt）
+	toks         []Token                // 原始 token 流（供 SelAt 反查接收者名）
+	funcSigs     map[string]*FuncSigRaw // 具名函数的原始文本签名（供签名反查）
 }
 
 // ---------- 构建（Binder）----------
@@ -121,6 +131,7 @@ func Bind(toks []Token) *Bindings {
 	b := &Bindings{
 		byPos:        map[int]*Binding{},
 		structScopes: map[string]*BindScope{},
+		funcSigs:     map[string]*FuncSigRaw{},
 		toks:         toks,
 	}
 	root := b.newScope(SkGlobal, nil, Pos{Offset: 0, Line: 1, Col: 1}, maxTokenEnd(toks))
@@ -283,9 +294,55 @@ func (b *Bindings) scanFunc(toks []Token, fi, end int, parent *BindScope) int {
 	// 函数名 / 方法名：绑定到外层作用域
 	if ni := funcNameAt(toks, fi); ni >= 0 {
 		b.addBinding(toks[ni], BkFunc, parent, "")
+		// B 类：收集原始文本签名（保留别名，供调用点反查参数/返回类型）。
+		b.collectFuncSig(toks, fi, ni, open, close, brace)
 	}
 	b.scan(toks, brace+1, bodyEnd, fn)
 	return bodyEnd
+}
+
+// collectFuncSig 为一个具名函数记录原始文本签名。
+// 参数类型按位置存（共享类型 / 无名参数留空），返回类型取首个。
+func (b *Bindings) collectFuncSig(toks []Token, fi, nameIdx, open, close, brace int) {
+	sig := &FuncSigRaw{Name: toks[nameIdx].Text}
+	pbs := parseParamBindings(toks, open, close)
+	// 参数位置数 = 顶层逗号分段数；用 parseParamBindings 的名字顺序近似。
+	// 无名参数场景 parseParamBindings 也可能给出 typeStart，故按段数补齐。
+	segs := splitTopLevelSegs(toks, open+1, close)
+	for range segs {
+		sig.ParamTypes = append(sig.ParamTypes, "")
+	}
+	for _, pb := range pbs {
+		if pb.typeStart >= 0 && pb.typeStart < pb.typeEnd {
+			t := exprText(toks, pb.typeStart, pb.typeEnd)
+			// 按参数名在段中的位置填回（共享类型会被多个 pb 指向同一类型区间）。
+			for si, seg := range segs {
+				f := nextSigIn(toks, seg[0], seg[1])
+				if f == pb.nameIdx && si < len(sig.ParamTypes) {
+					sig.ParamTypes[si] = t
+				}
+			}
+		}
+	}
+	// 返回类型：')' 之后到 '{' 之间。
+	k := nextSig(toks, close+1)
+	if k < 0 || k >= brace || toks[k].Text == "{" {
+		sig.IsVoid = true
+	} else {
+		te := typeRangeEnd(toks, k)
+		if te > brace {
+			te = brace
+		}
+		if te > k {
+			sig.ResultType = exprText(toks, k, te)
+		} else {
+			sig.IsVoid = true
+		}
+	}
+	// 同名函数取首个声明（与 FuncSig 一致）。
+	if _, exists := b.funcSigs[sig.Name]; !exists {
+		b.funcSigs[sig.Name] = sig
+	}
 }
 
 // funcReceiverParens 判定 func 声明是否带接收者；是则返回接收者括号。
@@ -310,22 +367,14 @@ func funcReceiverParens(toks []Token, fi int) (open, close int, ok bool) {
 	return j, rc, true
 }
 
-// paramsTypeText 尽力提取参数的类型文本（[typeStart,typeEnd) 的有效 token 拼接）。
+// paramsTypeText 提取参数的类型文本（[typeStart,typeEnd)）。
+// 与 exprText 一致：token 原样拼接、不插入空格，保证 "[]int"/"map[string]int"
+// 这类类型文本与 structs 表 / fieldsFromStructText 的键格式一致。
 func paramsTypeText(toks []Token, open, close int, pb paramBinding) string {
 	if pb.typeStart < 0 || pb.typeStart >= pb.typeEnd {
 		return ""
 	}
-	var s string
-	for i := pb.typeStart; i < pb.typeEnd; i++ {
-		if toks[i].Kind == Space || toks[i].Kind == Newline {
-			continue
-		}
-		if s != "" && (toks[i].Kind == Ident || toks[i].Kind == Number) {
-			s += " "
-		}
-		s += toks[i].Text
-	}
-	return s
+	return exprText(toks, pb.typeStart, pb.typeEnd)
 }
 
 // scanType 处理 type 声明：命名类型 + struct 字段空间 + 分组 type (...)。
@@ -561,10 +610,23 @@ func (b *Bindings) upgradeRangeVars(toks []Token, ri int, scope *BindScope) {
 	if op < 0 {
 		return
 	}
+	// range xs：xs 的类型 → 元素类型（[]T/数组/string→rune）。
+	elemType := ""
+	xsIdx := nextSig(toks, ri+1)
+	if xsIdx >= 0 && toks[xsIdx].Kind == Ident {
+		if xsBD := b.ResolveAt(toks[xsIdx].Text, toks[xsIdx].Pos); xsBD != nil {
+			elemType = sliceElemType(xsBD.Type)
+		}
+	}
 	p := prevSig(toks, op-1)
 	for p >= 0 {
 		if bd, ok := b.byPos[toks[p].Pos.Offset]; ok && bd.Kind == BkLocal {
 			bd.Kind = BkRangeVar
+			// 与旧 inferIdentFromRange 对齐：range 左侧变量统一填元素类型，
+			// 不区分 k/v（旧逻辑对 k、v 都返回 sliceElemType）。保持迁移零行为差异。
+			if elemType != "" {
+				bd.Type = elemType
+			}
 		}
 		q := prevSig(toks, p-1)
 		if q >= 0 && toks[q].Text == "," {
@@ -656,6 +718,16 @@ func (b *Bindings) TypeAt(name string, pos Pos) string {
 	return ""
 }
 
+// TypeAtIdx 是 TypeAt 的下标适配：用 toks[useIdx].Pos 查询绑定表。
+// 供 desugar 后 token 流上的调用点使用——Pos 是跨 desugar 稳定的锚点，
+// 而 useIdx 会随 token 增删漂移。b 为 nil 或越界时返回 ""（调用方降级）。
+func (b *Bindings) TypeAtIdx(toks []Token, name string, useIdx int) string {
+	if b == nil || useIdx < 0 || useIdx >= len(toks) {
+		return ""
+	}
+	return b.TypeAt(name, toks[useIdx].Pos)
+}
+
 // DeclAt 返回 pos 处的声明绑定（供「声明目标不改写」判断，取代 isSignalDeclTarget）。
 func (b *Bindings) DeclAt(pos Pos) *Binding {
 	return b.byPos[pos.Offset]
@@ -709,6 +781,41 @@ func (b *Bindings) SelAt(sel string, recvPos, selPos Pos) *Binding {
 		}
 	}
 	return nil
+}
+
+// FuncParamAt 返回具名函数 name 第 idx 个参数的原始类型文本；"" 表示无/未知。
+func (b *Bindings) FuncParamAt(name string, idx int) string {
+	if b == nil || b.funcSigs == nil {
+		return ""
+	}
+	sig := b.funcSigs[name]
+	if sig == nil || idx < 0 || idx >= len(sig.ParamTypes) {
+		return ""
+	}
+	return sig.ParamTypes[idx]
+}
+
+// FuncResult 返回具名函数 name 的首个返回类型文本；"" 表示无返回值/未知。
+func (b *Bindings) FuncResult(name string) string {
+	if b == nil || b.funcSigs == nil {
+		return ""
+	}
+	if sig := b.funcSigs[name]; sig != nil {
+		return sig.ResultType
+	}
+	return ""
+}
+
+// FuncIsVoid 判断具名函数 name 是否声明为无返回值。
+// 第三返回值 ok 表示是否找到该函数（未找到时调用方应回退旧扫描）。
+func (b *Bindings) FuncIsVoid(name string) (isVoid, ok bool) {
+	if b == nil || b.funcSigs == nil {
+		return false, false
+	}
+	if sig := b.funcSigs[name]; sig != nil {
+		return sig.IsVoid, true
+	}
+	return false, false
 }
 
 // AllBindings 返回全部绑定（调试/对拍用）。不要修改返回值。

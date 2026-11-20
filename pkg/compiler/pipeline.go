@@ -67,19 +67,19 @@ func CompileWithModule(file, src, module string) (*Result, error) {
 	analysis := Analyze(toks)    // desugar 之前的 GX 语义层（联合未擦除）
 	names := map[string]string{} // 小写原名 → 大写导出名（自身 pub 符号）
 	toks = expandDefaults(toks, defaultDefs)
-	toks = transformLambdas(toks, analysis)
+	toks = transformLambdas(toks, analysis, bindings)
 	// 对象字面量：期望类型校验失败时返回带 GX 坐标的错误。
-	toks, err := transformObjectLits(toks, analysis)
+	toks, err := transformObjectLits(toks, analysis, bindings)
 	if err != nil {
 		return nil, err
 	}
 	// 对象解构：{ name, age } := p → name := p.name; age := p.age
 	// 放在对象字面量之后，右值声明类型（含 struct{...}{...} 展开形态）已可见。
-	toks, err = expandDestructures(toks)
+	toks, err = expandDestructures(toks, bindings)
 	if err != nil {
 		return nil, err
 	}
-	toks = transformTemplates(toks)
+	toks = transformTemplates(toks, bindings)
 	toks = runUnion(toks)
 	toks = transformTypeGuard(toks, analysis)
 	if err := checkStrandedIs(toks); err != nil {
@@ -164,16 +164,16 @@ func CompileStage(src, stage string) (string, error) {
 		toks = transformSignals(toks, bindings)
 		analysis := Analyze(toks)
 		toks = expandDefaults(toks, defaultDefs)
-		toks = transformLambdas(toks, analysis)
-		toks, err := transformObjectLits(toks, analysis)
+		toks = transformLambdas(toks, analysis, bindings)
+		toks, err := transformObjectLits(toks, analysis, bindings)
 		if err != nil {
 			return "", err
 		}
-		toks, err = expandDestructures(toks)
+		toks, err = expandDestructures(toks, bindings)
 		if err != nil {
 			return "", err
 		}
-		toks = transformTemplates(toks)
+		toks = transformTemplates(toks, bindings)
 		toks = runUnion(toks)
 		toks = transformTypeGuard(toks, analysis)
 		toks = transformEnum(toks, names)

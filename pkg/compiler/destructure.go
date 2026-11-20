@@ -138,9 +138,9 @@ func parseDestructNames(toks []Token, start, end int) ([]destructName, bool) {
 
 // destructSourceFields 推断右值标识符 ident 的字段集合。
 // 返回 nil 表示无法推断（调用方宽松处理，不校验）。
-func destructSourceFields(toks []Token, ident string, at int, structs map[string]*structInfo) map[string]bool {
+func destructSourceFields(toks []Token, ident string, at int, structs map[string]*structInfo, b *Bindings) map[string]bool {
 	// 1) 先用共享类型推断（var p Student / p := 字面量）
-	if typ := inferIdentType(toks, ident, at); typ != "" {
+	if typ := lookupIdentType(b, toks, ident, at); typ != "" {
 		if info, ok := structs[typ]; ok {
 			return fieldSet(info)
 		}
@@ -237,7 +237,7 @@ func rhsIdentifier(toks []Token, from, to int) string {
 
 // expandDestructures 校验并改写所有对象解构。
 // 校验失败返回 *destructError（带 GX 坐标）。
-func expandDestructures(in []Token) ([]Token, error) {
+func expandDestructures(in []Token, b *Bindings) ([]Token, error) {
 	structs := collectStructTypes(in)
 	ds := detectDestructures(in)
 	if len(ds) == 0 {
@@ -250,7 +250,7 @@ func expandDestructures(in []Token) ([]Token, error) {
 		rhsIdent := rhsIdentifier(out, d.rhsFrom, d.to)
 		fields := map[string]bool(nil)
 		if rhsIdent != "" {
-			fields = destructSourceFields(out, rhsIdent, d.rhsFrom, structs)
+			fields = destructSourceFields(out, rhsIdent, d.rhsFrom, structs, b)
 		}
 		// 校验 S₂ ⊆ fields(T)；fields 为 nil（类型未知）时宽松放行
 		if fields != nil {

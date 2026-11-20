@@ -180,7 +180,7 @@ func matchDelimBack(toks []Token, close int, r string) int {
 
 // inferLambdaTypes 为一个 lambda 推断参数类型与返回类型。
 // an 可为 nil（无 Analysis 时只用显式标注 + 表达式反推）。
-func inferLambdaTypes(toks []Token, l *lambdaExpr, an *Analysis) {
+func inferLambdaTypes(toks []Token, l *lambdaExpr, an *Analysis, b *Bindings) {
 	// 上下文函数类型优先：拿到参数类型列表与返回类型。
 	ctxParams, ctxResult := inferContextFuncType(toks, l, an)
 
@@ -205,7 +205,7 @@ func inferLambdaTypes(toks []Token, l *lambdaExpr, an *Analysis) {
 	}
 	// 无返回值 body（如 () => println(count) / effect 回调）必须先判，
 	// 否则会生成非法的 `return println(...)`（println 无返回值）。
-	if bodyIsVoid(toks, l) {
+	if bodyIsVoid(toks, l, b) {
 		l.bodyResult = "void"
 		return
 	}
@@ -234,7 +234,7 @@ var voidCallbackNames = map[string]bool{
 // bodyIsVoid 判断 lambda body 是否应生成无返回值的 func(){...}。
 // 1) body 顶层是已知无返回值调用（println / 本文件声明的无返回值函数）；
 // 2) lambda 处于 effect 这类 void 回调上下文中。
-func bodyIsVoid(toks []Token, l *lambdaExpr) bool {
+func bodyIsVoid(toks []Token, l *lambdaExpr, b *Bindings) bool {
 	first := nextSigIn(toks, l.bodyFrom, l.bodyTo)
 	if first >= 0 && toks[first].Kind == Ident {
 		callee := toks[first].Text
@@ -247,7 +247,7 @@ func bodyIsVoid(toks []Token, l *lambdaExpr) bool {
 			}
 		}
 		if n >= 0 && toks[n].Text == "(" {
-			if voidBuiltins[callee] || declaredVoidFunc(toks, callee) {
+			if voidBuiltins[callee] || declaredVoidFunc(toks, callee, b) {
 				return true
 			}
 		}
@@ -256,7 +256,11 @@ func bodyIsVoid(toks []Token, l *lambdaExpr) bool {
 }
 
 // declaredVoidFunc 扫描本文件是否声明了名为 name 的无返回值函数 func name(...) {...}。
-func declaredVoidFunc(toks []Token, name string) bool {
+func declaredVoidFunc(toks []Token, name string, b *Bindings) bool {
+	// 优先绑定表的原始文本签名索引（含 IsVoid）；未收录时回退旧扫描。
+	if isVoid, ok := b.FuncIsVoid(name); ok {
+		return isVoid
+	}
 	for i := 0; i < len(toks); i++ {
 		if !toks[i].is("func") {
 			continue
@@ -680,7 +684,7 @@ func literalType(t Token) string {
 // 然后重新 detect。这样下标始终基于最新 token 流，且内层先被转成 func 字面量后，
 // 外层 body 里嵌的就是已转换的结果——避免嵌套 lambda 用旧下标替换导致区间错位、
 // 内层 => 残留的 bug。
-func transformLambdas(in []Token, an *Analysis) []Token {
+func transformLambdas(in []Token, an *Analysis, b *Bindings) []Token {
 	for {
 		lambdas := detectLambdas(in)
 		if len(lambdas) == 0 {
@@ -693,7 +697,7 @@ func transformLambdas(in []Token, an *Analysis) []Token {
 			}
 		}
 		l := &lambdas[sel]
-		inferLambdaTypes(in, l, an)
+		inferLambdaTypes(in, l, an, b)
 		parts := buildLambdaParts(in, l)
 		out := make([]Token, 0, len(in)+len(parts))
 		out = append(out, in[:l.paramOpen]...)

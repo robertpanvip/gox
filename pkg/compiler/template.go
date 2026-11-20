@@ -26,14 +26,14 @@ type tplPart struct {
 }
 
 // transformTemplates 把 token 流里的 Template token 就地展开为字符串拼接 token。
-func transformTemplates(in []Token) []Token {
+func transformTemplates(in []Token, b *Bindings) []Token {
 	out := make([]Token, 0, len(in))
 	for i, t := range in {
 		if t.Kind != Template {
 			out = append(out, t)
 			continue
 		}
-		out = append(out, expandTemplate(t, in, i)...)
+		out = append(out, expandTemplate(t, in, i, b)...)
 	}
 	return out
 }
@@ -42,7 +42,7 @@ func transformTemplates(in []Token) []Token {
 // ctx/useIdx 为当前模板在主流中的位置：对可静态判为 int 的整插值用 strconv.Itoa
 // 替代 fmt.Sprint，避免 fmt.Sprint 的反射装箱开销（实测约 2x）。
 // 递归展开嵌套模板时 ctx 传 nil（保守用 fmt.Sprint）。
-func expandTemplate(t Token, ctx []Token, useIdx int) []Token {
+func expandTemplate(t Token, ctx []Token, useIdx int, b *Bindings) []Token {
 	body := t.Text
 	if len(body) >= 2 && body[0] == '`' && body[len(body)-1] == '`' {
 		body = body[1 : len(body)-1]
@@ -58,7 +58,7 @@ func expandTemplate(t Token, ctx []Token, useIdx int) []Token {
 			if len(inner) > 0 && inner[len(inner)-1].Kind == EOF {
 				inner = inner[:len(inner)-1]
 			}
-			inner = transformTemplates(inner)
+			inner = transformTemplates(inner, nil)
 			// 子 token 用模板起始位置，避免相对坐标污染 sourcemap。
 			for i := range inner {
 				inner[i].Pos = t.Pos
@@ -66,7 +66,7 @@ func expandTemplate(t Token, ctx []Token, useIdx int) []Token {
 			// 整数插值特化：能静态判为 int 时用 strconv.Itoa，避免 fmt.Sprint 的
 			// 反射装箱（实测 2x 开销）。其余类型仍用 fmt.Sprint 保证通用。
 			pkgName, fnName := "fmt", "Sprint"
-			if ctx != nil && exprIsInt(inner, ctx, useIdx) {
+			if ctx != nil && exprIsInt(inner, ctx, useIdx, b) {
 				pkgName, fnName = "strconv", "Itoa"
 			}
 			seg := []Token{
@@ -97,7 +97,7 @@ func expandTemplate(t Token, ctx []Token, useIdx int) []Token {
 
 // exprIsInt 判断插值表达式 inner 是否可静态判定为 int。
 // 支持：整数字面量、ctx 中已知为 int 的单个标识符、以及结果为 int 的简单字面量表达式。
-func exprIsInt(inner []Token, ctx []Token, useIdx int) bool {
+func exprIsInt(inner []Token, ctx []Token, useIdx int, b *Bindings) bool {
 	// 去掉 EOF
 	toks := inner
 	if len(toks) > 0 && toks[len(toks)-1].Kind == EOF {
@@ -117,7 +117,7 @@ func exprIsInt(inner []Token, ctx []Token, useIdx int) bool {
 	}
 	if tk.Kind == Ident && !tk.is("true") && !tk.is("false") && !tk.is("nil") {
 		// 在主流 ctx 里按名字查声明类型；useIdx 是模板位置。
-		return inferIdentType(ctx, tk.Text, useIdx) == "int"
+		return lookupIdentType(b, ctx, tk.Text, useIdx) == "int"
 	}
 	return false
 }

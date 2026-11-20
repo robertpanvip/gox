@@ -307,3 +307,41 @@ goSrc, sm := emit(toks, file)
 - **一处架构边界**：绑定表适合在 lex 后一次构建、贯穿查询「源码里写了什么声明」；但**管线中动态注入的符号**（import、匿名 struct 字段）必须由后段 `collectScope` 兜底。二者是互补关系，不是替代关系——这是 P4 回滚揭示的约束。
 - **对后续 AST 阶段**：`ResolveAt`/`TypeAt` 已提供稳定的「标识符 → 声明/类型」查询，AST 节点可直接复用；P3 调用者切换与 P4 selector 合流建议放到 AST 阶段一并处理（届时注入符号已有 AST 表示）。
 - **质量门禁**：每阶段 `go test ./...` 全绿；golden 无意外变更。
+
+---
+
+## 13. 全面接入（2026-11-20 续）
+
+针对「绑定表建好后旧代码没接入」的问题，本轮把词法层面的符号查询全面切到绑定表。
+
+### 13.1 能力盘点：散落查询分三类
+
+| 类别 | 函数 | 性质 | 处理 |
+|---|---|---|---|
+| **A 词法名字→类型** | `inferIdentType`/`FromParams`/`FromDecl`/`FromRange`、`lookupVarType`、`exprIsInt`、`inferValueType`(Ident 分支) | 重复实现「名字→声明类型」 | 切到 `Bindings.TypeAt` |
+| **B 函数签名反查** | `declaredParamTypeAt`、`inferReturnExpectType`、`inferArgExpectType`、`declaredVoidFunc`、`inferContextFuncType`(实参分支) | 查 func 签名第 i 参数/返回类型 | 切到绑定表的原始文本签名索引 `FuncSigRaw` |
+| **C 表达式形状推断** | `inferExprType`、`inferExprLitType`、`inferParamTypeFromBody`、`inferCollectionElemType`、`inferValueType`(字面量分支) | 纯 token 形状分析，与符号表无关 | **不接入**（非符号表职责） |
+
+### 13.2 落地内容
+
+- **统一查询入口** `lookupIdentType(b, toks, name, useIdx)`：优先 `b.TypeAtIdx`（Pos 稳定、O(1)、天然遮蔽正确），未命中回退旧扫描。所有 A 类调用点经此入口。
+- **Binder 类型能力补齐**：
+  - 修 `paramsTypeText` —— 原实现在 `[]int` 里插空格成 `[] int`，导致 `structs[typ]` 键匹配失败；统一用 `exprText` 原样拼接。
+  - `upgradeRangeVars` 补 range 元素类型（`sliceElemType`），与旧 `inferIdentFromRange` 对齐。
+  - `scanVarConst`/`bindLHS`/参数均已填 `Binding.Type`。
+- **签名索引** `Bindings.funcSigs`：`scanFunc` 时为具名函数记录原始文本签名（参数类型列表/返回类型/isVoid），保留别名不展开。查询 `FuncParamAt`/`FuncResult`/`FuncIsVoid`。`Analysis.FuncSig`（语义层、展开别名）与新索引（词法层、原始文本）互补。
+- **参数透传**：`pipeline` → `transformLambdas`/`transformObjectLits`/`expandDestructures`/`transformTemplates` 及各内部 helper 均接收 `*Bindings`。
+
+### 13.3 验证
+
+- **对拍测试**（`bindings_test.go` 新增 3 项）：`TestBindTypeQueryParity`（参数/var/`:=`/range/链式/遮蔽逐一比对）、`TestBindFuncSigParity`（参数/返回/isVoid）、`TestBindShadowTypePrefersBinding`（遮蔽场景证明绑定表给出正确类型）。全绿。
+- **回退触发率诊断**：5 个代表性编译场景（参数/对象字面量/模板/range/解构）中 `lookupIdentType` 的回退分支命中 **0 次** —— 绑定表已实质接管 A 类查询，回退仅为长尾安全网。
+- **质量门禁**：`go test -race ./...`、`go vet ./...`、`go build ./...` 全绿，golden 无意外变更。
+
+### 13.4 保留回退的理由
+
+`inferIdentType` 系列与 `declaredParamTypeAt`/`declaredVoidFunc` 的旧扫描体保留为回退层：
+- 它们互相依赖（链式字面量推断 `i := j; j := 0`），构成完整回退子系统，删一损全；
+- `inferExprLitType` 仍被 Binder 自身用于字面量类型推断（C 类，必要）；
+- `Analysis.FuncSig` 展开别名，不满足对象字面量「保留原始类型名」的需求，故 B 类回退也有价值。
+绑定表是主路径（回退率 0），旧扫描是安全网——这是「双轨过渡」的最终形态，而非未清理的死代码。

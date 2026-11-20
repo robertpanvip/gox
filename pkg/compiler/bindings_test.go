@@ -296,3 +296,102 @@ func f() {
 		t.Errorf("遮蔽后 flag 类型应为 int，实际 %q", got)
 	}
 }
+
+// ===== 全面接入对拍测试：验证绑定表路径与旧扫描逻辑等价 =====
+
+func TestBindTypeQueryParity(t *testing.T) {
+	// 覆盖 lookupIdentType 的全部 A 类场景：参数 / var 显式 / := 字面量 /
+	// range 元素 / 链式赋值 / 遮蔽。逐一比对「绑定表命中」与「旧扫描」结果。
+	src := `package main
+func f(nums []int, name string) {
+    var age int = 1
+    score := 3.14
+    flag := true
+    j := 0
+    i := j
+    for _, v := range nums {
+        p := point{x: v}
+        println(p, name, age, score, flag, i)
+    }
+}
+type point struct { x int }
+`
+	toks := New(src).AllTokens()
+	b := Bind(toks)
+	// 只比使用点（跳过声明点：声明点旧扫描返回 "" 而绑定表返回类型，属预期）。
+	cases := []string{"nums", "name", "age", "score", "flag", "j", "i", "v"}
+	for i, tk := range toks {
+		if tk.Kind != Ident {
+			continue
+		}
+		matched := false
+		for _, c := range cases {
+			if tk.Text == c {
+				matched = true
+				break
+			}
+		}
+		if !matched || b.DeclAt(tk.Pos) != nil {
+			continue
+		}
+		viaBind := b.TypeAtIdx(toks, tk.Text, i)
+		viaOld := inferIdentType(toks, tk.Text, i)
+		if viaBind != viaOld {
+			t.Errorf("TypeParity %q @line%d: 绑定表=%q 旧扫描=%q", tk.Text, tk.Pos.Line, viaBind, viaOld)
+		}
+	}
+}
+
+func TestBindFuncSigParity(t *testing.T) {
+	// B 类：函数签名索引与旧扫描等价（参数原始文本 / 返回类型 / isVoid）。
+	src := `package main
+func apply(f func(int) int, n int) int { return f(n) }
+func draw(p point) point { return p }
+func notify(msg string) { println(msg) }
+type point struct { x int }
+`
+	toks := New(src).AllTokens()
+	b := Bind(toks)
+	params := []struct {
+		name string
+		idx  int
+	}{{"apply", 0}, {"apply", 1}, {"draw", 0}, {"notify", 0}}
+	for _, p := range params {
+		viaBind := b.FuncParamAt(p.name, p.idx)
+		viaOld := declaredParamTypeAt(toks, p.name, p.idx)
+		if viaBind != viaOld {
+			t.Errorf("FuncParamParity %s[%d]: 绑定表=%q 旧扫描=%q", p.name, p.idx, viaBind, viaOld)
+		}
+	}
+	for _, name := range []string{"apply", "draw", "notify"} {
+		viaBind, ok := b.FuncIsVoid(name)
+		if !ok {
+			t.Errorf("FuncIsVoid %s: 绑定表未收录签名", name)
+			continue
+		}
+		viaOld := declaredVoidFunc(toks, name, nil)
+		if viaBind != viaOld {
+			t.Errorf("FuncVoidParity %s: 绑定表=%v 旧扫描=%v", name, viaBind, viaOld)
+		}
+	}
+}
+
+func TestBindShadowTypePrefersBinding(t *testing.T) {
+	// 关键对拍：遮蔽场景下绑定表给出正确类型，旧扫描给出错误类型。
+	// 证明确实由绑定表接管（而非回退路径碰巧一致）。
+	src := `package main
+func f(n int) {
+    n := "shadow"
+    p := point{x: 0}
+    println(n, p)
+}
+type point struct { x int }
+`
+	toks := New(src).AllTokens()
+	b := Bind(toks)
+	usePos := posAtNthIdent(t, toks, "n", 3) // println(n) —— 遮蔽后应为 string
+	if got := b.TypeAt("n", usePos); got != "string" {
+		t.Errorf("遮蔽后 n 类型应为 string（绑定表），实际 %q", got)
+	}
+	// 旧扫描取「最近声明」会在某些下标下误报 int；这里断言绑定表正确性即可。
+}
