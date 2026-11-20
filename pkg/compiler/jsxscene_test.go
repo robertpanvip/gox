@@ -199,3 +199,87 @@ func main() {
 		t.Errorf("组件属性里的 signal 读应补全 (), got:\n%s", out)
 	}
 }
+
+// 强类型组件契约：func Card(props CardProps) 命中后，JSX 调用生成裸对象字面量，
+// 由管线第二次 objectlit 从签名补全 Card(CardProps{...}) 并按字段校验。
+func TestJSXSceneTypedPropsContract(t *testing.T) {
+	res, err := CompileScene("typed.gx", `package main
+import gxscene "github.com/robertpanvip/gox/runtime/scene"
+type CardProps struct {
+	title string
+	n     int
+}
+func Card(props CardProps) *gxscene.Instance { return nil }
+func main() {
+	_ = <div><Card title="Gox" n={42}/></div>
+}
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := res.GoSource
+	if !strings.Contains(out, "Card(CardProps{") {
+		t.Errorf("应补全为 Card(CardProps{...}), got:\n%s", out)
+	}
+	for _, want := range []string{`title:"Gox"`, `n:42`} {
+		if !strings.Contains(out, want) {
+			t.Errorf("产物应包含 %q, got:\n%s", want, out)
+		}
+	}
+	// 强类型路径不应出现 getter-map / OpComp getter 包装
+	if strings.Contains(out, `gxscene.Props{`) {
+		t.Errorf("强类型组件不应生成 gxscene.Props getter-map, got:\n%s", out)
+	}
+}
+
+func TestJSXSceneTypedPropsValidation(t *testing.T) {
+	cases := []struct {
+		name string
+		jsx  string
+		want string
+	}{
+		{"未知字段", `<Card title="Gox" n={1} bad={2}/>`, `未知字段 "bad"`},
+		{"类型不匹配", `<Card title={123} n={1}/>`, `字段 "title" 类型不匹配`},
+		{"缺字段", `<Card title="Gox"/>`, `缺少字段 "n"`},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			_, err := CompileScene("typed.gx", `package main
+import gxscene "github.com/robertpanvip/gox/runtime/scene"
+type CardProps struct {
+	title string
+	n     int
+}
+func Card(props CardProps) *gxscene.Instance { return nil }
+func main() { _ = <div>`+c.jsx+`</div> }
+`)
+			if err == nil {
+				t.Fatalf("应校验失败: %s", c.jsx)
+			}
+			if !strings.Contains(err.Error(), c.want) {
+				t.Errorf("错误应包含 %q, got: %v", c.want, err)
+			}
+		})
+	}
+}
+
+// 老式 gxscene.Props 组件不受影响：仍走 getter-map（保鲜语义）。
+func TestJSXScenePropsComponentUnchanged(t *testing.T) {
+	res, err := CompileScene("old.gx", `package main
+import gxscene "github.com/robertpanvip/gox/runtime/scene"
+func Card(props gxscene.Props) *gxscene.Instance { return nil }
+func main() {
+	v := "x"
+	_ = <div><Card title={v}/></div>
+}
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(res.GoSource, `gxscene.Props{`) {
+		t.Errorf("老式组件应保留 gxscene.Props getter-map, got:\n%s", res.GoSource)
+	}
+	if !strings.Contains(res.GoSource, `func() any{ return v }`) {
+		t.Errorf("老式组件动态属性应包 getter, got:\n%s", res.GoSource)
+	}
+}

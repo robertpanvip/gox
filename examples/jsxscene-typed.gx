@@ -1,0 +1,33 @@
+// JSX scene 后端 + 强类型组件契约示例。
+// 构建：gox build examples/jsxscene-typed.gx -jsx=scene -o main.go && go run .
+//
+// 演示「省略类型名 + 按组件签名补全 + 字段校验」：
+//   - type CardProps struct 声明 props 契约
+//   - func Card(props CardProps) 命中强类型契约
+//   - <Card title="Gox" n={42}/> 编译成 Card(CardProps{title:"Gox", n:42})
+//   - 属性名拼错 / 类型不符 / 缺字段 → 编译期报错（带 GX 坐标）
+//
+// 取舍：强类型路径的属性是「快照值」（不是 getter），值变化时组件不自动刷新；
+// 需要响应式请用 gxscene.Props + getter（examples/jsxscene.gx）或 signal 接线
+// （examples/jsxscene-signal.gx）。
+package main
+
+import (
+    gxscene "github.com/robertpanvip/gox/runtime/scene"
+    "fmt"
+)
+
+type CardProps struct {
+    title string
+    n     int
+}
+
+pub func Card(props CardProps) *gxscene.Instance {
+    return <div class="card"><h1>{props.title}</h1><span>{props.n}</span></div>
+}
+
+func main() {
+    // 省略类型名：不写 CardProps，编译器从 Card 的签名推断并补全。
+    view := <div id="app"><Card title="Gox" n={42}/></div>
+    fmt.Println(view)
+}

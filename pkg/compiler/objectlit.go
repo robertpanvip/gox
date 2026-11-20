@@ -40,11 +40,11 @@ type objectLit struct {
 }
 
 type objField struct {
-	name     string
-	pos      Pos
-	valFrom  int // 值表达式 token 区间 [valFrom, valTo)
-	valTo    int
-	valType  string // 反推的值类型（延迟填充）
+	name    string
+	pos     Pos
+	valFrom int // 值表达式 token 区间 [valFrom, valTo)
+	valTo   int
+	valType string // 反推的值类型（延迟填充）
 }
 
 // collectStructTypes 扫描所有 `type X struct { ... }` 声明，建立 struct 字段结构表。
@@ -674,6 +674,81 @@ func typeCompatible(target, vt string) bool {
 		return target == "bool"
 	}
 	return false
+}
+
+// collectCompContracts 收集强类型组件契约：扫描 `func Name(props T) ...`，
+// 若首个参数类型 T 是本文件已知的具名 struct，则记录 Name → T。
+// 供 JSX scene 转换分流：命中契约的组件生成裸对象字面量，由后续
+// transformObjectLits 从签名补全并校验字段。
+// 这是一个纯查询函数，不修改 token 流。
+func collectCompContracts(toks []Token, structs map[string]*structInfo) map[string]string {
+	out := map[string]string{}
+	for i := 0; i < len(toks); i++ {
+		if !toks[i].is("func") {
+			continue
+		}
+		nameIdx := funcNameAt(toks, i)
+		if nameIdx < 0 || toks[nameIdx].Kind != Ident {
+			continue
+		}
+		open, close, ok := funcParamParens(toks, i)
+		if !ok {
+			continue
+		}
+		segs := splitTopLevelSegs(toks, open+1, close)
+		if len(segs) == 0 {
+			continue
+		}
+		// 只看首个参数；形如 `props CardProps` 或 `props *CardProps`
+		seg := segs[0]
+		first := nextSigIn(toks, seg[0], seg[1])
+		if first < 0 || toks[first].Kind != Ident {
+			continue
+		}
+		second := nextSigIn(toks, first+1, seg[1])
+		if second < 0 {
+			continue
+		}
+		// 支持指针类型 *CardProps
+		if toks[second].Text == "*" {
+			second = nextSigIn(toks, second+1, seg[1])
+			if second < 0 {
+				continue
+			}
+		}
+		if toks[second].Kind != Ident {
+			continue
+		}
+		typ := toks[second].Text
+		if _, isStruct := structs[typ]; !isStruct {
+			continue
+		}
+		out[toks[nameIdx].Text] = typ
+	}
+	return out
+}
+
+// transformObjectLitExpr 用于 JSX 插值这类「整个表达式就是一个对象字面量」的场景。
+// 与 transformObjectLits 的区别：允许 '{' 是首个有效 token（前面没有 = / return 等前缀），
+// 这是插值 { {k:v} } 的正常形态，而 detectObjectLits 的前缀判定在这里不适用。
+// 其余逻辑复用 transformObjectLits——通过前置一个虚拟 '=' token 达成，变换后剔除。
+func transformObjectLitExpr(in []Token) ([]Token, error) {
+	// 找首个有效 token；若已是 '{'，前置虚拟 '=' 让 detectObjectLits 认可。
+	first := nextSig(in, 0)
+	if first >= 0 && in[first].Text == "{" && in[first].Kind == Operator {
+		pre := []Token{tokOp("=", in[first].Pos)}
+		aug := append(pre, in...)
+		out, err := transformObjectLits(aug, nil)
+		if err != nil {
+			return in, err
+		}
+		// 剔除前置的 '='（变换后它仍是第一个 token）
+		if len(out) > 0 && out[0].Text == "=" && out[0].Kind == Operator {
+			return out[1:], nil
+		}
+		return out, nil
+	}
+	return transformObjectLits(in, nil)
 }
 
 // transformObjectLits 是对象字面量变换入口。

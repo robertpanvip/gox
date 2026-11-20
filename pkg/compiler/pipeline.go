@@ -111,7 +111,19 @@ func compileWithMode(file, src, module string, mode jsxMode) (*Result, error) {
 	toks = transformEnum(toks, names)
 	toks = transformPub(toks, names)
 	if mode == jsxScene {
-		toks = transformJSXScene(toks, sigs)
+		// 收集强类型组件契约（func Card(props CardProps)）供 JSX 转换分流。
+		// 命中契约的组件生成裸对象字面量 Card({...})，随后第二次 objectlit
+		// 会从签名补全 Card(CardProps{...}) 并校验字段。
+		structs := collectStructTypes(toks)
+		comps := collectCompContracts(toks, structs)
+		ctx := &jsxSceneCtx{sigs: sigs, comps: comps}
+		toks = transformJSXScene(toks, ctx)
+		// 第二次对象字面量变换：补全 JSX 转换新产生的 Card({...}) 期望类型并校验。
+		// 第一次已在 desugar 早期处理非 JSX 字面量；这里处理 JSX 阶段新增的。
+		toks, err = transformObjectLits(toks, analysis)
+		if err != nil {
+			return nil, err
+		}
 	} else {
 		toks = transformJSX(toks, sigs)
 	}
@@ -178,7 +190,7 @@ func CompileStage(src, stage string) (string, error) {
 	case "jsx":
 		toks = transformJSX(toks, nil)
 	case "jsxscene":
-		toks = transformJSXScene(toks, nil)
+		toks = transformJSXScene(toks, &jsxSceneCtx{})
 		toks = ReconcileImports(toks, defaultModule)
 	case "pub":
 		toks = transformPub(toks, names)

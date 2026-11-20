@@ -164,6 +164,37 @@ func main() {
 
 验证见 [`runtime/scene/reactive_test.go`](runtime/scene/reactive_test.go)（运行时：signal 经两层组件 Props 传到叶子、写入自动刷新、组件不重建、写同值零冗余写入）与 `pkg/compiler/jsxscene_test.go`（编译器：插值/属性/组件 Props 里的 signal 读补全）。
 
+##### 强类型组件 Props（省略类型名 + 字段校验）
+
+复合组件有两种契约形态，由组件函数签名自动判定：
+
+| 形态 | 组件签名 | JSX 属性编译为 | 语义 |
+|---|---|---|---|
+| **强类型 struct**（推荐要类型安全时） | `func Card(props CardProps)`，`type CardProps struct{...}` | `Card(CardProps{title:"x", n:42})` | 属性是**快照值**，编译期校验字段名/类型/缺失 |
+| **getter-map**（要保鲜/响应式时） | `func Card(props gxscene.Props)` | `Card(gxscene.Props{"title": func() any{...}})` | 属性是 getter，值变化随 `Update()`/`BindReactive` 刷新 |
+
+强类型形态复用了[对象字面量](#11-对象字面量)的「省略类型名 + 期望类型补全 + 校验」机制：JSX 编译期生成裸对象字面量 `Card({title:"x", n:42})`，transpiler 从 `func Card(props CardProps)` 签名推断期望类型 `CardProps`，补全为 `Card(CardProps{...})`，并校验——**字段拼错、类型不符、缺字段都会编译报错（带 GX 坐标）**。
+
+```gx
+// gox build demo.gx -jsx=scene
+import gxscene "github.com/robertpanvip/gox/runtime/scene"
+
+type CardProps struct {
+    title string
+    n     int
+}
+func Card(props CardProps) *gxscene.Instance {
+    return <div><h1>{props.title}</h1><span>{props.n}</span></div>  // 直接强类型字段访问
+}
+func main() {
+    view := <Card title="Gox" n={42}/>   // → Card(CardProps{title:"Gox", n:42})
+    // <Card title={123} n={42}/> → error: 字段 "title" 类型不匹配：期望 string，实际 int
+    // <Card title="Gox"/>         → error: 缺少字段 "n"（类型 CardProps）
+}
+```
+
+> **取舍**：强类型属性是快照值（组件只执行一次、字段是普通值），写变量后**不会**自动刷新——要响应式请用 getter-map + `BindReactive`。两种形态可在同一文件混用，按组件各自签名判定。完整示例见 [`examples/jsxscene-typed.gx`](examples/jsxscene-typed.gx)。
+
 ```go
 view := gxscene.Render(tpl, getters...) // 返回 *Instance，常驻场景树
 fmt.Println(view)                       // Instance.String() 用 TextBackend 绘制
@@ -175,11 +206,12 @@ n := view.Update()                      // 更新，返回写入节点数
 
 | # | 约束 | 说明 |
 |---|---|---|
-| 1 | 组件签名 `func(gxscene.Props) *gxscene.Instance` | 返回类型不匹配则不是合法组件 |
+| 1 | 组件签名二选一 | `func(gxscene.Props) *gxscene.Instance`（getter-map，保鲜）或 `func(T) *gxscene.Instance`（T 为本文件具名 struct，强类型快照）；返回类型不匹配则不是合法组件 |
 | 2 | 组件只执行一次 | 组件体是建树逻辑；不要把「每次刷新要做的事」放这里，放到 getter 里 |
-| 3 | 动态数据必须是 getter | 属性传变量（`title={title}`）而非快照字面量；组件体用 `Get[T]()()` 读。`Get` 断言失败返回零值，不 panic |
+| 3 | getter-map 形态动态数据必须是 getter | 属性传变量（`title={title}`）而非快照字面量；组件体用 `Get[T]()()` 读。`Get` 断言失败返回零值，不 panic |
+| 3b | 强类型形态字段编译期校验 | 属性名必须存在于 struct、值类型须兼容、所有字段须提供；否则编译报错（带 GX 坐标）。属性是快照值，不随变量变化刷新 |
 | 4 | 大写/带点 = 组件，其余 = 原生标签 | 与 `vdom` 后端判定一致 |
-| 5 | children 用 `gxscene.Child(props)()` 读 | 值是子 `Instance`，透明摊平，无多余标签层 |
+| 5 | children 用 `gxscene.Child(props)()` 读（getter-map） | 值是子 `Instance`，透明摊平，无多余标签层；强类型形态 children 作为 struct 字段传入 |
 | 6 | 更新靠 `Update()` 或 `BindReactive` 驱动 | scene 不内置响应式；`BindReactive(signal.Effect)` 可把 signal 直接接到插槽，免手动 Update |
 | 7 | `SetPart` / `SetGetter` 用插槽下标 | 下标由编译期分配，手写 opcode 时才需要；JSX 开发中优先用 getter |
 | 8 | 绘制后端目前只有 `TextBackend` | 经 `Backend` 接口抽象，Skia / wgpu 可后续接入，编译器无需改动 |
