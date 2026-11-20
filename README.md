@@ -23,7 +23,12 @@
 | **对象字面量** | `{ name: "x", age: 1 }` | `struct{ name string; age int }{...}`，有期望类型时用 `point{...}` |
 | **对象解构** | `{ name, age } := p` / `var { name, age } = p` | `name := p.name; age := p.age`（逐字段，校验字段存在） |
 | **Signal 响应式** | `signal n = 0` / `Signal.effect(() => ...)` | `Signal.New(0)` + 函数式读写 + 依赖追踪自动重跑 |
+| **条件分支** | `if cond { <A/> } else { <B/> }`（JSX 内） | `gxscene.OpBranch` + `BranchGetter`，切换时销毁旧 Owner、只重建该区域 |
+| **Keyed 列表** | `<For each={xs} key={...}>{(x T) => <Item/>}</For>` | `gxscene.OpFor` + `ForGetterOf[T]`，按 key 复用节点、每元素独立 Owner |
 | **应用入口** | `gxapp.open(<div/>, cfg)` | `gxapp.Open(gxscene.Render(...), cfg)` + Window 抽象 + signal 自动重绘（源码小写 `open`，编译器还原大写） |
+
+> 响应式 UI 的 Owner / Cleanup / 条件分支 / Keyed For / 结构变化重绘等机制，详见
+> [响应式 UI 路线图落地说明](docs/reactive-ui-roadmap.md)。
 
 ## 1. 可见性：`pub`
 
