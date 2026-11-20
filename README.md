@@ -78,35 +78,80 @@ JSX 有两种降级后端，按场景选择（默认 `vdom`）：
 
 `scene` 后端借鉴 lit-html 的「静态模板 + 动态 part」：`gxscene.Render` 按 opcode 结构缓存静态骨架，clone 得到常驻场景树；每个 `{expr}` / `attr={expr}` 是一个 getter 插槽。数据变化后调 `Update()` 只回写变化节点（可观测指标 `Instance.Writes`）。绘制经 `Backend` 接口抽象，第一版提供 `TextBackend`，Skia / wgpu 后端可后续接入，编译器与场景树无需改动。
 
-#### 复合组件（SolidJS 模型）
+#### 使用指南（scene 后端）
 
-`<Card/>` 这类大写/带点标签是**复合组件**，不是字符串标签。约定：
-
-| 项 | 规则 |
-|---|---|
-| 组件签名 | `func(props gxscene.Props) *gxscene.Instance` |
-| 编译产物 | `OpComp` 插槽 + 一次 `Card(gxscene.Props{...})` 调用；组件**只执行一次** |
-| 动态属性 | `attr={expr}` 包成 `func() any` getter；组件体用 `gxscene.Get[T](props,"attr")()` 读最新值 |
-| 静态属性 | 直接放字面值，`gxscene.Get[T]` 同样可读 |
-| children | 编成一个子 `Instance`，经 `props["children"]` 传入，组件体用 `gxscene.Child(props)()` 读取 |
-| 更新 | 父 `Instance.Update()` 递归驱动所有子组件 `Update()`；组件 getter 不重复调用、子树不重建 |
+一个完整例子，覆盖**组件定义 → JSX 组合 → 数据更新 → 约束**（可直接对照 `examples/jsxscene.gx`）：
 
 ```gx
-// gox build demo.gx -jsx=scene
-import gxscene "github.com/robertpanvip/gox/runtime/scene"
-func Card(props gxscene.Props) *gxscene.Instance {
+// 构建：gox build demo.gx -jsx=scene
+package main
+
+import (
+    gxscene "github.com/robertpanvip/gox/runtime/scene"
+    "fmt"
+)
+
+// 【约束 1】复合组件签名必须是 func(gxscene.Props) *gxscene.Instance。
+// 【约束 2】组件只执行一次——函数体是「建树」而非「每次渲染」，别在这里放依赖刷新的副作用。
+pub func Card(props gxscene.Props) *gxscene.Instance {
+    // 【约束 3】动态属性用 Get[T]()() 读：先取 getter，再在 JSX 里调用 title()。
+    //   title 是 func() string，不是 string；写成 string 就变成了不会更新的快照。
     title := gxscene.Get[string](props, "title")
-    return <div class="card"><h1>{title()}</h1></div>
+    n     := gxscene.Get[int](props, "n")
+    return <div class="card"><h1>{title()}</h1><span>{n()}</span></div>
 }
-// 使用：<div id="app"><Card title={title}/></div>
-// title 变化后：view.Update() → 递归进 Card，只写 title 对应的文本节点
+
+func main() {
+    title := "GX"
+    count := 1
+
+    // 【约束 4】大写/带点标签 = 复合组件；其余 = 原生标签。
+    // title={title} 编成 getter（捕获变量本身），不是把 "GX" 拷贝进去。
+    view := <div id="app"><Card title={title} n={count}/></div>
+
+    fmt.Println(view)   // 首次渲染：挂载常驻场景树
+
+    // ——— 数据更新 ———
+    title = "Gox"       // 改外部变量
+    count = 2
+    view.Update()       // 触发更新：递归进 Card，只写变化的节点（此处 2 个）
+    fmt.Println(view)
+}
 ```
 
-原生元素与组件的区分同 `vdom` 后端：标签名首字母大写或含 `.` 视为组件，其余视为原生标签。
+##### 数据怎么更新
 
-API：`CompileScene` / `CompileSceneWithModule`（对应默认的 `Compile` / `CompileWithModule`）；调试单步用 `gox jsxscene`。运行时见 [`runtime/scene/`](runtime/scene/)，示例见 `examples/jsxscene.gx`。
+scene 后端**没有 Diff、没有重建**。更新 = 重新求值 getter + 只把变化的插槽写回节点。三种更新途径：
 
-> 提示：`scene` 后端动态插值应绑定 getter / signal（读共享引用），这样 `Update()` 才能读到最新值；直接捕获局部值快照不会随外部修改变化。复合组件的 `Props` getter 机制正是为此设计。
+| 方式 | 用法 | 适用 |
+|---|---|---|
+| **闭包 getter（推荐）** | `title={title}` 编成 `func() any{return title}`；改变量后调 `view.Update()` | 绝大多数场景；配合 signal 最自然 |
+| **signal 外接** | 运行时不含依赖追踪。在 getter 里登记订阅、signal 变化时调 `view.Update()` 即可 | 需要自动响应式的 UI（signal 由你的响应式库提供，scene 只消费） |
+| **命令式 `SetPart`** | `view.SetPart(slot, value)` 按插槽下标直接写，绕过 getter | 事件回调里精确改一个值；需知道 slot 下标，较少用 |
+
+`Update()` 返回本次**实际写入的节点数**，值没变则写 0（`equalValue` 按类型严格比较）。观测指标：`Instance.Writes`（累计写入）、`Instance.Updates`（Update 调用次数）。
+
+```go
+view := gxscene.Render(tpl, getters...) // 返回 *Instance，常驻场景树
+fmt.Println(view)                       // Instance.String() 用 TextBackend 绘制
+n := view.Update()                      // 更新，返回写入节点数
+// 只需渲染一次、不更新时：gxscene.RenderText(tpl, getters...) 直接返回 string
+```
+
+##### 约束清单
+
+| # | 约束 | 说明 |
+|---|---|---|
+| 1 | 组件签名 `func(gxscene.Props) *gxscene.Instance` | 返回类型不匹配则不是合法组件 |
+| 2 | 组件只执行一次 | 组件体是建树逻辑；不要把「每次刷新要做的事」放这里，放到 getter 里 |
+| 3 | 动态数据必须是 getter | 属性传变量（`title={title}`）而非快照字面量；组件体用 `Get[T]()()` 读。`Get` 断言失败返回零值，不 panic |
+| 4 | 大写/带点 = 组件，其余 = 原生标签 | 与 `vdom` 后端判定一致 |
+| 5 | children 用 `gxscene.Child(props)()` 读 | 值是子 `Instance`，透明摊平，无多余标签层 |
+| 6 | 更新靠 `Update()` 显式驱动 | scene 不内置响应式；signal 库负责「变化时调 Update」 |
+| 7 | `SetPart` / `SetGetter` 用插槽下标 | 下标由编译期分配，手写 opcode 时才需要；JSX 开发中优先用 getter |
+| 8 | 绘制后端目前只有 `TextBackend` | 经 `Backend` 接口抽象，Skia / wgpu 可后续接入，编译器无需改动 |
+
+API：`CompileScene` / `CompileSceneWithModule`（对应默认的 `Compile` / `CompileWithModule`）；调试单步用 `gox jsxscene`。运行时见 [`runtime/scene/`](runtime/scene/)，完整示例见 `examples/jsxscene.gx`。
 
 ## 4. 外部 Go 符号：只首字母小写
 
