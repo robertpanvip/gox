@@ -88,7 +88,7 @@ func CompileWithModule(file, src, module string) (*Result, error) {
 	}
 	toks = transformEnum(toks, names)
 	toks = transformPub(toks, names)
-	toks = transformJSX(toks)
+	toks = transformJSX(toks, bindings)
 	toks = transformCollections(toks, module)
 	// 统一 import 别名：源码若已用别名导入 list/vdom/strconv，生成代码的占位包名
 	// 需替换为实际别名；否则各 transform 注入的 import 会与生成引用对不上。
@@ -150,7 +150,7 @@ func CompileStage(src, stage string) (string, error) {
 	case "enum":
 		toks = transformEnum(toks, names)
 	case "jsx":
-		toks = transformJSX(toks)
+		toks = transformJSX(toks, nil)
 	case "pub":
 		toks = transformPub(toks, names)
 	case "collections":
@@ -180,7 +180,7 @@ func CompileStage(src, stage string) (string, error) {
 		toks = transformTypeGuard(toks, analysis)
 		toks = transformEnum(toks, names)
 		toks = transformPub(toks, names)
-		toks = transformJSX(toks)
+		toks = transformJSX(toks, bindings)
 		toks = transformCollections(toks, defaultModule)
 		toks = ReconcileImports(toks, defaultModule)
 		scope := collectScope(toks)

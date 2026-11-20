@@ -265,6 +265,48 @@ func rewriteSignalReads(seg []Token, ast *SignalAST) []Token {
 	return out
 }
 
+// rewriteSignalReadsInTemplateExpr 对模板插值片段内的 signal 裸读补 name → name()。
+//
+// 背景：signal 读写改写（transformSignals）先于模板展开（transformTemplates）执行，
+// 彼时 ${...} 还是整块 Template token、内部标识符未被识别，导致模板里的 signal
+// 读取漏改（实测 `v=${a}` 生成 fmt.Sprint(a)，输出函数地址而非值 0x…）。此处在
+// 插值展开后按绑定表补一次改写。
+//
+// 插值 token 由子串重新词法分析得到、Pos 被重置为模板起始位置，无法用 ast.ExprAt
+// 命中原始流节点；改用 ResolveAt(name, at) 按名字 + 模板位置解析绑定（at 为模板
+// token 的原始 Pos，offset 语义让局部遮蔽天然生效）。形态排除与 ParseSignalExprs
+// 一致：selector 右侧 / 复合字段键 / 声明目标 / 声明区 / 已是调用都不改。
+func rewriteSignalReadsInTemplateExpr(seg []Token, b *Bindings, at Pos) []Token {
+	if b == nil {
+		return seg // 无绑定表时无法判定 signal，保持原样（生产路径 b 始终非 nil）
+	}
+	out := make([]Token, 0, len(seg))
+	for i := range seg {
+		t := seg[i]
+		if t.Kind == Ident && isSignalRefAt(b, t.Text, at) {
+			skip := false
+			if p := prevSig(seg, i-1); p >= 0 && seg[p].Text == "." {
+				skip = true // selector 右侧 obj.name
+			}
+			if n := nextSig(seg, i+1); n >= 0 && seg[n].Text == ":" {
+				skip = true // 复合字段键 {name: ...}
+			}
+			if isSignalDeclTarget(seg, i) || inDeclZone(seg, i) {
+				skip = true // 声明目标 / 函数参数 / struct 字段
+			}
+			if n := nextSig(seg, i+1); n >= 0 && seg[n].Text == "(" {
+				skip = true // 已是调用 name(...)
+			}
+			if !skip {
+				out = append(out, t, tokOp("(", t.Pos), tokOp(")", t.Pos))
+				continue
+			}
+		}
+		out = append(out, t)
+	}
+	return out
+}
+
 // isAssignOp 判断是否为简单赋值运算符。
 func isAssignOp(s string) bool { return s == "=" }
 

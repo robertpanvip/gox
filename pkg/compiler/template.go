@@ -66,6 +66,8 @@ func expandTemplate(t Token, body string, ctx []Token, useIdx int, b *Bindings) 
 			if len(inner) > 0 && inner[len(inner)-1].Kind == EOF {
 				inner = inner[:len(inner)-1]
 			}
+			// 递归只展开嵌套模板；signal 改写留给外层在 Pos 统一重置后用正确
+			// 的模板原始位置一次性完成（此处子串 lex 的 Pos 还是相对偏移）。
 			inner = transformTemplates(inner, nil, nil)
 			// 子 token 用模板起始位置，避免相对坐标污染 sourcemap。
 			for i := range inner {
@@ -73,10 +75,17 @@ func expandTemplate(t Token, body string, ctx []Token, useIdx int, b *Bindings) 
 			}
 			// 整数插值特化：能静态判为 int 时用 strconv.Itoa，避免 fmt.Sprint 的
 			// 反射装箱（实测 2x 开销）。其余类型仍用 fmt.Sprint 保证通用。
+			// 注意：必须在 signal 读改写之前判定——改写会把单 token 的 signal 名
+			// 变成 name() 三 token，使 exprIsInt 失效、白白丢掉已有的 int 优化。
 			pkgName, fnName := "fmt", "Sprint"
 			if ctx != nil && exprIsInt(inner, ctx, useIdx, b) {
 				pkgName, fnName = "strconv", "Itoa"
 			}
+			// signal 读改写补漏：transformSignals 先于 transformTemplates 执行，
+			// 彼时 ${...} 还是整块 Template token，其内部 signal 引用未被识别。
+			// 此处插值已展开为普通 token，按名字 + 模板位置补一次 name → name()，
+			// 遮蔽/selector/字段键/已是调用等排除与主流改写保持一致。
+			inner = rewriteSignalReadsInTemplateExpr(inner, b, t.Pos)
 			seg := []Token{
 				tokIdent(pkgName, t.Pos), tokOp(".", t.Pos),
 				tokIdent(fnName, t.Pos), tokOp("(", t.Pos),

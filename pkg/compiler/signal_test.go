@@ -244,3 +244,129 @@ func main() { test(); println(count()) }
 	}
 	containsAll(t, got, `count := 100`, `println(count)`, `println(count())`)
 }
+
+// TestSignalReadInTemplate 回归：模板插值 ${a} 内的 signal 裸读必须改写为 a()。
+// transformSignals 先于 transformTemplates 执行，插值彼时还是整块 Template token
+// 未被识别，曾在展开后漏改，导致 fmt.Sprint(a) 把函数对象当值输出（函数地址）。
+func TestSignalReadInTemplate(t *testing.T) {
+	src := "package main\nsignal a = 1\nsignal b = 2\nfunc main() {\n\tprintln(`v=${a}`)\n\tprintln(`s=${a + b}`)\n\tprintln(`${a}-${b}`)\n}\n"
+	got := compileOK(t, "sigtpl.gx", src)
+	containsAll(t, got,
+		`fmt.Sprint(a())`,
+		`fmt.Sprint(a() + b())`,
+		`fmt.Sprint(a())+"-"+fmt.Sprint(b())`,
+	)
+	// 不得残留裸 signal 名作为 fmt.Sprint 实参
+	if strings.Contains(got, "fmt.Sprint(a)") || strings.Contains(got, "fmt.Sprint(b)") {
+		t.Errorf("模板插值内 signal 未改写为 getter():\n%s", got)
+	}
+}
+
+// TestSignalComputedInTemplate 回归：computed 派生 signal 在模板插值里也要改写。
+// 同时验证 int 特化不受影响（strconv.Itoa(d()) 而非退化成 fmt.Sprint）。
+func TestSignalComputedInTemplate(t *testing.T) {
+	src := "package main\nsignal a = 1\nfunc main() {\n\tlet d = Signal.computed(() => a * 2)\n\tprintln(`d=${d}`)\n}\n"
+	got := compileOK(t, "sigtplcomp.gx", src)
+	containsAll(t, got, `strconv.Itoa(d())`)
+	if strings.Contains(got, "strconv.Itoa(d)") {
+		t.Errorf("computed 在模板插值内未改写为 d():\n%s", got)
+	}
+}
+
+// TestSignalTemplatePreservesExclusions 回归：模板插值里的 selector 右侧 /
+// 函数实参 / 已是调用 / 局部遮蔽，不能被误改写。
+func TestSignalTemplatePreservesExclusions(t *testing.T) {
+	src := "package main\nsignal a = 1\ntype Box struct { v int }\nfunc f(x int) int { return x }\nfunc main() {\n\tbox := Box{v: 3}\n\tprintln(`${box.v}`)\n\tprintln(`${f(a)}`)\n\tprintln(`${a}`)\n\ta := 9\n\tprintln(`${a}`)\n}\n"
+	got := compileOK(t, "sigtplexcl.gx", src)
+	containsAll(t, got,
+		`fmt.Sprint(box.v)`,  // selector 不改写
+		`fmt.Sprint(f(a()))`, // signal 作函数实参要改写
+		`a := 9`,
+	)
+}
+
+// TestSignalTemplateSelectorLHS 回归：signal 作为 selector 接收者 ${a.field}
+// 应改写为 a().field（signal 本身是读），而不是整体跳过。
+func TestSignalTemplateSelectorLHS(t *testing.T) {
+	src := "package main\nsignal p = struct{ v int }{v: 1}\nfunc main() { println(`${p.v}`) }\n"
+	got := compileOK(t, "sigtplsel.gx", src)
+	if !strings.Contains(got, "fmt.Sprint(p().v)") {
+		t.Errorf("signal 作 selector 接收者应改写为 p().v:\n%s", got)
+	}
+}
+
+// TestSignalReadInJSX 回归：JSX 插值里的 signal 裸读必须改写为 name()。
+// JSX 在 lexer 阶段被整块吞成一个 token，transformSignals 扫不到内部的 signal
+// 引用；曾在展开后漏改，导致把函数对象塞进 vdom（<span>{count}</span>）或直接
+// 编译失败（{a+b} → a + b，函数相加）。展开后用 ResolveAt 按名字补改写。
+func TestSignalReadInJSX(t *testing.T) {
+	src := `package main
+signal count = 0
+signal name = "x"
+signal a = 1
+signal b = 2
+func main() {
+    _ = <div id={name}><span>{count}</span>{a + b}</div>
+}
+`
+	got := compileOK(t, "sigjsx.gx", src)
+	containsAll(t, got,
+		`"id": name()`,
+		`nil, count(),`,
+		`a() + b()`,
+	)
+	// 不得残留裸 signal 名作为 vdom 参数
+	if strings.Contains(got, "nil, count,") || strings.Contains(got, `"id": name,`) {
+		t.Errorf("JSX 插值内 signal 未改写为 getter():\n%s", got)
+	}
+}
+
+// TestSignalJSXShadowing 回归：JSX 插值里的局部遮蔽变量不得被误改写。
+// signal count 被函数内 count := 3 遮蔽后，{count} 应读局部变量（原样 count）。
+func TestSignalJSXShadowing(t *testing.T) {
+	src := `package main
+signal count = 0
+func main() {
+    count := 3
+    _ = <div>{count}</div>
+}
+`
+	got := compileOK(t, "sigjsxshadow.gx", src)
+	containsAll(t, got, `count := 3`)
+	if !strings.Contains(got, "nil, count,") {
+		t.Errorf("被遮蔽的局部变量 count 不应改写为 count():\n%s", got)
+	}
+}
+
+// TestSignalJSXNested 回归：嵌套 JSX 的每层插值里的 signal 都要改写。
+func TestSignalJSXNested(t *testing.T) {
+	src := `package main
+signal a = 1
+func main() {
+    _ = <div>{a}<span>{a}</span></div>
+}
+`
+	got := compileOK(t, "sigjsxnest.gx", src)
+	// 两处 {a} 都应变成 a()
+	if n := strings.Count(got, "a()"); n < 2 {
+		t.Errorf("嵌套 JSX 两处 signal 读都应改写，实际 a() 出现 %d 次:\n%s", n, got)
+	}
+}
+
+// TestSignalJSXComponentNameNotRewritten 回归：JSX 组件名（大写开头的引用）
+// 即使与 signal 同名，也不应被改写成调用——组件名是 createElement 的第一个参数，
+// 是要渲染的组件引用，不是 signal 读取。改写只应作用于插值片段。
+func TestSignalJSXComponentNameNotRewritten(t *testing.T) {
+	src := `package main
+signal Card = 1
+func main() {
+    view := <Card/>
+    _ = view
+}
+`
+	got := compileOK(t, "sigjsxcomp.gx", src)
+	containsAll(t, got, `gxvdom.CreateElement(Card, nil)`)
+	if strings.Contains(got, "CreateElement(Card()") {
+		t.Errorf("JSX 组件名不应被误改写为 Card():\n%s", got)
+	}
+}
