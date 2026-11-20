@@ -38,8 +38,8 @@ type Signal[T any] func(...T) T
 
 var (
 	mu        sync.Mutex
-	recalc    = sync.NewCond(&mu)  // computed 重算完成广播，供并发读者等待（H-9）
-	observers = map[uint64]*node{} // 各 goroutine 当前的观察者栈顶，按 goroutine id 隔离（H-8）
+	recalc    = sync.NewCond(&mu)    // computed 重算完成广播，供并发读者等待（H-9）
+	observers = map[uint64][]*node{} // 各 goroutine 的观察者栈，按 goroutine id 隔离（H-8/P1-3）
 )
 
 // goid 返回当前 goroutine 的 id。通过 runtime.Stack 首行 "goroutine N ..." 解析。
@@ -69,11 +69,15 @@ type node struct {
 	subs        map[*node]struct{} // 下游：谁依赖我
 	deps        map[*node]struct{} // 上游：我依赖谁
 	dirty       bool               // computed 的缓存是否失效
+	version     uint64             // 失效版本号：每次被标脏递增，用于检测「计算期间又变脏」（P1-2）
 	computing   bool               // computed 是否正在重算（循环依赖检测）
 	computingBy uint64             // 正在重算的 goroutine id（区分自身重入 vs 其它 goroutine）
 	isEffect    bool               // 是否为 effect（写时直接重跑，而非仅标脏）
 	run         func()             // computed 的重算 / effect 的函数体
-	prev        *node              // 观察者栈中前一个观察者
+	// effect 串行执行调度（P1-3）：running 表示该 effect 正在某 goroutine 上执行，
+	// queued 表示执行期间又收到重跑请求。合并重复请求，保证同一 effect 不并发。
+	running bool
+	queued  bool
 }
 
 func newNode(isEffect bool) *node {
@@ -85,12 +89,20 @@ func newNode(isEffect bool) *node {
 	}
 }
 
-// track 在 mu 持有期间调用：把当前 goroutine 的观察者登记为 n 的下游。
+// track 在 mu 持有期间调用：把当前 goroutine 观察者栈的栈顶登记为 n 的下游。
 func track(n *node) {
-	if ob := observers[goid()]; ob != nil {
+	if st := observers[goid()]; len(st) > 0 {
+		ob := st[len(st)-1]
 		ob.deps[n] = struct{}{}
 		n.subs[ob] = struct{}{}
 	}
+}
+
+// markDirty 在 mu 持有期间调用：把一个 computed 节点标脏并递增失效版本号。
+// version 让重算能发现「计算期间又脏了」——旧结果不得写回（P1-2）。
+func markDirty(n *node) {
+	n.dirty = true
+	n.version++
 }
 
 // clearDeps 在 mu 持有期间调用：清空节点的上游依赖（重跑前调用，避免陈旧依赖）。
@@ -116,7 +128,7 @@ func collectDirty(n *node) []*node {
 			if sub.isEffect {
 				effects = append(effects, sub)
 			} else {
-				sub.dirty = true
+				markDirty(sub)
 				walk(sub)
 			}
 		}
@@ -125,22 +137,21 @@ func collectDirty(n *node) []*node {
 	return effects
 }
 
-// withObserver 在锁外执行 fn，执行期间把 n 设为「当前 goroutine」的观察者并重建其依赖集合。
-// 观察者栈按 goroutine id 隔离：并发下各 goroutine 的 withObserver 操作各自的栈顶，
-// 不会互相覆盖导致依赖登记到错误节点（H-8）。
+// withObserver 在锁外执行 fn，执行期间把 n 压入「当前 goroutine」的观察者栈并重建依赖集合。
+// 观察者栈按 goroutine id 隔离且每个 goroutine 持有独立的栈切片（P1-3）：彻底移除共享的
+// node.prev —— 之前两个 goroutine 同时执行同一节点时会互相覆盖 prev，破坏对方的栈恢复。
 // 恢复用 defer 保证：即便 fn panic（如循环依赖检测触发），当前 goroutine 的栈也不会被污染（M-10）。
 func withObserver(n *node, fn func()) {
 	id := goid()
 	mu.Lock()
-	n.prev = observers[id]
-	observers[id] = n
+	observers[id] = append(observers[id], n)
 	clearDeps(n)
 	mu.Unlock()
 
 	defer func() {
 		mu.Lock()
-		observers[id] = n.prev
-		n.prev = nil
+		st := observers[id]
+		observers[id] = st[:len(st)-1] // 弹出栈顶（n 必为最后压入者）
 		mu.Unlock()
 	}()
 
@@ -159,7 +170,7 @@ func New[T any](v T) Signal[T] {
 			effects := collectDirty(st.n)
 			mu.Unlock()
 			for _, e := range effects {
-				e.run()
+				scheduleEffect(e)
 			}
 		}
 		mu.Lock()
@@ -193,33 +204,52 @@ func Computed[T any](f func() T) Signal[T] {
 			mu.Unlock()
 			panic("gx/signal: 检测到循环依赖：computed 直接或间接读取了自身")
 		}
+		mu.Unlock()
+
+		// 计算直到「版本稳定」：若 f() 执行期间依赖又变化（被标脏 → version++），
+		// 则本次结果基于过期输入，丢弃并重试。这是 P1-2 的核心：不能让旧结果
+		// 写回时把计算期间新产生的 dirty 标记冲掉。
+		// computing 在整个重算期间保持为 true，defer 保证任何退出路径都复位。
+		mu.Lock()
 		st.n.computing = true
 		st.n.computingBy = id
 		mu.Unlock()
-
-		// result 在锁外计算（f 内会读其它 signal，需能再次获取 mu），
-		// 但写回 st.value 必须在锁内，避免与并发读者的数据竞争（H-9）。
-		var result T
-		panicked := true
-		func() {
-			defer func() {
-				mu.Lock()
-				st.n.computing = false
-				st.n.computingBy = 0
-				recalc.Broadcast()
-				mu.Unlock()
-			}()
-			withObserver(st.n, func() { result = f() })
-			panicked = false
+		defer func() {
+			mu.Lock()
+			st.n.computing = false
+			st.n.computingBy = 0
+			recalc.Broadcast()
+			mu.Unlock()
 		}()
-		if panicked {
-			return // f() panic：result 无效，不写回；computing 已由 defer 复位
-		}
 
-		mu.Lock()
-		st.value = result
-		st.n.dirty = false
-		mu.Unlock()
+		for {
+			mu.Lock()
+			startVersion := st.n.version
+			mu.Unlock()
+
+			var result T
+			panicked := true
+			func() {
+				// withObserver 内部重建依赖集合；f 在锁外执行（会读其它 signal）。
+				withObserver(st.n, func() { result = f() })
+				panicked = false
+			}()
+			if panicked {
+				return // f() panic：result 无效，不写回
+			}
+
+			mu.Lock()
+			if st.n.version != startVersion {
+				// 计算期间又脏了：丢弃旧结果，保持 dirty 并重试。
+				// 此时 computing 仍为 true（本 goroutine 持有），继续下一次循环。
+				mu.Unlock()
+				continue
+			}
+			st.value = result
+			st.n.dirty = false
+			mu.Unlock()
+			return
+		}
 	}
 	st.n.run = recompute
 	return func(args ...T) T {
@@ -238,13 +268,41 @@ func Computed[T any](f func() T) Signal[T] {
 	}
 }
 
+// scheduleEffect 串行调度一个 effect 的执行（P1-3）。
+// 同一 effect 的回调绝不在两个 goroutine 上并发执行——用户回调常写共享状态，
+// 并发执行会引入数据竞争。执行期间若又收到重跑请求，只记 queued，待本次结束后
+// 合并重跑一次，避免重复抖动。
+func scheduleEffect(e *node) {
+	mu.Lock()
+	if e.running {
+		e.queued = true
+		mu.Unlock()
+		return
+	}
+	e.running = true
+	mu.Unlock()
+
+	for {
+		e.run() // 用户回调在锁外执行
+		mu.Lock()
+		if e.queued {
+			e.queued = false
+			mu.Unlock()
+			continue // 合并执行期间的请求，再跑一次
+		}
+		e.running = false
+		mu.Unlock()
+		return
+	}
+}
+
 // Effect 立即执行一次 f，并在其依赖的任意 signal 变化时自动重跑。
 // f 在每次执行前会重建依赖集合，因此条件分支里的依赖会被正确增删。
+// 重跑由 scheduleEffect 串行调度，保证同一 effect 的回调不并发（P1-3）。
 func Effect(f func()) {
 	n := newNode(true)
-	run := func() { withObserver(n, f) }
-	n.run = run
-	run() // 首次立即执行
+	n.run = func() { withObserver(n, f) }
+	scheduleEffect(n) // 首次立即执行
 }
 
 // state 保存 signal 的节点与当前值。

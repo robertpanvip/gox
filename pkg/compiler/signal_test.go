@@ -214,3 +214,33 @@ func main() { signal a = 1; f(a, 2) }
 	}
 	containsAll(t, got, `f(a(), 2)`)
 }
+
+// TestSignalNameShadowedByParam 回归 P1-1a：signal 名被函数参数遮蔽时，
+// 函数体内对参数的引用必须保持普通变量，不能改写成 count()。
+func TestSignalNameShadowedByParam(t *testing.T) {
+	src := `package main
+signal count = 0
+func getCount(count int) int { return count + 1 }
+func main() { println(getCount(1), count()) }
+`
+	got := compileOK(t, "sigshadowparam.gx", src)
+	if strings.Contains(got, "return count()") {
+		t.Errorf("被遮蔽的参数 count 被误改写为 count(): %s", got)
+	}
+	containsAll(t, got, `return count + 1`, `var count = Signal.New(0)`, `count())`)
+}
+
+// TestSignalNameShadowedByLocal 回归 P1-1b：signal 名被局部变量遮蔽时，
+// 局部作用域内的引用保持普通变量，函数外的全局 signal 读写仍正常改写。
+func TestSignalNameShadowedByLocal(t *testing.T) {
+	src := `package main
+signal count = 0
+func test() { count := 100; println(count) }
+func main() { test(); println(count()) }
+`
+	got := compileOK(t, "sigshadowlocal.gx", src)
+	if strings.Contains(got, "count := 100; println(count())") {
+		t.Errorf("被遮蔽的局部变量 count 被误改写: %s", got)
+	}
+	containsAll(t, got, `count := 100`, `println(count)`, `println(count())`)
+}

@@ -99,8 +99,115 @@ func computedAssignTarget(toks []Token, computedIdx int) string {
 	return ""
 }
 
+// collectSignalShadows 收集「signal 名被函数参数 / 局部变量遮蔽」的区间。
+//
+// transformSignals 在 Analyze 之前运行，拿不到符号表，因此这里做一次轻量
+// 作用域分析：对每个函数，参数名的作用域是整个函数体；局部 := / var 声明名
+// 的作用域从声明点到函数体结束。凡与 signal 同名的声明都登记为遮蔽区间，
+// 改写读写时落在区间内的标识符保持原样（P1-1：避免 count int 被改成 count()）。
+func collectSignalShadows(toks []Token, sigs map[string]bool) map[string][]shadowRange {
+	shadows := map[string][]shadowRange{}
+	if len(sigs) == 0 {
+		return shadows
+	}
+	add := func(name string, from, to int) {
+		if sigs[name] && to > from {
+			shadows[name] = append(shadows[name], shadowRange{name: name, from: from, to: to})
+		}
+	}
+
+	for i := 0; i < len(toks); i++ {
+		if !toks[i].is("func") {
+			continue
+		}
+		j := nextSig(toks, i+1)
+		if j < 0 {
+			continue
+		}
+		// 定位参数列表的 '(' 与 ')'：
+		//  - func name(...)       → j=name，下一个 '(' 是参数
+		//  - func (recv T) name(...) → j='(' 是接收者，方法名后是参数
+		//  - func(...) 匿名函数    → j='(' 就是参数
+		paramOpen, paramClose := -1, -1
+		if toks[j].Text == "(" {
+			rc := matchDelim(toks, j, "(", ")")
+			if rc > j {
+				after := nextSig(toks, rc+1)
+				if after >= 0 && toks[after].Kind == Ident && !isGoKeyword(toks[after].Text) {
+					// 方法：after 是方法名，之后才是参数括号
+					pOpen := nextSig(toks, after+1)
+					if pOpen >= 0 && toks[pOpen].Text == "(" {
+						paramOpen, paramClose = pOpen, matchDelim(toks, pOpen, "(", ")")
+					}
+				} else {
+					// 匿名函数 func(...)
+					paramOpen, paramClose = j, rc
+				}
+			}
+		} else if toks[j].Kind == Ident {
+			pOpen := nextSig(toks, j+1)
+			if pOpen >= 0 && toks[pOpen].Text == "(" {
+				paramOpen, paramClose = pOpen, matchDelim(toks, pOpen, "(", ")")
+			}
+		}
+		if paramClose <= paramOpen || paramOpen < 0 {
+			continue
+		}
+		bodyStart := findFuncBodyBrace(toks, paramClose)
+		if bodyStart < 0 {
+			continue
+		}
+		bodyEnd := matchDelim(toks, bodyStart, "{", "}")
+		if bodyEnd <= bodyStart {
+			continue
+		}
+		// 参数名：作用域从函数体开始
+		seg := paramOpen + 1
+		for k := paramOpen + 1; k <= paramClose; k++ {
+			if k == paramClose || toks[k].Text == "," {
+				ps := parseParamSeg(toks, seg, k)
+				if ps.nameIdx >= 0 {
+					add(toks[ps.nameIdx].Text, bodyStart, bodyEnd)
+				}
+				seg = k + 1
+			}
+		}
+		// 函数体内的局部声明：:= / var（signal 声明此时还是 signal 关键字，不计入）
+		for k := bodyStart; k < bodyEnd; k++ {
+			if toks[k].Text == ":=" {
+				p := prevSig(toks, k-1)
+				for p >= bodyStart && toks[p].Kind == Ident {
+					add(toks[p].Text, k, bodyEnd)
+					q := prevSig(toks, p-1)
+					if q >= bodyStart && toks[q].Text == "," {
+						p = prevSig(toks, q-1)
+					} else {
+						break
+					}
+				}
+			} else if toks[k].is("var") {
+				if n := nextSig(toks, k+1); n >= 0 && n < bodyEnd && toks[n].Kind == Ident && !isGoKeyword(toks[n].Text) {
+					add(toks[n].Text, k, bodyEnd)
+				}
+			}
+		}
+	}
+	return shadows
+}
+
+// isShadowed 判断下标 idx 处的名字 name 是否处于遮蔽区间内。
+func isShadowed(shadows map[string][]shadowRange, name string, idx int) bool {
+	for _, r := range shadows[name] {
+		if idx >= r.from && idx < r.to {
+			return true
+		}
+	}
+	return false
+}
+
 // rewriteSignals 生成改写后的 token 流。
 func rewriteSignals(toks []Token, sigs map[string]bool) []Token {
+	shadows := collectSignalShadows(toks, sigs)
 	out := make([]Token, 0, len(toks))
 	for i := 0; i < len(toks); i++ {
 		t := toks[i]
@@ -130,7 +237,7 @@ func rewriteSignals(toks []Token, sigs map[string]bool) []Token {
 					k++
 				}
 				// 右侧表达式里的裸 signal 读取也要改写（H-3）：signal b = a → Signal.New(a())
-				out = append(out, rewriteSignalReads(toks[k:end], sigs)...)
+				out = append(out, rewriteSignalReads(toks[k:end], sigs, shadows, k)...)
 				out = append(out, tokOp(")", t.Pos))
 				i = end - 1
 				continue
@@ -167,6 +274,11 @@ func rewriteSignals(toks []Token, sigs map[string]bool) []Token {
 
 		// 3) signal 变量读写改写
 		if t.Kind == Ident && sigs[t.Text] {
+			// P1-1：被同名函数参数 / 局部变量遮蔽时，保持原样（它是普通变量，不是 signal）
+			if isShadowed(shadows, t.Text, i) {
+				out = append(out, t)
+				continue
+			}
 			// 声明目标不改写（var name = ... / name := ...）
 			if isSignalDeclTarget(toks, i) {
 				out = append(out, t)
@@ -204,7 +316,7 @@ func rewriteSignals(toks []Token, sigs map[string]bool) []Token {
 					k++
 				}
 				// 右侧表达式里的裸 signal 读取改写：a += b → a(a() + b())
-				out = append(out, rewriteSignalReads(toks[k:end], sigs)...)
+				out = append(out, rewriteSignalReads(toks[k:end], sigs, shadows, k)...)
 				out = append(out, tokOp(")", t.Pos))
 				i = end - 1
 				continue
@@ -231,7 +343,7 @@ func rewriteSignals(toks []Token, sigs map[string]bool) []Token {
 					k++
 				}
 				// 右侧表达式里的裸 signal 读取改写：a = b → a(b())
-				out = append(out, rewriteSignalReads(toks[k:end], sigs)...)
+				out = append(out, rewriteSignalReads(toks[k:end], sigs, shadows, k)...)
 				out = append(out, tokOp(")", t.Pos))
 				i = end - 1
 				continue
@@ -250,11 +362,16 @@ func rewriteSignals(toks []Token, sigs map[string]bool) []Token {
 // 用于被整段拷贝出主循环的右侧表达式（signal 声明 / 简单赋值 / 复合赋值），
 // 这些片段不会经过 rewriteSignals 主循环的读改写，需在此补上（H-3）。
 // 排除规则与主循环一致：selector 右侧、复合字段键、已是调用、声明目标。
-func rewriteSignalReads(seg []Token, sigs map[string]bool) []Token {
+func rewriteSignalReads(seg []Token, sigs map[string]bool, shadows map[string][]shadowRange, base int) []Token {
 	out := make([]Token, 0, len(seg))
 	for i := range seg {
 		t := seg[i]
 		if t.Kind == Ident && sigs[t.Text] {
+			// P1-1：右侧表达式内被局部遮蔽的同名标识符保持原样
+			if isShadowed(shadows, t.Text, base+i) {
+				out = append(out, t)
+				continue
+			}
 			// selector 右侧 obj.name
 			if p := prevSig(seg, i-1); p >= 0 && seg[p].Text == "." {
 				out = append(out, t)

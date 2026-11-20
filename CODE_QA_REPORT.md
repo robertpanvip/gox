@@ -131,3 +131,26 @@
 | L-9 | ○ | vdom keyed diff 坐标/nil 健壮性——运行时边界场景，改动风险高于收益 |
 
 图例：✅ 已修复并测试　◐ 部分修复　○ 保持现状（低风险收益权衡）
+
+---
+
+# 第二轮外部审查修复记录（2026-11-20）
+
+针对第二轮源码审查提出的 Signal 运行时问题，逐项用真实编译 / 并发探针实证后修复。
+三项 P1 均确认为真 bug（非静态推断误报）。所有修复附回归测试，
+`go test ./...`、`go test -race ./...`、`go vet ./...`、`go build ./...` 全绿。
+
+| ID | 结论 | 修复要点 | 回归测试 |
+|---|---|---|---|
+| P1-1 | ✅ 真 bug | signal 名被函数参数 / 局部变量遮蔽时被误改写为 `count()`（真实 `go build` 报 `cannot call count (int)`）。新增 `collectSignalShadows` 做轻量作用域区间分析，遮蔽区内的同名标识符保持原样 | `TestSignalNameShadowedByParam` / `TestSignalNameShadowedByLocal` |
+| P1-2 | ✅ 真 bug | computed 的 f() 锁外计算期间源被写并标脏，旧结果写回时冲掉 dirty。改为版本号机制（node.version），写回前比对版本，变化则丢弃旧结果重试至稳定 | `TestComputedNoStaleOnConcurrentWrite` |
+| P1-3 | ✅ 真 bug | 观察者栈用共享 `node.prev`，两个 goroutine 同时执行同一节点互相覆盖；effect 回调并发执行引发用户数据竞争。改为按 goroutine 的独立栈切片；effect 经 `scheduleEffect` 串行调度并合并重复请求 | `TestEffectSerialUnderConcurrentWrites` / `TestNestedComputedConcurrentRead` |
+
+## 本轮保持现状的审查建议（非 bug，属设计权衡 / 后续演进）
+
+| 建议 | 状态 | 说明 |
+|---|---|---|
+| 写入边界语义（多参数只用首个 / computed 写入忽略 / 相等值不触发 / Dispose） | ○ | 属 API 语义扩展，非正确性 bug；Dispose 生命周期是后续演进项 |
+| goid() 用 runtime.Stack 属非官方技巧 | ○ | 当前无官方 goroutine-local；改动需重设 API 契约，风险高于收益，已在代码注释标注 |
+| 对象解构字段重命名 / 嵌套解构 | ○ | 报告本身建议暂不增加，先把简单解构的作用域/类型/求值处理完善 |
+| 统一符号表 + 作用域 + 表达式 AST 改造 | ○ | 架构级演进，另立方案评审后分阶段落地；本轮先以补丁解除 P1 正确性风险 |

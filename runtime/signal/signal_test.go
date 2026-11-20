@@ -267,3 +267,94 @@ func containsChineseSubstr(s, sub string) bool {
 	}
 	return false
 }
+
+// TestComputedNoStaleOnConcurrentWrite 回归 P1-2：computed 的 f() 在锁外计算期间，
+// 若另一 goroutine 写了源信号并标脏，旧结果不得写回冲掉失效标记。
+// 用 channel 屏障确定性复现该竞态窗口。
+func TestComputedNoStaleOnConcurrentWrite(t *testing.T) {
+	src := New(2)
+	started := make(chan struct{})
+	release := make(chan struct{})
+	done := make(chan int, 1)
+
+	d := Computed(func() int {
+		v := src() // 读旧值 2，登记依赖
+		select {
+		case started <- struct{}{}:
+		default:
+		}
+		<-release // 期间放行另一 goroutine 写源
+		return v * 2
+	})
+
+	go func() { done <- d() }()
+	<-started // f() 已读到 2
+	src(5)    // 写 5 → collectDirty 标脏 d（version++）
+	close(release)
+	got := <-done
+
+	if got != 10 {
+		t.Errorf("计算期间写入被吞：d()=%d, want=10", got)
+	}
+	if again := d(); again != 10 {
+		t.Errorf("后续读取仍是陈旧值：d()=%d, want=10", again)
+	}
+}
+
+// TestEffectSerialUnderConcurrentWrites 回归 P1-3：多个 goroutine 并发写同一 signal
+// 触发 effect 时，effect 回调不得并发执行（否则用户回调里的共享状态会数据竞争）。
+// 在 -race 下运行此测试可验证无竞争；无 -race 时验证回调串行（用原子计数检测重入）。
+func TestEffectSerialUnderConcurrentWrites(t *testing.T) {
+	count := New(0)
+	var active, maxActive, total int32
+	Effect(func() {
+		cur := atomic.AddInt32(&active, 1)
+		for {
+			m := atomic.LoadInt32(&maxActive)
+			if cur <= m || atomic.CompareAndSwapInt32(&maxActive, m, cur) {
+				break
+			}
+		}
+		_ = count() // 登记依赖
+		atomic.AddInt32(&total, 1)
+		atomic.AddInt32(&active, -1)
+	})
+
+	var wg sync.WaitGroup
+	for i := 0; i < 200; i++ {
+		wg.Add(1)
+		go func(v int) {
+			defer wg.Done()
+			count(v)
+		}(i)
+	}
+	wg.Wait()
+
+	if got := atomic.LoadInt32(&maxActive); got != 1 {
+		t.Errorf("effect 回调发生并发执行：maxActive=%d, want=1", got)
+	}
+	if atomic.LoadInt32(&total) == 0 {
+		t.Error("effect 从未执行")
+	}
+}
+
+// TestNestedComputedConcurrentRead 回归 P1-3：嵌套 computed（观察者栈多层）在并发读写下
+// 栈的 push/pop 不共享 node.prev，不破坏彼此的栈结构。
+func TestNestedComputedConcurrentRead(t *testing.T) {
+	a := New(1)
+	b := New(2)
+	outer := Computed(func() int {
+		inner := Computed(func() int { return b() })
+		return a() + inner()
+	})
+	var wg sync.WaitGroup
+	for i := 0; i < 100; i++ {
+		wg.Add(1)
+		go func(v int) {
+			defer wg.Done()
+			b(v)
+			_ = outer()
+		}(i)
+	}
+	wg.Wait()
+}
