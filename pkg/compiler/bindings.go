@@ -81,6 +81,19 @@ type Binding struct {
 	Scope   *BindScope // 所属作用域
 	IsPub   bool       // pub/enum 阶段回填：导出名映射的镜像
 	PubName string     // 导出后的名字（如 foo → Foo）
+
+	// VisibleFrom 是绑定「真正开始可见」的位置（按 Offset 比较）。
+	// 多数声明可见起点就是 DeclPos；但 Go 的语言规则是短变量声明/带初始化
+	// 的 var 声明其作用域从「声明语句结束」开始，因此 `x := x + 1` 右侧的 x
+	// 应引用外层绑定。这类声明会把 VisibleFrom 设到语句右端，ResolveAt 据此排除。
+	VisibleFrom Pos
+}
+
+// setVisibleFrom 设置绑定的可见起点。nil 安全、NoPos 忽略。
+func (bd *Binding) setVisibleFrom(pos Pos) {
+	if bd != nil && pos.valid() {
+		bd.VisibleFrom = pos
+	}
 }
 
 // ScopeKind 区分作用域种类；selector 保护等规则依赖它（字段/方法只在 BkField/BkFunc 有效）。
@@ -89,8 +102,12 @@ type ScopeKind uint8
 const (
 	SkGlobal ScopeKind = iota // 包级
 	SkFunc                    // 函数体（含接收者/参数）
-	SkBlock                   // if/for/switch/裸 {} 块
+	SkBlock                   // 裸 {} 块
 	SkStruct                  // struct 定义体 / 匿名 struct（字段名空间）
+	SkFor                     // for 语句（含 init/条件/post/body）
+	SkIf                      // if 语句（含 init/条件/body/else 链）
+	SkSwitch                  // switch 语句（含 init/tag/body）
+	SkSelect                  // select 语句
 )
 
 // BindScope 是词法作用域树的一个节点。边界用 Pos.Offset 表示，不受下标漂移影响。
@@ -194,12 +211,13 @@ func (b *Bindings) addBinding(t Token, kind BindingKind, scope *BindScope, typ s
 		return ex
 	}
 	bd := &Binding{
-		ID:      len(b.all),
-		Name:    t.Text,
-		Kind:    kind,
-		Type:    typ,
-		DeclPos: t.Pos,
-		Scope:   scope,
+		ID:          len(b.all),
+		Name:        t.Text,
+		Kind:        kind,
+		Type:        typ,
+		DeclPos:     t.Pos,
+		VisibleFrom: t.Pos, // 默认：声明即可见；:= 场景由调用方改写为语句结束处
+		Scope:       scope,
 	}
 	scope.Bindings[t.Text] = append(scope.Bindings[t.Text], bd)
 	b.byPos[off] = bd
@@ -250,6 +268,11 @@ func (b *Bindings) scan(toks []Token, start, end int, scope *BindScope) {
 					i = close
 				}
 			}
+		case t.is("for"), t.is("if"), t.is("switch"), t.is("select"):
+			// 控制语句：init 变量（for i := 0 / if x := f()）的作用域仅限本语句，
+			// 不得泄漏到外层。为整条语句建独立作用域 [关键字, body右括号)，
+			// 在其中扫描 init + 条件 + body，返回 body 右括号让外层跳过。
+			i = b.scanControl(toks, i, end, scope)
 		case t.Text == "{":
 			// 普通块：建 SkBlock 并递归扫描其内容，跳过整个块。
 			close := matchDelim(toks, i, "{", "}")
@@ -260,6 +283,119 @@ func (b *Bindings) scan(toks []Token, start, end int, scope *BindScope) {
 			}
 		}
 	}
+}
+
+// scanControl 扫描一条 for/if/switch/select 语句，为其建立独立词法作用域。
+// 作用域覆盖从关键字 token 到 body 右括号（含 init / 条件 / post / body / else 链），
+// 使 `for i := 0` / `if x := f()` 声明的变量在语句外不可见（P2-1）。
+// 返回 body 右括号下标（若有 else 链则到链尾），供外层 scan 跳过整条语句。
+func (b *Bindings) scanControl(toks []Token, ci, end int, parent *BindScope) int {
+	body := controlBodyBrace(toks, ci+1, end)
+	if body < 0 || body >= end {
+		return ci // 定位失败：退化为普通扫描，至少 init 仍登记在 parent（旧行为）
+	}
+	close := matchDelim(toks, body, "{", "}")
+	if close <= body || close > end {
+		return ci
+	}
+
+	var kind ScopeKind
+	switch {
+	case toks[ci].is("for"):
+		kind = SkFor
+	case toks[ci].is("if"):
+		kind = SkIf
+	case toks[ci].is("switch"):
+		kind = SkSwitch
+	default:
+		kind = SkSelect
+	}
+	// 作用域从关键字覆盖到 body 右括号；else 链稍后并入同一作用域。
+	last := close
+	cs := b.newScope(kind, parent, toks[ci].Pos, toks[close].Pos)
+
+	// init + 条件 + post（关键字之后到 body 之前）：在 cs 中扫描，使 := 落入 cs。
+	b.scan(toks, ci+1, body, cs)
+	// body：其内部第一个 '{' 会由普通块规则再建子 SkBlock；初值变量经父链 cs 可见。
+	b.scan(toks, body, close+1, cs)
+
+	// else / else if：并入同一 if 作用域，共享 init 变量。
+	if kind == SkIf {
+		last = b.scanElseChain(toks, close, end, cs)
+		cs.To = toks[last].Pos
+	}
+	return last
+}
+
+// scanElseChain 扫描 if 的 else/else-if 链，全部并入 scope（与 if init 共享作用域）。
+// 返回链尾 token 下标（最后一个右括号）。
+func (b *Bindings) scanElseChain(toks []Token, thenClose, end int, scope *BindScope) int {
+	last := thenClose
+	for {
+		j := nextSig(toks, last+1)
+		if j < 0 || j >= end || !toks[j].is("else") {
+			break
+		}
+		k := nextSig(toks, j+1)
+		if k < 0 || k >= end {
+			break
+		}
+		if toks[k].is("if") {
+			// else if：作为新的 if 语句扫描，但 parent 用当前 scope 以共享 init。
+			last = b.scanControl(toks, k, end, scope)
+		} else if toks[k].Text == "{" {
+			close := matchDelim(toks, k, "{", "}")
+			if close > k && close <= end {
+				b.scan(toks, k, close+1, scope) // else body 的 '{' 再建子块
+				last = close
+			} else {
+				break
+			}
+		} else {
+			break
+		}
+	}
+	return last
+}
+
+// controlBodyBrace 定位控制语句的 body '{'：从 start 起找第一个处于括号/方括号/
+// 花括号嵌套深度为 0 的 '{'。Go 规定 header 里的复合字面量（[]T{...}）必须
+// 被括号包裹，因此顶层的第一个 '{' 必是 body，不会被 `range []int{1,2}` 误伤。
+func controlBodyBrace(toks []Token, start, end int) int {
+	depth := 0
+	for i := start; i < end; i++ {
+		switch toks[i].Text {
+		case "{":
+			if depth != 0 {
+				depth++ // 嵌套在括号/复合字面量里的 '{'
+				continue
+			}
+			// depth==0 的 '{' 候选：可能是 body，也可能是 header 里无括号的
+			// 复合字面量（如 `for _, v := range []int{1,2} {`）。Go 允许 range
+			// 表达式里的复合字面量不加括号，此时其配对 '}' 后紧跟 body 的 '{'。
+			// 用「配对后是否紧跟另一个 '{'」区分二者。
+			if close := matchDelim(toks, i, "{", "}"); close > i && close < end {
+				if nxt := nextSig(toks, close+1); nxt > 0 && nxt < end && toks[nxt].Text == "{" {
+					i = close // 当前是复合字面量，跳到其后继续找 body
+					continue
+				}
+			}
+			return i
+		case "(":
+			depth++
+		case "[":
+			depth++
+		case ")", "]":
+			if depth > 0 {
+				depth--
+			}
+		case "}":
+			if depth > 0 {
+				depth--
+			}
+		}
+	}
+	return -1
 }
 
 // scanFunc 处理一个 func 声明/字面量：建 SkFunc 作用域，登记接收者、参数、函数名，
@@ -570,17 +706,31 @@ func (b *Bindings) scanEnum(toks []Token, ei, end int, scope *BindScope) {
 
 // bindLHS 收集 `:=` 左侧的标识符（可能多个：`a, b := ...`）。
 // 类型从 `:=` 右侧首个字面量推断（多值场景与 inferIdentFromDecl 一致，取首个）。
+//
+// 可见性：Go 规定短变量声明的作用域从声明语句结束处开始，故 `x := x + 1` 右侧
+// 的 x 应引用外层绑定。这里把新绑定的 VisibleFrom 设到右侧表达式最后一个 token；
+// `range` 迭代变量例外——它们在循环体里立即生效，保持默认 DeclPos 即可。
 func (b *Bindings) bindLHS(toks []Token, op int, scope *BindScope, kind BindingKind) {
 	exprFrom := nextSig(toks, op+1)
 	typ := ""
+	visibleFrom := NoPos
+	isRange := exprFrom >= 0 && toks[exprFrom].Text == "range"
 	if exprFrom >= 0 {
 		exprTo := exprEndInStmt(toks, exprFrom, len(toks))
 		typ = inferExprLitType(toks, exprFrom, exprTo)
+		if !isRange {
+			if exprTo > exprFrom && exprTo <= len(toks) {
+				visibleFrom = toks[exprTo-1].Pos // 表达式最后一个 token 处生效
+			} else if exprFrom < len(toks) {
+				visibleFrom = toks[exprFrom].Pos
+			}
+		}
 	}
 	p := prevSig(toks, op-1)
 	for p >= 0 {
 		if toks[p].Kind == Ident && !isGoKeyword(toks[p].Text) {
-			b.addBinding(toks[p], kind, scope, typ)
+			bd := b.addBinding(toks[p], kind, scope, typ)
+			bd.setVisibleFrom(visibleFrom)
 		}
 		q := prevSig(toks, p-1)
 		if q >= 0 && toks[q].Text == "," {
@@ -694,7 +844,18 @@ func (b *Bindings) ResolveAt(name string, pos Pos) *Binding {
 		cands := s.Bindings[name]
 		var best *Binding
 		for _, c := range cands {
-			if c.DeclPos.Offset <= off {
+			// 声明点自身总是可见：pub/signal 等 transform 在声明 token 位置
+			// 查询绑定以判断「此声明是否遮蔽外层符号」，必须命中新声明本身。
+			if c.DeclPos.Offset == off {
+				return c
+			}
+			// 引用点：VisibleFrom 为声明真正生效的偏移（:= 场景是语句结束处），
+			// 未设置时回退到 DeclPos。这样 `x := x + 1` 右侧的 x 不命中新绑定。
+			from := c.VisibleFrom.Offset
+			if !c.VisibleFrom.valid() {
+				from = c.DeclPos.Offset
+			}
+			if from <= off {
 				best = c
 			}
 		}
