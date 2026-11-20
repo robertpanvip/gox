@@ -79,7 +79,8 @@ type App struct {
 	win             Window
 	cfg             WindowConfig
 	closed          bool
-	reactivePriming bool // 聚合 effect 首次执行只登记依赖，不重绘（Open 已画首帧）
+	reactivePriming bool                  // 聚合 effect 首次执行只登记依赖，不重绘（Open 已画首帧）
+	reactive        []gxscene.Computation // BindReactive 建立的响应式句柄，Close 时清理
 }
 
 // Open 把场景树挂到默认 Headless 窗口并首次绘制。
@@ -144,12 +145,12 @@ func (a *App) Update() int {
 // 底层 Instance.BindReactive（但不会产生窗口帧）。
 //
 //	app.BindReactive(signal.Effect)   // signal 变化 → 更新 + 自动重绘一帧
-func (a *App) BindReactive(effect func(func())) {
+func (a *App) BindReactive(effect func(func()) gxscene.Computation) {
 	if effect == nil || a.closed {
 		return
 	}
 	a.reactivePriming = true
-	effect(func() {
+	if c := effect(func() {
 		_ = a.inst.Update() // 递归读所有 getter 登记依赖 + 裁剪写入
 		if a.reactivePriming {
 			// 首次执行（接线时立即触发）只登记依赖；Open 已画首帧，避免重复绘制。
@@ -159,7 +160,9 @@ func (a *App) BindReactive(effect func(func())) {
 		if !a.closed {
 			_ = a.Draw() // 一批更新完成，画一帧
 		}
-	})
+	}); c != nil {
+		a.reactive = append(a.reactive, c)
+	}
 }
 
 // Run 进入窗口事件循环，直到窗口关闭。Headless 后端立即返回 nil。
@@ -176,6 +179,11 @@ func (a *App) Close() error {
 		return nil
 	}
 	a.closed = true
+	// 先停掉响应式订阅，避免关闭过程中 signal 写入触发已关闭窗口的重绘。
+	for _, c := range a.reactive {
+		c.Dispose()
+	}
+	a.reactive = nil
 	return a.win.Close()
 }
 

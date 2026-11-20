@@ -30,9 +30,9 @@ func TestEffectRerunsOnWrite(t *testing.T) {
 		t.Fatalf("after write = %v, want [0 5]", seen)
 	}
 	count(9)
-	count(9) // 相同值也触发（本运行时不做相等裁剪）
-	if len(seen) != 4 {
-		t.Fatalf("after 2 writes = %v, want 4 runs", seen)
+	count(9) // 相等性裁剪：值未变化，不重复触发下游
+	if len(seen) != 3 {
+		t.Fatalf("after 2 writes = %v, want 3 runs (相等写入被裁剪)", seen)
 	}
 }
 

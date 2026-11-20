@@ -20,6 +20,8 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+
+	"github.com/robertpanvip/gox/runtime/signal"
 )
 
 // OpCode 是编译期生成的 opcode 类型。
@@ -229,9 +231,15 @@ type Instance struct {
 	tpl     Template
 	root    *Node
 	slots   []*slot
-	Writes  int // 累计实际写入节点的次数（细粒度更新的可观测指标）
-	Updates int // Update 调用次数
+	comps   []Computation // BindReactive 建立的响应式计算句柄，Dispose 时统一清理
+	Writes  int           // 累计实际写入节点的次数（细粒度更新的可观测指标）
+	Updates int           // Update 调用次数
 }
+
+// Computation 是响应式计算的可销毁句柄。用类型别名统一到 signal 包的定义，
+// 使 signal.Effect（func(func()) signal.Computation）能直接作为 BindReactive
+// 的实参——Go 函数类型要求返回类型 identical，别名保证二者是同一类型。
+type Computation = signal.Computation
 
 // Render 取（或编译）模板骨架，clone 成常驻树并绑定 getters。
 // getters 的数量须等于模板的插槽数 N；缺失的 getter 以 nil 处理（渲染为 <nil> 的零值）。
@@ -530,7 +538,7 @@ func (i *Instance) SetPart(slot int, v any) {
 //
 // scene 核心不依赖任何具体响应式库：effect 由调用方注入（如 signal.Effect），
 // 渲染与响应式解耦——这也是 scene 后端从一开始就留白的那层。
-func (i *Instance) BindReactive(effect func(func())) {
+func (i *Instance) BindReactive(effect func(func()) Computation) {
 	if effect == nil {
 		return
 	}
@@ -546,7 +554,23 @@ func (i *Instance) BindReactive(effect func(func())) {
 		}
 		slot := s
 		getter := sl.get
-		effect(func() { i.SetPart(slot, getter()) })
+		if c := effect(func() { i.SetPart(slot, getter()) }); c != nil {
+			i.comps = append(i.comps, c)
+		}
+	}
+}
+
+// Dispose 销毁该实例通过 BindReactive 建立的所有响应式计算，停止订阅并清理。
+// 幂等：多次调用只清理一次。复合子组件的计算由其自身实例负责。
+func (i *Instance) Dispose() {
+	for _, c := range i.comps {
+		c.Dispose()
+	}
+	i.comps = nil
+	for _, sl := range i.slots {
+		if sl.kind == slotComp && sl.child != nil {
+			sl.child.Dispose()
+		}
 	}
 }
 

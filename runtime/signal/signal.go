@@ -27,6 +27,7 @@
 package signal
 
 import (
+	"reflect"
 	"runtime"
 	"sync"
 )
@@ -78,6 +79,15 @@ type node struct {
 	// queued 表示执行期间又收到重跑请求。合并重复请求，保证同一 effect 不并发。
 	running bool
 	queued  bool
+	// owner 是该计算所属的响应式作用域，销毁 owner 时级联 Dispose。
+	owner *Owner
+	// disposed 标记节点是否已销毁：销毁后不再重跑、不再登记依赖。
+	disposed bool
+	// equals 是源 signal 的相等性策略：写入值相等则不触发下游。
+	equals func(a, b any) bool
+	// runCleanups 是当前计算注册的 onCleanup 回调：每次重跑前执行并清空，
+	// 节点销毁时也执行一次（幂等地清空）。
+	runCleanups []func()
 }
 
 func newNode(isEffect bool) *node {
@@ -146,7 +156,14 @@ func withObserver(n *node, fn func()) {
 	mu.Lock()
 	observers[id] = append(observers[id], n)
 	clearDeps(n)
+	// 重跑前执行上一轮注册的 onCleanup（SolidJS 语义：每次重新执行前先清理）。
+	cleanups := n.runCleanups
+	n.runCleanups = nil
 	mu.Unlock()
+
+	for _, c := range cleanups {
+		c() // 锁外执行用户 cleanup，回调内可安全读写 signal
+	}
 
 	defer func() {
 		mu.Lock()
@@ -164,18 +181,47 @@ func withObserver(n *node, fn func()) {
 
 // ---------- 公开 API ----------
 
-// New 创建一个值为 v 的源 signal。
+// New 创建一个值为 v 的源 signal。默认用 reflect.DeepEqual 判断相等：
+// 写入值未变化时短路，不触发下游 computed/effect（避免 count=10 连续写三次
+// 触发三次无效重跑）。不可比较类型（slice/map/func）也能安全判定。
+// 需要「每次写都通知」的场景请用 NewWithEquals(v, func(a,b T) bool { return false })。
 func New[T any](v T) Signal[T] {
-	st := &state[T]{n: newNode(false), value: v}
+	return NewWithEquals(v, func(a, b T) bool { return reflect.DeepEqual(a, b) })
+}
+
+// NewWithEquals 用自定义相等策略创建 signal。equals(a,b) 返回 true 表示两值相等，
+// 写入被忽略、不触发下游。equals 为 nil 时退化为「永不相等」（每次写都通知）。
+func NewWithEquals[T any](v T, equals func(a, b T) bool) Signal[T] {
+	n := newNode(false)
+	if equals != nil {
+		eq := equals
+		n.equals = func(a, b any) bool {
+			av, aok := a.(T)
+			bv, bok := b.(T)
+			if !aok || !bok {
+				return false
+			}
+			return eq(av, bv)
+		}
+	}
+	st := &state[T]{n: n, value: v}
 	return func(args ...T) T {
 		if len(args) > 0 {
 			mu.Lock()
-			st.value = args[0]
+			next := args[0]
+			changed := true
+			if n.equals != nil {
+				changed = !n.equals(st.value, next)
+			}
+			if !changed {
+				v := st.value
+				mu.Unlock()
+				return v // 相等：跳过标脏与调度
+			}
+			st.value = next
 			effects := collectDirty(st.n)
 			mu.Unlock()
-			for _, e := range effects {
-				scheduleEffect(e)
-			}
+			dispatchEffects(effects)
 		}
 		mu.Lock()
 		track(st.n)
@@ -188,7 +234,15 @@ func New[T any](v T) Signal[T] {
 // Computed 创建一个派生 signal：f 的结果被缓存，仅在依赖变化时惰性重算。
 // 派生 signal 是只读的（带参调用写入被忽略）。
 func Computed[T any](f func() T) Signal[T] {
+	s, _ := ComputedWithHandle(f)
+	return s
+}
+
+// ComputedWithHandle 创建派生 signal 并返回其 Computation 句柄。句柄可 Dispose
+// 以断开依赖、停止参与下游传播；若在某个 Owner 内创建，Owner 销毁时级联销毁。
+func ComputedWithHandle[T any](f func() T) (Signal[T], Computation) {
 	st := &state[T]{n: newNode(false)}
+	attachToOwner(st.n)
 	recompute := func() {
 		id := goid()
 		mu.Lock()
@@ -258,7 +312,7 @@ func Computed[T any](f func() T) Signal[T] {
 		}
 	}
 	st.n.run = recompute
-	return func(args ...T) T {
+	sig := func(args ...T) T {
 		if len(args) > 0 {
 			mu.Lock()
 			v := st.value // 只读：忽略写入
@@ -272,6 +326,7 @@ func Computed[T any](f func() T) Signal[T] {
 		mu.Unlock()
 		return v
 	}
+	return sig, &handle{n: st.n}
 }
 
 // scheduleEffect 串行调度一个 effect 的执行（P1-3）。
@@ -280,6 +335,10 @@ func Computed[T any](f func() T) Signal[T] {
 // 合并重跑一次，避免重复抖动。
 func scheduleEffect(e *node) {
 	mu.Lock()
+	if e.disposed {
+		mu.Unlock()
+		return // 已销毁的计算不再重跑
+	}
 	if e.running {
 		e.queued = true
 		mu.Unlock()
@@ -317,10 +376,22 @@ func scheduleEffect(e *node) {
 // Effect 立即执行一次 f，并在其依赖的任意 signal 变化时自动重跑。
 // f 在每次执行前会重建依赖集合，因此条件分支里的依赖会被正确增删。
 // 重跑由 scheduleEffect 串行调度，保证同一 effect 的回调不并发（P1-3）。
-func Effect(f func()) {
+//
+// 返回 Computation 句柄：调用 Dispose() 可停止该 effect 并清理其订阅；
+// 若 effect 在某个 Owner 内创建，Owner 销毁时也会级联销毁它。
+func Effect(f func()) Computation {
 	n := newNode(true)
 	n.run = func() { withObserver(n, f) }
+	attachToOwner(n)
 	scheduleEffect(n) // 首次立即执行
+	return &handle{n: n}
+}
+
+// EffectWithOwner 在指定 Owner 下创建 effect，返回其句柄。
+func EffectWithOwner(o *Owner, f func()) Computation {
+	var h Computation
+	RunWithOwner(o, func() { h = Effect(f) })
+	return h
 }
 
 // state 保存 signal 的节点与当前值。
