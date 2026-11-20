@@ -408,7 +408,14 @@ func (a *Analysis) NamedType(name string) (Type, bool) {
 
 // ---------- 作用域与符号查询 ----------
 
-func (a *Analysis) scopeOf(idx int) (int, int) {
+// scopeOf 返回 idx 所在的最内层词法作用域 [from, to)。
+// 先取最内层函数体，再在函数体内收紧到最内层包围的 '{...}' 块——
+// 这样内层块用同名 var 遮蔽时，块外的引用不会再命中块内符号（词法作用域）。
+//
+// 向左扫描时用 depth 跳过所有已配对的块（复合字面量 P{...}、内层 {...}、
+// struct 定义等），停在最近的未配对 '{'——它就是真正包围 idx 的词法块。
+// 因此函数体顶层的 var 仍覆盖整个函数体，只有嵌套块内的声明才被收紧。
+func (a *Analysis) scopeOf(toks []Token, idx int) (int, int) {
 	from, to := 0, a.n
 	best := a.n + 1
 	for _, r := range a.funcRange {
@@ -417,6 +424,23 @@ func (a *Analysis) scopeOf(idx int) (int, int) {
 				best = span
 				from, to = r.from, r.to
 			}
+		}
+	}
+	// 在函数范围内进一步收紧到最内层包围块。
+	depth := 0
+	for i := idx - 1; i >= from; i-- {
+		switch toks[i].Text {
+		case "}":
+			depth++
+		case "{":
+			if depth == 0 {
+				// 配对成功且落在函数范围内 → 该块即最内层词法块。
+				if close := matchDelimSkipSpace(toks, i, "{", "}"); close > i && close <= to {
+					return i, close
+				}
+				return from, to // 配对越界（非本函数块），回退函数范围
+			}
+			depth--
 		}
 	}
 	return from, to
@@ -758,7 +782,7 @@ func (a *Analysis) collectSymbols(toks []Token) {
 		if toks[i].Text != ":=" {
 			continue
 		}
-		ff, ft := a.scopeOf(i)
+		ff, ft := a.scopeOf(toks, i)
 		p := prevSig(toks, i-1)
 		for p >= 0 && toks[p].Kind == Ident {
 			a.symbols = append(a.symbols, Symbol{
@@ -805,7 +829,7 @@ func (a *Analysis) addVarSymbol(toks []Token, start, limit int) {
 		te = limit
 	}
 	typ := a.typeFromTokens(toks, ts, te)
-	ff, ft := a.scopeOf(nameIdx)
+	ff, ft := a.scopeOf(toks, nameIdx)
 	a.symbols = append(a.symbols, Symbol{
 		Name: toks[nameIdx].Text, Type: typ, DeclIdx: nameIdx,
 		ScopeFrom: ff, ScopeTo: ft,

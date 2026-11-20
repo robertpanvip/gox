@@ -142,3 +142,55 @@ func TestParseErrorDiagnostic(t *testing.T) {
 		t.Errorf("语法错误应产出 parse 诊断, got %v", diags)
 	}
 }
+
+// ---------- 词法作用域：块内 var 不得泄漏到块外 ----------
+
+// TestBlockScopedVarNoLeak：内层块用同名 var 遮蔽外层联合变量后，
+// 块外的赋值必须重新看到外层联合变量，而非块内的局部类型。
+// 回归：scopeOf 曾只算函数级范围，内层 var 的 scope 覆盖整个函数体，
+// declaredTypeAt 取 DeclIdx 最大者 → 块外引用命中块内非联合类型 → 漏报。
+func TestBlockScopedVarNoLeak(t *testing.T) {
+	src := `package main
+func f() {
+    var x int | string = 1
+    {
+        var x bool = true
+        _ = x
+    }
+    x = true
+}
+`
+	diags := checkGx(t, src)
+	// 块外 x = true 必须报：x 是外层 int|string，bool 不兼容。
+	found := false
+	for _, d := range diags {
+		if d.Code == "union-assign" && d.Line == 8 {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("块外赋值应重新看到外层联合变量并报 union-assign（第 8 行）, got %v", diags)
+	}
+}
+
+// TestBlockScopedVarInnerShadow：块内的同名变量遮蔽应正常生效——
+// 块内对非联合 x 的赋值不应误报（x 在块内是 bool）。
+func TestBlockScopedVarInnerShadow(t *testing.T) {
+	src := `package main
+func f() {
+    var x int | string = 1
+    {
+        var x bool = true
+        x = false
+        _ = x
+    }
+    _ = x
+}
+`
+	diags := checkGx(t, src)
+	for _, d := range diags {
+		if d.Code == "union-assign" {
+			t.Errorf("块内 x 是 bool，不应报联合赋值: %v", d)
+		}
+	}
+}

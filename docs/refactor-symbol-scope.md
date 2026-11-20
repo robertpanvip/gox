@@ -415,6 +415,36 @@ signal transform 位于管线最前段（Analyze 之前），处理的是**原�
 - 新增 `TemplateAST` + `ExTemplate` 节点（持模板原文 `TplBody`）；`ParseTemplateExprs` 在原始流一次构建、只登记非生成 token。`transformTemplates` 主入口按 offset 命中节点并以节点原文展开，递归内层模板（无独立 offset）回退 token 原文。
 - 等价性验证：节点解析测试 + offset 映射测试 + **12 样本端到端对拍**（基础/多插值/纯插值/文本混合/嵌套/引号/整数特化/signal/lambda/对象字面量/解构/原生 raw string）新旧输出逐字一致；race/vet/build/golden 全绿。
 
-### 15.5 后续（E3）
+### 15.5 E2 续调研：形式化 AST 化收益低，转 E3 找真实 bug
 
-- **E3**：把 lambda / 对象字面量 / 解构的 detect 逐个切到 AST（offset 映射已由 E2 验证打通），删除各自的扫 token 消歧补丁；之后 Analysis 类型/诊断直接读 AST 节点（P6 已判 `idxNearGx` 收益低，缓做）。
+按 E2 打通的 offset 映射，原计划继续把 lambda / 对象字面量 / 解构的 detect 切到 AST。调研后**放弃该方向**，理由（有证据）：
+
+| 表达式 | detect 形态 | 判定是否散落 | 切 AST 的实质收益 |
+|---|---|---|---|
+| signal（E1） | 一次性、主循环 | ✅ 散落在主循环多分支 + `rewriteSignalReads` 重复一套 | 净删 84 行重复判定（实质去重） |
+| template（E2） | 一次性 | 单一判定 | 验证中后段 offset 映射（打通后续路径） |
+| destructure | 一次性、单一集中函数 | ❌ 入口只调一次，无重复判定 | 仅换入口，收益微弱 |
+| lambda / objectlit | **迭代式**（每轮替换后 re-detect） | ❌ 单一集中函数 | AST 节点在原始流算的下标每轮漂移，**根本用不上，负收益** |
+
+grep 证实三个 detect 各自只在自己的 transform 里调用一次，没有 signal 那种「多处重复判定」可收敛。强行切属于「建能力没收益」（P6 结论），故收窄为 E3——找 Analysis 类型/诊断的**真实 bug** 修。
+
+### 15.6 E3：块级词法作用域 bug（真实漏报，本轮）
+
+**bug**：内层块用同名 `var` 遮蔽外层联合变量后，块外的赋值漏报。
+
+```
+func f() {
+    var x int | string = 1
+    { var x bool = true; _ = x }
+    x = true   // 应报 union-assign，旧代码漏报
+}
+```
+
+**根因**：`Analysis.scopeOf` 只算函数级范围，`addVarSymbol` 把内层 `var x bool` 的 scope 设为整个函数体；`declaredTypeAt` 取 `DeclIdx` 最大者 → 块外 `x = true` 命中块内 `bool`（非联合）→ check 层跳过检查。探针对照：无遮蔽场景报、内层也是联合时也报，唯独内层是非联合 bool 时漏报——精确定位到 scope 泄漏。
+
+**修复**：`scopeOf(toks, idx)` 在函数体内进一步用**深度扫描**收紧到最内层未配对的 `{...}` 块：向左扫描时 `depth` 跳过所有已配对块（复合字面量 `P{...}`、内层块、struct 定义等），停在最近的未配对 `{`。函数体顶层的 var 仍覆盖整个函数体，只有嵌套块声明被收紧。`collectParams`（参数走函数级 ff/ft）不受影响。
+
+**验证**（红灯→绿灯 + 无回归）：
+- 红灯：修复前 `TestBlockScopedVarNoLeak` 失败（块外 got `[]`）。
+- 正式回归：`check` 层 `TestBlockScopedVarNoLeak` / `TestBlockScopedVarInnerShadow`（块内遮蔽仍正常）+ `compiler` 层 `TestBlockScopedVarScope`（scope 结构）/ `TestCompositeLitNotScopeBoundary`（复合字面量不误判为块）。
+- 门禁：`go test -race ./...` / `go vet ./...` / `go build ./...` 全绿，golden 无变化。
