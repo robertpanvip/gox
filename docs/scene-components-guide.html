@@ -100,7 +100,9 @@
   <div class="meta">
     <span>gox build -jsx=scene</span>
     <span>runtime/scene</span>
-    <span>SolidJS 模型</span>
+    <span>Owner / Cleanup</span>
+    <span>条件分支 + Keyed For</span>
+    <span>Go 1.27 泛型方法</span>
     <span>示例已实测 go run ✓</span>
   </div>
 </header>
@@ -418,7 +420,79 @@ app.<span class="fn">Run</span>()</pre>
 &lt;/div&gt;</div>
 <div class="note"><b>验证要点</b>：① signal 经两层组件 Props 传到叶子插槽并自动刷新；② <code>count=5</code> 与 <code>doubled=10</code> 在<b>同一帧</b>一致更新（聚合 effect 批处理，无中间态）；③ 组件只执行一次、不重建。源码 <code>examples/jsxapp-full.gx</code> 已通过 <code>gox build -jsx=scene</code> + <code>go run</code> 端到端验证。</div>
 
-<h2>四、约束清单</h2>
+<h2>四、响应式 UI 增强（SolidJS 化四阶段）</h2>
+<p class="lead">前面讲的是「一棵场景树怎么建、叶子怎么更新」。这一节是<b>四阶段架构升级</b>：把 Gox 从「带 Signal 的 JSX 框架」推进为「具有原生细粒度响应式语义的语言」。
+分层边界保持一致：<b>语言层识别 Signal，响应式层追踪依赖，UI 层更新节点</b>。工具链 <b>Go 1.27</b>（支持泛型方法）。完整设计见 <code>docs/reactive-ui-roadmap.md</code>。</p>
+<div class="note"><b>为什么要做：</b>评审的核心判断是「Owner + Reactive Computation 才是 SolidJS 的核心」。只有把响应式作用域（Owner）、清理（Cleanup）、结构化控制流（分支 / 列表）与场景树协作起来，才谈得上细粒度——否则 signal 只是能触发整树重算的语法糖。四阶段就是按这个依赖顺序落地的。</div>
+
+<h3>阶段 1 · 响应式核心：Owner + Computation + Cleanup（<code>runtime/signal</code>）</h3>
+<table>
+  <tr><th>能力</th><th>API / 语义</th></tr>
+  <tr><td>相等性裁剪</td><td><code>signal.New(v)</code> 默认 <code>reflect.DeepEqual</code>，值未变不触发下游；<code>signal.NewWithEquals(v, eq)</code> 自定义策略</td></tr>
+  <tr><td>可销毁 Effect</td><td><code>Effect(f) → Computation</code>；<code>h.Dispose()</code> 幂等：断依赖、停订阅、执行清理</td></tr>
+  <tr><td>Computed 句柄</td><td><code>Computed(f)</code> 常规用法；<code>ComputedWithHandle(f) → (Signal[T], Computation)</code> 需要提前销毁时</td></tr>
+  <tr><td>Owner 树</td><td><code>CreateRoot(func(o *Owner){...}) → *Owner</code>；<code>GetOwner()</code> / <code>RunWithOwner(o, f)</code>；父销毁级联子，嵌套 <code>CreateRoot</code> 自动挂为子</td></tr>
+  <tr><td>生命周期</td><td><code>OnCleanup(fn)</code>（每次重跑前 + 销毁时执行）、<code>OnMount(fn)</code>（首次挂载执行一次）</td></tr>
+  <tr><td>批处理</td><td><code>Batch(func(){ 多次 signal 写入 })</code> 合并同一轮写入，批次结束统一调度 Effect</td></tr>
+</table>
+<pre class="code"><span class="kw">import</span> <span class="st">"github.com/robertpanvip/gox/runtime/signal"</span>
+
+<span class="con">// Effect 现在返回可销毁句柄；挂在 Owner 下，Owner 销毁会级联停掉它</span>
+signal.<span class="fn">CreateRoot</span>(<span class="kw">func</span>(o *signal.<span class="ty">Owner</span>) {
+    h := signal.<span class="fn">Effect</span>(<span class="kw">func</span>() {
+        fmt.<span class="fn">Println</span>(<span class="st">"count ="</span>, count())
+        signal.<span class="fn">OnCleanup</span>(<span class="kw">func</span>() { <span class="cm">/* 重跑前 / 销毁时执行 */</span> })
+    })
+    _ = h
+    <span class="cm">// 之后 h.Dispose() 可单独停掉这个 effect（幂等）</span>
+})
+<span class="con">// 一次写入只触发一次 effect：signal.Batch(func(){ count(1); count(2) })</span></pre>
+<div class="note"><code>scene.Computation</code> 是 <code>signal.Computation</code> 的类型别名，因此 <code>signal.Effect</code> 可直接作为 <code>BindReactive</code> 的实参（Go 的函数类型要求返回类型完全一致）。</div>
+
+<h3>阶段 2 · 条件分支：<code>if / else if / else</code>（JSX 内）</h3>
+<p>JSX children 支持条件分支，产出 <code>gxscene.OpBranch</code> + <code>gxscene.BranchGetter(selector, builders...)</code>。切换分支时<b>销毁旧 Owner、只重建该区域</b>，绝不重跑根组件。</p>
+<pre class="code"><span class="kw">signal</span> visible = <span class="kw">true</span>
+<span class="kw">signal</span> count = 0
+
+view := &lt;<span class="jx">div</span>&gt;
+    <span class="kw">if</span> visible {
+        &lt;<span class="jx">span</span>&gt;{count}&lt;/<span class="jx">span</span>&gt;
+    } <span class="kw">else</span> {
+        &lt;<span class="jx">b</span>&gt;Hidden&lt;/<span class="jx">b</span>&gt;
+    }
+&lt;/<span class="jx">div</span>&gt;</pre>
+<div class="note"><b>依赖与清理</b>：selector（<code>visible()</code>）在当前 Effect 上下文求值以登记依赖；索引不变时<b>不重建</b>——<code>count</code> 变化由子树自身插槽的细粒度 Effect 处理。索引变化才销毁旧 Owner（级联停 Effect / 跑 Cleanup）并在新 Owner 下构建目标子树。支持 <code>else if</code> 链。</div>
+
+<h3>阶段 3 · Keyed For：keyed 列表（含元素类型自动推断）</h3>
+<p><code>&lt;For&gt;</code> 产出 <code>gxscene.OpFor</code> + <code>gxscene.ForGetterOf[T](each, key, render)</code>：按 key 复用节点、每元素独立 Owner。render 参数类型<b>可省略</b>，编译器从 <code>each</code> 自动推断。</p>
+<pre class="code"><span class="kw">type</span> User <span class="kw">struct</span> { id <span class="kw">int</span>; name <span class="kw">string</span> }
+<span class="kw">signal</span> users = []User{{1,<span class="st">"Tom"</span>},{2,<span class="st">"Jack"</span>}}
+
+view := &lt;<span class="jx">ul</span>&gt;
+    &lt;<span class="jx">For</span> <span class="fn">each</span>={users} <span class="fn">key</span>={(u) =&gt; u.id}&gt;
+        {(u) =&gt; &lt;<span class="jx">li</span>&gt;{u.name}&lt;/<span class="jx">li</span>&gt;}
+    &lt;/<span class="jx">For</span>&gt;
+&lt;/<span class="jx">ul</span>&gt;</pre>
+<table>
+  <tr><th>能力</th><th>说明</th></tr>
+  <tr><td>元素类型推断</td><td><code>(u)</code> 无注解时从 <code>each</code> 的 <code>[]User</code> 推断出 <code>User</code>，生成 <code>ForGetterOf[User]</code>；支持 signal 变量 / 普通变量 / 函数返回值；<code>(u User)</code> 显式注解始终优先</td></tr>
+  <tr><td>keyed diff</td><td><code>key(item)</code> 生成稳定键：相同键<b>复用节点</b>（移动而非重建），新增在独立 Owner 下构建，删除销毁 Owner（级联清理）</td></tr>
+  <tr><td>细粒度更新</td><td>每元素独立 Owner，元素内 signal 变化只更新对应项；重排只调顺序、不重跑 render</td></tr>
+</table>
+<div class="note"><b>推断优先级</b>：render 参数显式注解 &gt; <code>each</code> 集合类型（<code>[]T</code> / <code>[N]T</code> / signal 声明字面量）&gt; 降级 <code>any</code>。signal 声明类型在改写前采集，避免初值字面量被 <code>Signal.New(...)</code> 包裹遮蔽。<code>key</code> lambda 参数类型同样可省略，复用 render 的元素类型。</div>
+
+<h3>阶段 4 · GUI 调度：结构变化重绘 + 批处理（<code>runtime/app</code>）</h3>
+<div class="note"><b>修复的关键缺陷</b>：此前 app 只建一个聚合 effect 调 <code>Update()</code>，未为 Branch/For 这类<b>结构插槽</b>接线，导致分支 / 列表切换时场景树变了却不重绘。新增 <code>Instance.BindStructural</code> 仅为结构插槽接线，与叶子的聚合 effect 并存；<code>app.BindReactive</code> 用「重绘包装」的 effect 接线——selector / each 变化重建子树后自动画一帧。</div>
+<table>
+  <tr><th>能力</th><th>说明</th></tr>
+  <tr><td>结构变化重绘</td><td><code>BindStructural</code> 接线 Branch/For 插槽；切换 / 增删后自动 Draw 一帧</td></tr>
+  <tr><td>关闭清理</td><td><code>App.Close</code> 额外 dispose 结构 effect 与元素 Owner，无泄漏</td></tr>
+  <tr><td>批处理</td><td><code>Batch</code> 合并同一轮多次 signal 写入为一帧，无「部分插槽已更新」的中间态画面</td></tr>
+  <tr><td>压力验证</td><td>Owner 500 轮创建/销毁、分支 200 轮切换，Effect / Cleanup 严格配对</td></tr>
+</table>
+<p><b>验证</b>：<code>go build ./...</code> + <code>go test ./...</code> 全量通过（Go 1.27.4）。条件分支与 For 均有「转译 → 真实 <code>go run</code> → 校验输出」的端到端测试。详见 <code>runtime/signal/owner_test.go</code>、<code>runtime/scene/branch_test.go</code> / <code>for_test.go</code>、<code>runtime/app/app_test.go</code>、<code>internal/integration/integration_test.go</code>。</p>
+
+<h2>五、约束清单</h2>
 <ol class="constraints">
   <li><b>组件签名二选一</b> <code>func(gxscene.Props) *gxscene.Instance</code>（getter-map，保鲜）或 <code>func(T) *gxscene.Instance</code>（T 为本文件具名 struct，强类型快照）；返回类型不匹配则不是合法组件。</li>
   <li><b>组件只执行一次</b> 组件体是建树逻辑；不要把「每次刷新要做的事」放这里，放到 getter 里。</li>
@@ -429,9 +503,13 @@ app.<span class="fn">Run</span>()</pre>
   <li><b>更新靠 <code>Update()</code> 或 <code>BindReactive</code> 驱动</b> scene 不内置响应式；<code>BindReactive(signal.Effect)</code> 可把 signal 直接接到插槽，免手动 Update。</li>
   <li><b><code>SetPart</code>/<code>SetGetter</code> 用插槽下标</b> 下标由编译期分配，手写 opcode 时才需要；JSX 开发中优先用 getter。</li>
   <li><b>绘制后端目前只有 <code>TextBackend</code></b> 经 <code>Backend</code> 接口抽象，Skia / wgpu 可后续接入，编译器无需改动。</li>
+  <li><b>条件分支的 selector 必须是 signal 读</b> <code>if visible { ... }</code> 里的 <code>visible()</code> 在 Effect 上下文求值登记依赖；普通变量不会触发分支切换。</li>
+  <li><b><code>&lt;For&gt;</code> 必须有 <code>key</code></b> keyed diff 依赖稳定键复用节点；render / key 参数类型可省略（从 <code>each</code> 推断），显式注解始终优先。</li>
+  <li><b>响应式作用域挂在 Owner 上</b> <code>Effect</code> / <code>Computed</code> 自动挂到当前 Owner；<code>OnCleanup</code> 在重跑前与销毁时执行；<code>Dispose</code> 幂等。分支切换 / 列表删除会级联清理对应 Owner。</li>
+  <li><b>app 层结构变化也会重绘</b> <code>app.BindReactive</code> 经 <code>BindStructural</code> 为 Branch/For 接线，结构变化后自动画一帧；底层 <code>Instance.BindReactive</code> 仍是逐插槽精确模式。</li>
 </ol>
 
-<h2>五、实测输出</h2>
+<h2>六、实测输出</h2>
 <p>上面例子经 <code>gox build -jsx=scene</code> → <code>go run</code> 的真实输出：</p>
 <div class="term">
 <div><span class="cmd">$ gox build demo.gx -jsx=scene -o main.go &amp;&amp; go run .</span></div>
@@ -490,7 +568,7 @@ app.<span class="fn">Run</span>()</pre>
 <div>&lt;/<span class="tag">div</span>&gt;</div>
 </div>
 
-<h2>六、API 速查</h2>
+<h2>七、API 速查</h2>
 <table>
   <tr><th>API</th><th>作用</th></tr>
   <tr><td>CompileScene / CompileSceneWithModule</td><td>转译入口（对应默认的 Compile / CompileWithModule）</td></tr>
@@ -499,7 +577,15 @@ app.<span class="fn">Run</span>()</pre>
   <tr><td>gxscene.Render / RenderText</td><td>渲染模板：返回 *Instance / 直接返回 string</td></tr>
   <tr><td>Instance.Update / SetPart / SetGetter</td><td>更新：全量重算 / 单插槽写 / 改绑 getter</td></tr>
   <tr><td>Instance.BindReactive(effect)</td><td>把 signal.Effect 接到所有插槽：signal 写入自动精确更新，免手动 Update</td></tr>
+  <tr><td>Instance.BindStructural(effect)</td><td>仅为 Branch/For 结构插槽接线：结构变化重建子树后触发重绘（app 内部使用）</td></tr>
+  <tr><td>Instance.Dispose()</td><td>销毁实例：停掉所有响应式订阅与结构 Owner</td></tr>
   <tr><td>Instance.Root / String / Writes / Updates</td><td>场景树根 / 文本绘制 / 观测指标</td></tr>
+  <tr><td>gxscene.OpBranch / BranchGetter</td><td>条件分支：selector + builders，切换时销毁旧 Owner 重建局部子树</td></tr>
+  <tr><td>gxscene.OpFor / ForGetterOf[T]</td><td>Keyed 列表：按 key 复用节点、每元素独立 Owner；T 可从 each 推断</td></tr>
+  <tr><td>signal.New / NewWithEquals / Computed / ComputedWithHandle</td><td>响应式源：相等性裁剪、自定义比较、派生信号（带句柄版本）</td></tr>
+  <tr><td>signal.Effect → Computation</td><td>可销毁 effect 句柄，Dispose() 幂等；自动挂到当前 Owner</td></tr>
+  <tr><td>signal.CreateRoot / GetOwner / RunWithOwner</td><td>Owner 树：建立响应式作用域，父销毁级联子</td></tr>
+  <tr><td>signal.OnCleanup / OnMount / Batch</td><td>生命周期：重跑前与销毁时清理 / 首次挂载 / 合并同一轮写入</td></tr>
   <tr><td>Backend / TextBackend</td><td>绘制抽象 / 当前唯一实现</td></tr>
   <tr><td>gxapp.Open / OpenWith</td><td>应用入口：JSX + 窗口配置 → App（类比 ReactDOM.render）</td></tr>
   <tr><td>WindowConfig / Window / HeadlessWindow</td><td>窗口配置 / 后端接口 / Headless 实现</td></tr>
@@ -509,7 +595,8 @@ app.<span class="fn">Run</span>()</pre>
 <footer>
   源码：<code>runtime/scene/</code>（场景运行时） · <code>runtime/app/</code>（应用入口） · <code>pkg/compiler/jsxscene.go</code>（编译器） ·
   <code>examples/jsxscene.gx</code>（getter-map） · <code>examples/jsxscene-signal.gx</code>（signal 响应式） ·
-  <code>examples/jsxscene-typed.gx</code>（强类型契约） · <code>examples/jsxapp.gx</code>（应用入口） · <code>docs/scene-components-guide.html</code>（本文档）
+  <code>examples/jsxscene-typed.gx</code>（强类型契约） · <code>examples/jsxapp.gx</code>（应用入口） ·
+  <code>docs/reactive-ui-roadmap.md</code>（响应式四阶段设计） · <code>docs/scene-components-guide.html</code>（本文档）
 </footer>
 
 </div>
