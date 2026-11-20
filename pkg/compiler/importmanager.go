@@ -17,8 +17,8 @@ import (
 //  3. 把「生成 token」里作为包名使用的占位别名替换为实际别名——只改 IsGen 的
 //     token，绝不碰用户源码里同名的变量/标识符。
 type ImportManager struct {
-	toks      []Token
-	pathAlias map[string]string // import 路径 → 实际别名
+	toks          []Token
+	pathAlias     map[string]string // import 路径 → 实际别名
 	used          map[string]bool   // 已被占用的别名
 	module        string
 	pendingInject []runtimeImport // 需要新增的 import
@@ -54,6 +54,17 @@ func newImportManager(toks []Token, module string) *ImportManager {
 		} else {
 			m.recordImport(toks, i+1, len(toks))
 		}
+	}
+	// 收集用户源码中所有非生成标识符作为「已占用名」：局部变量名、参数名、
+	// 函数名、类型名等。运行时依赖若用同名占位别名会被局部变量遮蔽（H-5：
+	// `list := "hi"` 后生成 `list.List[int]` 指向字符串变量）。把这些名字登记为
+	// 已占用，resolve 就会给冲突的占位别名分配无冲突名（list2 等）。
+	for i := 0; i < len(toks); i++ {
+		t := toks[i]
+		if t.Kind != Ident || t.IsGen || isGoKeyword(t.Text) {
+			continue
+		}
+		m.used[t.Text] = true
 	}
 	return m
 }

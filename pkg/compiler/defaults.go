@@ -178,8 +178,8 @@ func expandDefaults(in []Token, defs map[string]*funcDefault) []Token {
 		return in
 	}
 	type insertion struct {
-		at    int // 在 in[at] 之前插入
-		toks  []Token
+		at   int // 在 in[at] 之前插入
+		toks []Token
 	}
 	var ins []insertion
 	for i := 0; i < len(in); i++ {

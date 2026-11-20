@@ -392,3 +392,97 @@ func main() { f(1) }
 		t.Errorf("嵌套联合应扁平化为 int|int64|string, got %q", got)
 	}
 }
+
+func TestElseIfGuardWithNonGuardHead(t *testing.T) {
+	// 回归 H-7：`if c {} else if v is T {}` 链首非守卫时，else-if 守卫仍须处理，
+	// 不得误报 "is 守卫仅支持简单形态"。
+	src := `package main
+func f(v any) {
+	if v == nil { println(0) } else if v is int { println(v + 1) }
+}
+func main() { f(1) }
+`
+	res, err := CompileSource(src)
+	if err != nil {
+		t.Fatalf("合法 else-if 守卫被拒: %v", err)
+	}
+	if err := res.Validate(); err != nil {
+		t.Fatalf("生成代码语法无效: %v\n%s", err, res.GoSource)
+	}
+}
+
+// TestAnalyzeSharedTypeParams 验证共享类型参数 `a, b int|string` 的两个名字
+// 都进入符号表并各自得到联合类型。collectParams 早先用 parseParamSeg 逐段切分，
+// 导致段 `a` 无类型被跳过、只有 b 拿到联合类型（P5 合流修复）。
+func TestAnalyzeSharedTypeParams(t *testing.T) {
+	src := "package main\nfunc f(a, b int|string) {}\n"
+	a := Analyze(New(src).AllTokens())
+	got := map[string]string{}
+	for _, s := range a.Symbols() {
+		got[s.Name] = s.Type.String()
+	}
+	for _, name := range []string{"a", "b"} {
+		if typ, ok := got[name]; !ok {
+			t.Errorf("共享类型参数 %q 未进符号表; symbols=%v", name, got)
+		} else if typ != "int|string" {
+			t.Errorf("参数 %q 类型 = %q, want int|string", name, typ)
+		}
+	}
+}
+
+// TestBlockScopedVarScope：内层块用同名 var 遮蔽时，其 scope 必须被收紧到
+// 最内层词法块，不得覆盖块外的引用（否则 check 层块外赋值会命中块内类型、
+// 漏报联合兼容性）。回归 E3 的词法作用域 bug。
+func TestBlockScopedVarScope(t *testing.T) {
+	src := "package main\nfunc f() {\n var x int|string = 1\n {\n  var x bool = true\n  _ = x\n }\n x = true\n}\n"
+	a := Analyze(New(src).AllTokens())
+	var outer, inner *Symbol
+	for i := range a.symbols {
+		s := &a.symbols[i]
+		if s.Name != "x" {
+			continue
+		}
+		if s.Type.String() == "int|string" {
+			outer = s
+		} else if s.Type.String() == "bool" {
+			inner = s
+		}
+	}
+	if outer == nil || inner == nil {
+		t.Fatalf("应收集到外层 x(int|string) 与内层 x(bool); symbols=%v", a.Symbols())
+	}
+	if !(inner.ScopeFrom >= outer.ScopeFrom && inner.ScopeTo <= outer.ScopeTo &&
+		(inner.ScopeFrom > outer.ScopeFrom || inner.ScopeTo < outer.ScopeTo)) {
+		t.Errorf("内层 x 的 scope 应收紧到块内: outer=[%d,%d) inner=[%d,%d)",
+			outer.ScopeFrom, outer.ScopeTo, inner.ScopeFrom, inner.ScopeTo)
+	}
+}
+
+// TestCompositeLitNotScopeBoundary：复合字面量 P{...} 的花括号不得被当作
+// 词法块——其后的 var 声明 scope 仍应从函数体 '{' 起（覆盖整个函数体）。
+func TestCompositeLitNotScopeBoundary(t *testing.T) {
+	src := "package main\ntype P struct{ name string }\nfunc f() {\n p := P{name: \"z\"}\n var x int|string = 1\n x = true\n _ = p\n}\n"
+	a := Analyze(New(src).AllTokens())
+	var xSym *Symbol
+	for i := range a.symbols {
+		if a.symbols[i].Name == "x" && a.symbols[i].Type.String() == "int|string" {
+			xSym = &a.symbols[i]
+		}
+	}
+	if xSym == nil {
+		t.Fatal("x 符号缺失")
+	}
+	// 复合字面量 P{name:"z"} 的花括号应被深度扫描跳过——x 的 scope 起点
+	// 必须是函数体 '{'，而不是 P{...} 的 '{'。用 idxNearGx 定位块外 x=true
+	// 引用点，确认它仍落在 x 的 scope 内（若误把 P{...} 当块，x 的 scope
+	// 会从 P 的 '{' 起，而该引用在其后——仍在内，故改用 ScopeFrom 上界判断：
+	// x 声明前、函数体 '{' 之后不应有未配对块边界被误认）。
+	toks := New(src).AllTokens()
+	// 定位 `x = true` 里 true 的下标（第 6 行）并确认在 scope 内。
+	for i, tk := range toks {
+		if tk.Text == "true" && tk.Pos.Line == 6 && i >= xSym.ScopeFrom && i < xSym.ScopeTo {
+			return // 通过
+		}
+	}
+	t.Errorf("复合字面量后的 x 声明 scope 应覆盖块外 x=true 引用: x=[%d,%d)", xSym.ScopeFrom, xSym.ScopeTo)
+}

@@ -160,8 +160,9 @@ func transformExternal(in []Token, scope *Scope, pubNames map[string]string) []T
 			out[k].Text = real
 			continue
 		}
-		// 自己的私有字段/变量/方法：保持小写
-		if scope.IsPrivate(sel) {
+		// 自己的私有字段/方法（selector 右侧）：保持小写。
+		// 只认 struct 字段/方法名——局部变量/参数名即使同名也不保护 selector（L-7）。
+		if scope.IsPrivateField(sel) {
 			continue
 		}
 		// 左侧是变量：外部结构体字段/方法，机械 upperFirst

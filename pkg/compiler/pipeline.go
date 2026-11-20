@@ -78,6 +78,10 @@ func CompileSceneWithModule(file, src, module string) (*Result, error) {
 
 func compileWithMode(file, src, module string, mode jsxMode) (*Result, error) {
 	toks := New(src).AllTokens()
+	// 统一绑定表 + 表达式 AST：lex 之后、任何 transform 之前构建一次，贯穿整条管线。
+	// 以 Pos.Offset 为稳定身份，不受后续 desugar 增删 token 的下标漂移影响。
+	bindings := Bind(toks)
+	templateAST := ParseTemplateExprs(toks)
 	// 默认值：声明处先物理剥离（否则 Analyze 会把 `= default` 算进类型），
 	// 调用点在 Analyze 之后补全（补全表达式仍流经后续全部 transform）。
 	toks, defaultDefs := stripDefaults(toks)
@@ -86,23 +90,24 @@ func compileWithMode(file, src, module string, mode jsxMode) (*Result, error) {
 	// 先收集 signal 变量名并透传给 JSX 转换：JSX 插值 {count} 在此时是整体 token，
 	// 信号改写穿透不到；scene/vdom 后端重新词法化插值时需据此补上读调用 count()。
 	sigs := collectSignalVars(toks)
-	toks = transformSignals(toks)
+	// P1：传入 bindings，用 ResolveAt 做遮蔽判断（P1-1 根治）。
+	toks = transformSignals(toks, bindings)
 	analysis := Analyze(toks)    // desugar 之前的 GX 语义层（联合未擦除）
 	names := map[string]string{} // 小写原名 → 大写导出名（自身 pub 符号）
 	toks = expandDefaults(toks, defaultDefs)
-	toks = transformLambdas(toks, analysis)
+	toks = transformLambdas(toks, analysis, bindings)
 	// 对象字面量：期望类型校验失败时返回带 GX 坐标的错误。
-	toks, err := transformObjectLits(toks, analysis)
+	toks, err := transformObjectLits(toks, analysis, bindings)
 	if err != nil {
 		return nil, err
 	}
 	// 对象解构：{ name, age } := p → name := p.name; age := p.age
 	// 放在对象字面量之后，右值声明类型（含 struct{...}{...} 展开形态）已可见。
-	toks, err = expandDestructures(toks)
+	toks, err = expandDestructures(toks, bindings)
 	if err != nil {
 		return nil, err
 	}
-	toks = transformTemplates(toks)
+	toks = transformTemplates(toks, bindings, templateAST)
 	toks = runUnion(toks)
 	toks = transformTypeGuard(toks, analysis)
 	if err := checkStrandedIs(toks); err != nil {
@@ -120,7 +125,7 @@ func compileWithMode(file, src, module string, mode jsxMode) (*Result, error) {
 		toks = transformJSXScene(toks, ctx)
 		// 第二次对象字面量变换：补全 JSX 转换新产生的 Card({...}) 期望类型并校验。
 		// 第一次已在 desugar 早期处理非 JSX 字面量；这里处理 JSX 阶段新增的。
-		toks, err = transformObjectLits(toks, analysis)
+		toks, err = transformObjectLits(toks, analysis, bindings)
 		if err != nil {
 			return nil, err
 		}
@@ -132,7 +137,7 @@ func compileWithMode(file, src, module string, mode jsxMode) (*Result, error) {
 	// 需替换为实际别名；否则各 transform 注入的 import 会与生成引用对不上。
 	toks = ReconcileImports(toks, module)
 	scope := collectScope(toks)
-	toks = restoreRefs(toks, names)
+	toks = restoreRefs(toks, names, bindings)
 	toks = transformExternal(toks, scope, names)
 	toks = transformCompositeFields(toks, scope)
 	goSrc, sm := emit(toks, file)
@@ -201,21 +206,23 @@ func CompileStage(src, stage string) (string, error) {
 		toks = transformExternal(toks, scope, names)
 		toks = transformCompositeFields(toks, scope)
 	case "all":
+		bindings := Bind(toks)
+		templateAST := ParseTemplateExprs(toks)
 		toks, defaultDefs := stripDefaults(toks)
 		sigs := collectSignalVars(toks)
-		toks = transformSignals(toks)
+		toks = transformSignals(toks, bindings)
 		analysis := Analyze(toks)
 		toks = expandDefaults(toks, defaultDefs)
-		toks = transformLambdas(toks, analysis)
-		toks, err := transformObjectLits(toks, analysis)
+		toks = transformLambdas(toks, analysis, bindings)
+		toks, err := transformObjectLits(toks, analysis, bindings)
 		if err != nil {
 			return "", err
 		}
-		toks, err = expandDestructures(toks)
+		toks, err = expandDestructures(toks, bindings)
 		if err != nil {
 			return "", err
 		}
-		toks = transformTemplates(toks)
+		toks = transformTemplates(toks, bindings, templateAST)
 		toks = runUnion(toks)
 		toks = transformTypeGuard(toks, analysis)
 		toks = transformEnum(toks, names)
@@ -224,9 +231,13 @@ func CompileStage(src, stage string) (string, error) {
 		toks = transformCollections(toks, defaultModule)
 		toks = ReconcileImports(toks, defaultModule)
 		scope := collectScope(toks)
-		toks = restoreRefs(toks, names)
+		toks = restoreRefs(toks, names, bindings)
 		toks = transformExternal(toks, scope, names)
 		toks = transformCompositeFields(toks, scope)
+		// all 分支内 toks 被 := 重新声明（见上方 stripDefaults），必须在此作用域内
+		// 直接 emit 并返回，否则外层 emit 拿到的是未改写的原始 token。
+		out, _ := emit(toks, "<stage>")
+		return out, nil
 	default:
 		return "", fmt.Errorf("unknown stage %q (want lex/union/typeguard/enum/jsx/jsxscene/pub/collections/external/all)", stage)
 	}

@@ -13,16 +13,16 @@ import "unicode"
 type Kind int
 
 const (
-	Space Kind = iota // 横向空白（空格/Tab）
-	Newline           // \n 或 \r\n
-	Ident             // 标识符 / 关键字
-	Number            // 数字字面量
-	String            // 字符串字面量（含引号）
-	Template          // 模板字符串字面量（含反引号，内部有 ${...} 插值）
-	Rune              // rune 字面量
-	Comment           // 行注释或块注释
-	Operator          // 运算符 / 标点
-	JSX               // 一个完整 JSX 元素的原文
+	Space    Kind = iota // 横向空白（空格/Tab）
+	Newline              // \n 或 \r\n
+	Ident                // 标识符 / 关键字
+	Number               // 数字字面量
+	String               // 字符串字面量（含引号）
+	Template             // 模板字符串字面量（含反引号，内部有 ${...} 插值）
+	Rune                 // rune 字面量
+	Comment              // 行注释或块注释
+	Operator             // 运算符 / 标点
+	JSX                  // 一个完整 JSX 元素的原文
 	EOF
 )
 
@@ -96,8 +96,8 @@ func lowerFirst(s string) string {
 
 // ---------- token 构造 helper（供 jsx/enum 生成使用）----------
 
-func tokIdent(s string, p Pos) Token   { return Token{Kind: Ident, Text: s, Pos: p, IsGen: true} }
-func tokString(s string, p Pos) Token  { return Token{Kind: String, Text: s, Pos: p, IsGen: true} }
-func tokOp(s string, p Pos) Token      { return Token{Kind: Operator, Text: s, Pos: p, IsGen: true} }
-func tokNewline(p Pos) Token           { return Token{Kind: Newline, Text: "\n", Pos: p, IsGen: true} }
-func tokSpace(s string, p Pos) Token   { return Token{Kind: Space, Text: s, Pos: p, IsGen: true} }
+func tokIdent(s string, p Pos) Token  { return Token{Kind: Ident, Text: s, Pos: p, IsGen: true} }
+func tokString(s string, p Pos) Token { return Token{Kind: String, Text: s, Pos: p, IsGen: true} }
+func tokOp(s string, p Pos) Token     { return Token{Kind: Operator, Text: s, Pos: p, IsGen: true} }
+func tokNewline(p Pos) Token          { return Token{Kind: Newline, Text: "\n", Pos: p, IsGen: true} }
+func tokSpace(s string, p Pos) Token  { return Token{Kind: Space, Text: s, Pos: p, IsGen: true} }

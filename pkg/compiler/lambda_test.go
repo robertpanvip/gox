@@ -151,3 +151,41 @@ func main() {
 	got := compileOK(t, "lambdavoid3.gx", src)
 	containsAll(t, got, `func(x any) {logIt(x)}`)
 }
+
+// TestLambdaContextFuncArg 回归 H-2：恒等 lambda 作为函数实参时，
+// 参数/返回类型必须从被调函数签名的对应参数位推断（body 无字面量可反推）。
+func TestLambdaContextFuncArg(t *testing.T) {
+	src := `package main
+func apply(f func(int) int) { println(f(1)) }
+func main() {
+	apply(x => x)
+}
+`
+	got := compileOK(t, "lambdactx1.gx", src)
+	containsAll(t, got, `apply(func(x int) int {return x})`)
+}
+
+// TestLambdaContextFuncArgMulti 验证多参数函数类型 + 实参序号定位：
+// 签名 func(func(int,int) int, string) 的第 0 位回调必须推断成 (int,int)->int。
+func TestLambdaContextFuncArgMulti(t *testing.T) {
+	src := `package main
+func combine(f func(int,int) int, s string) { println(f(1,2), s) }
+func main() {
+	combine((a,b) => a+b, "x")
+}
+`
+	got := compileOK(t, "lambdactx2.gx", src)
+	containsAll(t, got, `func(a int,b int) int {return a+b}`)
+}
+
+// TestLambdaContextAssign 验证赋值初始化场景：var f func(int,string) bool = ...
+func TestLambdaContextAssign(t *testing.T) {
+	src := `package main
+func main() {
+	var f func(int,string) bool = (n,s) => true
+	println(f(1,"a"))
+}
+`
+	got := compileOK(t, "lambdactx3.gx", src)
+	containsAll(t, got, `func(n int,s string) bool {return true}`)
+}

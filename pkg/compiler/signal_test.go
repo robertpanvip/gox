@@ -180,3 +180,83 @@ func main() {
 		t.Errorf("vdom JSX 插值里的 signal 读应补全 (), got:\n%s", res.GoSource)
 	}
 }
+
+// TestSignalRHSReads 回归 H-3：signal 声明/简单赋值/复合赋值右侧的裸 signal
+// 读取必须改写为调用式，否则类型/语义错误。
+func TestSignalRHSReads(t *testing.T) {
+	src := `package main
+func main() {
+	signal a = 1
+	signal b = a
+	signal c = 2
+	b = c
+	c += a
+	println(b(), c())
+}
+`
+	got := compileOK(t, "sigrhs.gx", src)
+	containsAll(t, got,
+		`var b = Signal.New(a())`,
+		`b(c())`,
+		`c(c() + a())`,
+	)
+}
+
+// TestSignalNoInitNotSwallowNext 回归 M-4：`signal x` 缺 '=' 时不得吞掉后续语句。
+func TestSignalNoInitNotSwallowNext(t *testing.T) {
+	src := `package main
+func main() {
+	signal x
+	println(1)
+}
+`
+	got := compileOK(t, "signoinit.gx", src)
+	containsAll(t, got, `var x any`, `println(1)`)
+	if strings.Contains(got, "Signal.New((") {
+		t.Errorf("不应把后续语句吞进 Signal.New: %s", got)
+	}
+}
+
+// TestSignalParamFirstInGroup 回归 L-6：`func f(a, b int)` 中逗号前的首参 a
+// 是 signal 同名时不得被误改写为 a()。
+func TestSignalParamFirstInGroup(t *testing.T) {
+	src := `package main
+func f(a, b int) { println(a, b) }
+func main() { signal a = 1; f(a, 2) }
+`
+	got := compileOK(t, "sigparam.gx", src)
+	if strings.Contains(got, "func f(a()") {
+		t.Errorf("函数参数 a 被误改写为 a(): %s", got)
+	}
+	containsAll(t, got, `f(a(), 2)`)
+}
+
+// TestSignalNameShadowedByParam 回归 P1-1a：signal 名被函数参数遮蔽时，
+// 函数体内对参数的引用必须保持普通变量，不能改写成 count()。
+func TestSignalNameShadowedByParam(t *testing.T) {
+	src := `package main
+signal count = 0
+func getCount(count int) int { return count + 1 }
+func main() { println(getCount(1), count()) }
+`
+	got := compileOK(t, "sigshadowparam.gx", src)
+	if strings.Contains(got, "return count()") {
+		t.Errorf("被遮蔽的参数 count 被误改写为 count(): %s", got)
+	}
+	containsAll(t, got, `return count + 1`, `var count = Signal.New(0)`, `count())`)
+}
+
+// TestSignalNameShadowedByLocal 回归 P1-1b：signal 名被局部变量遮蔽时，
+// 局部作用域内的引用保持普通变量，函数外的全局 signal 读写仍正常改写。
+func TestSignalNameShadowedByLocal(t *testing.T) {
+	src := `package main
+signal count = 0
+func test() { count := 100; println(count) }
+func main() { test(); println(count()) }
+`
+	got := compileOK(t, "sigshadowlocal.gx", src)
+	if strings.Contains(got, "count := 100; println(count())") {
+		t.Errorf("被遮蔽的局部变量 count 被误改写: %s", got)
+	}
+	containsAll(t, got, `count := 100`, `println(count)`, `println(count())`)
+}

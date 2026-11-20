@@ -357,3 +357,13 @@ func main() {}
 		t.Fatalf("生成代码语法无效: %v\n%s", err, res.GoSource)
 	}
 }
+
+func TestAnonFuncUnionParamGuard(t *testing.T) {
+	// 回归 M-2：匿名函数 func(v int|string) 的联合参数擦除为 any 后，
+	// 仍需插入入口 type switch 守卫。
+	src := `package main
+func main() { f := func(v int|string) { println(v) }; f(1) }
+`
+	got := compileOK(t, "anonunion.gx", src)
+	containsAll(t, got, `func(v any)`, `switch v.(type)`, `case int, string:`)
+}

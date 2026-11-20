@@ -92,7 +92,8 @@ pub func f() {
 }
 `
 	got := compileOK(t, "destructlenient.gx", src)
-	containsAll(t, got, "name := getP().name", "age := getP().age")
+	// 回归 M-6：复杂右值 getP() 只求值一次，各字段从临时变量取。
+	containsAll(t, got, ":= getP()", "name := __gx_ds_", "age := __gx_ds_")
 }
 
 func TestDestructureNotConfusedWithObjectLit(t *testing.T) {

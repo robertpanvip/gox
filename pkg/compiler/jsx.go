@@ -496,7 +496,7 @@ func normalizeText(s string) string {
 func lexExpr(expr string, base Pos, sigs map[string]bool) []Token {
 	toks := New(expr).AllTokens()
 	if len(sigs) > 0 {
-		toks = rewriteSignals(toks, sigs)
+		toks = rewriteJSXInterpSignals(toks, sigs)
 	}
 	// 对象字面量自动推断（同 scene 后端）：插值里的 { k: v } 编成带类型匿名 struct。
 	if converted, err := transformObjectLitExpr(toks); err == nil {

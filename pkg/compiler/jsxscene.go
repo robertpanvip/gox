@@ -257,7 +257,7 @@ func tokNumber(s string, p Pos) Token { return Token{Kind: Number, Text: s, Pos:
 func lexExprScene(expr string, base Pos, ctx *jsxSceneCtx) []Token {
 	toks := New(expr).AllTokens()
 	if len(ctx.sigs) > 0 {
-		toks = rewriteSignals(toks, ctx.sigs)
+		toks = rewriteJSXInterpSignals(toks, ctx.sigs)
 	}
 	// 对象字面量自动推断：{ { name: "x", age: 1 } } → struct{ name string; age int }{...}。
 	// 插值片段无期望类型上下文，走匿名 struct 推断路径。

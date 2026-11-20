@@ -23,7 +23,7 @@
 | **对象字面量** | `{ name: "x", age: 1 }` | `struct{ name string; age int }{...}`，有期望类型时用 `point{...}` |
 | **对象解构** | `{ name, age } := p` / `var { name, age } = p` | `name := p.name; age := p.age`（逐字段，校验字段存在） |
 | **Signal 响应式** | `signal n = 0` / `Signal.effect(() => ...)` | `Signal.New(0)` + 函数式读写 + 依赖追踪自动重跑 |
-| **应用入口** | `gxapp.Open(<div/>, cfg)` | `gxapp.Open(gxscene.Render(...), cfg)` + Window 抽象 + signal 自动重绘 |
+| **应用入口** | `gxapp.open(<div/>, cfg)` | `gxapp.Open(gxscene.Render(...), cfg)` + Window 抽象 + signal 自动重绘（源码小写 `open`，编译器还原大写） |
 
 ## 1. 可见性：`pub`
 
@@ -219,20 +219,22 @@ n := view.Update()                      // 更新，返回写入节点数
 
 API：`CompileScene` / `CompileSceneWithModule`（对应默认的 `Compile` / `CompileWithModule`）；调试单步用 `gox jsxscene`。运行时见 [`runtime/scene/`](runtime/scene/)，完整示例见 `examples/jsxscene.gx`。
 
-##### 应用入口：`gxapp.Open`（类比 `ReactDOM.render`）
+##### 应用入口：`gxapp.open`（类比 `ReactDOM.render`）
 
-`gxapp.Open` 把一棵 JSX 场景树挂到「窗口」上，是应用外壳层——类比 React 的 `ReactDOM.render(element, container)`：
+`gxapp.open` 把一棵 JSX 场景树挂到「窗口」上，是应用外壳层——类比 React 的 `ReactDOM.render(element, container)`。
+
+> **源码小写、生成大写**：遵循 GX 的「外部符号按小写书写、编译器还原真实大小写」约定（同 `gxvdom.render`），源码写 `gxapp.open` / `gxapp.windowConfig`，生成的 Go 是 `gxapp.Open` / `gxapp.WindowConfig`。运行时库里定义的仍是大写 `Open`（Go 导出可见性要求）。
 
 | 参数 | 含义 |
 |---|---|
 | 第一个 | **JSX**（编译后即 `gxscene.Render(...)` → `*gxscene.Instance`） |
-| 第二个 | **窗口配置** `gxapp.WindowConfig`（标题、尺寸、位置、全屏、后端提示） |
+| 第二个 | **窗口配置** `gxapp.windowConfig`（标题、尺寸、位置、全屏、后端提示） |
 
 ```gx
 // gox build demo.gx -jsx=scene
 import gxapp "github.com/robertpanvip/gox/runtime/app"
 
-app, err := gxapp.Open(<div id="app">hello</div>, gxapp.WindowConfig{
+app, err := gxapp.open(<div id="app">hello</div>, gxapp.windowConfig{
     Title: "Demo", Width: 800, Height: 600,
 })
 if err != nil { panic(err) }
@@ -240,7 +242,7 @@ defer app.Close()
 app.Run()
 ```
 
-`WindowConfig` 字段：`Title` / `Width` / `Height` / `X` / `Y` / `Resizable` / `Fullscreen` / `Backend`。零值尺寸自动补 800×600，`Backend` 空值补 `"headless"`；`gxapp.DefaultConfig()` 返回一份带默认值的配置。
+`WindowConfig` 字段：`Title` / `Width` / `Height` / `X` / `Y` / `Resizable` / `Fullscreen` / `Backend`。零值尺寸自动补 800×600，`Backend` 空值补 `"headless"`；`gxapp.defaultConfig()` 返回一份带默认值的配置。
 
 **窗口后端是接口**，第一版内置 Headless（用 `TextBackend` 绘制到 `io.Writer`，沙箱/CI 可跑通）：
 
@@ -260,7 +262,7 @@ app.Run()
 signal count = 0
 let doubled = Signal.computed(func() int { return count() * 2 })
 view := <div><span>{count}</span><b>{doubled}</b></div>
-app, _ := gxapp.Open(view, gxapp.DefaultConfig())
+app, _ := gxapp.open(view, gxapp.defaultConfig())
 app.BindReactive(signal.Effect)   // 接线（抑制首帧重复绘制）
 count = 5                          // 自动更新 + 只画一帧：count=5、doubled=10 一致
 ```

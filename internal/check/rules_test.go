@@ -563,3 +563,19 @@ func main() { f(1) }
 	diags := checkGx(t, src)
 	hasDiag(t, diags, "union-operand", "v")
 }
+
+// TestSharedTypeParamBothUnions 验证共享类型参数 `a, b int|string` 的两个参数
+// 都保留联合类型，因此各自未收窄参与 + 运算都应报 union-operand（P5 合流修复：
+// 旧 collectParams 漏掉 a，导致对 a 的联合运算漏报）。
+func TestSharedTypeParamBothUnions(t *testing.T) {
+	src := `package main
+func f(a, b int | string) {
+    _ = a + 1
+    _ = b + 1
+}
+`
+	diags := checkGx(t, src)
+	if got := countCode(diags, "union-operand"); got != 2 {
+		t.Fatalf("共享类型参数 a、b 都应报 union-operand，got %d: %v", got, diags)
+	}
+}

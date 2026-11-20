@@ -13,16 +13,18 @@ import "strconv"
 // Scope 在 pub 转换之后收集：pub 声明的名字此时已大写，不会被误收为私有名。
 
 type Scope struct {
-	imports map[string]bool // import 包名 / 别名
-	private map[string]bool // 本文件小写声明的名字（参数/局部变量/私有字段/私有方法/私有类型等）
+	imports       map[string]bool // import 包名 / 别名
+	private       map[string]bool // 本文件小写声明的名字（参数/局部变量/私有字段/私有方法/私有类型等）
+	privateFields map[string]bool // 仅 struct 字段与方法名——真正可能出现在 selector 右侧的私有符号（L-7）
 }
 
-func (s *Scope) HasImport(name string) bool { return s.imports[name] }
-func (s *Scope) IsPrivate(name string) bool { return s.private[name] }
+func (s *Scope) HasImport(name string) bool      { return s.imports[name] }
+func (s *Scope) IsPrivate(name string) bool      { return s.private[name] }
+func (s *Scope) IsPrivateField(name string) bool { return s.privateFields[name] }
 
 // collectScope 在 pub 转换之后调用；此时 pub 名已大写，天然排除。
 func collectScope(toks []Token) *Scope {
-	s := &Scope{imports: map[string]bool{}, private: map[string]bool{}}
+	s := &Scope{imports: map[string]bool{}, private: map[string]bool{}, privateFields: map[string]bool{}}
 	for _, sp := range collectImportSpecs(toks) {
 		s.imports[sp.pkg] = true
 	}
@@ -128,11 +130,21 @@ func (s *Scope) collectPrivate(toks []Token) {
 			s.private[t.Text] = true
 		}
 	}
+	// addField 登记真正会出现在 selector 右侧的私有符号（struct 字段/方法名）：
+	// 同时进 private（对外的 IsPrivate 视图）与 privateFields（selector 精确保护）。
+	// 局部变量/参数名即使与某外部结构体字段同名，也不进 privateFields，
+	// 不保护 selector（L-7）。
+	addField := func(t Token) {
+		if t.Kind == Ident && isLowerStart(t.Text) && !isGoKeyword(t.Text) {
+			s.private[t.Text] = true
+			s.privateFields[t.Text] = true
+		}
+	}
 	for i := 0; i < len(toks); i++ {
 		t := toks[i]
 		switch t.Text {
 		case "func":
-			s.collectFuncDecls(toks, i, add)
+			s.collectFuncDecls(toks, i, add, addField)
 		case "var", "const", "type":
 			j := nextSig(toks, i+1)
 			if j < 0 {
@@ -147,7 +159,7 @@ func (s *Scope) collectPrivate(toks []Token) {
 			if t.is("type") {
 				if st := nextSig(toks, j+1); st >= 0 && toks[st].is("struct") {
 					if br := nextSig(toks, st+1); br >= 0 && toks[br].Text == "{" {
-						s.collectStructFields(toks, br, add)
+						s.collectStructFields(toks, br, addField)
 					}
 				}
 			}
@@ -155,7 +167,7 @@ func (s *Scope) collectPrivate(toks []Token) {
 			// 匿名 struct（对象字面量降级产物等）：收集其字段名，
 			// 避免 transformExternal 把 x.inner 误当外部字段大写。
 			if br := nextSig(toks, i+1); br >= 0 && toks[br].Text == "{" {
-				s.collectStructFields(toks, br, add)
+				s.collectStructFields(toks, br, addField)
 			}
 		case ":=":
 			p := prevSig(toks, i-1)
@@ -175,20 +187,27 @@ func (s *Scope) collectPrivate(toks []Token) {
 }
 
 // collectFuncDecls 收集接收者名、方法名、参数名。
-func (s *Scope) collectFuncDecls(toks []Token, fi int, add func(Token)) {
+// 方法名（有接收者时的函数名）同时登记到 privateFields——它是 selector 右侧
+// 的私有符号（p.helper() 不应被外部还原大写）；普通函数名与参数不登记。
+func (s *Scope) collectFuncDecls(toks []Token, fi int, add, addField func(Token)) {
 	j := nextSig(toks, fi+1)
 	if j < 0 {
 		return
 	}
+	isMethod := false
 	if toks[j].Text == "(" {
 		s.collectParenIdents(toks, j, add) // 接收者 (p point)
 		close := matchDelim(toks, j, "(", ")")
 		j = nextSig(toks, close+1)
+		isMethod = true
 	}
 	if j < 0 {
 		return
 	}
 	add(toks[j]) // 函数名 / 方法名
+	if isMethod && toks[j].Kind == Ident {
+		addField(toks[j]) // 私有方法名：selector 右侧保护
+	}
 	k := nextSig(toks, j+1)
 	if k >= 0 && toks[k].Text == "(" {
 		s.collectParenIdents(toks, k, add) // 参数
@@ -241,34 +260,37 @@ func (s *Scope) collectGroupNames(toks []Token, open int, add func(Token)) {
 	}
 }
 
-// collectStructFields 收集 struct { ... } 顶层每行首个标识符（字段名）。
+// collectStructFields 收集 struct { ... } 顶层字段名。
+// 每个行首以及顶层逗号之后的标识符都是字段名——覆盖 `a, b int` 这种
+// 多名字共享类型的写法（H-4：漏收 b 会导致 t.b 被外部符号改写误大写）。
+// 嵌套结构（depth>0）内的逗号/标识符跳过，不误收嵌套字段。
 func (s *Scope) collectStructFields(toks []Token, open int, add func(Token)) {
 	close := matchDelim(toks, open, "{", "}")
 	if close <= open {
 		return
 	}
-	depth, lineStart := 0, true
+	depth, expectName := 0, true
 	for i := open + 1; i <= close; i++ {
 		t := toks[i]
 		switch t.Text {
-		case "{":
+		case "{", "[", "(":
 			depth++
-		case "}":
+		case "}", "]", ")":
 			depth--
 		}
 		if depth > 0 {
 			continue
 		}
-		if t.Kind == Newline || t.Text == ";" {
-			lineStart = true
+		if t.Kind == Newline || t.Text == ";" || t.Text == "," {
+			expectName = true
 			continue
 		}
 		if t.Kind == Space || t.Kind == Comment {
 			continue
 		}
-		if lineStart {
+		if expectName {
 			add(t)
-			lineStart = false
+			expectName = false
 		}
 	}
 }

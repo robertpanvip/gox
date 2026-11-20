@@ -306,17 +306,18 @@ n := view.<span class="fn">Update</span>()                      <span class="cm"
 }</pre>
 <div class="note"><b>取舍</b>：强类型属性是快照值（组件只执行一次、字段是普通值），写变量后<b>不会</b>自动刷新——要响应式请用 getter-map + <code>BindReactive</code>。两种形态可在同一文件混用，按组件各自签名判定。验证见 <code>pkg/compiler/jsxscene_test.go</code> 的 <code>TestJSXSceneTypedProps*</code>。</div>
 
-<h2>三·补充三、应用入口 gxapp.Open（类比 ReactDOM.render）</h2>
-<p>前面都在讲「一棵场景树怎么建、怎么更新」。<code>gxapp.Open</code> 是再上一层的<b>应用外壳</b>——把 JSX 挂到「窗口」上，正如 <code>ReactDOM.render(element, container)</code>。两个参数正好是：</p>
+<h2>三·补充三、应用入口 gxapp.open（类比 ReactDOM.render）</h2>
+<p>前面都在讲「一棵场景树怎么建、怎么更新」。<code>gxapp.open</code> 是再上一层的<b>应用外壳</b>——把 JSX 挂到「窗口」上，正如 <code>ReactDOM.render(element, container)</code>。</p>
+<div class="note"><b>源码小写、生成大写</b>：遵循 GX「外部符号按小写书写、编译器还原真实大小写」的约定（同 <code>gxvdom.render</code>）——源码写 <code>gxapp.open</code> / <code>gxapp.windowConfig</code>，生成的 Go 是 <code>gxapp.Open</code> / <code>gxapp.WindowConfig</code>。运行时库里定义的仍是大写 <code>Open</code>（Go 导出可见性要求）。</div>
 <table>
   <tr><th>参数</th><th>含义</th></tr>
   <tr><td>第一个</td><td><b>JSX</b>（编译后即 <code>gxscene.Render(...)</code> → <code>*Instance</code>）</td></tr>
-  <tr><td>第二个</td><td><b>窗口配置</b> <code>gxapp.WindowConfig</code>（标题、尺寸、位置、全屏、后端提示）</td></tr>
+  <tr><td>第二个</td><td><b>窗口配置</b> <code>gxapp.windowConfig</code>（标题、尺寸、位置、全屏、后端提示）</td></tr>
 </table>
 <pre class="code"><span class="cm">// gox build demo.gx -jsx=scene   ·   examples/jsxapp.gx</span>
 <span class="kw">import</span> gxapp <span class="st">"github.com/robertpanvip/gox/runtime/app"</span>
 
-app, err := gxapp.<span class="fn">Open</span>(&lt;<span class="tag">div</span> id=<span class="st">"app"</span>&gt;hello&lt;/<span class="tag">div</span>&gt;, gxapp.WindowConfig{
+app, err := gxapp.<span class="fn">open</span>(&lt;<span class="tag">div</span> id=<span class="st">"app"</span>&gt;hello&lt;/<span class="tag">div</span>&gt;, gxapp.windowConfig{
     Title:<span class="st">"Demo"</span>, Width:800, Height:600,
 })
 <span class="kw">if</span> err != nil { <span class="fn">panic</span>(err) }

@@ -20,9 +20,22 @@ func prevSigIn(toks []Token, end, from int) int {
 // 全部查询都基于「当前 token 流」向前扫描声明，不依赖 Analysis 的旧下标
 // （desugar 层会改写 token 流，Analysis 的下标基于改写前的快照，会漂移）。
 
+// lookupIdentType 是 A 类词法类型查询的统一入口（取代散落的 inferIdentType）。
+// 优先走绑定表 TypeAtIdx（Pos 稳定、O(1)、天然处理遮蔽）；绑定表未推断出类型时
+// 回退旧扫描逻辑，保证迁移期间零行为差异。所有 transform 经此入口查询。
+func lookupIdentType(b *Bindings, toks []Token, name string, useIdx int) string {
+	if b != nil {
+		if t := b.TypeAtIdx(toks, name, useIdx); t != "" {
+			return t
+		}
+	}
+	return inferIdentType(toks, name, useIdx)
+}
+
 // inferIdentType 推断标识符 name 在 useIdx 处的类型文本。
 // 返回 "" 表示无法推断（调用方降级为 any / fmt.Sprint）。
 // 优先级：函数形参 → var 显式类型 → := 右侧表达式 → range 元素。
+// 保留为 lookupIdentType 的回退路径；绑定表覆盖全部场景后可在对拍确认下移除。
 func inferIdentType(toks []Token, name string, useIdx int) string {
 	// 1) 函数形参：在所有 func 声明里找名为 name 的参数，取最近的一个。
 	if t := inferIdentFromParams(toks, name, useIdx); t != "" {

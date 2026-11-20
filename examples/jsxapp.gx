@@ -1,9 +1,11 @@
-// 应用级入口 gxapp.Open — 类比 ReactDOM.render：把 JSX 挂到「窗口」上。
+// 应用级入口 gxapp.open — 类比 ReactDOM.render：把 JSX 挂到「窗口」上。
 // 构建：gox build examples/jsxapp.gx -jsx=scene -o main.go && go run .
 //
-// gxapp.Open 的两个参数正好是：
+// GX 约定：外部符号源码一律小写书写，编译器自动还原真实大小写——
+//   gxapp.open → gxapp.Open、gxapp.windowConfig → gxapp.WindowConfig（同 gxvdom.render）。
+// gxapp.open 的两个参数正好是：
 //   第一个参数：JSX（编译后即 gxscene.Render(...) → *Instance）
-//   第二个参数：窗口配置 gxapp.WindowConfig（标题、尺寸、位置等）
+//   第二个参数：窗口配置 gxapp.windowConfig（标题、尺寸、位置等）
 //
 // 窗口后端由 Window 接口抽象。第一版内置 Headless（TextBackend 绘制到终端）；
 // Skia / wgpu / GLFW 后端实现同一接口即可接入，app 层与编译器无需改动。
@@ -27,7 +29,7 @@ func main() {
 
     // 打开窗口：第一个参数是 JSX（场景树），第二个是窗口配置。
     // 返回 (*App, error)：窗口后端创建失败时报错（Headless 不会失败）。
-    app, err := gxapp.Open(view, gxapp.WindowConfig{
+    app, err := gxapp.open(view, gxapp.windowConfig{
         Title:  "Gox Counter",
         Width:  800,
         Height: 600,

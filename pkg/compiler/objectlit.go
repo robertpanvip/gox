@@ -224,7 +224,7 @@ func exprStartBefore(toks []Token, p int) bool {
 }
 
 // inferValueType 从值表达式 token 区间反推类型文本。
-func inferValueType(toks []Token, from, to int) string {
+func inferValueType(toks []Token, from, to int, b *Bindings) string {
 	if from >= to {
 		return "any"
 	}
@@ -232,7 +232,7 @@ func inferValueType(toks []Token, from, to int) string {
 	if toks[from].Text == "{" && toks[from].Kind == Operator {
 		close := matchDelimSkipSpace(toks, from, "{", "}")
 		if close > from && close <= to {
-			return buildAnonymousStructType(toks, from, close)
+			return buildAnonymousStructType(toks, from, close, b)
 		}
 	}
 	// 单有效 token 的值（允许前后空白）：字面量常量 / 标识符。
@@ -253,7 +253,7 @@ func inferValueType(toks []Token, from, to int) string {
 				return "int"
 			case Ident:
 				// 标识符（循环变量 i / 函数参数 / var 变量）：从声明推断类型。
-				if t := inferIdentType(toks, toks[firstSig].Text, firstSig); t != "" {
+				if t := lookupIdentType(b, toks, toks[firstSig].Text, firstSig); t != "" {
 					return t
 				}
 			}
@@ -297,7 +297,7 @@ func inferValueType(toks []Token, from, to int) string {
 }
 
 // buildAnonymousStructType 为 [open,close) 内的对象字面量生成 `struct{ name T; ... }` 类型文本。
-func buildAnonymousStructType(toks []Token, open, close int) string {
+func buildAnonymousStructType(toks []Token, open, close int, b *Bindings) string {
 	var parts []string
 	for _, seg := range splitTopLevelSegs(toks, open+1, close) {
 		colonIdx := -1
@@ -324,7 +324,7 @@ func buildAnonymousStructType(toks []Token, open, close int) string {
 			continue
 		}
 		valFrom := nextSigIn(toks, colonIdx+1, seg[1])
-		parts = append(parts, toks[nameIdx].Text+" "+inferValueType(toks, valFrom, seg[1]))
+		parts = append(parts, toks[nameIdx].Text+" "+inferValueType(toks, valFrom, seg[1], b))
 	}
 	return "struct{ " + strings.Join(parts, "; ") + " }"
 }
@@ -351,8 +351,8 @@ func (e *objectLitError) Error() string {
 // 字段结构信息，无法用于补全结构体类型名（生成 any{...} 是非法 Go）。因此在
 // 这里显式归一为空串，让对象字面量按匿名结构体编译。具名 struct 则保留，
 // 交给 validateObjectLit 补全 + 校验。
-func resolveExpectType(toks []Token, lit *objectLit, an *Analysis, structs map[string]*structInfo) string {
-	typ := resolveExpectTypeRaw(toks, lit, an, structs)
+func resolveExpectType(toks []Token, lit *objectLit, an *Analysis, structs map[string]*structInfo, b *Bindings) string {
+	typ := resolveExpectTypeRaw(toks, lit, an, structs, b)
 	if isAnyLikeType(typ) {
 		return ""
 	}
@@ -369,7 +369,7 @@ func isAnyLikeType(s string) bool {
 	return strings.Join(strings.Fields(s), "") == "interface{}"
 }
 
-func resolveExpectTypeRaw(toks []Token, lit *objectLit, an *Analysis, structs map[string]*structInfo) string {
+func resolveExpectTypeRaw(toks []Token, lit *objectLit, an *Analysis, structs map[string]*structInfo, b *Bindings) string {
 	open := lit.open
 	p := prevSig(toks, open-1)
 	if p < 0 {
@@ -387,7 +387,7 @@ func resolveExpectTypeRaw(toks []Token, lit *objectLit, an *Analysis, structs ma
 		}
 		// 赋值场景 p = {...}：变量名声明类型已知
 		if nameIdx := prevSig(toks, p-1); nameIdx >= 0 && toks[nameIdx].Kind == Ident {
-			if typ := lookupVarType(toks, nameIdx); typ != "" {
+			if typ := lookupVarType(toks, nameIdx, b); typ != "" {
 				return typ
 			}
 		}
@@ -395,11 +395,11 @@ func resolveExpectTypeRaw(toks []Token, lit *objectLit, an *Analysis, structs ma
 	}
 	// 2) f({...})：找调用的函数名与实参序号
 	if toks[p].Text == "(" || toks[p].Text == "," {
-		return inferArgExpectType(toks, open, an)
+		return inferArgExpectType(toks, open, an, b)
 	}
 	// 3) return {...}
 	if toks[p].is("return") {
-		return inferReturnExpectType(toks, open, an)
+		return inferReturnExpectType(toks, open, an, b)
 	}
 	return ""
 }
@@ -437,24 +437,29 @@ func lookupVarTypeAtEq(toks []Token, eqIdx int) string {
 //	var name TYPE
 //
 // 返回类型文本。
-func lookupVarType(toks []Token, nameIdx int) string {
+func lookupVarType(toks []Token, nameIdx int, b *Bindings) string {
 	name := toks[nameIdx].Text
+	// 优先绑定表：nameIdx 是赋值左侧使用点，按 Pos 查其声明类型。
+	if b != nil {
+		if t := b.TypeAtIdx(toks, name, nameIdx); t != "" {
+			return t
+		}
+	}
+	// 回退：旧扫描（var 声明显式类型）。
 	for i := 0; i < len(toks); i++ {
 		if !toks[i].is("var") {
 			continue
 		}
 		j := nextSig(toks, i+1)
 		if j < 0 || toks[j].Text != name {
-			// var (...) 分组：稍后简化处理
 			continue
 		}
 		k := nextSig(toks, j+1)
 		if k < 0 {
 			continue
 		}
-		// var name TYPE = ... 或 var name TYPE
 		if toks[k].Text == "=" {
-			return "" // 无显式类型
+			return ""
 		}
 		te := typeRangeEnd(toks, k)
 		if te > k {
@@ -467,7 +472,7 @@ func lookupVarType(toks []Token, nameIdx int) string {
 // inferArgExpectType 推断对象字面量作为函数实参时的期望类型。
 // 找到包裹该字面量的最近一层函数调用 f(...)，确定它是第几个实参，
 // 再从 f 的声明里取对应参数的原始类型 token 文本（保留类型名，不展开别名）。
-func inferArgExpectType(toks []Token, open int, an *Analysis) string {
+func inferArgExpectType(toks []Token, open int, an *Analysis, b *Bindings) string {
 	// 向左找到最近一层未匹配的 '('（即实参列表起点）
 	depth := 0
 	openCall := -1
@@ -512,7 +517,13 @@ func inferArgExpectType(toks []Token, open int, an *Analysis) string {
 			}
 		}
 	}
-	// 从 func 声明取第 argIdx 个参数的原始类型文本
+	// 从 func 声明取第 argIdx 个参数的原始类型文本。
+	// 优先绑定表的原始文本签名索引；未收录（如 lambda 展开的匿名函数）回退旧扫描。
+	if b != nil {
+		if t := b.FuncParamAt(funcName, argIdx); t != "" {
+			return t
+		}
+	}
 	return declaredParamTypeAt(toks, funcName, argIdx)
 }
 
@@ -556,7 +567,7 @@ func declaredParamTypeAt(toks []Token, funcName string, idx int) string {
 // inferReturnExpectType 推断 return 语句里对象字面量的期望类型（函数返回类型）。
 // 不依赖 Analysis 的 token 下标（会因前面的 transform 漂移），而是从 return
 // 位置向前找最近的 func 声明，取其 ')' 后的返回类型 token 文本。
-func inferReturnExpectType(toks []Token, open int, an *Analysis) string {
+func inferReturnExpectType(toks []Token, open int, an *Analysis, b *Bindings) string {
 	// 从 return 向前找最近的 func 关键字
 	funcIdx := -1
 	for i := open - 1; i >= 0; i-- {
@@ -567,6 +578,15 @@ func inferReturnExpectType(toks []Token, open int, an *Analysis) string {
 	}
 	if funcIdx < 0 {
 		return ""
+	}
+	// 优先绑定表：具名函数直接查原始文本签名索引（匿名 lambda 展开体无函数名，
+	// funcNameAt 返回 -1，自然回退到下面的 token 扫描）。
+	if b != nil {
+		if ni := funcNameAt(toks, funcIdx); ni >= 0 {
+			if t := b.FuncResult(toks[ni].Text); t != "" {
+				return t
+			}
+		}
 	}
 	// 找参数列表的 '('：func 后可能有函数名（或接收者）
 	openParen := nextSig(toks, funcIdx+1)
@@ -738,7 +758,7 @@ func transformObjectLitExpr(in []Token) ([]Token, error) {
 	if first >= 0 && in[first].Text == "{" && in[first].Kind == Operator {
 		pre := []Token{tokOp("=", in[first].Pos)}
 		aug := append(pre, in...)
-		out, err := transformObjectLits(aug, nil)
+		out, err := transformObjectLits(aug, nil, nil)
 		if err != nil {
 			return in, err
 		}
@@ -748,12 +768,12 @@ func transformObjectLitExpr(in []Token) ([]Token, error) {
 		}
 		return out, nil
 	}
-	return transformObjectLits(in, nil)
+	return transformObjectLits(in, nil, nil)
 }
 
 // transformObjectLits 是对象字面量变换入口。
 // 返回一个错误（带 GX 坐标）表示校验失败；成功则返回改写后的 token 流。
-func transformObjectLits(in []Token, an *Analysis) ([]Token, error) {
+func transformObjectLits(in []Token, an *Analysis, b *Bindings) ([]Token, error) {
 	structs := collectStructTypes(in)
 	out := append([]Token(nil), in...)
 
@@ -777,9 +797,9 @@ func transformObjectLits(in []Token, an *Analysis) ([]Token, error) {
 		var reps []repl
 		for _, lit := range leaves {
 			for j := range lit.fields {
-				lit.fields[j].valType = inferValueType(out, lit.fields[j].valFrom, lit.fields[j].valTo)
+				lit.fields[j].valType = inferValueType(out, lit.fields[j].valFrom, lit.fields[j].valTo, b)
 			}
-			lit.expectTyp = resolveExpectType(out, &lit, an, structs)
+			lit.expectTyp = resolveExpectType(out, &lit, an, structs, b)
 
 			var typeText string
 			if lit.expectTyp != "" {
@@ -790,10 +810,10 @@ func transformObjectLits(in []Token, an *Analysis) ([]Token, error) {
 				if info != nil {
 					typeText = lit.expectTyp // 省略结构体类型名，用期望类型补全
 				} else {
-					typeText = buildAnonymousStructType(out, lit.open, lit.close)
+					typeText = buildAnonymousStructType(out, lit.open, lit.close, b)
 				}
 			} else {
-				typeText = buildAnonymousStructType(out, lit.open, lit.close)
+				typeText = buildAnonymousStructType(out, lit.open, lit.close, b)
 			}
 
 			p := lit.pos

@@ -145,7 +145,11 @@ func (s *stream) applyPubAt(k int) {
 // gx 约定一切标识符小写书写；pub 声明的名字在生成 Go 时被大写，
 // 因此所有对它们的引用（函数调用、类型引用、字段/方法访问）也要同步大写。
 // names 由 pub/enum 两层收集；已是大写或不在表中的标识符一律不动。
-func restoreRefs(in []Token, names map[string]string) []Token {
+// 与 pub 同名的局部变量（及其函数体内的引用）不还原（M-5）。
+//
+// P2：遮蔽判断改走 bindings.ResolveAt —— 解析到非包级（SkGlobal）绑定即为
+// 局部遮蔽（BkLocal/BkParam/局部 var），自动跳过；删去 collectLocalShadows。
+func restoreRefs(in []Token, names map[string]string, b *Bindings) []Token {
 	if len(names) == 0 {
 		return in
 	}
@@ -158,9 +162,17 @@ func restoreRefs(in []Token, names map[string]string) []Token {
 		if isGoKeyword(t.Text) || t.Text == "pub" || t.Text == "enum" {
 			continue
 		}
-		if up, ok := names[t.Text]; ok {
-			t.Text = up
+		up, ok := names[t.Text]
+		if !ok {
+			continue
 		}
+		// 解析到局部绑定（非包级）→ 该名字在此处被遮蔽，不还原。
+		if b != nil {
+			if bd := b.ResolveAt(t.Text, t.Pos); bd != nil && bd.Scope != nil && bd.Scope.Kind != SkGlobal {
+				continue
+			}
+		}
+		t.Text = up
 	}
 	return out
 }

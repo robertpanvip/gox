@@ -30,11 +30,11 @@ type destructName struct {
 
 // destructure 是一处对象解构声明。
 type destructure struct {
-	open, close int          // '{' / '}' 下标
-	from, to    int          // 整体替换区间 [from, to)
+	open, close int // '{' / '}' 下标
+	from, to    int // 整体替换区间 [from, to)
 	names       []destructName
-	rhsFrom     int          // 右值表达式 token 起点
-	useVar      bool         // true → 生成 var name = p.name；false → name := p.name
+	rhsFrom     int  // 右值表达式 token 起点
+	useVar      bool // true → 生成 var name = p.name；false → name := p.name
 }
 
 // destructError 是解构校验失败的错误，携带 GX 坐标。
@@ -138,9 +138,9 @@ func parseDestructNames(toks []Token, start, end int) ([]destructName, bool) {
 
 // destructSourceFields 推断右值标识符 ident 的字段集合。
 // 返回 nil 表示无法推断（调用方宽松处理，不校验）。
-func destructSourceFields(toks []Token, ident string, at int, structs map[string]*structInfo) map[string]bool {
+func destructSourceFields(toks []Token, ident string, at int, structs map[string]*structInfo, b *Bindings) map[string]bool {
 	// 1) 先用共享类型推断（var p Student / p := 字面量）
-	if typ := inferIdentType(toks, ident, at); typ != "" {
+	if typ := lookupIdentType(b, toks, ident, at); typ != "" {
 		if info, ok := structs[typ]; ok {
 			return fieldSet(info)
 		}
@@ -237,7 +237,7 @@ func rhsIdentifier(toks []Token, from, to int) string {
 
 // expandDestructures 校验并改写所有对象解构。
 // 校验失败返回 *destructError（带 GX 坐标）。
-func expandDestructures(in []Token) ([]Token, error) {
+func expandDestructures(in []Token, b *Bindings) ([]Token, error) {
 	structs := collectStructTypes(in)
 	ds := detectDestructures(in)
 	if len(ds) == 0 {
@@ -250,7 +250,7 @@ func expandDestructures(in []Token) ([]Token, error) {
 		rhsIdent := rhsIdentifier(out, d.rhsFrom, d.to)
 		fields := map[string]bool(nil)
 		if rhsIdent != "" {
-			fields = destructSourceFields(out, rhsIdent, d.rhsFrom, structs)
+			fields = destructSourceFields(out, rhsIdent, d.rhsFrom, structs, b)
 		}
 		// 校验 S₂ ⊆ fields(T)；fields 为 nil（类型未知）时宽松放行
 		if fields != nil {
@@ -272,8 +272,19 @@ func expandDestructures(in []Token) ([]Token, error) {
 				rhs = append(rhs, toks)
 			}
 		}
-		// 生成 name := p.name / var name = p.name，每个字段一行
+		// M-6：复杂右值（非单个标识符）只求值一次——先存临时变量，各字段从它取。
+		// 简单标识符（如 p）重复引用无副作用，保留原样以保持生成代码简洁。
+		base := rhs
 		var gen []Token
+		if len(rhs) != 1 || rhs[0].Kind != Ident {
+			tmp := fmt.Sprintf("__gx_ds_%d_%d", d.rhsFrom, len(d.names))
+			tp := rhs[0].Pos
+			gen = append(gen, tokIdent(tmp, tp), tokSpace(" ", tp), tokOp(":=", tp), tokSpace(" ", tp))
+			gen = append(gen, rhs...)
+			gen = append(gen, tokNewline(tp))
+			base = []Token{tokIdent(tmp, tp)}
+		}
+		// 生成 name := p.name / var name = p.name，每个字段一行
 		for _, nm := range d.names {
 			p := nm.pos
 			if d.useVar {
@@ -286,7 +297,7 @@ func expandDestructures(in []Token) ([]Token, error) {
 				gen = append(gen, tokOp(":=", p))
 			}
 			gen = append(gen, tokSpace(" ", p))
-			gen = append(gen, rhs...)
+			gen = append(gen, base...)
 			gen = append(gen, tokOp(".", p), tokIdent(nm.name, p), tokNewline(p))
 		}
 		out = append(out[:d.from], append(gen, out[d.to:]...)...)
