@@ -90,6 +90,10 @@ func compileWithMode(file, src, module string, mode jsxMode) (*Result, error) {
 	// 先收集 signal 变量名并透传给 JSX 转换：JSX 插值 {count} 在此时是整体 token，
 	// 信号改写穿透不到；scene/vdom 后端重新词法化插值时需据此补上读调用 count()。
 	sigs := collectSignalVars(toks)
+	// 在 signal 改写前收集 signal 变量的声明类型（如 users→[]User）。
+	// 改写后初值被 Signal.New(...) 包裹，字面量类型无法直接推断，故必须在此处采集。
+	// 供 <For> 在 render 参数无类型注解时从 each 推断元素类型。
+	sigTypes := collectSignalTypes(toks)
 	// P1：传入 bindings，用 ResolveAt 做遮蔽判断（P1-1 根治）。
 	toks = transformSignals(toks, bindings)
 	analysis := Analyze(toks)    // desugar 之前的 GX 语义层（联合未擦除）
@@ -121,7 +125,7 @@ func compileWithMode(file, src, module string, mode jsxMode) (*Result, error) {
 		// 会从签名补全 Card(CardProps{...}) 并校验字段。
 		structs := collectStructTypes(toks)
 		comps := collectCompContracts(toks, structs)
-		ctx := &jsxSceneCtx{sigs: sigs, comps: comps}
+		ctx := &jsxSceneCtx{sigs: sigs, comps: comps, sigTypes: sigTypes, bindings: bindings}
 		toks = transformJSXScene(toks, ctx)
 		// 第二次对象字面量变换：补全 JSX 转换新产生的 Card({...}) 期望类型并校验。
 		// 第一次已在 desugar 早期处理非 JSX 字面量；这里处理 JSX 阶段新增的。

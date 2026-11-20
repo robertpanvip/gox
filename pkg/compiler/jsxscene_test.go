@@ -375,3 +375,73 @@ func main() {
 		}
 	}
 }
+
+// Keyed For 元素类型推断：render 参数无类型注解时，从 each 集合表达式推断元素类型。
+func TestJSXSceneForInferElemType(t *testing.T) {
+	res, err := CompileScene("for.gx", `package main
+import gxscene "github.com/robertpanvip/gox/runtime/scene"
+type User struct { id int; name string }
+func main() {
+	signal users = []User{{1,"Tom"}}
+	_ = <ul><For each={users} key={(u) => u.id}>{(u) => <li>{u.name}</li>}</For></ul>
+}
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := res.GoSource
+	for _, want := range []string{
+		"gxscene.ForGetterOf[User]", // 关键：从 signal users 推断出 User，而非 any
+		"func() []User", "users()",
+		"func(u User) any", "u.id",
+		"func(u User) *gxscene.Instance",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("无类型 render 应推断为 User，期望产物包含 %q, got:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "ForGetterOf[any]") {
+		t.Errorf("不应降级为 any, got:\n%s", out)
+	}
+}
+
+// 普通变量（非 signal）也应能从 each 推断元素类型，走 bindings 查询路径。
+func TestJSXSceneForInferFromPlainVar(t *testing.T) {
+	res, err := CompileScene("for.gx", `package main
+import gxscene "github.com/robertpanvip/gox/runtime/scene"
+type User struct { id int; name string }
+func main() {
+	users := []User{{1,"Tom"}}
+	_ = <ul><For each={users} key={(u) => u.id}>{(u) => <li>{u.name}</li>}</For></ul>
+}
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := res.GoSource
+	if !strings.Contains(out, "gxscene.ForGetterOf[User]") {
+		t.Errorf("普通变量应推断为 User, got:\n%s", out)
+	}
+	if strings.Contains(out, "ForGetterOf[any]") {
+		t.Errorf("不应降级为 any, got:\n%s", out)
+	}
+}
+
+// 显式类型注解仍优先于推断（回归保证）。
+func TestJSXSceneForExplicitTypeWins(t *testing.T) {
+	res, err := CompileScene("for.gx", `package main
+import gxscene "github.com/robertpanvip/gox/runtime/scene"
+type User struct { id int; name string }
+func main() {
+	signal users = []User{{1,"Tom"}}
+	_ = <ul><For each={users} key={(u) => u.id}>{(u User) => <li>{u.name}</li>}</For></ul>
+}
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := res.GoSource
+	if !strings.Contains(out, "gxscene.ForGetterOf[User]") {
+		t.Errorf("显式注解应生成 ForGetterOf[User], got:\n%s", out)
+	}
+}

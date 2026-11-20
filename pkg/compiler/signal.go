@@ -83,6 +83,40 @@ func collectSignalVars(toks []Token) map[string]bool {
 	return sigs
 }
 
+// collectSignalTypes 在 signal 改写前，从原始 token 流收集 signal/let 变量的
+// 声明类型（如 signal users = []User{{...}} → {"users":"[]User"}）。
+// 改写后初值被 Signal.New(...) 包裹，字面量类型无法从声明直接推断，
+// 因此本函数必须在 transformSignals 之前调用。
+// 只收集能静态推断出类型的变量（布尔/字符串/数字/切片等），无法判定则不入表。
+func collectSignalTypes(toks []Token) map[string]string {
+	out := map[string]string{}
+	for i := 0; i < len(toks); i++ {
+		if !toks[i].is("signal") && !toks[i].is("let") {
+			continue
+		}
+		j := nextSig(toks, i+1)
+		if j < 0 || j >= len(toks) || toks[j].Kind != Ident || isGoKeyword(toks[j].Text) {
+			continue
+		}
+		eq := nextSig(toks, j+1)
+		if eq < 0 || eq >= len(toks) || toks[eq].Text != "=" {
+			continue
+		}
+		end := signalExprEnd(toks, eq+1)
+		exprFrom := eq + 1
+		for exprFrom < end && toks[exprFrom].Kind == Space {
+			exprFrom++
+		}
+		if exprFrom >= end {
+			continue
+		}
+		if typ := inferExprLitType(toks, exprFrom, end); typ != "" {
+			out[toks[j].Text] = typ
+		}
+	}
+	return out
+}
+
 // computedAssignTarget 若 computed/Computed 调用处于 `name := Signal.computed(...)`
 // 或 `var name = Signal.computed(...)` 等赋值右侧，返回被赋值的变量名。
 func computedAssignTarget(toks []Token, computedIdx int) string {

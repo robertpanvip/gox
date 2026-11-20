@@ -56,20 +56,25 @@ view := <div>
 
 ## 阶段 3：Keyed For（`runtime/scene` + 编译器）
 
-**GX 语法**（render lambda 参数需带元素类型注解以实例化泛型）：
+**GX 语法**（render 参数类型可省略，编译器从 `each` 自动推断元素类型）：
 
 ```gox
 type User struct { id int; name string }
+signal users = []User{{1, "Tom"}, {2, "Jack"}}
 
 view := <ul>
     <For each={users} key={(u) => u.id}>
-        {(u User) => <li>{u.name}</li>}
+        {(u) => <li>{u.name}</li>}
     </For>
 </ul>
 ```
 
-> `key` lambda 的参数类型可省略，编译器复用 render 的元素类型；
-> render lambda 的 `(u User)` 注解用于确定泛型实参。
+> `(u)` 无类型注解时，编译器从 `each={users}` 的集合类型（`[]User`）推断元素类型
+> `User`，生成 `ForGetterOf[User]`。以下写法均受支持：
+> - signal 变量：`signal users = []User{...}`（改写前采集声明类型）
+> - 普通变量：`users := []User{...}`（查询绑定表）
+> - 显式注解：`(u User) => ...` 始终优先于推断，可用于 `each` 类型无法静态确定的场景。
+> `key` lambda 的参数类型同样可省略，复用 render 的元素类型。
 
 **运行时**（`For` / `for.go`）：
 
@@ -82,8 +87,9 @@ view := <ul>
 
 **编译器**：`<For>` 产出 `gxscene.OpFor` + `gxscene.ForGetterOf[T](each, key, render)`。
 
-> 说明：静态分析与类型推断在 JSX 节点间传递上下文较复杂，首版要求 render lambda
-> 显式标注元素类型。无标注的 `(user) =>` 写法可作为后续增强。
+> 元素类型 `T` 的推断优先级：render 参数显式注解 > `each` 集合类型推断（`[]T` /
+> `[N]T` / signal 声明字面量）> 降级 `any`。推断复用统一绑定表与 signal 声明类型
+> 采集，在 signal 改写前完成，确保初值字面量类型不被 `Signal.New(...)` 包裹遮蔽。
 
 ---
 

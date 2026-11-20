@@ -596,3 +596,36 @@ func main() {
 		}
 	}
 }
+
+func TestIntegrationJSXSceneForInferElemType(t *testing.T) {
+	// render 参数无类型注解：应从 each={users}（signal []User）推断元素类型 User，
+	// 生成可编译的 gxscene.ForGetterOf[User](...)。
+	src := `package main
+import (
+	gxscene "github.com/robertpanvip/gox/runtime/scene"
+	"fmt"
+)
+type User struct { id int; name string }
+func main() {
+	signal users = []User{{1,"Tom"},{2,"Jack"}}
+	view := <ul>
+		<For each={users} key={(u) => u.id}>
+			{(u) => <li>{u.name}</li>}
+		</For>
+	</ul>
+	view.BindReactive(Signal.Effect)
+	fmt.Print("INIT:", view)
+	users = []User{{2,"Jack"},{1,"Tom"},{3,"Ann"}}
+	fmt.Print("ADD:", view)
+}
+`
+	out := runGXScene(t, src)
+	for _, want := range []string{
+		`INIT:<ul>`, `"Tom"`, `"Jack"`,
+		`ADD:<ul>`, `"Ann"`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("无类型 render 推断应正常运行，输出应包含 %q, got:\n%s", want, out)
+		}
+	}
+}

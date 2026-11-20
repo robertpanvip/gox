@@ -202,6 +202,11 @@ func inferExprLitType(toks []Token, from, to int) string {
 		}
 		return inferIdentType(toks, toks[from].Text, from)
 	}
+	// 切片/数组复合字面量：[]T{...} / [N]T{...} → []T / [N]T。
+	// 必须早于「含字符串 → string」：元素里可能带字符串字面量（如 []User{{1,"Tom"}}）。
+	if typ := compositeLitType(toks, from, to); typ != "" {
+		return typ
+	}
 	// bool 字面量（表达式含 true/false 且是简单比较）
 	for i := from; i < to; i++ {
 		if toks[i].is("true") || toks[i].is("false") {
@@ -230,6 +235,43 @@ func inferExprLitType(toks []Token, from, to int) string {
 		return "rune"
 	}
 	return ""
+}
+
+// compositeLitType 从切片/数组复合字面量 `[]T{...}` / `[N]T{...}` 提取完整集合
+// 类型文本（`[]T` / `[N]T`）。用 Go parser 校验，确保只返回合法切片类型；
+// 非复合字面量或无法判定返回 ""。调用方可再经 sliceElemType 取元素类型。
+func compositeLitType(toks []Token, from, to int) string {
+	if from >= to || toks[from].Text != "[" {
+		return ""
+	}
+	// 找顶层第一个 `{`（值序列起点），其左侧即类型片段 `[]T` / `[N]T`。
+	depth := 0
+	brace := -1
+	for i := from; i < to; i++ {
+		switch toks[i].Text {
+		case "[", "(":
+			depth++
+		case "]", ")":
+			if depth > 0 {
+				depth--
+			}
+		case "{":
+			if depth == 0 {
+				brace = i
+			}
+		}
+		if brace >= 0 {
+			break
+		}
+	}
+	if brace <= from {
+		return ""
+	}
+	text := exprText(toks, from, brace)
+	if !isSliceGoTypeExpr(text) {
+		return ""
+	}
+	return text
 }
 
 // sliceElemType 从切片/数组类型文本提取元素类型文本。

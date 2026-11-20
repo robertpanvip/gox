@@ -34,6 +34,15 @@ import (
 type jsxSceneCtx struct {
 	sigs  map[string]bool
 	comps map[string]string
+	// sigTypes: signal 变量声明类型（改写前收集，如 users→[]User），
+	// 供 <For> 在 render 参数无类型注解时从 each 推断元素类型。
+	sigTypes map[string]string
+	// bindings: 统一绑定表，回退查询普通变量/函数形参类型。
+	bindings *Bindings
+	// jsxPos: 当前 JSX token 在原始源码中的绝对位置。JSX 内部节点（如嵌套
+	// 的 <For>）的 pos 是解析器生成的相对偏移，不能直接用于 bindings 查询，
+	// 故以根 JSX token 的绝对 pos 作为锚点。
+	jsxPos Pos
 }
 
 // sceneOp 是一条待发射的 opcode 描述（编译期中间结构）。
@@ -295,10 +304,10 @@ func branchGetterTokens(c *jsxCond, ctx *jsxSceneCtx) []Token {
 
 // forTokens 为 <For> 节点生成 gxscene.ForGetterOf[T](each, key, render)。
 //
-// 语法（render lambda 的参数须带元素类型注解，供泛型实例化）：
+// 语法（render lambda 参数类型可省略，从 each 推断；显式注解优先）：
 //
 //	<For each={users} key={(u) => u.id}>
-//	    {(u User) => <li>{u.name}</li>}
+//	    {(u) => <li>{u.name}</li>}       // 从 users 的 []User 推断出 User
 //	</For>
 //
 // 生成：
@@ -309,7 +318,8 @@ func branchGetterTokens(c *jsxCond, ctx *jsxSceneCtx) []Token {
 //	    func(u User) *gxscene.Instance { return <li>..</li> },
 //	)
 //
-// key lambda 的参数若不写类型，复用 render 的元素类型。
+// 元素类型推断优先级：render 参数显式注解 > each 集合类型（signal 声明字面量 /
+// 绑定表变量 / 函数返回值）> 降级 any。key lambda 的参数若不写类型，复用同一元素类型。
 func forTokens(n *jsxNode, ctx *jsxSceneCtx) []Token {
 	p := n.pos
 	var eachExpr, keyLambda string
@@ -333,11 +343,15 @@ func forTokens(n *jsxNode, ctx *jsxSceneCtx) []Token {
 	rParams, rBody, rOK := parseForLambda(renderLambda)
 	elemType, paramName := "any", "it"
 	if rOK {
-		if rParams.typ != "" {
-			elemType = rParams.typ
-		}
 		if rParams.name != "" {
 			paramName = rParams.name
+		}
+		if rParams.typ != "" {
+			// 显式注解优先（保留原有行为）。
+			elemType = rParams.typ
+		} else if inferred := ctx.inferForElemType(eachExpr, ctx.jsxPos); inferred != "" {
+			// 无类型注解时，从 each 集合表达式推断元素类型。
+			elemType = inferred
 		}
 	}
 
@@ -432,6 +446,53 @@ func parseForLambda(src string) (forLambdaParam, string, bool) {
 		fp.typ = strings.Join(fields[1:], " ")
 	}
 	return fp, body, true
+}
+
+// inferForElemType 从 <For each={expr}> 的 each 表达式推断元素类型文本，
+// 供 render 参数无显式类型注解时实例化 ForGetterOf[T]。
+//
+// each 支持三种形态：
+//   - 裸标识符：users（signal 或普通变量）
+//   - signal 读调用：users()
+//   - 函数调用：getUsers() / pkg.Items()
+//
+// 推断路径：取根标识符 → 先查 sigTypes（signal 声明原始类型），
+// 再查 bindings（普通变量 / 函数形参 / 函数返回值）→ sliceElemType 提取元素。
+// 无法判定时返回 ""，调用方降级为 any。
+func (ctx *jsxSceneCtx) inferForElemType(eachExpr string, pos Pos) string {
+	root := rootIdentOfExpr(eachExpr)
+	if root == "" {
+		return ""
+	}
+	collType := ""
+	if ctx.sigTypes != nil {
+		collType = ctx.sigTypes[root]
+	}
+	if collType == "" && ctx.bindings != nil {
+		collType = ctx.bindings.TypeAt(root, pos)
+		// 函数返回值：each 是 getUsers() 形态时，TypeAt 拿不到，取 FuncResult。
+		if collType == "" && strings.Contains(eachExpr, "(") {
+			collType = ctx.bindings.FuncResult(root)
+		}
+	}
+	if collType == "" {
+		return ""
+	}
+	return sliceElemType(collType)
+}
+
+// rootIdentOfExpr 取表达式的根标识符（跳过空白，取第一个标识符）。
+// users → users；users() → users；pkg.Items() → pkg（保守取首段，调用方再按函数兜底）。
+func rootIdentOfExpr(expr string) string {
+	for _, t := range New(expr).AllTokens() {
+		if t.Kind == EOF {
+			break
+		}
+		if t.Kind == Ident && !isGoKeyword(t.Text) {
+			return t.Text
+		}
+	}
+	return ""
 }
 
 // sceneOpTokens 把一个 sceneOp 转成 Go token 序列：
@@ -559,6 +620,8 @@ func transformJSXScene(in []Token, ctx *jsxSceneCtx) []Token {
 	var out []Token
 	for _, t := range in {
 		if t.Kind == JSX {
+			// 记录根 JSX token 的绝对位置，供内部节点（如嵌套 <For>）查询绑定表。
+			ctx.jsxPos = t.Pos
 			parser := newJSXParser(t.Text, t.Pos)
 			node := parser.parseElement()
 			out = append(out, genSceneExpr(node, ctx)...)
