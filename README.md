@@ -577,7 +577,7 @@ gox/
 
 分层：`pkg` 是对外稳定 API，`internal` 仅供本仓库 cmd 使用；IDEA 插件等前端通过 `bindings/cabi` 或直接 import `pkg` 接入，不碰 `internal`。
 
-详细文档：[语言规范](docs/language-spec.md) · [架构](docs/architecture.md) · [JNA 集成](docs/CABI.md)
+详细文档：[语言规范](docs/language-spec.md) · [架构](docs/architecture.md) · [后端接入（host + 协议）](docs/backend-integration.md) · [JNA 集成](docs/CABI.md)
 
 ## 构建与使用
 
