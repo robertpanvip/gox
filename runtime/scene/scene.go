@@ -532,24 +532,28 @@ func mountComp(s *slot, v any) {
 	}
 }
 
-// mountBranch 把条件分支当前命中的子树嫁接到槽位包装节点下。
-// 分支切换由 Branch.Resolve 负责销毁旧 Owner 并构建新子树；这里只做场景树的嫁接。
+// mountBranch 把条件分支/列表当前命中的子树嫁接到槽位包装节点下。
+// 分支切换由 Branch.Resolve / For.Resolve 负责销毁旧 Owner 并构建/复用子树；
+// 这里做场景树嫁接，并把"哪些子节点增删/移动"记录成细粒度指令。
 func mountBranch(s *slot, sub *Instance) {
 	if s.node == nil {
 		return
 	}
+	old := childrenSnapshot(s.node)
 	s.node.Children = nil
 	s.child = nil
-	if sub == nil {
-		s.node.Kind = "#frag"
-		return
+	if sub != nil {
+		s.child = sub
+		s.owner.adoptSink(sub)
+		for _, c := range sub.root.Children {
+			c.parent = s.node
+			s.node.Children = append(s.node.Children, c)
+		}
 	}
-	s.child = sub
 	s.node.Kind = "#frag"
-	s.owner.adoptSink(sub)
-	for _, c := range sub.root.Children {
-		c.parent = s.node
-		s.node.Children = append(s.node.Children, c)
+	// 首渲染时 sink 尚未 enable，diff 内部 add 会 no-op，无需特殊分支。
+	if s.owner != nil {
+		diffChildren(s.owner.changes, s.node, old, s.node.Children)
 	}
 }
 
@@ -627,8 +631,11 @@ func (i *Instance) Update() int {
 		// 但不重复计数子树写入（子树自身 Update 时会计入）。
 		if s.kind == slotChild {
 			if _, ok := v.(*Instance); ok {
+				old := childrenSnapshot(s.node)
+				wasText := s.node.Kind == "#text"
 				s.last = v
 				embedValue(s, v)
+				i.recordChildTransition(s.node, old, wasText)
 				continue
 			}
 		}
@@ -638,12 +645,10 @@ func (i *Instance) Update() int {
 		s.last = v
 		switch s.kind {
 		case slotChild:
+			old := childrenSnapshot(s.node)
+			wasText := s.node.Kind == "#text"
 			embedValue(s, v)
-			if s.node.Kind == "#text" {
-				i.record(ChangeSetText, s.node, "", s.node.Text)
-			} else {
-				i.record(ChangeReplaceChildren, s.node, "", nil)
-			}
+			i.recordChildTransition(s.node, old, wasText)
 		case slotAttr:
 			s.node.Props[s.attr] = v
 			i.record(ChangeSetAttr, s.node, s.attr, v)
@@ -743,8 +748,9 @@ func (i *Instance) SetPart(slot int, v any) {
 			return
 		}
 		s.ctrl = ctrl
+		// mountBranch 内部已对嫁接前后做逐节点 diff（含列表增删/重排）；
+		// 这里不再额外发 ReplaceChildren，否则后端会先收到整块重建再收到细粒度补丁。
 		mountBranch(s, ctrl.Resolve())
-		i.record(ChangeReplaceChildren, s.node, "", nil)
 		i.Writes++
 		return
 	}
@@ -754,12 +760,10 @@ func (i *Instance) SetPart(slot int, v any) {
 	s.last = v
 	switch s.kind {
 	case slotChild:
+		old := childrenSnapshot(s.node)
+		wasText := s.node.Kind == "#text"
 		embedValue(s, v)
-		if s.node.Kind == "#text" {
-			i.record(ChangeSetText, s.node, "", s.node.Text)
-		} else {
-			i.record(ChangeReplaceChildren, s.node, "", nil)
-		}
+		i.recordChildTransition(s.node, old, wasText)
 	case slotAttr:
 		s.node.Props[s.attr] = v
 		i.record(ChangeSetAttr, s.node, s.attr, v)

@@ -136,14 +136,34 @@ for _, ch := range app.TakeChanges() { // 取走自上帧以来的有序变更
     case gxscene.ChangeSetAttr:    /* ch.NodeID / ch.Key / ch.Value */
     case gxscene.ChangeSetText:    /* ch.Value 为新文本 */
     case gxscene.ChangeSetHandler: /* 事件换绑 */
-    case gxscene.ChangeReplaceChildren: /* ch.NodeID 的 children 重建，重读之 */
+    case gxscene.ChangeInsertBefore: /* ch.NodeID 下，把 ch.Value(*Node) 插到 ch.BeforeID 之前 */
+    case gxscene.ChangeMoveChild:    /* 把 ch.ChildID 子节点移到 ch.BeforeID 之前 */
+    case gxscene.ChangeRemoveChild, gxscene.ChangeDestroy: /* 移除 ch.ChildID 子节点 */
+    case gxscene.ChangeAppendChild:  /* 追加 ch.Value(*Node) 到末尾 */
+    case gxscene.ChangeReplaceChildren: /* 整块兜底：ch.NodeID 的 children 重建，重读之 */
     }
 }
 ```
-- `ChangeKind`：`SetAttr` / `SetText` / `SetHandler` / `ReplaceChildren` / `AppendChild` / `RemoveChild` / `Destroy`。
-- 变更用 `Node.ID` 定位；整棵实例树（组件/分支/列表项）共享同一 sink，一次 `TakeChanges` 取全。
-- 这是 opcode 常驻树 + 细粒度 `Update()` 的自然产物——`Update` 本来就算出"哪些插槽变了"，这里只是暴露出来，**不像被移除的 vdom 后端那样每次重建整树**。
-- 后端可忽略它、继续每次全量 `Draw(root)`（零改动），也可消费它做增量重绘。
+
+**`ChangeKind` 全表与字段语义**（`BeforeID` 为空表示末尾）：
+
+| Kind | NodeID | ChildID | BeforeID | Value | 触发场景 |
+|------|--------|---------|----------|-------|----------|
+| `SetAttr` | 属性所在节点 | — | — | 新值 | 动态属性变化 |
+| `SetText` | 文本节点 | — | — | 新文本 | 标量/文本插值变化 |
+| `SetHandler` | 事件所在节点 | — | — | handler | 事件换绑 |
+| `InsertBefore` | 父节点 | 新子节点 ID | 锚点 ID | 完整 `*Node` 子树 | 列表新增、动态 children 插入 |
+| `MoveChild` | 父节点 | 被移动节点 ID | 锚点 ID | — | keyed 列表重排（节点复用，只调顺序） |
+| `RemoveChild` | 父节点 | 被移除节点 ID | — | 被移除 `*Node` | 列表删项、children 移除 |
+| `Destroy` | 父节点 | 被移除节点 ID | — | 被移除 `*Node` | 节点从树中彻底移除（同 RemoveChild） |
+| `AppendChild` | 父节点 | 子节点 ID | — | 完整 `*Node` 子树 | 追加到末尾 |
+| `ReplaceChildren` | 父节点 | — | — | — | 整块兜底：文本↔容器互转等大结构变化 |
+
+**逐节点增删/移动是真实的，不是占位符**：`For` 的 keyed diff 在增删/重排时会精确发出 `InsertBefore`/`RemoveChild`/`MoveChild`；动态 children 变化会先对旧/新子节点做基于 `*Node` 指针身份的 diff，只发变化的部分。为把移动次数降到最少，复用节点按旧索引求最长递增子序列（LIS），LIS 上的节点保持原位，其余发 `MoveChild`；指令从右往左生成、`BeforeID` 始终指向右侧已就位的节点，后端顺序 apply 即得目标顺序。
+
+- 变更用 `Node.ID` 定位（`ChildID`/`BeforeID` 同为跨帧稳定 ID）；整棵实例树（组件/分支/列表项）共享同一 sink，一次 `TakeChanges` 取全。
+- 这是 opcode 常驻树 + 细粒度 `Update()` 的自然产物——`Update` 本来就算出"哪些插槽变了"，这里只是暴露出来，**不像被移除的 vdom 后端那样每次重建整树**；细粒度 diff 只作用于单个动态插槽的 children，不产生 `createElement`、不重建整棵树。
+- 后端可忽略它、继续每次全量 `Draw(root)`（零改动），也可消费它做增量重绘。`ReplaceChildren` 作为兜底保留：后端即便只实现这一条、忽略其余细粒度指令，也能正确工作（只是退化为整块重读）。
 
 > 三样都不触碰命中/布局/绘制：ID 是身份、Layout 是空容器、Changes 是"什么变了"的数据描述。决策与实现仍 100% 归后端。
 

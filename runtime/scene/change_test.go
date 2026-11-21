@@ -185,3 +185,173 @@ func TestChangesWithForKeyedItems(t *testing.T) {
 		t.Fatalf("列表项内部变更应汇入根 sink: %v", changes)
 	}
 }
+
+// ---------------- 逐节点增删/移动细粒度指令 ----------------
+
+func countKind(changes []Change, kind ChangeKind) int {
+	n := 0
+	for _, c := range changes {
+		if c.Kind == kind {
+			n++
+		}
+	}
+	return n
+}
+
+func nodeIDs(nodes []*Node) []string {
+	out := make([]string, len(nodes))
+	for i, n := range nodes {
+		out[i] = nodeID(n)
+	}
+	return out
+}
+
+func sameIDs(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// 纯重排应只产生 MoveChild，不产生增删；apply 后顺序与目标一致。
+func TestDiffChildrenReorderEmitsMoveOnly(t *testing.T) {
+	parent := &Node{ID: "p", Kind: "#frag"}
+	a := &Node{ID: "a", Kind: "div"}
+	b := &Node{ID: "b", Kind: "div"}
+	c := &Node{ID: "c", Kind: "div"}
+	old := []*Node{a, b, c}
+	next := []*Node{c, a, b} // 循环右移：LIS 保留 a,b，只移动 c
+	parent.Children = old
+
+	sink := newChangeSink()
+	sink.enable()
+	diffChildren(sink, parent, old, next)
+	changes := sink.take()
+
+	if countKind(changes, ChangeMoveChild) == 0 {
+		t.Fatalf("重排应产生 MoveChild: %v", changes)
+	}
+	if countKind(changes, ChangeRemoveChild) != 0 || countKind(changes, ChangeInsertBefore) != 0 {
+		t.Fatalf("纯重排不应产生增删: %v", changes)
+	}
+	applyChanges(parent, changes)
+	if !sameIDs(nodeIDs(parent.Children), []string{"c", "a", "b"}) {
+		t.Fatalf("apply 后顺序不符: %v", nodeIDs(parent.Children))
+	}
+}
+
+// 增删应产生 InsertBefore / RemoveChild，apply 后与目标 children 一致。
+func TestDiffChildrenAddRemove(t *testing.T) {
+	parent := &Node{ID: "p", Kind: "#frag"}
+	a := &Node{ID: "a", Kind: "div"}
+	b := &Node{ID: "b", Kind: "div"}
+	c := &Node{ID: "c", Kind: "div"}
+	d := &Node{ID: "d", Kind: "div"}
+	old := []*Node{a, b, c}
+	next := []*Node{a, c, d} // 删 b，末尾加 d
+	parent.Children = old
+
+	sink := newChangeSink()
+	sink.enable()
+	diffChildren(sink, parent, old, next)
+	changes := sink.take()
+
+	if countKind(changes, ChangeRemoveChild) != 1 {
+		t.Fatalf("应产生 1 条 RemoveChild: %v", changes)
+	}
+	if countKind(changes, ChangeInsertBefore) != 1 {
+		t.Fatalf("应产生 1 条 InsertBefore: %v", changes)
+	}
+	applyChanges(parent, changes)
+	if !sameIDs(nodeIDs(parent.Children), []string{"a", "c", "d"}) {
+		t.Fatalf("apply 后顺序不符: %v", nodeIDs(parent.Children))
+	}
+}
+
+// 同位置内容变化（标量/文本节点）应表现为删+插，而非被同位置 ID 误判为未变。
+func TestDiffChildrenTextChangeIsRemoveInsert(t *testing.T) {
+	parent := &Node{ID: "p", Kind: "#frag"}
+	oldText := &Node{ID: "p/t0", Kind: "#text", Type: NodeText, Text: "old"}
+	newText := &Node{ID: "p/t0", Kind: "#text", Type: NodeText, Text: "new"}
+	old := []*Node{oldText}
+	next := []*Node{newText} // ID 相同但指针不同（值变了）
+
+	sink := newChangeSink()
+	sink.enable()
+	diffChildren(sink, parent, old, next)
+	changes := sink.take()
+
+	if countKind(changes, ChangeRemoveChild) != 1 || countKind(changes, ChangeInsertBefore) != 1 {
+		t.Fatalf("文本变化应表现为删+插: %v", changes)
+	}
+}
+
+type fgUser struct {
+	id   int
+	name string
+}
+
+func fgForTpl() Template {
+	return Template{Ops: []Op{
+		{Code: OpElem, Arg: "ul"},
+		{Code: OpFor, Slot: 0},
+		{Code: OpClose},
+	}, N: 1}
+}
+
+func fgItemTpl() Template {
+	return Template{Ops: []Op{
+		{Code: OpElem, Arg: "li"},
+		{Code: OpDynChild, Slot: 0},
+		{Code: OpClose},
+	}, N: 1}
+}
+
+// For 列表增删/重排应真正发出细粒度指令（而非一条 ReplaceChildren）。
+func TestForEmitsFineGrainedChanges(t *testing.T) {
+	users := signal.New([]fgUser{{1, "Tom"}, {2, "Jack"}})
+	f := NewFor(
+		func() []any {
+			out := []any{}
+			for _, u := range users() {
+				out = append(out, u)
+			}
+			return out
+		},
+		func(v any) any { return v.(fgUser).id },
+		func(v any) *Instance {
+			u := v.(fgUser)
+			return Render(fgItemTpl(), func() any { return u.name })
+		},
+	)
+	view := Render(fgForTpl(), func() any { return f })
+	view.BindReactive(signal.Effect)
+	view.EnableChanges()
+	view.TakeChanges() // 清掉接线期记录
+
+	// 新增第三项。
+	users([]fgUser{{1, "Tom"}, {2, "Jack"}, {3, "Ann"}})
+	added := view.TakeChanges()
+	if countKind(added, ChangeInsertBefore) == 0 {
+		t.Fatalf("新增列表项应产生 InsertBefore: %v", added)
+	}
+
+	// 删除中间项。
+	users([]fgUser{{1, "Tom"}, {3, "Ann"}})
+	removed := view.TakeChanges()
+	if countKind(removed, ChangeRemoveChild) == 0 {
+		t.Fatalf("删除列表项应产生 RemoveChild: %v", removed)
+	}
+
+	// 重排。
+	users([]fgUser{{3, "Ann"}, {1, "Tom"}})
+	reordered := view.TakeChanges()
+	if countKind(reordered, ChangeMoveChild) == 0 {
+		t.Fatalf("列表重排应产生 MoveChild: %v", reordered)
+	}
+}
