@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Gox scene 后端 · 复合组件使用指南</title>
+<title>Gox scene · 响应式组件使用指南</title>
 <style>
   :root{
     --bg:#1e1e2e; --panel:#181825; --panel2:#11111b; --border:#313244;
@@ -16,7 +16,7 @@
   *{box-sizing:border-box}
   body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--sans);
        font-size:15px;line-height:1.7;padding:0 0 80px}
-  .wrap{max-width:1060px;margin:0 auto;padding:0 24px}
+  .wrap{max-width:1080px;margin:0 auto;padding:0 24px}
   header{padding:48px 0 28px;border-bottom:1px solid var(--border);margin-bottom:36px}
   header h1{margin:0 0 8px;font-size:32px;letter-spacing:-.5px}
   header h1 .tag{color:var(--purple)}
@@ -24,17 +24,39 @@
   header .meta{display:flex;gap:10px;flex-wrap:wrap}
   header .meta span{font-size:12px;color:var(--sub);border:1px solid var(--border);
        border-radius:20px;padding:3px 12px;font-family:var(--mono)}
-  h2{font-size:23px;margin:44px 0 16px;padding-left:12px;border-left:4px solid var(--purple)}
+  h2{font-size:23px;margin:46px 0 16px;padding-left:12px;border-left:4px solid var(--purple)}
   h3{font-size:17px;margin:28px 0 12px;color:var(--blue)}
   p{margin:10px 0}
   .lead{background:linear-gradient(90deg,#1a1b2e,#181825);border:1px solid var(--purple);
         border-radius:12px;padding:18px 22px;font-size:15px}
   .lead b{color:var(--purple)}
+  .warn{background:rgba(243,139,168,.08);border:1px solid var(--pink);
+        border-radius:12px;padding:16px 20px;font-size:14.5px;margin:18px 0}
+  .warn b{color:var(--pink)}
   code{font-family:var(--mono)}
   :not(pre)>code{background:var(--panel2);border:1px solid var(--border);border-radius:5px;
         padding:1px 6px;font-size:13px;color:var(--cyan)}
 
-  /* 原理图 */
+  /* 代码块 */
+  pre.code{background:var(--panel2);border:1px solid var(--border);border-radius:12px;
+        padding:18px 20px;overflow-x:auto;font-size:13px;line-height:1.65;margin:16px 0}
+  pre.code .cap{display:block;color:var(--sub);font-size:11.5px;font-family:var(--sans);
+        letter-spacing:.3px;margin-bottom:12px;padding-bottom:8px;border-bottom:1px dashed var(--border)}
+  .kw{color:var(--pink)} .fn{color:var(--blue)} .ty{color:var(--amber)}
+  .st{color:var(--green)} .jx{color:var(--cyan)} .cm{color:var(--sub);font-style:italic}
+  .con{color:var(--amber);font-weight:600}
+  .note{background:rgba(166,227,161,.07);border-left:3px solid var(--green);border-radius:0 8px 8px 0;
+        padding:12px 16px;margin:16px 0;font-size:14px;line-height:1.7;color:var(--fg)}
+
+  /* 表格 */
+  table{width:100%;border-collapse:collapse;margin:16px 0;font-size:14px}
+  th,td{border:1px solid var(--border);padding:10px 13px;text-align:left;vertical-align:top}
+  th{background:var(--panel);color:var(--blue);font-weight:600}
+  td:first-child{font-family:var(--mono);font-size:13px;color:var(--cyan)}
+  tr:nth-child(even) td{background:rgba(255,255,255,.015)}
+  .arrow{color:var(--purple);font-weight:700}
+
+  /* 三段流程 */
   .flow{display:flex;gap:14px;flex-wrap:wrap;margin:20px 0}
   .fcol{flex:1;min-width:270px;background:var(--panel);border:1px solid var(--border);
         border-radius:12px;padding:16px;display:flex;flex-direction:column;gap:10px}
@@ -45,40 +67,14 @@
   .c3 h4{color:var(--amber)} .c3 .dot{background:var(--amber)}
   .box{background:var(--panel2);border:1px solid var(--border);border-radius:8px;padding:10px 12px}
   .box .lbl{font-size:11px;color:var(--muted);letter-spacing:.4px;margin-bottom:6px;text-transform:uppercase}
-  .box .txt{font-size:12.5px;color:var(--fg)}
-  .box .txt b{color:var(--fg)}
-  pre{margin:0;font-family:var(--mono);font-size:12.5px;white-space:pre-wrap;word-break:break-word;line-height:1.55}
+  .box pre{margin:0;font-family:var(--mono);font-size:12.5px;white-space:pre-wrap;word-break:break-word;line-height:1.55}
   .arw{text-align:center;color:var(--muted);font-size:16px;line-height:1;margin:-3px 0}
-  .op{color:var(--green)} .key{color:var(--purple);font-weight:700}
-  .em{color:var(--pink);font-weight:600}
-  .summary{background:var(--panel);border:1px solid var(--purple);border-radius:10px;
-        padding:14px 18px;margin-top:6px}
-  .summary b{color:var(--purple)}
-
-  /* 代码块 */
-  pre.code{background:var(--panel2);border:1px solid var(--border);border-radius:12px;
-        padding:18px 20px;overflow-x:auto;font-size:13px;line-height:1.65;margin:16px 0}
-  .kw{color:var(--pink)} .fn{color:var(--blue)} .ty{color:var(--yellow,var(--amber))}
-  .st{color:var(--green)} .jx{color:var(--cyan)} .cm{color:var(--sub);font-style:italic}
-  .con{color:var(--amber);font-weight:600}
-  .note{background:rgba(166,227,161,.07);border-left:3px solid var(--green);border-radius:0 8px 8px 0;
-        padding:12px 16px;margin:16px 0;font-size:14px;line-height:1.7;color:var(--fg)}
-
-  /* 表格 */
-  table{width:100%;border-collapse:collapse;margin:16px 0;font-size:14px}
-  th,td{border:1px solid var(--border);padding:10px 13px;text-align:left;vertical-align:top}
-  th{background:var(--panel);color:var(--blue);font-weight:600}
-  td:first-child{white-space:nowrap;color:var(--purple);font-family:var(--mono);font-size:13px}
-  tr:nth-child(even) td{background:rgba(255,255,255,.015)}
-  .yes{color:var(--green)} .no{color:var(--red)}
+  .op{color:var(--green)} .key{color:var(--purple);font-weight:700} .em{color:var(--pink);font-weight:600}
 
   /* 终端 */
   .term{background:#0b0b12;border:1px solid var(--border);border-radius:12px;padding:16px 20px;
         font-family:var(--mono);font-size:13px;line-height:1.6;margin:16px 0;color:#a6adc8}
-  .term .cmd{color:var(--green)}
-  .term .tag{color:var(--purple)}
-  .term .out{color:var(--cyan)}
-  .term .hl{color:var(--amber);font-weight:600}
+  .term .cmd{color:var(--green)} .term .out{color:var(--cyan)} .term .hl{color:var(--amber);font-weight:600}
 
   ol.constraints{padding-left:0;list-style:none;counter-reset:c;margin:16px 0}
   ol.constraints li{counter-increment:c;position:relative;padding:10px 14px 10px 52px;
@@ -95,8 +91,8 @@
 <div class="wrap">
 
 <header>
-  <h1>Gox <span class="tag">scene 后端</span> · 复合组件使用指南</h1>
-  <p class="sub">编译期 opcode + 常驻场景树 + 细粒度更新。组件只执行一次，靠 getter 保鲜、递归驱动。</p>
+  <h1>Gox <span class="tag">scene 后端</span> · 响应式组件使用指南</h1>
+  <p class="sub">编译期 opcode + 常驻场景树 + getter 保鲜 + 细粒度更新。用 GX 语法书写，编译器还原为标准 Go。</p>
   <div class="meta">
     <span>gox build -jsx=scene</span>
     <span>runtime/scene</span>
@@ -107,516 +103,206 @@
   </div>
 </header>
 
-<div class="lead">
-  <b>核心一句：</b>组件是一种「不透明的子树插槽」。骨架在编译期固定，组件的形状在运行时嫁接进来；
-  更新靠 getter 保鲜 + 递归透传，而不是重建整树或做 Diff。
+<div class="warn">
+  <b>先记住这一条：</b>下面所有示例都是 <b>GX 源码</b>——标识符一律<b>小写</b>书写，编译器会在 selector 右侧机械还原成 Go 的导出名。
+  不要把生成后的 Go 大写 API 当成源码写进 `.gx`。详见 <a href="#rules" style="color:var(--pink)">§ 一 · 书写约定</a>。
 </div>
 
-<h2>一、工作原理（三段流程）</h2>
+<h2 id="rules">一、书写约定（最先要遵守）</h2>
+<p>Gox 的设计是：<b>转译器不读第三方包符号表、不做类型推导</b>，只对小写形式做机械首字母大写还原（<code>upperFirst</code>）。因此行为完全可预测。你在 <code>.gx</code> 里写小写，生成的 Go 自动变大写。</p>
+
+<table>
+  <tr><th>GX 源码（你写的）</th><th>生成的 Go</th><th>规则</th></tr>
+  <tr><td><code>fmt.println()</code></td><td><code>fmt.Println()</code></td><td>包级函数：小写书写，还原</td></tr>
+  <tr><td><code>req.method</code> / <code>u.path</code></td><td><code>req.Method</code> / <code>u.Path</code></td><td>结构体字段：小写书写，还原</td></tr>
+  <tr><td><code>r.URL</code> / <code>http.StatusOK</code></td><td>原样保留</td><td>全大写缩写：<b>写大写</b>，不动</td></tr>
+  <tr><td><code>gxscene.get[T]()</code></td><td><code>gxscene.Get[T]()</code></td><td>runtime 符号：小写书写，还原</td></tr>
+  <tr><td><code>view.bindReactive(signal.effect)</code></td><td><code>view.BindReactive(signal.Effect)</code></td><td>方法：小写书写，还原</td></tr>
+  <tr><td><code>gxapp.open(view, gxapp.windowConfig{...})</code></td><td><code>gxapp.Open(view, gxapp.WindowConfig{...})</code></td><td>多词符号：<b>只首字母小写</b>，其余照抄</td></tr>
+  <tr><td><code>pub func card</code> + <code>&lt;Card/&gt;</code></td><td><code>func Card</code></td><td>pub 声明小写；<b>JSX 标签必须大写</b></td></tr>
+</table>
+
+<div class="note">
+<b>三条边界（踩过的坑）：</b>① 多词符号只小写首字母——<code>windowConfig</code> → <code>WindowConfig</code>，写成 <code>windowconfig</code> 会生成拼错的 <code>Windowconfig</code>。
+② <code>Signal</code> 是语法糖占位包名，必须大写开头：写 <code>Signal.computed(...)</code>，<b>不要</b>写裸 <code>computed(...)</code>（裸标识符不会被还原）。
+③ JSX 标签首字母大写 = 组件、小写 = 原生 HTML 标签，这是硬编码判定，组件标签不能小写。
+</div>
+
+<h2>二、工作原理（三段流程）</h2>
 <div class="flow">
   <div class="fcol c1">
     <h4><span class="dot"></span>① 编译期</h4>
-    <div class="box">
-      <div class="lbl">JSX 源码</div>
-      <pre>&lt;<span class="jx">div</span>&gt;
+    <div class="box"><div class="lbl">GX 源码（小写）</div><pre>&lt;<span class="jx">div</span>&gt;
   &lt;<span class="jx">Card</span> title={<span class="em">t</span>}/&gt;
-&lt;/<span class="jx">div</span>&gt;</pre>
-    </div>
+&lt;/<span class="jx">div</span>&gt;</pre></div>
     <div class="arw">↓</div>
-    <div class="box">
-      <div class="lbl">opcode 模板（静态骨架）</div>
-      <pre><span class="op">OpElem</span>   "div"
+    <div class="box"><div class="lbl">opcode 模板（静态骨架）</div><pre><span class="op">OpElem</span>   "div"
 <span class="key">OpComp</span>   "Card"  Slot:0
-<span class="op">OpClose</span>
-N:1</pre>
-    </div>
-    <div class="box">
-      <div class="lbl">getter（动态 part）</div>
-      <pre><span class="kw">func</span>() any {
-  <span class="kw">return</span> <span class="key">Card</span>(gxscene.props{
-    "title": <span class="kw">func</span>() any{ <span class="kw">return</span> <span class="em">t</span> },
-  })
-}</pre>
-      <div class="txt" style="margin-top:6px;color:var(--muted)">组件调用只生成<b>一次</b></div>
-    </div>
+<span class="op">OpClose</span></pre></div>
   </div>
-
   <div class="fcol c2">
-    <h4><span class="dot"></span>② 首次 Render</h4>
-    <div class="box"><pre>gxscene.<span class="fn">render</span>(tpl, getters...)</pre></div>
+    <h4><span class="dot"></span>② 建树期（一次）</h4>
+    <div class="box"><div class="lbl">动态插槽 → getter</div><pre>props["title"] =
+  <span class="kw">func</span>() any { <span class="kw">return</span> <span class="em">t</span>() }</pre></div>
     <div class="arw">↓</div>
-    <div class="box">
-      <div class="lbl">骨架缓存</div>
-      <div class="txt">opcode 结构作 key：命中直接 <b>clone</b>；静态结构全仓库只解析一次。</div>
-    </div>
-    <div class="arw">↓</div>
-    <div class="box">
-      <div class="lbl">遇到 OpComp 槽位</div>
-      <div class="txt">调用 getter <b>一次</b> → 得到子组件 <b>*Instance</b>；组件函数之后不再执行。</div>
-    </div>
-    <div class="arw">↓</div>
-    <div class="box">
-      <div class="lbl">mountComp 嫁接</div>
-      <div class="txt">子实例的子节点挂到 <b>&lt;Card&gt;</b> 占位节点下；<b>#frag</b> 透明摊平，无多余标签层。</div>
-    </div>
+    <div class="box"><div class="lbl">组件嫁接</div><pre>调用一次 Card(props)
+递归建出常驻子树</pre></div>
   </div>
-
   <div class="fcol c3">
-    <h4><span class="dot"></span>③ 每次 Update</h4>
-    <div class="box"><pre><span class="em">t</span> = "Gox" → view.<span class="fn">update</span>()</pre></div>
+    <h4><span class="dot"></span>③ 更新期（每次写入）</h4>
+    <div class="box"><div class="lbl">signal 写入</div><pre><span class="em">t</span> = <span class="st">"new"</span>
+→ effect 重跑</pre></div>
     <div class="arw">↓</div>
-    <div class="box">
-      <div class="lbl">遍历所有 slot</div>
-      <div class="txt" style="font-family:var(--mono);font-size:12px">
-        <span class="op">文本/属性</span> getter() → 比较 → 变了才写<br>
-        <span class="key">组件</span> child.Update() <span style="color:var(--muted)">// 透传，不写</span>
-      </div>
-    </div>
-    <div class="arw">↓</div>
-    <div class="box">
-      <div class="lbl">递归进 Card</div>
-      <div class="txt">title getter 读到新值 → 只回写 <b>&lt;h1&gt;</b> 的文本节点。</div>
-    </div>
-    <div class="box">
-      <div class="txt"><b class="yes">Writes +1 · 零 Diff · 零重建</b></div>
-    </div>
+    <div class="box"><div class="lbl">精确写节点</div><pre>只写依赖它的插槽
+不重建整树，无 Diff</pre></div>
   </div>
 </div>
-<div class="summary">
-  <b>为什么组件要当「不透明插槽」：</b>scene 的前提是「静态结构编译期确定、只解析一次」，
-  但组件形状是运行时才由函数决定的。把组件做成 <code>OpComp</code> 插槽——骨架里只固定「这里有个组件」，
-  真实子树首次渲染时嫁接进来——两边优势都保住：骨架完全静态可缓存，组件内部是独立常驻树。
-</div>
+<div class="note">组件是一种「不透明的子树插槽」：骨架编译期固定，组件形状运行时嫁接；更新靠 getter 保鲜 + 递归透传，而不是重建整树或做 vdom Diff。</div>
 
-<h2>二、完整例子（约束写在注释里）</h2>
-<p>可直接对照 <code>examples/jsxscene.gx</code>。每行关键点用 <span class="con">【约束 N】</span> 标注。</p>
-<pre class="code"><span class="cm">// 构建：gox build demo.gx -jsx=scene</span>
-<span class="kw">package</span> main
+<h2>三、完整实战（一条龙）</h2>
+<p>下面这段是<b>经过 <code>go run</code> 实测</b>的完整 GX 源码，同时用到了对象字面量、对象解构、signal、条件分支、Keyed For 和应用入口——全部小写写法。</p>
+<pre class="code"><span class="cap">demo.gx · 编译：gox build demo.gx -jsx=scene -o main.go && go run .</span><span class="kw">package</span> main
 
-<span class="kw">import</span> (
-    gxscene <span class="st">"github.com/robertpanvip/gox/runtime/scene"</span>
-    <span class="st">"fmt"</span>
-)
-
-<span class="con">// 【约束 1】复合组件签名必须是 func(gxscene.props) *gxscene.instance</span>
-<span class="con">// 【约束 2】组件只执行一次——函数体是「建树」而非「每次渲染」，</span>
-<span class="con">//           别在这里放依赖刷新的副作用</span>
-<span class="con">// pub 声明小写 → 生成 Card；JSX 标签必须大写 → &lt;Card/&gt;</span>
-<span class="kw">pub func</span> <span class="fn">card</span>(props gxscene.<span class="ty">props</span>) *gxscene.<span class="ty">instance</span> {
-    <span class="con">// 【约束 3】动态属性用 get[T]()() 读：先取 getter，再在 JSX 里 title()</span>
-    <span class="con">//   title 是 func() string 而非 string——写成 string 就成了不会更新的快照</span>
-    title := gxscene.<span class="fn">get</span>[<span class="ty">string</span>](props, <span class="st">"title"</span>)
-    n     := gxscene.<span class="fn">get</span>[<span class="ty">int</span>](props, <span class="st">"n"</span>)
-    <span class="kw">return</span> &lt;<span class="jx">div</span> <span class="fn">class</span>=<span class="st">"card"</span>&gt;&lt;<span class="jx">h1</span>&gt;{title()}&lt;/<span class="jx">h1</span>&gt;&lt;<span class="jx">span</span>&gt;{n()}&lt;/<span class="jx">span</span>&gt;&lt;/<span class="jx">div</span>&gt;
-}
-
-<span class="kw">func</span> <span class="fn">main</span>() {
-    <span class="con">// GX 新特性：对象字面量 + 解构——不写类型名，按字段值推断匿名 struct</span>
-    data := { title: <span class="st">"GX"</span>, count: 1 }
-    { title, count } := data
-
-    <span class="con">// 【约束 4】大写/带点标签 = 复合组件；其余 = 原生标签</span>
-    <span class="con">// title={title} 编成 getter（捕获变量本身），不是把 "GX" 拷贝进去</span>
-    view := &lt;<span class="jx">div</span> <span class="fn">id</span>=<span class="st">"app"</span>&gt;&lt;<span class="jx">Card</span> <span class="fn">title</span>={title} <span class="fn">n</span>={count}/&gt;&lt;/<span class="jx">div</span>&gt;
-
-    fmt.<span class="fn">println</span>(view)   <span class="cm">// 首次渲染：挂载常驻场景树</span>
-
-    <span class="cm">// ——— 数据更新 ———</span>
-    title = <span class="st">"Gox"</span>      <span class="cm">// 改外部变量</span>
-    count = <span class="st">2</span>
-    writes := view.<span class="fn">update</span>()   <span class="cm">// 递归进 Card，只写变化的节点（此处 2 个）</span>
-    fmt.<span class="fn">println</span>(view)
-}</pre>
-
-<h2>三、数据怎么更新</h2>
-<p>scene 后端<b>没有 Diff、没有重建</b>。更新 = 重新求值 getter + 只把变化的插槽写回节点。三种途径：</p>
-<table>
-  <tr><th>方式</th><th>用法</th><th>适用</th></tr>
-  <tr>
-    <td>闭包 getter</td>
-    <td><code>title={title}</code> 编成 <code>func() any{return title}</code>；改变量后调 <code>view.Update()</code></td>
-    <td>外部普通变量；手动驱动</td>
-  </tr>
-  <tr>
-    <td>signal 自动接线<br><span style="color:var(--green)">推荐</span></td>
-    <td><code>view.bindReactive(signal.effect)</code> 一行接线；之后 <code>count(5)</code> 写 signal 即自动精确更新，无需 <code>update()</code></td>
-    <td>响应式 UI；signal 沿 Props 传到叶子，叶子在插槽里读</td>
-  </tr>
-  <tr>
-    <td>命令式<br><code>SetPart</code></td>
-    <td><code>view.SetPart(slot, value)</code> 按插槽下标直接写，绕过 getter</td>
-    <td>事件回调里精确改一个值；需知道 slot 下标，较少用</td>
-  </tr>
-</table>
-<pre class="code">view := gxscene.<span class="fn">render</span>(tpl, getters...) <span class="cm">// *Instance，常驻场景树（小写书写→Render）</span>
-fmt.<span class="fn">println</span>(view)                       <span class="cm">// String() 用 TextBackend 绘制</span>
-n := view.<span class="fn">update</span>()                      <span class="cm">// 更新，返回写入节点数</span>
-<span class="cm">// 只需渲染一次、不更新时：gxscene.renderText(tpl, getters...) 直接返回 string</span></pre>
-<p><code>update()</code> 返回本次<b>实际写入的节点数</b>，值没变则写 0（<code>equalValue</code> 按类型严格比较）。
-观测指标：<code>Instance.Writes</code>（累计写入，各 Instance 独立、不跨子树累加）、<code>Instance.Updates</code>（Update 调用次数）。</p>
-
-<h2>三·补充、signal 自动接线（一行搞定响应式）</h2>
-<p>scene 核心<b>不依赖</b>任何响应式库：<code>view.bindReactive(effect)</code> 接受一个形如 <code>signal.effect</code> 的 effect 原语注入。它为每个插槽建一个 effect——普通插槽读 getter 后直接 <code>setPart</code>（signal 变化只精确命中依赖它的插槽，不遍历全树）；复合组件插槽则<b>递归进子组件</b>接线（组件不重建）。signal 从根经 props getter 一路传到叶子、在叶子的动态插槽里读取，写入即自动刷新。</p>
-<pre class="code"><span class="cm">// 完整可运行示例：examples/jsxscene-signal.gx</span>
-<span class="kw">import</span> (
-    gxscene <span class="st">"github.com/robertpanvip/gox/runtime/scene"</span>
-    "github.com/robertpanvip/gox/runtime/signal"
-)
-
-<span class="kw">func</span> <span class="fn">main</span>() {
-    <span class="cm">// GX 新特性：对象字面量 + 解构，按字段值推断匿名 struct</span>
-    cfg := { start: 0, factor: 2 }
-    { start, factor } := cfg
-
-    <span class="kw">signal</span> count = start
-    <span class="kw">let</span> doubled = Signal.<span class="fn">computed</span>(func() <span class="kw">int</span> { <span class="kw">return</span> count() * factor })   <span class="cm">// Signal 是 signal 语法糖占位包名</span>
-
-    <span class="cm">// JSX 插值 {count}/{doubled} 由编译器编成 getter 并自动补读调用</span>
-    view := <span class="jx">&lt;div id="app"&gt;&lt;span&gt;{count}&lt;/span&gt;&lt;b&gt;{doubled}&lt;/b&gt;&lt;/div&gt;</span>
-
-    view.<span class="fn">bindReactive</span>(signal.effect)   <span class="cm">// 一行接线（小写书写，编译器还原 BindReactive）</span>
-
-    count = 5   <span class="cm">// 自动更新：count→"5"、doubled→"10"，无需手动 Update</span>
-}</pre>
-<div class="note"><b>编译器细节</b>：<code>signal</code> 语法糖在管线早期消除声明并改写读写，但 JSX 插值当时是整体 token、改写穿透不到。JSX 后端重新词法化插值时拿到同一份 signal 变量集合，补上读调用——<code>{count}</code> 正确编成 <code>count()</code> 而非把 signal 函数对象当值。scene / vdom 两个后端都已覆盖。</div>
-<div class="note"><b>链路验证</b>（<code>runtime/scene/reactive_test.go</code> + <code>pkg/compiler/jsxscene_test.go</code>）：signal 经<b>两层组件 Props</b> 传到叶子 → 叶子在插槽里消费 → 写入后自动刷新、组件只执行一次不重建 → 写相同值因 <code>equalValue</code> 裁剪零冗余写入 → Computed 派生信号同样驱动；编译器侧验证插值/属性/组件 Props 里的 signal 读补全。</div>
-
-<h2>三·补充二、强类型组件 Props（省略类型名 + 字段校验）</h2>
-<p>复合组件有两种契约形态，由组件函数签名<b>自动判定</b>，无需额外标注：</p>
-<table>
-  <tr><th>形态</th><th>组件签名</th><th>JSX 属性编译为</th><th>语义</th></tr>
-  <tr>
-    <td>强类型 struct<br><span style="color:var(--green)">要类型安全时</span></td>
-    <td><code>func Card(props CardProps)</code><br><code>type CardProps struct{...}</code></td>
-    <td><code>Card(CardProps{title:"x", n:42})</code></td>
-    <td>属性是<b>快照值</b>，编译期校验字段名 / 类型 / 缺失</td>
-  </tr>
-  <tr>
-    <td>getter-map<br><span style="color:var(--green)">要保鲜 / 响应式时</span></td>
-    <td><code>func card(props gxscene.props)</code> → 生成 <code>Card</code></td>
-    <td><code>Card(gxscene.Props{"title": func() any{...}})</code></td>
-    <td>属性是 getter，随 <code>Update()</code> / <code>BindReactive</code> 刷新</td>
-  </tr>
-</table>
-<p>强类型形态复用了「对象字面量的省略类型名 + 期望类型补全 + 校验」机制：JSX 编译期先生成裸对象字面量 <code>Card({title:"x", n:42})</code>，transpiler 从 <code>func Card(props CardProps)</code> 签名推断期望类型 <code>CardProps</code>，补全为 <code>Card(CardProps{...})</code> 并校验。<b>字段拼错、类型不符、缺字段都会编译报错（带 GX 坐标）。</b></p>
-<pre class="code"><span class="cm">// gox build demo.gx -jsx=scene   ·   examples/jsxscene-typed.gx</span>
-<span class="kw">type</span> cardProps <span class="kw">struct</span> {
-    title <span class="kw">string</span>
-    n     <span class="kw">int</span>
-}
-<span class="kw">pub func</span> <span class="fn">card</span>(props cardProps) *gxscene.<span class="ty">instance</span> {
-    <span class="kw">return</span> &lt;<span class="tag">div</span>&gt;&lt;<span class="tag">h1</span>&gt;{props.title}&lt;/<span class="tag">h1</span>&gt;&lt;/<span class="tag">div</span>&gt;  <span class="cm">// 直接强类型字段访问</span>
-}
-<span class="kw">func</span> main() {
-    <span class="cm">// JSX 属性直接写对象字面量，编译器按 card 签名补全类型名并校验</span>
-    view := &lt;<span class="tag">Card</span> title=<span class="st">"Gox"</span> n={42}/&gt;   <span class="cm">// → Card(cardProps{title:"Gox", n:42})</span>
-    <span class="cm">// &lt;Card title={123} n={42}/&gt; → error: 字段 "title" 类型不匹配：期望 string，实际 int</span>
-    <span class="cm">// &lt;Card title="Gox"/&gt;         → error: 缺少字段 "n"（类型 cardProps）</span>
-}</pre>
-<div class="note"><b>取舍</b>：强类型属性是快照值（组件只执行一次、字段是普通值），写变量后<b>不会</b>自动刷新——要响应式请用 getter-map + <code>BindReactive</code>。两种形态可在同一文件混用，按组件各自签名判定。验证见 <code>pkg/compiler/jsxscene_test.go</code> 的 <code>TestJSXSceneTypedProps*</code>。</div>
-
-<h2>三·补充三、应用入口 gxapp.open（类比 ReactDOM.render）</h2>
-<p>前面都在讲「一棵场景树怎么建、怎么更新」。<code>gxapp.open</code> 是再上一层的<b>应用外壳</b>——把 JSX 挂到「窗口」上，正如 <code>ReactDOM.render(element, container)</code>。</p>
-<div class="note"><b>源码小写、生成大写</b>：遵循 GX「外部符号按小写书写、编译器还原真实大小写」的约定（同 <code>gxvdom.render</code>）——源码写 <code>gxapp.open</code> / <code>gxapp.windowConfig</code>，生成的 Go 是 <code>gxapp.Open</code> / <code>gxapp.WindowConfig</code>。运行时库里定义的仍是大写 <code>Open</code>（Go 导出可见性要求）。</div>
-<table>
-  <tr><th>参数</th><th>含义</th></tr>
-  <tr><td>第一个</td><td><b>JSX</b>（编译后即 <code>gxscene.Render(...)</code> → <code>*Instance</code>）</td></tr>
-  <tr><td>第二个</td><td><b>窗口配置</b> <code>gxapp.windowConfig</code>（标题、尺寸、位置、全屏、后端提示）</td></tr>
-</table>
-<pre class="code"><span class="cm">// gox build demo.gx -jsx=scene   ·   examples/jsxapp.gx</span>
-<span class="kw">import</span> gxapp <span class="st">"github.com/robertpanvip/gox/runtime/app"</span>
-
-app, err := gxapp.<span class="fn">open</span>(&lt;<span class="tag">div</span> id=<span class="st">"app"</span>&gt;hello&lt;/<span class="tag">div</span>&gt;, gxapp.windowConfig{
-    Title:<span class="st">"Demo"</span>, Width:800, Height:600,
-})
-<span class="kw">if</span> err != nil { <span class="fn">panic</span>(err) }
-<span class="kw">defer</span> app.<span class="fn">close</span>()
-app.<span class="fn">run</span>()</pre>
-<p><b>窗口后端是接口</b>，第一版内置 Headless（用 TextBackend 绘制到 <code>io.Writer</code>，沙箱 / CI 可跑通）。<code>WindowConfig</code> 字段：<code>Title</code> / <code>Width</code> / <code>Height</code> / <code>X</code> / <code>Y</code> / <code>Resizable</code> / <code>Fullscreen</code> / <code>Backend</code>；零值尺寸自动补 800×600，<code>Backend</code> 空值补 <code>"headless"</code>。</p>
-<table>
-  <tr><th>API</th><th>作用</th></tr>
-  <tr><td><code>gxapp.Open(view, cfg)</code></td><td>打开默认 Headless 窗口 + 绘制首帧，返回 <code>(*App, error)</code></td></tr>
-  <tr><td><code>gxapp.OpenWith(view, cfg, win)</code></td><td>注入自定义窗口后端（实现 <code>Window</code> 接口）</td></tr>
-  <tr><td><code>Window</code> 接口</td><td><code>Open/Draw/Run/Close/Config</code> — Skia / wgpu / GLFW 按此接入</td></tr>
-  <tr><td><code>App.Draw() / Update()</code></td><td>手动重绘一帧 / 更新场景树并重绘</td></tr>
-  <tr><td><code>App.BindReactive(effect)</code></td><td>signal 变化 → 自动更新 + 重绘一帧（批处理，见下）</td></tr>
-  <tr><td><code>App.Run() / Close()</code></td><td>事件循环 / 关闭（幂等）</td></tr>
-  <tr><td><code>gxapp.RenderText(view)</code></td><td>不建窗口，直接绘制成字符串（测试用）</td></tr>
-</table>
-<div class="note"><b>signal 自动重绘（批处理）</b>：<code>app.BindReactive(signal.Effect)</code> 建一个<b>聚合 effect</b>——<code>Instance.Update()</code> 递归读所有 getter 登记依赖并裁剪写入，随后 <code>Draw()</code> 一帧。一次 signal 写入 = <b>一帧</b>，不会出现「部分插槽已更新」的中间态画面（这是应用入口该有的语义，区别于底层 <code>Instance.BindReactive</code> 的逐插槽精确模式）。接线时首帧被抑制，避免与 Open 的首帧重复。真实实测：<code>count=5</code> 后一帧内 <code>count=5</code> 与 <code>doubled=10</code> 一致。</div>
-<div class="note"><b>接入真实 GUI</b>：实现 <code>Window</code> 的 <code>Open/Draw/Run/Close/Config</code>，用 <code>OpenWith</code> 注入即可——Skia / wgpu / GLFW 后端无需改动 <code>gxapp</code> 或编译器。当前 Headless 后端让整条链路在无 GUI 环境端到端可验证。</div>
-
-<h2>三·实战、把组件 + 响应式 + open 串成一个完整应用</h2>
-<p class="lead">前面几节把每个零件单独讲了。这一节给一个<b>可直接编译运行、且实测通过</b>的完整例子：两层复合组件（<code>Dashboard</code> → <code>Stat</code>）+ <code>signal</code> 响应式 + <code>gxapp.open</code> 应用入口。源码见 <code>examples/jsxapp-full.gx</code>。</p>
-
-<h3>完整源码</h3>
-<pre class="code"><span class="cm">// gox build examples/jsxapp-full.gx -jsx=scene -o main.go && go run .</span>
-<span class="kw">package</span> main
 <span class="kw">import</span> (
     gxscene <span class="st">"github.com/robertpanvip/gox/runtime/scene"</span>
     gxapp   <span class="st">"github.com/robertpanvip/gox/runtime/app"</span>
     <span class="st">"github.com/robertpanvip/gox/runtime/signal"</span>
+    <span class="st">"fmt"</span>
 )
 
-<span class="cm">// ① 叶子组件：从 props 取 getter，在 JSX 插槽里读值 value()</span>
-<span class="con">// pub 声明小写 stat → 生成 Stat；JSX 标签 &lt;Stat/&gt; 大写</span>
+<span class="kw">type</span> <span class="ty">user</span> <span class="kw">struct</span> { id <span class="kw">int</span>; name <span class="kw">string</span> }
+
+<span class="cm">// 叶子组件：pub 小写声明；从 Props 取 getter，在插槽里 value() 读当前值</span>
 <span class="kw">pub func</span> <span class="fn">stat</span>(props gxscene.<span class="ty">props</span>) *gxscene.<span class="ty">instance</span> {
     label := gxscene.<span class="fn">get</span>[<span class="ty">string</span>](props, <span class="st">"label"</span>)
     value := gxscene.<span class="fn">get</span>[<span class="ty">int</span>](props, <span class="st">"value"</span>)
     <span class="kw">return</span> &lt;<span class="jx">div</span> <span class="fn">class</span>=<span class="st">"stat"</span>&gt;&lt;<span class="jx">span</span>&gt;{label()}&lt;/<span class="jx">span</span>&gt;&lt;<span class="jx">b</span>&gt;{value()}&lt;/<span class="jx">b</span>&gt;&lt;/<span class="jx">div</span>&gt;
 }
 
-<span class="cm">// ② 中间组件：把上层 getter 原样转发给两个 Stat</span>
-<span class="kw">pub func</span> <span class="fn">dashboard</span>(props gxscene.<span class="ty">props</span>) *gxscene.<span class="ty">instance</span> {
-    count   := gxscene.<span class="fn">get</span>[<span class="ty">int</span>](props, <span class="st">"count"</span>)
-    doubled := gxscene.<span class="fn">get</span>[<span class="ty">int</span>](props, <span class="st">"doubled"</span>)
-    <span class="kw">return</span> &lt;<span class="jx">section</span> <span class="fn">id</span>=<span class="st">"dash"</span>&gt;
-        &lt;<span class="jx">h1</span>&gt;Dashboard&lt;/<span class="jx">h1</span>&gt;
-        &lt;<span class="jx">Stat</span> <span class="fn">label</span>=<span class="st">"count"</span>   <span class="fn">value</span>={count()}/&gt;
-        &lt;<span class="jx">Stat</span> <span class="fn">label</span>=<span class="st">"doubled"</span> <span class="fn">value</span>={doubled()}/&gt;
-    &lt;/<span class="jx">section</span>&gt;
-}
-
 <span class="kw">func</span> <span class="fn">main</span>() {
-    <span class="cm">// ③ GX 新特性：对象字面量 + 解构提供窗口配置数据</span>
-    cfg := { title: <span class="st">"Gox Dashboard"</span>, width: 800, height: 600 }
-    { title } := cfg
-    <span class="kw">signal</span> count = 0
-    <span class="kw">let</span> doubled = Signal.<span class="fn">computed</span>(<span class="kw">func</span>() <span class="kw">int</span> { <span class="kw">return</span> count() * 2 })
+    <span class="cm">// 新特性：对象字面量 + 对象解构</span>
+    cfg := { title: <span class="st">"Gox"</span>, width: <span class="ty">800</span>, height: <span class="ty">600</span> }
+    { title, width } := cfg
 
-    <span class="cm">// ④ 组合根视图：插值里读 signal，编成 getter 传给组件树</span>
-    view := &lt;<span class="jx">div</span> <span class="fn">id</span>=<span class="st">"app"</span>&gt;&lt;<span class="jx">Dashboard</span> <span class="fn">count</span>={count} <span class="fn">doubled</span>={doubled}/&gt;&lt;/<span class="jx">div</span>&gt;
+    <span class="cm">// signal 源 + computed 派生（count 变化 → doubled 自动重算）</span>
+    <span class="kw">signal</span> count = <span class="ty">0</span>
+    <span class="kw">signal</span> visible = <span class="kw">true</span>
+    <span class="kw">signal</span> users = []<span class="ty">user</span>{{<span class="ty">1</span>, <span class="st">"Tom"</span>}, {<span class="ty">2</span>, <span class="st">"Jack"</span>}}
+    doubled := Signal.<span class="fn">computed</span>(<span class="kw">func</span>() <span class="kw">int</span> { <span class="kw">return</span> count() * <span class="ty">2</span> })
 
-    <span class="cm">// ⑤ 应用入口：源码小写 gxapp.open / windowConfig</span>
-    app, err := gxapp.<span class="fn">open</span>(view, gxapp.<span class="fn">windowConfig</span>{Title: title, Width: cfg.width, Height: cfg.height})
+    <span class="cm">// 组合根视图：JSX 标签大写 = 组件；插值 {count} 编成 getter</span>
+    view := &lt;<span class="jx">div</span> <span class="fn">id</span>=<span class="st">"app"</span>&gt;
+        &lt;<span class="jx">h1</span>&gt;{title}&lt;/<span class="jx">h1</span>&gt;
+        <span class="kw">if</span> visible {
+            &lt;<span class="jx">Stat</span> <span class="fn">label</span>=<span class="st">"count"</span> <span class="fn">value</span>={count()}/&gt;
+            &lt;<span class="jx">ul</span>&gt;&lt;<span class="jx">For</span> <span class="fn">each</span>={users} <span class="fn">key</span>={(u) =&gt; u.id}&gt;{(u) =&gt; &lt;<span class="jx">li</span>&gt;{u.name}&lt;/<span class="jx">li</span>&gt;}&lt;/<span class="jx">For</span>&gt;&lt;/<span class="jx">ul</span>&gt;
+        } <span class="kw">else</span> {
+            &lt;<span class="jx">b</span>&gt;Hidden&lt;/<span class="jx">b</span>&gt;
+        }
+    &lt;/<span class="jx">div</span>&gt;
+
+    <span class="cm">// 应用入口：gxapp.open / windowConfig 小写书写；app.close 同理</span>
+    app, err := gxapp.<span class="fn">open</span>(view, gxapp.<span class="fn">windowConfig</span>{ Title: title, Width: width, Height: cfg.height })
     <span class="kw">if</span> err != nil { <span class="fn">panic</span>(err) }
     <span class="kw">defer</span> app.<span class="fn">close</span>()
 
-    <span class="cm">// ⑥ 一行接线：signal 变化 → 精确更新插槽 → 自动重绘一帧</span>
-    app.<span class="fn">bindReactive</span>(signal.effect)
+    <span class="cm">// 一行接线：signal 写入 → 精确更新插槽 → 结构变化自动重绘</span>
+    app.<span class="fn">bindReactive</span>(signal.<span class="fn">effect</span>)
 
-    <span class="cm">// ⑦ 写入：count→5、doubled→10，两行同帧一致更新</span>
-    count = 5
+    <span class="cm">// 批处理：同一帧内 count→5、visible→false，只重绘一次</span>
+    signal.<span class="fn">batch</span>(<span class="kw">func</span>() { count(<span class="ty">5</span>); visible(<span class="kw">false</span>) })
+    fmt.<span class="fn">println</span>(doubled())  <span class="cm">// 10</span>
 }</pre>
+<div class="note"><b>实测输出要点：</b>初始渲染出 <code>"Tom"</code>/<code>"Jack"</code> 列表；<code>visible=false</code> 后条件分支切到 <code>Hidden</code>；<code>doubled()</code> 得到 <code>10</code>。<code>&lt;For&gt;</code> 的 render 参数 <code>(u)</code> 未写类型——编译器从 <code>each={users}</code> 的 <code>[]user</code> 自动推断出元素类型。</div>
 
-<h3>逐段拆解</h3>
-<table>
-  <tr><th>段</th><th>做了什么</th><th>关键点</th></tr>
-  <tr><td>①②</td><td>定义两层复合组件 <code>Dashboard</code> → <code>Stat</code></td><td>大写标签即组件；<code>Get[T]()</code> 取 getter，插槽里写 <code>value()</code> 读当前值（写 <code>value</code> 会成快照不更新）</td></tr>
-  <tr><td>③</td><td><code>signal count</code> 源 + <code>Signal.computed</code> 派生 <code>doubled</code></td><td>源码小写 <code>computed</code>，编译器还原为 <code>Computed</code></td></tr>
-  <tr><td>④</td><td>组合根视图 <code>&lt;Dashboard count={count} .../&gt;</code></td><td>插值 <code>{count}</code> 编成 getter <code>func() any{return count()}</code>，沿 Props 传到叶子插槽</td></tr>
-  <tr><td>⑤</td><td><code>gxapp.open(view, cfg)</code> 挂到窗口</td><td>源码小写 <code>open</code>/<code>windowConfig</code>，生成 <code>gxapp.Open</code>/<code>WindowConfig</code></td></tr>
-  <tr><td>⑥</td><td><code>app.BindReactive(signal.Effect)</code> 接线</td><td>聚合 effect：<code>Update()</code> 递归读所有 getter 登记依赖，随后 <code>Draw()</code> 一帧</td></tr>
-  <tr><td>⑦</td><td><code>count = 5</code> 写入</td><td>自动刷新，组件只执行一次不重建，首帧被抑制避免重复绘制</td></tr>
-</table>
+<h2>四、响应式 UI 四阶段增强</h2>
 
-<h3>实测输出（两帧）</h3>
-<p>上面示例真实编译运行，Headless 后端把场景树绘制到终端。<code>count=5</code> 写入前后各一帧：</p>
-<div class="term"><span class="cm"># 首帧（count=0）</span>
-&lt;div <span class="tag">id</span>=<span class="st">"app"</span>&gt;
-  &lt;<span class="tag">Dashboard</span>&gt;
-    &lt;section <span class="tag">id</span>=<span class="st">"dash"</span>&gt;
-      &lt;h1&gt;"Dashboard"&lt;/h1&gt;
-      &lt;<span class="tag">Stat</span>&gt;&lt;div <span class="tag">class</span>=<span class="st">"stat"</span>&gt;&lt;span&gt;"count"&lt;/span&gt;&lt;b&gt;<span class="hl">"0"</span>&lt;/b&gt;&lt;/div&gt;&lt;/<span class="tag">Stat</span>&gt;
-      &lt;<span class="tag">Stat</span>&gt;&lt;div <span class="tag">class</span>=<span class="st">"stat"</span>&gt;&lt;span&gt;"doubled"&lt;/span&gt;&lt;b&gt;<span class="hl">"0"</span>&lt;/b&gt;&lt;/div&gt;&lt;/<span class="tag">Stat</span>&gt;
-    &lt;/section&gt;
-  &lt;/<span class="tag">Dashboard</span>&gt;
-&lt;/div&gt;
-
-<span class="cm"># 写入 count=5 后（自动重绘，仅一帧）</span>
-&lt;div <span class="tag">id</span>=<span class="st">"app"</span>&gt;
-  ... &lt;<span class="tag">Stat</span>&gt;... "count" &lt;b&gt;<span class="hl">"5"</span>&lt;/b&gt; ...&lt;/<span class="tag">Stat</span>&gt;
-  ... &lt;<span class="tag">Stat</span>&gt;... "doubled" &lt;b&gt;<span class="hl">"10"</span>&lt;/b&gt; ...&lt;/<span class="tag">Stat</span>&gt;
-&lt;/div&gt;</div>
-<div class="note"><b>验证要点</b>：① signal 经两层组件 Props 传到叶子插槽并自动刷新；② <code>count=5</code> 与 <code>doubled=10</code> 在<b>同一帧</b>一致更新（聚合 effect 批处理，无中间态）；③ 组件只执行一次、不重建。源码 <code>examples/jsxapp-full.gx</code> 已通过 <code>gox build -jsx=scene</code> + <code>go run</code> 端到端验证。</div>
-
-<h2>四、响应式 UI 增强（SolidJS 化四阶段）</h2>
-<p class="lead">前面讲的是「一棵场景树怎么建、叶子怎么更新」。这一节是<b>四阶段架构升级</b>：把 Gox 从「带 Signal 的 JSX 框架」推进为「具有原生细粒度响应式语义的语言」。
-分层边界保持一致：<b>语言层识别 Signal，响应式层追踪依赖，UI 层更新节点</b>。工具链 <b>Go 1.27</b>（支持泛型方法）。完整设计见 <code>docs/reactive-ui-roadmap.md</code>。</p>
-<div class="note"><b>为什么要做：</b>评审的核心判断是「Owner + Reactive Computation 才是 SolidJS 的核心」。只有把响应式作用域（Owner）、清理（Cleanup）、结构化控制流（分支 / 列表）与场景树协作起来，才谈得上细粒度——否则 signal 只是能触发整树重算的语法糖。四阶段就是按这个依赖顺序落地的。</div>
-
-<h3>阶段 1 · 响应式核心：Owner + Computation + Cleanup（<code>runtime/signal</code>）</h3>
-<table>
-  <tr><th>能力</th><th>API / 语义</th></tr>
-  <tr><td>相等性裁剪</td><td><code>signal.new(v)</code> 默认 <code>reflect.DeepEqual</code>，值未变不触发下游；<code>signal.newWithEquals(v, eq)</code> 自定义策略</td></tr>
-  <tr><td>可销毁 Effect</td><td><code>signal.effect(f)</code> 返回 <code>computation</code>；<code>h.dispose()</code> 幂等：断依赖、停订阅、执行清理</td></tr>
-  <tr><td>Computed 句柄</td><td><code>signal.computed(f)</code> 常规用法；<code>signal.computedWithHandle(f)</code> 需要提前销毁时</td></tr>
-  <tr><td>Owner 树</td><td><code>signal.createRoot(func(o *signal.owner){...})</code>；<code>signal.getOwner()</code> / <code>signal.runWithOwner(o, f)</code>；父销毁级联子</td></tr>
-  <tr><td>生命周期</td><td><code>signal.onCleanup(fn)</code>（每次重跑前 + 销毁时执行）、<code>signal.onMount(fn)</code>（首次挂载执行一次）</td></tr>
-  <tr><td>批处理</td><td><code>signal.batch(func(){ 多次 signal 写入 })</code> 合并同一轮写入，批次结束统一调度 Effect</td></tr>
-</table>
-<div class="note"><b>书写约定（全篇适用）</b>：GX 源码里外部符号写<b>小写首字母</b>，编译器还原为 Go 的真实大小写——
-<code>signal.effect</code> → <code>signal.Effect</code>、<code>signal.createRoot</code> → <code>signal.CreateRoot</code>、
-<code>gxapp.windowConfig</code> → <code>gxapp.WindowConfig</code>、<code>app.bindReactive</code> → <code>app.BindReactive</code>。
-多词符号只小写首字母、其余照抄。<b>JSX 标签必须大写</b>（<code>&lt;Card/&gt;</code> = 组件，小写 = 原生标签）。</div>
-<pre class="code"><span class="kw">import</span> <span class="st">"github.com/robertpanvip/gox/runtime/signal"</span>
-
-<span class="con">// GX 新特性：对象字面量 + 对象解构——按字段值推断匿名 struct</span>
-cfg := { label: <span class="st">"counter"</span>, step: 1 }
-{ label } := cfg
-
-<span class="con">// effect 返回可销毁句柄；挂在 Owner 下，Owner 销毁会级联停掉它</span>
-signal.<span class="fn">createRoot</span>(<span class="kw">func</span>(o *signal.<span class="ty">owner</span>) {
-    h := signal.<span class="fn">effect</span>(<span class="kw">func</span>() {
-        fmt.<span class="fn">println</span>(label, <span class="st">"count ="</span>, count())
-        signal.<span class="fn">onCleanup</span>(<span class="kw">func</span>() { <span class="cm">/* 重跑前 / 销毁时执行 */</span> })
+<h3>阶段 1 · Owner / Cleanup / Effect 句柄</h3>
+<p><code>signal.effect</code> 返回可销毁句柄，挂在 Owner 树下；父 Owner 销毁会级联停掉子计算并执行清理。写副作用时把清理登记在 effect 内，重跑前与销毁时都会执行。</p>
+<pre class="code"><span class="kw">signal</span>.<span class="fn">createRoot</span>(<span class="kw">func</span>(o *<span class="ty">signal</span>.<span class="ty">owner</span>) {
+    h := <span class="kw">signal</span>.<span class="fn">effect</span>(<span class="kw">func</span>() {
+        fmt.<span class="fn">println</span>(count)
+        <span class="kw">signal</span>.<span class="fn">onCleanup</span>(<span class="kw">func</span>() { <span class="cm">/* 重跑前 / 销毁时执行 */</span> })
+        <span class="kw">signal</span>.<span class="fn">onMount</span>(<span class="kw">func</span>() { <span class="cm">/* 首次挂载执行一次 */</span> })
     })
-    _ = h
-    <span class="cm">// 之后 h.dispose() 可单独停掉这个 effect（幂等）</span>
+    _ = h  <span class="cm">// h.dispose() 幂等：断依赖、停订阅、执行清理</span>
 })
-<span class="con">// 一次写入只触发一次 effect：signal.batch(func(){ count(1); count(2) })</span></pre>
-<div class="note"><code>scene.computation</code> 是 <code>signal.Computation</code> 的类型别名，因此 <code>signal.effect</code> 可直接作为 <code>bindReactive</code> 的实参（Go 的函数类型要求返回类型完全一致）。</div>
+<span class="cm">// 相同值不触发下游；自定义比较用 signal.newWithEquals</span>
+<span class="cm">// 派生需要提前销毁时用 Signal.computedWithHandle</span></pre>
+<div class="note"><code>signal</code> 源信号默认用 <code>reflect.DeepEqual</code> 做相等性裁剪——值未变不触发下游。<code>scene.computation</code> 是 <code>signal.computation</code> 的类型别名，因此 <code>signal.effect</code> 可直接作为 <code>bindReactive</code> 的实参。</div>
 
-<h3>阶段 2 · 条件分支：<code>if / else if / else</code>（JSX 内）</h3>
-<p>JSX children 支持条件分支，产出 <code>gxscene.OpBranch</code> + <code>gxscene.BranchGetter(selector, builders...)</code>。切换分支时<b>销毁旧 Owner、只重建该区域</b>，绝不重跑根组件。</p>
-<pre class="code"><span class="kw">signal</span> visible = <span class="kw">true</span>
-<span class="kw">signal</span> count = 0
-
-view := &lt;<span class="jx">div</span>&gt;
+<h3>阶段 2 · 条件分支</h3>
+<p>JSX 内支持 <code>if / else if / else</code> 子节点。selector 读 signal 登记依赖；索引变化时销毁旧 Owner、重建局部子树，索引不变时只更新叶子。</p>
+<pre class="code">view := &lt;<span class="jx">div</span>&gt;
     <span class="kw">if</span> visible {
         &lt;<span class="jx">span</span>&gt;{count}&lt;/<span class="jx">span</span>&gt;
+    } <span class="kw">else if</span> other {
+        &lt;<span class="jx">i</span>&gt;other&lt;/<span class="jx">i</span>&gt;
     } <span class="kw">else</span> {
         &lt;<span class="jx">b</span>&gt;Hidden&lt;/<span class="jx">b</span>&gt;
     }
 &lt;/<span class="jx">div</span>&gt;</pre>
-<div class="note"><b>依赖与清理</b>：selector（<code>visible()</code>）在当前 Effect 上下文求值以登记依赖；索引不变时<b>不重建</b>——<code>count</code> 变化由子树自身插槽的细粒度 Effect 处理。索引变化才销毁旧 Owner（级联停 Effect / 跑 Cleanup）并在新 Owner 下构建目标子树。支持 <code>else if</code> 链。</div>
 
-<h3>阶段 3 · Keyed For：keyed 列表（含元素类型自动推断）</h3>
-<p><code>&lt;For&gt;</code> 产出 <code>gxscene.OpFor</code> + <code>gxscene.ForGetterOf[T](each, key, render)</code>：按 key 复用节点、每元素独立 Owner。render 参数类型<b>可省略</b>，编译器从 <code>each</code> 自动推断。</p>
-<pre class="code"><span class="kw">type</span> User <span class="kw">struct</span> { id <span class="kw">int</span>; name <span class="kw">string</span> }
-<span class="kw">signal</span> users = []User{{1,<span class="st">"Tom"</span>},{2,<span class="st">"Jack"</span>}}
-
-view := &lt;<span class="jx">ul</span>&gt;
+<h3>阶段 3 · Keyed For</h3>
+<p><code>&lt;For&gt;</code> 按 key 复用节点、每个元素独立 Owner；删除元素时级联清理其 Effect。key 与 render 的 lambda 参数类型都可省略——从 <code>each</code> 推断。</p>
+<pre class="code">&lt;<span class="jx">ul</span>&gt;
     &lt;<span class="jx">For</span> <span class="fn">each</span>={users} <span class="fn">key</span>={(u) =&gt; u.id}&gt;
         {(u) =&gt; &lt;<span class="jx">li</span>&gt;{u.name}&lt;/<span class="jx">li</span>&gt;}
     &lt;/<span class="jx">For</span>&gt;
 &lt;/<span class="jx">ul</span>&gt;</pre>
-<table>
-  <tr><th>能力</th><th>说明</th></tr>
-  <tr><td>元素类型推断</td><td><code>(u)</code> 无注解时从 <code>each</code> 的 <code>[]User</code> 推断出 <code>User</code>，生成 <code>ForGetterOf[User]</code>；支持 signal 变量 / 普通变量 / 函数返回值；<code>(u User)</code> 显式注解始终优先</td></tr>
-  <tr><td>keyed diff</td><td><code>key(item)</code> 生成稳定键：相同键<b>复用节点</b>（移动而非重建），新增在独立 Owner 下构建，删除销毁 Owner（级联清理）</td></tr>
-  <tr><td>细粒度更新</td><td>每元素独立 Owner，元素内 signal 变化只更新对应项；重排只调顺序、不重跑 render</td></tr>
-</table>
-<div class="note"><b>推断优先级</b>：render 参数显式注解 &gt; <code>each</code> 集合类型（<code>[]T</code> / <code>[N]T</code> / signal 声明字面量）&gt; 降级 <code>any</code>。signal 声明类型在改写前采集，避免初值字面量被 <code>Signal.New(...)</code> 包裹遮蔽。<code>key</code> lambda 参数类型同样可省略，复用 render 的元素类型。</div>
+<div class="note">元素类型推断支持 signal 变量、普通 <code>:=</code> 变量和函数返回值；若写了显式注解如 <code>(u user)</code>，则以注解为准。</div>
 
-<h3>阶段 4 · GUI 调度：结构变化重绘 + 批处理（<code>runtime/app</code>）</h3>
-<div class="note"><b>修复的关键缺陷</b>：此前 app 只建一个聚合 effect 调 <code>update()</code>，未为 Branch/For 这类<b>结构插槽</b>接线，导致分支 / 列表切换时场景树变了却不重绘。新增 <code>view.bindStructural</code>（生成 <code>BindStructural</code>）仅为结构插槽接线，与叶子的聚合 effect 并存；<code>app.bindReactive</code> 用「重绘包装」的 effect 接线——selector / each 变化重建子树后自动画一帧。</div>
-<table>
-  <tr><th>能力</th><th>说明</th></tr>
-  <tr><td>结构变化重绘</td><td><code>BindStructural</code> 接线 Branch/For 插槽；切换 / 增删后自动 Draw 一帧</td></tr>
-  <tr><td>关闭清理</td><td><code>App.Close</code> 额外 dispose 结构 effect 与元素 Owner，无泄漏</td></tr>
-  <tr><td>批处理</td><td><code>Batch</code> 合并同一轮多次 signal 写入为一帧，无「部分插槽已更新」的中间态画面</td></tr>
-  <tr><td>压力验证</td><td>Owner 500 轮创建/销毁、分支 200 轮切换，Effect / Cleanup 严格配对</td></tr>
-</table>
-<p><b>验证</b>：<code>go build ./...</code> + <code>go test ./...</code> 全量通过（Go 1.27.4）。条件分支与 For 均有「转译 → 真实 <code>go run</code> → 校验输出」的端到端测试。详见 <code>runtime/signal/owner_test.go</code>、<code>runtime/scene/branch_test.go</code> / <code>for_test.go</code>、<code>runtime/app/app_test.go</code>、<code>internal/integration/integration_test.go</code>。</p>
+<h3>阶段 4 · GUI 调度与生命周期</h3>
+<p>应用入口把「叶子聚合 effect」与「结构插槽接线」合并：<code>bindReactive</code> 在分支/列表切换重建子树后自动画一帧；<code>batch</code> 合并同一轮多次写入为一次重绘；<code>close</code> 销毁时级联清理所有订阅与 Owner。</p>
+<pre class="code">app, err := gxapp.<span class="fn">open</span>(view, gxapp.<span class="fn">windowConfig</span>{ Title: <span class="st">"Gox"</span>, Width: <span class="ty">800</span> })
+<span class="kw">if</span> err != nil { <span class="fn">panic</span>(err) }
+<span class="kw">defer</span> app.<span class="fn">close</span>()
+app.<span class="fn">bindReactive</span>(signal.<span class="fn">effect</span>)
+signal.<span class="fn">batch</span>(<span class="kw">func</span>() { count(<span class="ty">5</span>); visible(<span class="kw">false</span>) })  <span class="cm">// 一次重绘</span></pre>
 
 <h2>五、约束清单</h2>
 <ol class="constraints">
-  <li><b>组件签名二选一</b> <code>func(gxscene.props) *gxscene.instance</code>（getter-map，保鲜）或 <code>func(T) *gxscene.instance</code>（T 为本文件具名 struct，强类型快照）；返回类型不匹配则不是合法组件。声明用小写 + <code>pub</code>，JSX 标签用大写。</li>
-  <li><b>组件只执行一次</b> 组件体是建树逻辑；不要把「每次刷新要做的事」放这里，放到 getter 里。</li>
-  <li><b>getter-map 形态：动态数据必须是 getter</b> 属性传变量（<code>title={title}</code>）而非快照字面量；组件体用 <code>Get[T]()()</code> 读。<code>Get</code> 断言失败返回零值，不 panic。</li>
-  <li><b>强类型形态：字段编译期校验</b> 属性名必须存在于 struct、值类型须兼容、所有字段须提供，否则编译报错（带 GX 坐标）；属性是快照值，不随变量变化刷新。</li>
-  <li><b>大写/带点 = 组件</b> 其余 = 原生标签；与 vdom 后端判定一致。</li>
-  <li><b>children</b> getter-map 形态用 <code>gxscene.Child(props)()</code> 读（子 <code>Instance</code>，透明摊平）；强类型形态作为 struct 字段传入。</li>
-  <li><b>更新靠 <code>Update()</code> 或 <code>BindReactive</code> 驱动</b> scene 不内置响应式；<code>BindReactive(signal.Effect)</code> 可把 signal 直接接到插槽，免手动 Update。</li>
-  <li><b><code>SetPart</code>/<code>SetGetter</code> 用插槽下标</b> 下标由编译期分配，手写 opcode 时才需要；JSX 开发中优先用 getter。</li>
-  <li><b>绘制后端目前只有 <code>TextBackend</code></b> 经 <code>Backend</code> 接口抽象，Skia / wgpu 可后续接入，编译器无需改动。</li>
-  <li><b>条件分支的 selector 必须是 signal 读</b> <code>if visible { ... }</code> 里的 <code>visible()</code> 在 Effect 上下文求值登记依赖；普通变量不会触发分支切换。</li>
-  <li><b><code>&lt;For&gt;</code> 必须有 <code>key</code></b> keyed diff 依赖稳定键复用节点；render / key 参数类型可省略（从 <code>each</code> 推断），显式注解始终优先。</li>
-  <li><b>响应式作用域挂在 Owner 上</b> <code>Effect</code> / <code>Computed</code> 自动挂到当前 Owner；<code>OnCleanup</code> 在重跑前与销毁时执行；<code>Dispose</code> 幂等。分支切换 / 列表删除会级联清理对应 Owner。</li>
-  <li><b>app 层结构变化也会重绘</b> <code>app.BindReactive</code> 经 <code>BindStructural</code> 为 Branch/For 接线，结构变化后自动画一帧；底层 <code>Instance.BindReactive</code> 仍是逐插槽精确模式。</li>
+  <li><b>标识符小写书写</b>：GX 源码一律小写，编译器还原；全大写缩写写大写原样保留；多词符号只小写首字母（<code>windowConfig</code> 非 <code>windowconfig</code>）。</li>
+  <li><b>Signal 占位名大写</b>：<code>Signal.computed</code> / <code>Signal.effect</code>，不要写裸 <code>computed(...)</code>。</li>
+  <li><b>pub 声明小写 + JSX 标签大写</b>：<code>pub func card</code> 配 <code>&lt;Card/&gt;</code>；组件标签小写会被当成原生标签。</li>
+  <li><b>Props 用 getter 保鲜</b>：<code>gxscene.get[T](props,...)</code> 得到 getter，在插槽里 <code>value()</code> 读；写成 <code>value</code> 会变成不更新的快照。</li>
+  <li><b>组件只建树一次</b>：函数体是「建树」而非「每次渲染」，不要在组件函数里放依赖刷新的副作用。</li>
+  <li><b>分支 selector 必须读 signal</b> 才有响应式；<code>&lt;For&gt;</code> 必须提供 <code>key</code> 才能做 keyed 复用。</li>
+  <li><b>Owner 作用域</b>：effect / cleanup 归属当前 Owner，父销毁级联子；需要独立生命周期时用 <code>signal.createRoot</code>。</li>
+  <li><b>结构变化重绘</b>：app 场景用 <code>app.bindReactive(signal.effect)</code> 接线，分支/列表切换才会自动重绘一帧。</li>
+  <li><b>相等性裁剪</b>：signal 默认 <code>DeepEqual</code>，相同值不触发；需要自定义比较用 <code>signal.newWithEquals</code>。</li>
 </ol>
 
-<h2>六、实测输出</h2>
-<p>上面例子经 <code>gox build -jsx=scene</code> → <code>go run</code> 的真实输出：</p>
-<div class="term">
-<div><span class="cmd">$ gox build demo.gx -jsx=scene -o main.go &amp;&amp; go run .</span></div>
-<div>&lt;<span class="tag">div</span> id="app"&gt;</div>
-<div>&nbsp;&nbsp;&lt;<span class="tag">Card</span>&gt;</div>
-<div>&nbsp;&nbsp;&nbsp;&nbsp;&lt;<span class="tag">div</span> class="card"&gt;</div>
-<div>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&lt;<span class="tag">h1</span>&gt;</div>
-<div>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="out">"GX"</span></div>
-<div>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&lt;/<span class="tag">h1</span>&gt;</div>
-<div>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&lt;<span class="tag">span</span>&gt;<span class="out">"1"</span>&lt;/<span class="tag">span</span>&gt;</div>
-<div>&nbsp;&nbsp;&nbsp;&nbsp;&lt;/<span class="tag">div</span>&gt;&lt;/<span class="tag">Card</span>&gt;&lt;/<span class="tag">div</span>&gt;</div>
-<div>&nbsp;</div>
-<div>写入节点数: <span class="hl">2</span>&nbsp;&nbsp;<span class="cm">← 只写了 title 和 n 两个文本节点</span></div>
-<div>&lt;<span class="tag">div</span> id="app"&gt; … &lt;<span class="tag">h1</span>&gt;<span class="out">"Gox"</span>&lt;/<span class="tag">h1</span>&gt; … &lt;<span class="tag">span</span>&gt;<span class="out">"2"</span>&lt;/<span class="tag">span</span>&gt; … &lt;/<span class="tag">div</span>&gt;</div>
-</div>
-
-<p>signal 示例（<code>examples/jsxscene-signal.gx</code>）的真实输出——<code>count = 5</code> 后两个插槽自动刷新，Computed 同步更新：</p>
-<div class="term">
-<div><span class="cmd">$ gox build examples/jsxscene-signal.gx -jsx=scene -o main.go &amp;&amp; go run .</span></div>
-<div>初始：</div>
-<div>&lt;<span class="tag">div</span> id="app"&gt;</div>
-<div>&nbsp;&nbsp;&lt;<span class="tag">span</span>&gt;<span class="out">"0"</span>&lt;/<span class="tag">span</span>&gt;</div>
-<div>&nbsp;&nbsp;&lt;<span class="tag">b</span>&gt;<span class="out">"0"</span>&lt;/<span class="tag">b</span>&gt;</div>
-<div>&lt;/<span class="tag">div</span>&gt;</div>
-<div>&nbsp;</div>
-<div>count=5 后（自动更新）：</div>
-<div>&lt;<span class="tag">div</span> id="app"&gt;</div>
-<div>&nbsp;&nbsp;&lt;<span class="tag">span</span>&gt;<span class="out">"5"</span>&lt;/<span class="tag">span</span>&gt;&nbsp;&nbsp;<span class="cm">← count</span></div>
-<div>&nbsp;&nbsp;&lt;<span class="tag">b</span>&gt;<span class="out">"10"</span>&lt;/<span class="tag">b</span>&gt;&nbsp;&nbsp;<span class="cm">← doubled (computed)</span></div>
-<div>&lt;/<span class="tag">div</span>&gt;</div>
-</div>
-
-<p>强类型组件示例（<code>examples/jsxscene-typed.gx</code>）的编译产物与输出——<code>&lt;Card title="Gox" n={42}/&gt;</code> 补全为 <code>Card(CardProps{...})</code>：</p>
-<div class="term">
-<div><span class="cmd">$ gox build examples/jsxscene-typed.gx -jsx=scene -o main.go &amp;&amp; go run .</span></div>
-<div><span class="cm">// 编译产物（关键行）</span></div>
-<div>... func() any{ <span class="kw">return</span> Card(CardProps{title:<span class="st">"Gox"</span>,n:42,}) }</div>
-<div>&lt;<span class="tag">div</span> id=<span class="st">"app"</span>&gt;</div>
-<div>&nbsp;&nbsp;&lt;<span class="tag">Card</span>&gt;</div>
-<div>&nbsp;&nbsp;&nbsp;&nbsp;&lt;<span class="tag">div</span> class=<span class="st">"card"</span>&gt;</div>
-<div>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&lt;<span class="tag">h1</span>&gt;<span class="out">"Gox"</span>&lt;/<span class="tag">h1</span>&gt;</div>
-<div>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&lt;<span class="tag">span</span>&gt;<span class="out">"42"</span>&lt;/<span class="tag">span</span>&gt;</div>
-<div>&nbsp;&nbsp;&nbsp;&nbsp;&lt;/<span class="tag">div</span>&gt;</div>
-<div>&nbsp;&nbsp;&lt;/<span class="tag">Card</span>&gt;</div>
-<div>&lt;/<span class="tag">div</span>&gt;</div>
-</div>
-
-<p>应用入口示例（<code>examples/jsxapp.gx</code>）：<code>count=5</code> 后<b>只画一帧</b>，<code>count</code> 与 <code>doubled</code> 一致更新（无中间态帧）：</p>
-<div class="term">
-<div><span class="cmd">$ gox build examples/jsxapp.gx -jsx=scene -o main.go &amp;&amp; go run .</span></div>
-<div><span class="cm">// 第 1 帧：Open 首帧</span></div>
-<div>&lt;<span class="tag">div</span> id=<span class="st">"app"</span>&gt; … &lt;<span class="tag">span</span>&gt;<span class="out">"count = "</span><span class="out">"0"</span>&lt;/<span class="tag">span</span>&gt; &lt;<span class="tag">b</span>&gt;<span class="out">"doubled = "</span><span class="out">"0"</span>&lt;/<span class="tag">b</span>&gt; … &lt;/<span class="tag">div</span>&gt;</div>
-<div><span class="cm">// 第 2 帧：count=5 → 聚合 effect 一帧更新（含 doubled=10）</span></div>
-<div>&lt;<span class="tag">div</span> id=<span class="st">"app"</span>&gt; … &lt;<span class="tag">span</span>&gt;<span class="out">"count = "</span><span class="out">"5"</span>&lt;/<span class="tag">span</span>&gt;&nbsp;&nbsp;<span class="cm">← count</span></div>
-<div>&nbsp;&nbsp;&lt;<span class="tag">b</span>&gt;<span class="out">"doubled = "</span><span class="out">"10"</span>&lt;/<span class="tag">b</span>&gt;&nbsp;&nbsp;<span class="cm">← doubled (computed)</span></div>
-<div>&lt;/<span class="tag">div</span>&gt;</div>
-</div>
-
-<h2>七、API 速查（GX 写法 → 生成的 Go）</h2>
-<div class="note"><b>左列是你在 <code>.gx</code> 里写的，中列是编译产物。</b>外部符号只把首字母写小写、其余照抄；JSX 标签和 pub 声明按约定（标签大写、声明小写）。表格中的 <code>view</code> / <code>app</code> 是持有 <code>Instance</code> / <code>App</code> 的变量。</div>
+<h2>六、API 速查（GX 写法 → 生成 Go）</h2>
+<p>左列是你在 <code>.gx</code> 里写的（小写），右列是生成的 Go（大写）。<b>请照抄左列。</b></p>
 <table>
-  <tr><th>GX 写法（源码）</th><th>生成 Go</th><th>作用</th></tr>
-  <tr><td>gxscene.props / get[T] / prop / child</td><td>Props / Get[T] / Prop / Child</td><td>组件 props 读取（getter 语义）</td></tr>
-  <tr><td>gxscene.render / renderText</td><td>Render / RenderText</td><td>渲染模板：返回 *Instance / 直接返回 string</td></tr>
-  <tr><td>view.update / setPart / setGetter</td><td>Update / SetPart / SetGetter</td><td>更新：全量重算 / 单插槽写 / 改绑 getter</td></tr>
-  <tr><td>view.bindReactive(effect)</td><td>BindReactive</td><td>把 signal.effect 接到所有插槽：写入自动精确更新，免手动 update</td></tr>
-  <tr><td>view.bindStructural(effect)</td><td>BindStructural</td><td>仅为 Branch/For 结构插槽接线：结构变化重建子树后触发重绘</td></tr>
-  <tr><td>view.dispose()</td><td>Dispose</td><td>销毁实例：停掉所有响应式订阅与结构 Owner</td></tr>
-  <tr><td>view.root / string / writes / updates</td><td>Root / String / Writes / Updates</td><td>场景树根 / 文本绘制 / 观测指标</td></tr>
-  <tr><td>gxscene.OpBranch / branchGetter</td><td>OpBranch / BranchGetter</td><td>条件分支：selector + builders，切换时销毁旧 Owner 重建局部子树</td></tr>
-  <tr><td>gxscene.OpFor / forGetterOf[T]</td><td>OpFor / ForGetterOf[T]</td><td>Keyed 列表：按 key 复用节点、每元素独立 Owner；T 可从 each 推断</td></tr>
-  <tr><td>signal.new / newWithEquals</td><td>New / NewWithEquals</td><td>响应式源：相等性裁剪 / 自定义比较</td></tr>
-  <tr><td>Signal.computed / computedWithHandle</td><td>Computed / ComputedWithHandle</td><td>派生信号（语法糖占位包名 Signal；带句柄版本可提前销毁）</td></tr>
-  <tr><td>signal.effect</td><td>Effect → Computation</td><td>可销毁 effect 句柄，dispose() 幂等；自动挂到当前 Owner</td></tr>
-  <tr><td>signal.createRoot / getOwner / runWithOwner</td><td>CreateRoot / GetOwner / RunWithOwner</td><td>Owner 树：建立响应式作用域，父销毁级联子</td></tr>
-  <tr><td>signal.onCleanup / onMount / batch</td><td>OnCleanup / OnMount / Batch</td><td>生命周期：重跑前与销毁时清理 / 首次挂载 / 合并同一轮写入</td></tr>
-  <tr><td>gxapp.open / openWith</td><td>Open / OpenWith</td><td>应用入口：JSX + 窗口配置 → App（类比 ReactDOM.render）</td></tr>
-  <tr><td>gxapp.windowConfig / window</td><td>WindowConfig / Window</td><td>窗口配置 / 后端接口（Headless 实现）</td></tr>
-  <tr><td>app.bindReactive / run / close / draw / update</td><td>BindReactive / Run / Close / Draw / Update</td><td>应用生命周期 + signal 自动重绘（批处理）</td></tr>
-  <tr><td>backend / textBackend</td><td>Backend / TextBackend</td><td>绘制抽象 / 当前唯一实现</td></tr>
-  <tr><td>CompileScene / CompileSceneWithModule</td><td>（CLI / API 名，大小写照抄）</td><td>转译入口</td></tr>
-  <tr><td>gox jsxscene</td><td>（CLI 子命令）</td><td>单阶段调试，只看 JSX → opcode 的产物</td></tr>
+  <tr><th>GX 写法（你写的）</th><th>生成 Go</th><th>作用</th></tr>
+  <tr><td><code>gox build -jsx=scene</code></td><td>CLI</td><td>转译入口，只看/产出 JSX → opcode</td></tr>
+  <tr><td><code>gxscene.props</code> / <code>gxscene.get[T]</code></td><td><code>gxscene.Props</code> / <code>Get[T]</code></td><td>组件 props 读取（getter 语义）</td></tr>
+  <tr><td><code>gxscene.render</code> / <code>gxscene.renderText</code></td><td><code>Render</code> / <code>RenderText</code></td><td>渲染模板：返回实例 / 直接返回 string</td></tr>
+  <tr><td><code>view.update</code></td><td><code>Instance.Update</code></td><td>全量重算（signal 接线后通常无需手动调）</td></tr>
+  <tr><td><code>view.bindReactive(effect)</code></td><td><code>Instance.BindReactive</code></td><td>把 effect 接到所有插槽 + 结构插槽：写入自动精确更新与重绘</td></tr>
+  <tr><td><code>view.dispose()</code></td><td><code>Instance.Dispose</code></td><td>销毁实例：停订阅与结构 Owner</td></tr>
+  <tr><td><code>signal.new</code> / <code>signal.newWithEquals</code></td><td><code>New</code> / <code>NewWithEquals</code></td><td>响应式源：默认裁剪 / 自定义比较</td></tr>
+  <tr><td><code>Signal.computed</code> / <code>Signal.computedWithHandle</code></td><td><code>signal.Computed</code> / <code>ComputedWithHandle</code></td><td>派生只读信号（后者带可销毁句柄）</td></tr>
+  <tr><td><code>signal.effect</code></td><td><code>signal.Effect → Computation</code></td><td>可销毁 effect，幂等 dispose，自动挂 Owner</td></tr>
+  <tr><td><code>signal.createRoot</code> / <code>signal.getOwner</code> / <code>signal.runWithOwner</code></td><td><code>CreateRoot</code> / <code>GetOwner</code> / <code>RunWithOwner</code></td><td>Owner 树：建作用域、取当前、切换归属</td></tr>
+  <tr><td><code>signal.onCleanup</code> / <code>signal.onMount</code> / <code>signal.batch</code></td><td><code>OnCleanup</code> / <code>OnMount</code> / <code>Batch</code></td><td>生命周期清理 / 首挂载 / 合并写入</td></tr>
+  <tr><td><code>分支 if / else</code></td><td><code>gxscene.opBranch</code> + <code>branchGetter</code></td><td>条件分支：切换时销毁旧 Owner 重建子树</td></tr>
+  <tr><td><code>&lt;For each key&gt;</code></td><td><code>gxscene.opFor</code> + <code>forGetterOf[T]</code></td><td>Keyed 列表：按 key 复用、每元素独立 Owner，T 可推断</td></tr>
+  <tr><td><code>gxapp.open</code> / <code>gxapp.windowConfig</code></td><td><code>gxapp.Open</code> / <code>WindowConfig</code></td><td>应用入口：JSX + 窗口配置 → App</td></tr>
+  <tr><td><code>app.bindReactive</code> / <code>app.close</code></td><td><code>App.BindReactive</code> / <code>Close</code></td><td>应用接线 + 关闭清理</td></tr>
 </table>
 
+<div class="term">
+<span class="cmd">$</span> export GOTOOLCHAIN=<span class="hl">go1.27.4</span>   <span class="cm"># 必设：泛型方法依赖</span>
+<span class="cmd">$</span> gox build demo.gx -jsx=scene -o main.go &amp;&amp; go run .
+<span class="out">  BEFORE / AFTER / doubled: 10   —— 小写 GX 写法，实测通过</span>
+</div>
+
 <footer>
-  源码：<code>runtime/scene/</code>（场景运行时） · <code>runtime/app/</code>（应用入口） · <code>pkg/compiler/jsxscene.go</code>（编译器） ·
-  <code>examples/jsxscene.gx</code>（getter-map） · <code>examples/jsxscene-signal.gx</code>（signal 响应式） ·
-  <code>examples/jsxscene-typed.gx</code>（强类型契约） · <code>examples/jsxapp.gx</code>（应用入口） ·
-  <code>docs/reactive-ui-roadmap.md</code>（响应式四阶段设计） · <code>docs/scene-components-guide.html</code>（本文档）
+  规范来源：<code>docs/language-spec.md</code> · 书写约定活例子：<code>examples/lowerext.gx</code> · 四阶段设计：<code>docs/reactive-ui-roadmap.md</code> · 项目规则：<code>agent.md</code><br>
+  配套示例：<code>examples/jsxscene.gx</code> · <code>examples/jsxscene-signal.gx</code> · <code>examples/jsxapp-full.gx</code>（本指南示例已按 GX 小写约定统一，并经 go run 实测）
 </footer>
 
 </div>
