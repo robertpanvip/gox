@@ -43,6 +43,9 @@ type Checker struct {
 	// replaces 是 go.mod 的 replace 指令（module 路径 -> 本地目录），
 	// 用于让生成的 Go 代码能解析到本地运行时（vdom/list）。
 	replaces map[string]string
+	// modulePath 用于临时 go.mod 的 module 声明。默认 "buildcheck"；
+	// GX 项目模式下设为真实项目 module 路径，使本地包 import 可解析。
+	modulePath string
 }
 
 type cacheEntry struct {
@@ -56,11 +59,12 @@ func New(capacity int) *Checker {
 		capacity = 64
 	}
 	return &Checker{
-		cache:     map[string]*list.Element{},
-		order:     list.New(),
-		capacity:  capacity,
-		toolchain: "go",
-		replaces:  map[string]string{},
+		cache:      map[string]*list.Element{},
+		order:      list.New(),
+		capacity:   capacity,
+		toolchain:  "go",
+		replaces:   map[string]string{},
+		modulePath: "buildcheck",
 	}
 }
 
@@ -85,12 +89,26 @@ func (c *Checker) AddReplace(modulePath, localDir string) {
 	c.order.Init()
 }
 
+// SetModulePath 设置临时 go.mod 的 module 声明（GX 项目模式下为项目 module 路径），
+// 使本地包 import（如 example.com/proj/util）可被解析。变更会使缓存失效。
+func (c *Checker) SetModulePath(path string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if path == "" {
+		path = "buildcheck"
+	}
+	c.modulePath = path
+	c.cache = map[string]*list.Element{}
+	c.order.Init()
+}
+
 // buildConfig 是一次构建所用配置的一致快照。build 只读取快照，
 // 绝不在锁外访问 Checker 的共享字段，从而消除并发数据竞争。
 type buildConfig struct {
-	toolchain string
-	extraEnv  []string
-	replaces  map[string]string
+	toolchain  string
+	extraEnv   []string
+	replaces   map[string]string
+	modulePath string
 }
 
 // snapshot 在锁内复制当前配置。
@@ -102,7 +120,7 @@ func (c *Checker) snapshot() buildConfig {
 	for k, v := range c.replaces {
 		rep[k] = v
 	}
-	return buildConfig{toolchain: c.toolchain, extraEnv: env, replaces: rep}
+	return buildConfig{toolchain: c.toolchain, extraEnv: env, replaces: rep, modulePath: c.modulePath}
 }
 
 // cacheKey 把源码与构建配置一起哈希：不同 toolchain/replace/env 的检查结果
@@ -112,6 +130,8 @@ func cacheKey(goSrc string, cfg buildConfig) string {
 	h.Write([]byte(goSrc))
 	h.Write([]byte{0})
 	h.Write([]byte(cfg.toolchain))
+	h.Write([]byte{0})
+	h.Write([]byte(cfg.modulePath))
 	for _, e := range cfg.extraEnv {
 		h.Write([]byte{0})
 		h.Write([]byte(e))
@@ -131,10 +151,56 @@ func cacheKey(goSrc string, cfg buildConfig) string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
-// Check 对 goSrc 执行构建检查。结果被缓存；ctx 取消时返回 ctx.Err()。
+// cacheKeyFiles 把多文件源码与构建配置一起哈希。文件按 Name 排序保证稳定。
+func cacheKeyFiles(files []SourceFile, cfg buildConfig) string {
+	h := sha256.New()
+	sorted := append([]SourceFile(nil), files...)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Name < sorted[j].Name })
+	for _, f := range sorted {
+		h.Write([]byte{0})
+		h.Write([]byte(f.Name))
+		h.Write([]byte{0})
+		h.Write([]byte(f.Source))
+	}
+	h.Write([]byte{0})
+	h.Write([]byte(cfg.toolchain))
+	h.Write([]byte{0})
+	h.Write([]byte(cfg.modulePath))
+	for _, e := range cfg.extraEnv {
+		h.Write([]byte{0})
+		h.Write([]byte(e))
+	}
+	keys := make([]string, 0, len(cfg.replaces))
+	for k := range cfg.replaces {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		h.Write([]byte{0})
+		h.Write([]byte(k))
+		h.Write([]byte{0})
+		h.Write([]byte(cfg.replaces[k]))
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+// Check 对单文件 goSrc 执行构建检查。结果被缓存；ctx 取消时返回 ctx.Err()。
 func (c *Checker) Check(ctx context.Context, goSrc string) ([]Diagnostic, error) {
+	return c.CheckFiles(ctx, []SourceFile{{Name: "main.go", Source: goSrc}})
+}
+
+// SourceFile 是多文件构建中的一份 Go 源文件；Name 为相对构建根的路径
+// （如 "main.go"、"util/math.go"），Source 为其内容。
+type SourceFile struct {
+	Name   string
+	Source string
+}
+
+// CheckFiles 对一组 Go 源文件执行构建检查，诊断的 File 字段是 SourceFile.Name。
+// 供 GX 项目模式使用：多份 .gx 转译产物需一起 go build 才能解析跨包引用。
+func (c *Checker) CheckFiles(ctx context.Context, files []SourceFile) ([]Diagnostic, error) {
 	cfg := c.snapshot()
-	key := cacheKey(goSrc, cfg)
+	key := cacheKeyFiles(files, cfg)
 
 	c.mu.Lock()
 	if ent, ok := c.cache[key]; ok {
@@ -145,7 +211,7 @@ func (c *Checker) Check(ctx context.Context, goSrc string) ([]Diagnostic, error)
 	}
 	c.mu.Unlock()
 
-	diags, err := c.build(ctx, goSrc, cfg)
+	diags, err := c.buildFiles(ctx, files, cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -174,7 +240,7 @@ func (c *Checker) Check(ctx context.Context, goSrc string) ([]Diagnostic, error)
 
 var diagRe = regexp.MustCompile(`^(.*?):(\d+):(\d+):\s*(.+)$`)
 
-func (c *Checker) build(ctx context.Context, goSrc string, cfg buildConfig) ([]Diagnostic, error) {
+func (c *Checker) buildFiles(ctx context.Context, files []SourceFile, cfg buildConfig) ([]Diagnostic, error) {
 	dir, err := os.MkdirTemp("", "gox-buildcheck-")
 	if err != nil {
 		return nil, err
@@ -182,7 +248,7 @@ func (c *Checker) build(ctx context.Context, goSrc string, cfg buildConfig) ([]D
 	defer os.RemoveAll(dir)
 
 	var gomod strings.Builder
-	gomod.WriteString("module buildcheck\n\ngo 1.27\n")
+	fmt.Fprintf(&gomod, "module %s\n\ngo 1.27\n", cfg.modulePath)
 	if len(cfg.replaces) > 0 {
 		gomod.WriteString("\n")
 		// 排序使 go.mod 内容稳定（确定性构建）
@@ -202,9 +268,20 @@ func (c *Checker) build(ctx context.Context, goSrc string, cfg buildConfig) ([]D
 	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte(gomod.String()), 0644); err != nil {
 		return nil, err
 	}
-	srcPath := filepath.Join(dir, "main.go")
-	if err := os.WriteFile(srcPath, []byte(goSrc), 0644); err != nil {
-		return nil, err
+	// 逐份写入源码，保留相对路径（含子目录），使跨包引用可解析、
+	// 诊断 File 字段能回投到对应的 .gx sourcemap。
+	for _, f := range files {
+		name := filepath.Clean(f.Name)
+		if name == "." || filepath.IsAbs(name) || strings.HasPrefix(name, "..") {
+			name = "main.go" // 防御：非法相对路径回退
+		}
+		dst := filepath.Join(dir, name)
+		if err := os.MkdirAll(filepath.Dir(dst), 0755); err != nil {
+			return nil, err
+		}
+		if err := os.WriteFile(dst, []byte(f.Source), 0644); err != nil {
+			return nil, err
+		}
 	}
 
 	cmd := exec.CommandContext(ctx, cfg.toolchain, "build", "./...")
@@ -230,8 +307,9 @@ func (c *Checker) build(ctx context.Context, goSrc string, cfg buildConfig) ([]D
 		}
 		ln, _ := strconv.Atoi(m[2])
 		col, _ := strconv.Atoi(m[3])
+		file := filepath.ToSlash(filepath.Clean(m[1]))
 		diags = append(diags, Diagnostic{
-			Line: ln, Col: col, Message: m[4], File: filepath.Base(m[1]),
+			Line: ln, Col: col, Message: m[4], File: file,
 		})
 	}
 	if len(diags) == 0 && len(out) > 0 {

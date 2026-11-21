@@ -177,6 +177,73 @@ func restoreRefs(in []Token, names map[string]string, b *Bindings) []Token {
 	return out
 }
 
+// ScanExports 扫描一份 .gx 源码，返回其 pub 导出表「小写原名 → 导出名」。
+//
+// 这是 pkg/module 建立 GX 模块导出符号表的入口：只需 lex + enum/pub 两个阶段
+// （导出名由声明处的大写结果决定），不跑 signal/JSX/类型等无关阶段，速度快、
+// 耦合低。导出名严格来自被导入方，供导入方还原时精确查表，不做 upperFirst 猜测。
+//
+// 除顶层符号外，还收集 struct 的 pub 字段导出，用限定名「Type.field → Field」
+// 表示（Type 同时存原名与导出名两种 key，兼容书写方用小写/大写类型名引用）。
+// 这样 lib.box{value:9} 的字段能严格按被导入方 pub 声明还原，不做猜测。
+func ScanExports(src string) map[string]string {
+	toks := New(src).AllTokens()
+	names := map[string]string{}
+	// 字段级导出必须在 transformPub 之前扫原始 token（pub 与字段原名还在）。
+	for k, v := range scanFieldExports(toks) {
+		names[k] = v
+	}
+	// enum 也可以 pub：其类型名/成员名的导出映射由 transformEnum 记录。
+	toks = transformEnum(toks, names)
+	toks = transformPub(toks, names)
+	_ = toks // 仅需 names 副作用
+	return names
+}
+
+// scanFieldExports 扫描所有 `type X struct { pub field ... }`，为 pub 字段生成
+// 限定名导出映射。字段导出名与 transformPub 一致（upperFirst）。
+// 生成两种类型名 key（原名 X 与导出名 UpperX），兼容书写方用任一种引用类型。
+func scanFieldExports(toks []Token) map[string]string {
+	out := map[string]string{}
+	for i := 0; i < len(toks); i++ {
+		if !toks[i].is("type") {
+			continue
+		}
+		j := nextSig(toks, i+1)
+		if j < 0 || toks[j].Kind != Ident {
+			continue
+		}
+		typeName := toks[j].Text
+		k := nextSig(toks, j+1)
+		if k < 0 || !toks[k].is("struct") {
+			continue
+		}
+		br := nextSig(toks, k+1)
+		if br < 0 || toks[br].Text != "{" {
+			continue
+		}
+		close := matchDelim(toks, br, "{", "}")
+		if close <= br {
+			continue
+		}
+		typeUp := upperFirst(typeName)
+		for p := br + 1; p < close; p++ {
+			if !toks[p].is("pub") {
+				continue
+			}
+			f := nextSig(toks, p+1)
+			if f < 0 || f >= close || toks[f].Kind != Ident || isGoKeyword(toks[f].Text) {
+				continue
+			}
+			field, up := toks[f].Text, upperFirst(toks[f].Text)
+			out[typeName+"."+field] = up
+			out[typeUp+"."+field] = up
+		}
+		i = close
+	}
+	return out
+}
+
 // transformPub 删除 pub token 并大写其目标标识符。
 // names 收集「小写原名 → 大写导出名」，供引用处统一还原。
 func transformPub(in []Token, names map[string]string) []Token {

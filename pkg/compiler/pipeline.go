@@ -52,7 +52,16 @@ func Compile(file, src string) (*Result, error) {
 }
 
 // CompileWithModule 以指定 module 转译。<module>/runtime/list 作为集合运行时 import 路径。
+// imports 为 nil（单文件模式），所有 import 按 Go 来源处理，行为与改造前一致。
 func CompileWithModule(file, src, module string) (*Result, error) {
+	return CompileWithProject(file, src, module, nil)
+}
+
+// CompileWithProject 以指定 module 和 import 来源表转译。
+// imports 的键是 import 路径（未加引号），值是该 import 的解析结果（来源 + GX 导出表）。
+// 仅当某条 import 命中 imports 且来源为 ImportGX 时，selector 右侧才严格查导出表；
+// 其余一律维持原 upperFirst 行为。imports 为 nil 等价于 CompileWithModule。
+func CompileWithProject(file, src, module string, imports map[string]ImportInfo) (*Result, error) {
 	toks := New(src).AllTokens()
 	// 统一绑定表 + 表达式 AST：lex 之后、任何 transform 之前构建一次，贯穿整条管线。
 	// 以 Pos.Offset 为稳定身份，不受后续 desugar 增删 token 的下标漂移影响。
@@ -93,10 +102,12 @@ func CompileWithModule(file, src, module string) (*Result, error) {
 	// 统一 import 别名：源码若已用别名导入 list/vdom/strconv，生成代码的占位包名
 	// 需替换为实际别名；否则各 transform 注入的 import 会与生成引用对不上。
 	toks = ReconcileImports(toks, module)
-	scope := collectScope(toks)
+	scope := collectScopeWithImports(toks, imports)
 	toks = restoreRefs(toks, names, bindings)
-	toks = transformExternal(toks, scope, names)
-	toks = transformCompositeFields(toks, scope)
+	// GX 来源符号的大小写错误诊断落入 analysis.diags，随 Result.Analysis 被
+	// check.CheckAll / LSP 消费；单文件模式 imports 为 nil 不产生诊断（零回归）。
+	toks = transformExternal(toks, scope, names, &analysis.diags)
+	toks = transformCompositeFields(toks, scope, &analysis.diags)
 	goSrc, sm := emit(toks, file)
 	return &Result{File: file, GoSource: goSrc, SourceMap: sm, Analysis: analysis}, nil
 }
@@ -157,8 +168,8 @@ func CompileStage(src, stage string) (string, error) {
 		toks = transformCollections(toks, defaultModule)
 	case "external":
 		scope := collectScope(toks)
-		toks = transformExternal(toks, scope, names)
-		toks = transformCompositeFields(toks, scope)
+		toks = transformExternal(toks, scope, names, nil)
+		toks = transformCompositeFields(toks, scope, nil)
 	case "all":
 		bindings := Bind(toks)
 		templateAST := ParseTemplateExprs(toks)
@@ -185,8 +196,8 @@ func CompileStage(src, stage string) (string, error) {
 		toks = ReconcileImports(toks, defaultModule)
 		scope := collectScope(toks)
 		toks = restoreRefs(toks, names, bindings)
-		toks = transformExternal(toks, scope, names)
-		toks = transformCompositeFields(toks, scope)
+		toks = transformExternal(toks, scope, names, nil)
+		toks = transformCompositeFields(toks, scope, nil)
 		// all 分支内 toks 被 := 重新声明（见上方 stripDefaults），必须在此作用域内
 		// 直接 emit 并返回，否则外层 emit 拿到的是未改写的原始 token。
 		out, _ := emit(toks, "<stage>")

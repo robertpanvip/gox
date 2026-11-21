@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/robertpanvip/gox/internal/check"
 	"github.com/robertpanvip/gox/internal/lsp"
 	"github.com/robertpanvip/gox/pkg/compiler"
+	"github.com/robertpanvip/gox/pkg/module"
 	"github.com/robertpanvip/gox/pkg/sourcemap"
 )
 
@@ -58,12 +60,15 @@ func usage() {
 	fmt.Println(`gox — GX（编译到 Go）命令行工具
 
 用法:
-  gox build <file.gx> [-o out.go] [-module path] [-check] [-replace old=new]
+  gox build <file.gx> [-o out.go] [-module path] [-check] [-replace old=new] [-root dir] [-prefer gx|go]
        -module   集合/JSX 运行时的 module 路径（默认 github.com/robertpanvip/gox）
        -check    转译后执行真实 go build，并把错误回投到 .gx 位置
        -replace  go.mod replace 指令，可重复（module=本地目录）
+       -root     项目根目录（默认取入口文件所在目录）；启用跨文件 .gx 模块模式
+       -prefer   本地 .gx 与 Go 包同名时的来源裁决：gx（默认，本地优先）/ go
   gox union|typeguard|jsx|pub|enum|collections|external|all <file.gx>   单步 / 全管线调试
-  gox check <file.gx>                                   GX 语义层类型检查（AST + side table，GX 坐标诊断）
+  gox check <file.gx> [-root dir] [-prefer gx|go]        GX 语义层类型检查（AST + side table，含跨文件大小写诊断）
+       -root   项目根目录；启用跨文件 GX 模块检查（大小写错误由检查器直接报出）
   gox sourcemap <file.gx> [-o map.json]                 输出 GX↔Go 位置映射 JSON
   gox map-lookup [-to-go] <map.json> <line> <col>        位置反查（默认 Go→GX）
   gox lsp-map <dir-or-file>                              项目符号映射 JSON
@@ -86,10 +91,12 @@ type buildFlags struct {
 	module   string
 	check    bool
 	replaces []string
+	root     string // 项目根目录；非空则启用跨文件模块模式
+	prefer   string // gx / go
 }
 
 func parseBuildFlags(args []string) (*buildFlags, error) {
-	f := &buildFlags{module: "github.com/robertpanvip/gox"}
+	f := &buildFlags{module: "github.com/robertpanvip/gox", prefer: "gx"}
 	if len(args) == 0 {
 		return nil, fmt.Errorf("build: 需要 <file.gx>")
 	}
@@ -116,9 +123,24 @@ func parseBuildFlags(args []string) (*buildFlags, error) {
 			}
 			i++
 			f.replaces = append(f.replaces, args[i])
+		case "-root":
+			if i+1 >= len(args) {
+				return nil, fmt.Errorf("-root 缺少参数")
+			}
+			i++
+			f.root = args[i]
+		case "-prefer":
+			if i+1 >= len(args) {
+				return nil, fmt.Errorf("-prefer 缺少参数")
+			}
+			i++
+			f.prefer = args[i]
 		default:
 			return nil, fmt.Errorf("未知参数 %q", args[i])
 		}
+	}
+	if f.prefer != "gx" && f.prefer != "go" {
+		return nil, fmt.Errorf("-prefer 只支持 gx 或 go，得到 %q", f.prefer)
 	}
 	if f.out == "" {
 		f.out = f.file + ".go"
@@ -126,11 +148,38 @@ func parseBuildFlags(args []string) (*buildFlags, error) {
 	return f, nil
 }
 
+// readProjectModule 从 go.mod 的 `module xxx` 行读取项目 module 路径。
+// 找不到 go.mod 或无 module 行时返回空串，调用方回退到 -module。
+func readProjectModule(root string) string {
+	b, err := os.ReadFile(root + string(os.PathSeparator) + "go.mod")
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(string(b), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "module") {
+			rest := strings.TrimSpace(strings.TrimPrefix(line, "module"))
+			rest = strings.Trim(rest, "\"`")
+			if rest != "" {
+				return rest
+			}
+		}
+	}
+	return ""
+}
+
 func cmdBuild(args []string) error {
 	f, err := parseBuildFlags(args)
 	if err != nil {
 		return err
 	}
+
+	// 跨文件项目模式：-root 指定项目根，扫描全部 .gx、按来源还原大小写、逐文件落盘。
+	if f.root != "" {
+		return cmdBuildProject(f)
+	}
+
+	// 单文件模式（默认，零回归）。
 	src, err := readFile(f.file)
 	if err != nil {
 		return err
@@ -151,6 +200,118 @@ func cmdBuild(args []string) error {
 		return runCheck(res.GoSource, res.SourceMap, f.replaces)
 	}
 	return nil
+}
+
+// cmdBuildProject 在跨文件项目模式下转译整个 GX 项目并落盘。
+func cmdBuildProject(f *buildFlags) error {
+	projModule := readProjectModule(f.root)
+	if projModule == "" {
+		projModule = f.module
+	}
+	var prefer module.Prefer
+	if f.prefer == "go" {
+		prefer = module.PreferGo
+	} else {
+		prefer = module.PreferGX
+	}
+	proj, err := module.LoadProject(f.root, projModule, prefer)
+	if err != nil {
+		return err
+	}
+	files, err := proj.Build(f.file)
+	if err != nil {
+		return err
+	}
+	var srcFiles []buildcheck.SourceFile
+	smByGoPath := map[string]*sourcemap.SourceMap{}
+	var gxDiags []gxFileDiagnostic
+	for _, cf := range files {
+		if err := os.WriteFile(cf.GoPath, []byte(cf.GoSource), 0644); err != nil {
+			return err
+		}
+		relGo, _ := filepath.Rel(proj.Root, cf.GoPath)
+		relSrc, _ := filepath.Rel(proj.Root, cf.SourcePath)
+		fmt.Printf("已生成 %s （%d 字节，%d 条映射）\n", filepath.ToSlash(relGo), len(cf.GoSource), cf.SourceMap.Len())
+		srcFiles = append(srcFiles, buildcheck.SourceFile{Name: filepath.ToSlash(relGo), Source: cf.GoSource})
+		smByGoPath[filepath.ToSlash(relGo)] = cf.SourceMap
+		// GX 语义层诊断（含跨文件大小写错误）已是 GX 坐标，按源文件归集。
+		if cf.Analysis != nil {
+			for _, d := range cf.Analysis.Diagnostics() {
+				gxDiags = append(gxDiags, gxFileDiagnostic{
+					File: filepath.ToSlash(relSrc), Line: d.Pos.Line, Col: d.Pos.Col,
+					Code: d.Code, Message: d.Message,
+				})
+			}
+		}
+	}
+
+	if f.check {
+		return runCheckProject(srcFiles, smByGoPath, gxDiags, f.replaces, projModule, proj.Root)
+	}
+	// 未开 -check 时，GX 语义诊断（大小写等）仍应可见——这是检查器的直接产出。
+	if len(gxDiags) > 0 {
+		printGxDiagnostics(gxDiags)
+		return fmt.Errorf("GX 语义检查未通过")
+	}
+	return nil
+}
+
+// gxFileDiagnostic 是一条带源文件相对路径的 GX 语义诊断（已是 GX 坐标）。
+type gxFileDiagnostic struct {
+	File, Code, Message string
+	Line, Col           int
+}
+
+func printGxDiagnostics(diags []gxFileDiagnostic) {
+	fmt.Fprintf(os.Stderr, "GX 语义检查发现 %d 条问题:\n", len(diags))
+	for _, d := range diags {
+		fmt.Fprintf(os.Stderr, "  %s:%d:%d: %s: %s\n", d.File, d.Line, d.Col, d.Code, d.Message)
+	}
+}
+
+// runCheckProject 对多文件产物执行 go build，并把诊断按 File 回投到对应 .gx sourcemap。
+// gxDiags 是 GX 语义层（大小写等）诊断，已是 GX 坐标，与 go build 诊断一并输出。
+func runCheckProject(srcFiles []buildcheck.SourceFile, smByPath map[string]*sourcemap.SourceMap, gxDiags []gxFileDiagnostic, replaces []string, projectModule, root string) error {
+	checker := buildcheck.New(64)
+	checker.SetToolchain("go", "GOTOOLCHAIN=go1.27.3")
+	checker.SetModulePath(projectModule)
+	for _, r := range replaces {
+		parts := strings.SplitN(r, "=", 2)
+		if len(parts) != 2 {
+			return fmt.Errorf("-replace 格式应为 module=dir，得到 %q", r)
+		}
+		checker.AddReplace(parts[0], parts[1])
+	}
+	diags, err := checker.CheckFiles(context.Background(), srcFiles)
+	if err != nil {
+		return fmt.Errorf("编译检查失败: %w", err)
+	}
+	if len(diags) == 0 && len(gxDiags) == 0 {
+		fmt.Println("编译检查通过：无错误")
+		return nil
+	}
+	if len(gxDiags) > 0 {
+		printGxDiagnostics(gxDiags)
+	}
+	if len(diags) > 0 {
+		fmt.Fprintf(os.Stderr, "Go 编译检查发现 %d 条错误（已回投到 .gx）:\n", len(diags))
+		for _, d := range diags {
+			sm := smByPath[d.File]
+			if sm != nil {
+				if pos, ok := sm.GoToGx(d.Line, d.Col); ok {
+					// 用相对项目根的路径，避免多个包有同名 .gx 时产生歧义。
+					rel := sm.File
+					if r, err := filepath.Rel(root, sm.File); err == nil {
+						rel = filepath.ToSlash(r)
+					}
+					fmt.Fprintf(os.Stderr, "  %s:%d:%d: %s\n", rel, pos.Line, pos.Column, d.Message)
+					continue
+				}
+			}
+			fmt.Fprintf(os.Stderr, "  %s:%d:%d: %s\n", d.File, d.Line, d.Col, d.Message)
+		}
+	}
+	return fmt.Errorf("编译检查未通过")
 }
 
 // runCheck 执行真实 go build，并把诊断从 Go 位置经 sourcemap 回投到 .gx。
@@ -187,15 +348,42 @@ func runCheck(goSrc string, sm *sourcemap.SourceMap, replaces []string) error {
 
 // cmdCheck 用 GX 语义层检查器分析 .gx：降级为 Go 后用 go/parser 拿 AST，
 // 坐标映射回 GX 后查 side table，产出 GX 原生诊断（联合赋值等规则）。
+// 带 -root 时走跨文件项目模式，额外纳入大小写等跨文件语义诊断。
 func cmdCheck(args []string) error {
 	if len(args) == 0 {
 		return fmt.Errorf("check: 需要 <file.gx>")
 	}
-	src, err := readFile(args[0])
+	file := args[0]
+	var root, prefer string
+	for i := 1; i < len(args); i++ {
+		switch args[i] {
+		case "-root":
+			if i+1 >= len(args) {
+				return fmt.Errorf("-root 缺少参数")
+			}
+			i++
+			root = args[i]
+		case "-prefer":
+			if i+1 >= len(args) {
+				return fmt.Errorf("-prefer 缺少参数")
+			}
+			i++
+			prefer = args[i]
+		default:
+			return fmt.Errorf("check: 未知参数 %q", args[i])
+		}
+	}
+
+	// 项目模式：加载整个项目，逐文件跑 GX 语义检查（含跨文件大小写诊断）。
+	if root != "" {
+		return cmdCheckProject(file, root, prefer)
+	}
+
+	src, err := readFile(file)
 	if err != nil {
 		return err
 	}
-	res, err := compiler.Compile(args[0], src)
+	res, err := compiler.Compile(file, src)
 	if err != nil {
 		return err
 	}
@@ -212,6 +400,51 @@ func cmdCheck(args []string) error {
 	for _, d := range diags {
 		fmt.Fprintf(os.Stderr, "  %d:%d: %s: %s\n", d.Line, d.Col, d.Code, d.Message)
 	}
+	return fmt.Errorf("GX 语义检查未通过")
+}
+
+// cmdCheckProject 在项目模式下逐文件跑 GX 语义检查，诊断按源文件相对路径输出。
+func cmdCheckProject(file, root, prefer string) error {
+	projModule := readProjectModule(root)
+	if projModule == "" {
+		projModule = "github.com/robertpanvip/gox"
+	}
+	p := module.PreferGX
+	if prefer == "go" {
+		p = module.PreferGo
+	}
+	proj, err := module.LoadProject(root, projModule, p)
+	if err != nil {
+		return err
+	}
+	files, err := proj.Build(file)
+	if err != nil {
+		return err
+	}
+	var all []gxFileDiagnostic
+	for _, cf := range files {
+		if cf.Analysis == nil {
+			continue
+		}
+		// CheckAll 合并 AST 规则与 Analysis 诊断（含大小写），统一为 GX 坐标。
+		c := check.New(cf.SourceMap, cf.Analysis)
+		diags, err := c.CheckAll(cf.GoSource)
+		if err != nil {
+			return err
+		}
+		rel, _ := filepath.Rel(proj.Root, cf.SourcePath)
+		for _, d := range diags {
+			all = append(all, gxFileDiagnostic{
+				File: filepath.ToSlash(rel), Line: d.Line, Col: d.Col,
+				Code: d.Code, Message: d.Message,
+			})
+		}
+	}
+	if len(all) == 0 {
+		fmt.Println("GX 语义检查通过：无错误")
+		return nil
+	}
+	printGxDiagnostics(all)
 	return fmt.Errorf("GX 语义检查未通过")
 }
 
