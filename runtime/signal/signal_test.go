@@ -431,3 +431,72 @@ func TestEffectRecoversAfterPanic(t *testing.T) {
 		t.Fatalf("panic 后 effect 应能重跑：runs=%d, want 3", got)
 	}
 }
+
+// TestFastPathNoLostDependency 回归性能优化引入的 activeObservers 快路径：
+// 当普通读者（不在 observer 栈内）与 effect 重算并发混跑时，effect 的依赖
+// 不得因读快路径跳过 track 而丢失。这里让一个 effect 依赖 src，随后高频
+// 并发写 src，同时大量普通读者走快路径读 src；最后写 src 必须仍触发 effect。
+func TestFastPathNoLostDependency(t *testing.T) {
+	src := New(0)
+	var runs int64
+	Effect(func() { atomic.AddInt64(&runs, 1); _ = src() })
+	base := atomic.LoadInt64(&runs)
+
+	var wg sync.WaitGroup
+	// 8 个普通读者高频走快路径读（它们从不进 observer 栈）
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 500; j++ {
+				_ = src()
+			}
+		}()
+	}
+	// 同时若干写者触发 effect 重算
+	for i := 0; i < 4; i++ {
+		wg.Add(1)
+		go func(base int) {
+			defer wg.Done()
+			for j := 1; j <= 100; j++ {
+				src(base*100 + j)
+			}
+		}(i)
+	}
+	wg.Wait()
+
+	// 混跑结束后依赖必须仍完整：再写一次应恰好触发 effect 一次。
+	before := atomic.LoadInt64(&runs)
+	src(99999)
+	if got := atomic.LoadInt64(&runs); got != before+1 {
+		t.Fatalf("快路径疑似丢失依赖：写后 effect runs %d→%d, want +1 (base=%d)", before, got, base)
+	}
+}
+
+// TestFastPathValueAtomicUnderWrites 回归 value 原子化后的读一致性：
+// 并发读写时读者只能看到写入过的值之一，不得看到撕裂/零值。
+func TestFastPathValueAtomicUnderWrites(t *testing.T) {
+	s := New(uint64(0))
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := uint64(1); i <= 20000; i++ {
+			s(i)
+		}
+	}()
+	for r := 0; r < 4; r++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 20000; j++ {
+				v := s()
+				if v > 20000 {
+					t.Errorf("读到撕裂/越界值: %d", v)
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
+}
