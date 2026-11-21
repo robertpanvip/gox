@@ -275,7 +275,7 @@ count = 5                          // 自动更新 + 只画一帧：count=5、do
 **有状态组件（SolidJS 风格）**：组件函数**只在建树时执行一次**，状态写在组件内部、不在 `main` 里；`signal` / `Signal.computed` / `Signal.effect` 在组件内声明，靠响应式保鲜；`Signal.onMount` 启动副作用、`Signal.onCleanup` 清理，二者归属 App 根 Owner，`app.close()` 时级联执行。完整可运行示例见 [`examples/jsxapp-solid.gx`](examples/jsxapp-solid.gx)：
 
 ```gx
-pub func Counter(props gxscene.props) *gxscene.instance {
+pub func Counter(props gxscene.Props) *gxscene.Instance {
     signal count = 0   // 组件局部状态；读一律裸写 count，编译器自动补 ()
     let doubled = Signal.computed(() => count * 2)
     Signal.effect(() => { fmt.println("tick", count, doubled) })

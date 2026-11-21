@@ -666,7 +666,7 @@ import (
 	"fmt"
 )
 type user struct { id int; name string }
-pub func Stat(props gxscene.props) *gxscene.instance {
+pub func Stat(props gxscene.Props) *gxscene.Instance {
 	label := gxscene.get[string](props, "label")
 	return <div>{label()}</div>
 }
@@ -729,7 +729,7 @@ import (
 	"fmt"
 	"time"
 )
-pub func Counter(props gxscene.props) *gxscene.instance {
+pub func Counter(props gxscene.Props) *gxscene.Instance {
 	signal count = 0
 	let doubled = Signal.computed(() => count * 2)
 	let same = Signal.computed(() => count)

@@ -12,7 +12,7 @@ Gox 是一个把 `.gx` 转译成标准 Go 的编译器。`.gx` = Go 语法 + 一
 
 ## 1. 最高规则：标识符一律小写书写（最重要）
 
-> **在 GX 源码里，标识符一律写小写；编译器会在 selector 右侧机械地 `upperFirst` 还原成 Go 的导出名。全大写缩写直接写大写、原样保留。两个硬编码例外：`Signal` 前缀和 `pub` 组件/类型名必须大写开头。**
+> **在 GX 源码里，标识符一律写小写；编译器会在 selector 右侧机械地 `upperFirst` 还原成 Go 的导出名。全大写缩写直接写大写、原样保留。三个硬编码例外：`Signal` 前缀、`pub` 组件/类型名、以及被引用的类型名（如 `gxscene.Props` / `gxscene.Instance`）必须大写开头——类型名按 Go 真实拼写写，编译器原样保留。**
 
 这是本项目的设计选择：转译器不读第三方包符号表、不做类型推导，只对小写形式做机械首字母大写还原，因此行为完全可预测、零歧义。
 
@@ -23,6 +23,7 @@ Gox 是一个把 `.gx` 转译成标准 Go 的编译器。`.gx` = Go 语法 + 一
 | `req.method` / `u.path` | `req.Method` / `u.Path` | 结构体字段：小写书写，还原 |
 | `r.URL` / `http.StatusOK` | 原样 | **全大写缩写写大写，原样保留** |
 | `gxscene.get[T](props, "x")` | `gxscene.Get[T](...)` | runtime 符号：小写书写，还原 |
+| `props gxscene.Props` / `*gxscene.Instance` | 原样 | **类型名按真实拼写大写开头**，编译器原样保留；不要写成小写 `gxscene.props`（那是值/字段，不是类型） |
 | `view.bindReactive(Signal.effect)` | `view.BindReactive(signal.Effect)` | 底层 scene 实例方法：小写书写；signal API 用大写 `Signal.` 前缀 |
 | `gxapp.open({ ... })` + `app.render(() => <App/>)` | `gxapp.Open(gxapp.WindowConfig{...})` + `app.Render(func() any {...})` | **open 只收配置**（裸对象字面量，从签名推断类型）返回 App；**render 收建树函数**（SolidJS 风格），内部建根 Owner + 接线，无需手写 bindReactive |
 | `Signal.createRoot(...)` / `Signal.onCleanup(...)` | `signal.CreateRoot` / `signal.OnCleanup` | **signal API 一律大写 `Signal.` 前缀** |
@@ -44,7 +45,7 @@ Gox 是一个把 `.gx` 转译成标准 Go 的编译器。`.gx` = Go 语法 + 一
 // ❌ 错：signal API 用小写前缀（与 signal 关键字混淆）/ 组件小写 / 配置写全类型名 / open 传 JSX / render 收已建好的树
 signal.createRoot(func(o *signal.owner) { signal.onCleanup(...) })
 view.bindReactive(signal.effect)
-pub func stat(props gxscene.props) *gxscene.instance { ... }
+pub func stat(props gxscene.Props) *gxscene.Instance { ... }
 app, _ := gxapp.open(view, gxapp.windowConfig{...})
 app.bindReactive(signal.effect)
 app.render(view)
@@ -53,7 +54,7 @@ app.render(view)
 //      open 只收配置、render 收建树函数（圆括号箭头）且自带响应式与生命周期
 Signal.createRoot((o *Signal.owner) => { Signal.onCleanup(() => { ... }) })
 view.bindReactive(Signal.effect)
-pub func Stat(props gxscene.props) *gxscene.instance { ... }
+pub func Stat(props gxscene.Props) *gxscene.Instance { ... }
 app, _ := gxapp.open({ title: "Gox", width: 800 })
 app.render(() => <div><Stat/></div>)
 ```
@@ -123,7 +124,7 @@ Signal.batch(() => { count(5); visible(false) })
 组件函数**只在建树时执行一次**，状态写在组件内部（不在 main 里），靠 signal + effect 保鲜；副作用用 `onMount` 启动、`onCleanup` 清理，二者归属 App 根 Owner，`app.close()` 时级联执行。完整可运行示例见 `examples/jsxapp-solid.gx`：
 
 ```gx
-pub func Counter(props gxscene.props) *gxscene.instance {
+pub func Counter(props gxscene.Props) *gxscene.Instance {
     signal count = 0
     let doubled = Signal.computed(() => count * 2)
     Signal.effect(() => { fmt.println("tick", count, doubled) })

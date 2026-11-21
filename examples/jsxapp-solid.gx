@@ -16,7 +16,7 @@ import (
 )
 
 // Counter 是一个「活」的组件：状态封装在组件内，外部只看到它渲染出的场景树。
-pub func Counter(props gxscene.props) *gxscene.instance {
+pub func Counter(props gxscene.Props) *gxscene.Instance {
     name := gxscene.get[string](props, "name")
 
     // 组件局部状态：源 signal + 派生 computed（不在 main 里）。

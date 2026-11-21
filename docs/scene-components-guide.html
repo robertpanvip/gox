@@ -176,7 +176,7 @@
 <span class="kw">type</span> <span class="ty">user</span> <span class="kw">struct</span> { id <span class="kw">int</span>; name <span class="kw">string</span> }
 
 <span class="cm">// 叶子组件：pub 小写声明；从 Props 取 getter，在插槽里 value() 读当前值</span>
-<span class="kw">pub func</span> <span class="fn">Stat</span>(props gxscene.<span class="ty">props</span>) *gxscene.<span class="ty">instance</span> {
+<span class="kw">pub func</span> <span class="fn">Stat</span>(props gxscene.<span class="ty">Props</span>) *gxscene.<span class="ty">Instance</span> {
     label := gxscene.<span class="fn">get</span>[<span class="ty">string</span>](props, <span class="st">"label"</span>)
     value := gxscene.<span class="fn">get</span>[<span class="ty">int</span>](props, <span class="st">"value"</span>)
     <span class="kw">return</span> &lt;<span class="jx">div</span> <span class="fn">class</span>=<span class="st">"stat"</span>&gt;&lt;<span class="jx">span</span>&gt;{label()}&lt;/<span class="jx">span</span>&gt;&lt;<span class="jx">b</span>&gt;{value()}&lt;/<span class="jx">b</span>&gt;&lt;/<span class="jx">div</span>&gt;
@@ -260,7 +260,7 @@ app.<span class="fn">render</span>(() =&gt; &lt;<span class="jx">div</span>&gt;{
 
 <h3>有状态组件（SolidJS 风格，推荐）</h3>
 <p>组件函数<b>只在建树时执行一次</b>——状态是组件「自己的」，写在组件内部而非 <code>main</code> 里，靠 signal + effect 保鲜。副作用用 <code>Signal.onMount</code> 启动、<code>Signal.onCleanup</code> 清理，二者归属 <code>app.render</code> 建立的根 Owner，<code>app.close</code> 时级联执行。完整可运行示例见 <code>examples/jsxapp-solid.gx</code>（组件内定时器自增，close 时打印 unmounted）。</p>
-<pre class="code"><span class="kw">pub func</span> <span class="fn">Counter</span>(props gxscene.<span class="ty">props</span>) *gxscene.<span class="ty">instance</span> {
+<pre class="code"><span class="kw">pub func</span> <span class="fn">Counter</span>(props gxscene.<span class="ty">Props</span>) *gxscene.<span class="ty">Instance</span> {
     <span class="kw">signal</span> count = <span class="ty">0</span>   <span class="cm">// 组件局部状态</span>
     <span class="kw">let</span> doubled = <span class="fn">Signal</span>.<span class="fn">computed</span>(() =&gt; count * <span class="ty">2</span>)
     <span class="fn">Signal</span>.<span class="fn">effect</span>(() =&gt; { fmt.<span class="fn">println</span>(<span class="st">"tick"</span>, count, doubled) })  <span class="cm">// 状态变化逻辑</span>
@@ -277,7 +277,7 @@ app.<span class="fn">close</span>()  <span class="cm">// 级联执行 Counter �
 
 <h2>五、约束清单</h2>
 <ol class="constraints">
-  <li><b>标识符小写书写</b>：GX 源码一律小写，编译器还原；全大写缩写写大写原样保留。</li>
+  <li><b>标识符小写书写</b>：GX 源码的函数/方法/字段一律小写，编译器还原；全大写缩写写大写原样保留。<b>类型名例外</b>：<code>gxscene.Props</code> / <code>gxscene.Instance</code> 按真实拼写大写开头、原样保留。</li>
   <li><b>signal API 大写前缀</b>：<code>Signal.computed</code> / <code>Signal.effect</code> / <code>Signal.createRoot</code> / <code>Signal.batch</code> 等一律大写 <code>Signal.</code>，避免与 <code>signal</code> 声明关键字混淆；不要写裸 <code>computed(...)</code>。</li>
   <li><b>回调用箭头函数</b>：<code>Signal.computed(() =&gt; expr)</code> / <code>Signal.effect(() =&gt; ...)</code>，多语句用 <code>() =&gt; { ... }</code>，从 body 反推类型（含单点 signal getter），不写 <code>func() T { return ... }</code>。</li>
   <li><b>组件名大写开头</b>：<code>pub func Stat(...)</code> + <code>&lt;Stat/&gt;</code>；组件标签不能小写。</li>
@@ -292,11 +292,12 @@ app.<span class="fn">close</span>()  <span class="cm">// 级联执行 Counter �
 </ol>
 
 <h2>六、API 速查（GX 写法 → 生成 Go）</h2>
-<p>左列是你在 <code>.gx</code> 里写的（小写），右列是生成的 Go（大写）。<b>请照抄左列。</b></p>
+<p>左列是你在 <code>.gx</code> 里写的，右列是生成的 Go。<b>请照抄左列。</b>函数/方法/字段写小写、编译器还原为大写；<b>类型名例外</b>——<code>gxscene.Props</code> / <code>gxscene.Instance</code> 按真实拼写大写开头，原样保留。</p>
 <table>
   <tr><th>GX 写法（你写的）</th><th>生成 Go</th><th>作用</th></tr>
   <tr><td><code>gox build -jsx=scene</code></td><td>CLI</td><td>转译入口，只看/产出 JSX → opcode</td></tr>
-  <tr><td><code>gxscene.props</code> / <code>gxscene.get[T]</code></td><td><code>gxscene.Props</code> / <code>Get[T]</code></td><td>组件 props 读取（getter 语义）</td></tr>
+  <tr><td><code>gxscene.Props</code> / <code>gxscene.Instance</code></td><td>原样</td><td><b>类型名按真实拼写大写开头</b>，编译器原样保留；不要写小写 <code>gxscene.props</code></td></tr>
+  <tr><td><code>gxscene.get[T]</code></td><td><code>Get[T]</code></td><td>组件 props 读取方法（小写书写，还原；getter 语义）</td></tr>
   <tr><td><code>gxscene.render</code> / <code>gxscene.renderText</code></td><td><code>Render</code> / <code>RenderText</code></td><td>渲染模板：返回实例 / 直接返回 string</td></tr>
   <tr><td><code>view.update</code></td><td><code>Instance.Update</code></td><td>全量重算（signal 接线后通常无需手动调）</td></tr>
   <tr><td><code>view.bindReactive(effect)</code></td><td><code>Instance.BindReactive</code></td><td>把 effect 接到所有插槽 + 结构插槽：写入自动精确更新与重绘</td></tr>
