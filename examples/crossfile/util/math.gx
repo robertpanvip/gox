@@ -1,0 +1,9 @@
+package util
+
+// 本地 GX 模块：导出名由 pub 严格决定。
+// add → Add，box → Box，box 的 pub 字段 value → Value。
+pub func add(a int, b int) int { return a + b }
+
+pub type box struct {
+    pub value int
+}

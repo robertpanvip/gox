@@ -6,15 +6,21 @@
 
 Gox 是一个把 `.gx` 转译成标准 Go 的编译器。`.gx` = Go 语法 + 一组语法糖。你写的是 **GX 源码**，产出的是 **Go 代码**——两者写法不同，文档和示例必须展示前者。
 
-- 语言规范权威来源：`docs/language-spec.md`
-- 书写约定的活例子：`examples/lowerext.gx`（「GX 心智负担：一律写小写」）
+- 语言规范权威来源：`docs/language-spec.md`（大小写来源分流见 §4.1、跨文件项目见 §13）
+- 书写约定的活例子：`examples/lowerext.gx`（Go 来源「一律写小写」）
+- 跨文件导入示例：`examples/crossfile/`（本地 GX 模块严格大小写，见下）
 - 需要 Go **1.27+**（泛型方法）；本仓库用 `GOTOOLCHAIN=go1.27.4`
 
-## 1. 最高规则：标识符一律小写书写（最重要）
+## 1. 最高规则：大小写按 import 来源分流（最重要）
 
-> **在 GX 源码里，标识符一律写小写；编译器会在 selector 右侧机械地 `upperFirst` 还原成 Go 的导出名。全大写缩写直接写大写、原样保留。三个硬编码例外：`Signal` 前缀、`pub` 组件/类型名、以及被引用的类型名（如 `gxscene.Props` / `gxscene.Instance`）必须大写开头——类型名按 Go 真实拼写写，编译器原样保留。**
+> **大小写规则取决于符号来自哪里，先判来源再决定写法：**
+>
+> - **外部 Go 包**（`fmt`、`gxscene`、`gxapp`、`http` 等）：标识符一律写小写，编译器在 selector 右侧机械 `upperFirst` 还原成 Go 导出名；全大写缩写（`URL`、`StatusOK`）直接写大写、原样保留。
+> - **本地 GX 模块**（import 路径命中项目内另一组 `.gx`）：严格按被导入方 `pub` 声明的导出名书写——查被导入方的导出表，不猜。写小写源名（如 `util.add`）会查表还原成导出名（`util.Add`）；写错大小写（如 `util.ADD`）不改产物，由 GX 检查器报 `import-case` 诊断。
+>
+> **三个硬编码例外（两类来源都适用）**：`Signal` 前缀、`pub` 组件/类型名、以及被引用的类型名（如 `gxscene.Props` / `gxscene.Instance`）必须大写开头——类型名按 Go 真实拼写写，编译器原样保留。
 
-这是本项目的设计选择：转译器不读第三方包符号表、不做类型推导，只对小写形式做机械首字母大写还原，因此行为完全可预测、零歧义。
+设计选择分两层：对**外部 Go 包**不读符号表、不做类型推导，只对小写形式做机械首字母大写还原，行为完全可预测、零歧义；对**本地 GX 模块**则项目内可见 `.gx` 源码，能从被导入方的 `pub` 精确提取导出表，因此严格查表、写错即诊断。两者以 import 路径命中本地 `.gx` 与否自动分流（`-prefer go` 可强制按 Go 来源）。权威定义见 `docs/language-spec.md` §4.1 / §13。
 
 | 你在 GX 里写 | 生成的 Go | 规则 |
 |---|---|---|
@@ -29,6 +35,8 @@ Gox 是一个把 `.gx` 转译成标准 Go 的编译器。`.gx` = Go 语法 + 一
 | `Signal.createRoot(...)` / `Signal.onCleanup(...)` | `signal.CreateRoot` / `signal.OnCleanup` | **signal API 一律大写 `Signal.` 前缀** |
 | `Signal.computed(() => expr)` | `signal.Computed(func() T { return expr })` | **computed/回调首选箭头函数**（SolidJS 风格）；body 是单点 signal getter 时也能推断返回类型 |
 | `pub func Stat(...)` | `func Stat(...)` | **组件名 `pub func` 大写开头** |
+| `util.add(1, 2)`（util 是本地 GX 模块） | `util.Add(1, 2)` | **GX 来源**：严格查被导入方 `pub` 导出表（`add→Add`），不猜测；写 `util.ADD` 报 `import-case` 诊断且产物原样保留 |
+| `model.box{value: 9}`（model 是本地 GX 模块） | `model.Box{Value: 9}` | **GX 字段**：查被导入方 `pub` 字段限定名导出表；写错大小写报 `import-field-case` 诊断 |
 
 **边界与例外**（务必遵守，否则会写出无法编译的示例）：
 
@@ -38,6 +46,7 @@ Gox 是一个把 `.gx` 转译成标准 Go 的编译器。`.gx` = Go 语法 + 一
 4. **本文件私有类型写小写**：`type cardProps struct{...}` 保持私有小写；`pub type` 才导出。
 5. **裸标识符不碰**：内置函数等裸标识符一律不改，不要给它们加大小写。
 6. **回调用箭头函数**：`Signal.computed` / `Signal.effect` / `batch` / `onMount` / `onCleanup` / 集合回调（`map`/`filter`）等一律写箭头——单语句 `() => expr` / `x => expr`，多语句 `() => { stmt; stmt }`（花括号 body，生成 `func(){...}`），贴近 SolidJS/JS 习惯，别写 `func() T { return ... }`。编译器从 body 反推参数与返回类型，包括 `computed(() => count)` 单点 signal getter（裸写，从 signal 声明类型反查，不降级 `any`）；带参数的 `createRoot((o *Signal.owner) => { ... })` 保留显式类型标注。只有极少数需要显式多返回值的场合才用 `func` 字面量。
+7. **本地 GX 模块严格大小写，别套 Go 的裸写约定**：对本地 `.gx` 模块（import 命中项目内 `.gx`），符号/字段大小写必须与被导入方 `pub` 导出名一致，不能像外部 Go 包那样"随便写小写等还原"。写小写源名（如 `util.add`）可查表还原；写错大小写（如 `util.ADD`、`model.box{VALUE:9}`）由检查器报 `import-case` / `import-field-case`，产物原样保留不改赌。用 `gox build <entry.gx> -root <项目根>` 或 `gox check <entry.gx> -root <项目根>` 触发项目模式；详见 `examples/crossfile/`。
 
 ### 反面教材（本项目真实犯过的错，禁止重演）
 

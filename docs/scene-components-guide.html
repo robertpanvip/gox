@@ -104,12 +104,12 @@
 </header>
 
 <div class="warn">
-  <b>先记住这一条：</b>下面所有示例都是 <b>GX 源码</b>——标识符一律<b>小写</b>书写，编译器会在 selector 右侧机械还原成 Go 的导出名。
-  不要把生成后的 Go 大写 API 当成源码写进 `.gx`。详见 <a href="#rules" style="color:var(--pink)">§ 一 · 书写约定</a>。
+  <b>先记住这一条：</b>下面所有示例都是 <b>GX 源码</b>——引用<b>外部 Go 包</b>时标识符一律<b>小写</b>书写，编译器在 selector 右侧机械还原成 Go 导出名；引用<b>本地 GX 模块</b>时则严格按被导入方 <code>pub</code> 导出名书写。
+  不要把生成后的 Go 大写 API 当成源码写进 <code>.gx</code>。详见 <a href="#rules" style="color:var(--pink)">§ 一 · 书写约定</a>。
 </div>
 
 <h2 id="rules">一、书写约定（最先要遵守）</h2>
-<p>Gox 的设计是：<b>转译器不读第三方包符号表、不做类型推导</b>，只对小写形式做机械首字母大写还原（<code>upperFirst</code>）。因此行为完全可预测。你在 <code>.gx</code> 里写小写，生成的 Go 自动变大写。</p>
+<p>Gox 的大小写规则<b>按 import 来源分流</b>：<b>外部 Go 包</b>（<code>fmt</code> / <code>gxscene</code> / <code>gxapp</code> 等）不读符号表、不做类型推导，只对小写形式做机械首字母大写还原（<code>upperFirst</code>），行为完全可预测；<b>本地 GX 模块</b>（import 命中项目内另一组 <code>.gx</code>）则严格查被导入方的 <code>pub</code> 导出表，写错大小写由检查器报 <code>import-case</code> 诊断、产物原样保留。权威定义见 <code>docs/language-spec.md</code> §4.1 / §13。</p>
 
 <table>
   <tr><th>GX 源码（你写的）</th><th>生成的 Go</th><th>规则</th></tr>
@@ -121,6 +121,8 @@
   <tr><td><code>gxapp.open({ ... })</code> + <code>app.render(() => &lt;App/&gt;)</code></td><td><code>gxapp.Open(gxapp.WindowConfig{...})</code> + <code>app.Render(func() any {...})</code></td><td><b>open 只收配置</b>（裸对象字面量，从签名推断）；<b>render 收建树函数</b>（SolidJS 风格），内部建根 Owner + 接线</td></tr>
   <tr><td><code>pub func Stat(...)</code> + <code>&lt;Stat/&gt;</code></td><td><code>func Stat(...)</code></td><td><b>组件名大写开头</b>（pub 声明与 JSX 标签一致）</td></tr>
   <tr><td><code>pub func card</code> + <code>&lt;Card/&gt;</code></td><td><code>func Card</code></td><td>pub 声明小写；<b>JSX 标签必须大写</b></td></tr>
+  <tr><td><code>util.add(1, 2)</code>（本地 GX 模块）</td><td><code>util.Add(1, 2)</code></td><td><b>GX 来源</b>：严格查被导入方 <code>pub</code> 导出表（<code>add→Add</code>）；写 <code>util.ADD</code> 报 <code>import-case</code> 诊断</td></tr>
+  <tr><td><code>model.box{value: 9}</code>（本地 GX 模块）</td><td><code>model.Box{Value: 9}</code></td><td><b>GX 字段</b>：查 <code>pub</code> 字段限定名导出表；写错报 <code>import-field-case</code></td></tr>
 </table>
 
 <div class="note">
@@ -277,7 +279,8 @@ app.<span class="fn">close</span>()  <span class="cm">// 级联执行 Counter �
 
 <h2>五、约束清单</h2>
 <ol class="constraints">
-  <li><b>标识符小写书写</b>：GX 源码的函数/方法/字段一律小写，编译器还原；全大写缩写写大写原样保留。<b>类型名例外</b>：<code>gxscene.Props</code> / <code>gxscene.Instance</code> 按真实拼写大写开头、原样保留。</li>
+  <li><b>大小写按来源分流</b>：引用<b>外部 Go 包</b>（<code>fmt</code> / <code>gxscene</code> / <code>gxapp</code>）时函数/方法/字段一律小写，编译器 <code>upperFirst</code> 还原；全大写缩写写大写原样保留。<b>类型名例外</b>：<code>gxscene.Props</code> / <code>gxscene.Instance</code> 按真实拼写大写开头、原样保留。</li>
+  <li><b>本地 GX 模块严格大小写</b>：import 命中项目内另一组 <code>.gx</code> 时，符号/字段必须按被导入方 <code>pub</code> 导出名写——<code>util.add</code> 查表还原成 <code>util.Add</code>；写错大小写（<code>util.ADD</code>）报 <code>import-case</code> 诊断、产物原样保留。用 <code>gox build &lt;entry.gx&gt; -root &lt;根&gt;</code> 启用项目模式，详见 <code>examples/crossfile/</code>。</li>
   <li><b>signal API 大写前缀</b>：<code>Signal.computed</code> / <code>Signal.effect</code> / <code>Signal.createRoot</code> / <code>Signal.batch</code> 等一律大写 <code>Signal.</code>，避免与 <code>signal</code> 声明关键字混淆；不要写裸 <code>computed(...)</code>。</li>
   <li><b>回调用箭头函数</b>：<code>Signal.computed(() =&gt; expr)</code> / <code>Signal.effect(() =&gt; ...)</code>，多语句用 <code>() =&gt; { ... }</code>，从 body 反推类型（含单点 signal getter），不写 <code>func() T { return ... }</code>。</li>
   <li><b>组件名大写开头</b>：<code>pub func Stat(...)</code> + <code>&lt;Stat/&gt;</code>；组件标签不能小写。</li>

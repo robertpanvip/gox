@@ -230,7 +230,7 @@ API：`CompileScene` / `CompileSceneWithModule`（对应默认的 `Compile` / `C
 
 `gxapp.open(cfg)` 先创建「窗口外壳」并返回 `App`；`app.render(() => <App/>)` 收一个**建树函数**，把 JSX 场景树挂进窗口——类比 SolidJS / React 的 `render(() => <App/>, root)`。建树函数在内部建立的**根 Owner** 下运行，组件里的 `Signal.effect` / `onMount` / `onCleanup` 都归属它，`app.close()` 时级联销毁。
 
-> **源码小写、生成大写**：遵循 GX 的「标识符一律小写书写、编译器还原真实大小写」约定（同 `gxvdom.render`），源码写 `gxapp.open` / `app.render` / `app.close`，生成的 Go 是 `gxapp.Open` / `App.Render` / `App.Close`。配置写**裸对象字面量**且字段也小写，如 `gxapp.open({ title: "Demo", width: 800 })`，编译器从 `open` 的真实 Go 源码 AST 推断为 `gxapp.WindowConfig` 并把字段还原成真实拼写（通用机制，非特判；大小写混写、省略可选字段也支持）。
+> **源码小写、生成大写**：`gxapp` 是外部 Go 包，遵循 GX 对 Go 来源的「标识符一律小写书写、编译器 `upperFirst` 还原」约定（同 `gxvdom.render`；本地 GX 模块则严格大小写，见 §4.1），源码写 `gxapp.open` / `app.render` / `app.close`，生成的 Go 是 `gxapp.Open` / `App.Render` / `App.Close`。配置写**裸对象字面量**且字段也小写，如 `gxapp.open({ title: "Demo", width: 800 })`，编译器从 `open` 的真实 Go 源码 AST 推断为 `gxapp.WindowConfig` 并把字段还原成真实拼写（通用机制，非特判；大小写混写、省略可选字段也支持）。
 
 | 步骤 | 参数 / 返回 | 含义 |
 |---|---|---|
@@ -309,6 +309,17 @@ app.close()   // 级联执行 Counter 的 onCleanup
 - 裸标识符（内置 `println`/`len`/`make` 等）不碰。
 - 别名导入 `import h "net/http"` 支持。
 - 小写形式需按 Go 真实名字照抄驼峰（`Itoa` 写 `itoa`，不能写 `itoA`）；全大写写法无此约束。
+
+### 4.1 大小写按 import 来源分流（本地 GX 模块严格大小写）
+
+上面的 `upperFirst` 规则只针对**外部 Go 包**。`import` 命中项目内另一组 `.gx` 时走另一套语义：
+
+| 来源 | 判定 | selector / 字段还原 |
+|---|---|---|
+| 外部 Go 包 | 路径不是本地 `.gx`（或 `-prefer go`） | 小写形式机械 `upperFirst`，兼容旧写法 |
+| 本地 GX 模块 | 路径命中项目内某组 `.gx` | **严格查被导入方 `pub` 导出表**，不猜测 |
+
+本地 GX 模块：`util.add(...)` → 查导出表 `add→Add` → `util.Add(...)`；写错大小写 `util.ADD(...)` 不改产物，GX 检查器报 `import-case: 符号 "ADD" 大小写错误：包 … 导出的是 "Add"`（带源码坐标），struct 字段写错报 `import-field-case`。诊断由 `gox check -root` / `gox build`（项目模式）与 LSP 直接报出，无需等 `go build`。用 `gox build <entry.gx> -root <项目根>` 启用项目模式（模块路径从 `<root>/go.mod` 读取，缺失回退 `-module`）；同名时默认本地 GX 优先，`-prefer go` 切到 Go 来源。可运行示例见 [`examples/crossfile/`](examples/crossfile/)，权威定义见 [`docs/language-spec.md`](docs/language-spec.md) §4.1 / §13。
 
 ## 5. 集合链式调用
 

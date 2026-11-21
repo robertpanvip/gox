@@ -1,0 +1,14 @@
+package main
+
+import "example.com/crossfile/util"
+
+// GX 来源严格大小写：写被导入方 pub 声明的小写源名，编译器查导出表还原。
+// util.add → util.Add；util.box{value:9} → util.Box{Value:9}。
+// 若写成 util.ADD / util.box{VALUE:9}，检查器报 import-case / import-field-case，
+// 产物保持原样不改赌。
+func main() {
+    sum := util.add(1, 2)
+    b := util.box{value: 9}
+    println("sum =", sum)
+    println("box.value =", b.value)
+}
