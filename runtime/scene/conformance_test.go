@@ -196,3 +196,40 @@ func TestConformanceForKeyedValueUpdate(t *testing.T) {
 		t.Fatalf("同 key 值变化应刷新为 new:\n%s", out)
 	}
 }
+
+// For 同 key 值变化重建项后，entry.node 指针不变、父级 diff 不发指令。
+// 必须补发一条 ReplaceChildren，否则按补丁更新的后端会漏掉这一项（P1 回归守护）。
+func TestConformanceForKeyedRebuildEmitsReplaceChildren(t *testing.T) {
+	items := signal.New([]string{"old"})
+	f := NewFor(
+		func() []any { return []any{items()[0]} },
+		func(v any) any { return 1 }, // 固定 key，值变化走重建路径
+		func(v any) *Instance {
+			s := v.(string)
+			return Render(Template{Ops: []Op{
+				{Code: OpElem, Arg: "li"}, {Code: OpDynChild, Slot: 0}, {Code: OpClose},
+			}, N: 1}, func() any { return s })
+		},
+	)
+	view := Render(Template{Ops: []Op{
+		{Code: OpElem, Arg: "ul"}, {Code: OpFor, Slot: 0}, {Code: OpClose},
+	}, N: 1}, func() any { return f })
+	view.BindReactive(signal.Effect)
+	view.EnableChanges()
+	view.TakeChanges() // 清掉接线期变更
+
+	items([]string{"new"})
+	changes := view.TakeChanges()
+	found := false
+	for _, c := range changes {
+		if c.Kind == ChangeReplaceChildren {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("同 key 重建应发 ReplaceChildren, got %v", changes)
+	}
+	if out := view.String(); !strings.Contains(out, "new") {
+		t.Fatalf("重建后应显示新值:\n%s", out)
+	}
+}

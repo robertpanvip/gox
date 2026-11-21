@@ -176,35 +176,30 @@ func (a *App) teardownTree() {
 //  2. 结构插槽（条件分支 / keyed 列表）：BindStructural 递归整棵实例树（含组件内
 //     与嵌套分支），selector/each 变化时 Resolve 重建/复用子树并触发 onDirty 重绘。
 //
-// 两路的首次 effect 都会立即执行一次（接线期），用各自的 priming 标志跳过重绘
-// ——Render 已画过首帧。这两路都挂在 a.owner 下，teardown 时随 Owner 级联销毁。
+// 接线期（各 effect 首次立即执行）产生的重绘全部静音——Render 已画过首帧。
+// 用单个 binding 标志包裹整个接线过程即可：effect 首次回调同步发生在 bindReactive
+// 内，binding 为 true 时 onDirty 直接返回；接线完成后置 false。这样无论有多少个
+// 结构插槽都只画首帧那 1 帧（旧的 structPriming 布尔只能挡第一个插槽的首次回调，
+// 其余每个都会各画一帧）。两路 effect 都挂在 a.owner 下，teardown 时随 Owner 级联销毁。
 func (a *App) bindReactive() {
 	if a.inst == nil || a.closed {
 		return
 	}
+	binding := true
+	onDirty := func() {
+		if binding || a.closed {
+			return // 接线期静音 + 关闭后不再重绘
+		}
+		_ = a.Draw()
+	}
 	// 叶子聚合 effect：一帧一致性。挂在 a.owner 下，随 Owner 销毁。
-	leafPriming := true
 	signal.Effect(func() {
 		_ = a.inst.Update()
-		if leafPriming {
-			leafPriming = false
-			return
-		}
-		if !a.closed {
-			_ = a.Draw()
-		}
+		onDirty()
 	})
 	// 结构插槽：递归接线，变化后重绘。
-	structPriming := true
-	a.inst.BindStructural(signal.Effect, func() {
-		if structPriming {
-			structPriming = false
-			return
-		}
-		if !a.closed {
-			_ = a.Draw()
-		}
-	})
+	a.inst.BindStructural(signal.Effect, onDirty)
+	binding = false // 接线期结束，此后变化正常触发重绘
 }
 
 // Draw 立即把当前场景树绘制一帧到窗口。Render 之前调用为 no-op。

@@ -494,3 +494,107 @@ func TestEventDispatchToSignalRedraw(t *testing.T) {
 		t.Fatalf("最后一帧应显示 1:\n%s", last)
 	}
 }
+
+// P2-1 回归守护：3 个结构插槽，接线期应整体静音，Render 后只画首帧 1 帧。
+// 旧的 structPriming 布尔只挡第一个插槽的首次回调，其余每个各画一帧（共 3 帧）。
+func TestWiringDrawsOnlyFirstFrame(t *testing.T) {
+	v := signal.New(true)
+	win := &countingWindow{}
+	app := openApp(t, gxapp.DefaultConfig(), win)
+	defer app.Close()
+
+	branchComp := func() func() any {
+		return func() any {
+			br := gxscene.NewBranch(
+				func() int {
+					if v() {
+						return 0
+					}
+					return 1
+				},
+				func() *gxscene.Instance {
+					return gxscene.Render(gxscene.Template{Ops: []gxscene.Op{
+						{Code: gxscene.OpElem, Arg: "span"}, {Code: gxscene.OpChildText, Arg: "T"}, {Code: gxscene.OpClose},
+					}})
+				},
+				func() *gxscene.Instance {
+					return gxscene.Render(gxscene.Template{Ops: []gxscene.Op{
+						{Code: gxscene.OpElem, Arg: "b"}, {Code: gxscene.OpChildText, Arg: "E"}, {Code: gxscene.OpClose},
+					}})
+				},
+			)
+			return gxscene.Render(gxscene.Template{Ops: []gxscene.Op{
+				{Code: gxscene.OpElem, Arg: "div"}, {Code: gxscene.OpBranch, Slot: 0}, {Code: gxscene.OpClose},
+			}, N: 1}, func() any { return br })
+		}
+	}
+
+	if err := app.Render(func() any {
+		return gxscene.Render(gxscene.Template{Ops: []gxscene.Op{
+			{Code: gxscene.OpElem, Arg: "div"},
+			{Code: gxscene.OpComp, Arg: "A", Slot: 0},
+			{Code: gxscene.OpComp, Arg: "B", Slot: 1},
+			{Code: gxscene.OpComp, Arg: "C", Slot: 2},
+			{Code: gxscene.OpClose},
+		}, N: 3}, branchComp(), branchComp(), branchComp())
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := win.draws; got != 1 {
+		t.Fatalf("Render 后应只画首帧 1 帧（接线期静音）, got %d", got)
+	}
+}
+
+// P2-2 回归守护：app 场景下新建列表项内条件分支的 selector，一次切换只调用一次。
+// 旧的 buildEntry 同时用 BindReactive + bindRec 接同一 slotBranch，selector 被调用两次。
+func TestForKeyedItemSelectorSubscribedOnce(t *testing.T) {
+	items := signal.New([]int{1})
+	inner := signal.New(true)
+	calls := 0
+
+	f := gxscene.NewFor(
+		func() []any { return []any{items()[0]} },
+		func(v any) any { return v },
+		func(v any) *gxscene.Instance {
+			br := gxscene.NewBranch(
+				func() int {
+					calls++
+					if inner() {
+						return 0
+					}
+					return 1
+				},
+				func() *gxscene.Instance {
+					return gxscene.Render(gxscene.Template{Ops: []gxscene.Op{
+						{Code: gxscene.OpElem, Arg: "span"}, {Code: gxscene.OpChildText, Arg: "T"}, {Code: gxscene.OpClose},
+					}})
+				},
+				func() *gxscene.Instance {
+					return gxscene.Render(gxscene.Template{Ops: []gxscene.Op{
+						{Code: gxscene.OpElem, Arg: "b"}, {Code: gxscene.OpChildText, Arg: "E"}, {Code: gxscene.OpClose},
+					}})
+				},
+			)
+			return gxscene.Render(gxscene.Template{Ops: []gxscene.Op{
+				{Code: gxscene.OpElem, Arg: "li"}, {Code: gxscene.OpBranch, Slot: 0}, {Code: gxscene.OpClose},
+			}, N: 1}, func() any { return br })
+		},
+	)
+
+	win := &countingWindow{}
+	app := openApp(t, gxapp.DefaultConfig(), win)
+	defer app.Close()
+	if err := app.Render(func() any {
+		return gxscene.Render(gxscene.Template{Ops: []gxscene.Op{
+			{Code: gxscene.OpElem, Arg: "ul"}, {Code: gxscene.OpFor, Slot: 0}, {Code: gxscene.OpClose},
+		}, N: 1}, func() any { return f })
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	calls = 0    // 接线期不计
+	inner(false) // 一次项内分支切换
+	if calls != 1 {
+		t.Fatalf("一次分支切换 selector 应调用 1 次（无双订阅）, got %d", calls)
+	}
+}

@@ -160,6 +160,10 @@ func (f *For) Resolve() *Instance {
 			}
 			entry.value = e.value
 			f.buildEntry(entry)
+			// entry.node 指针未变，父级 diff 用指针身份比较不会发指令（内容重建
+			// 发生在该节点内部）。补发一条 ReplaceChildren，让按补丁更新的后端
+			// 重读该节点的 children——否则只显示旧内容的镜像树会漏掉这一项。
+			f.sink.add(Change{Kind: ChangeReplaceChildren, NodeID: entry.node.ID})
 			continue
 		}
 		// 列表项 ID 按「本列表唯一前缀 + key」派生：同 key 重排/增删时 ID 不变，
@@ -201,11 +205,14 @@ func (f *For) buildEntry(entry *forEntry) {
 		if f.sink != nil {
 			entry.inst.changes = f.sink // 共享所属实例树的变更缓冲
 		}
-		// 列表项子树不在父级聚合 Update 的递归路径上，叶子需自己的细粒度
-		// effect；结构插槽则继承统一 ctx（含 onDirty 重绘回调）。
-		entry.inst.BindReactive(signal.Effect)
+		// 叶子与结构接线互斥，避免项内 slotBranch 被双订阅（selector 调用两次）：
+		// 有统一 ctx（app 场景）时，叶子用 bindLeaves、结构用 bindRec 继承 ctx；
+		// 无 ctx（纯 scene）时，BindReactive 一并接叶子与结构。
 		if f.bctx != nil {
+			entry.inst.bindLeaves(signal.Effect)
 			entry.inst.bindRec(f.bctx)
+		} else {
+			entry.inst.BindReactive(signal.Effect)
 		}
 		for _, c := range entry.inst.root.Children {
 			c.parent = entry.node

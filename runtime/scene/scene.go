@@ -825,19 +825,27 @@ func (i *Instance) BindReactive(effect func(func()) Computation) {
 		return
 	}
 	for s, sl := range i.slots {
-		if sl.kind == slotComp {
+		switch sl.kind {
+		case slotComp:
+			// 组件实例常驻：递归进子组件（叶子 + 其内部的结构插槽都要接）。
 			if sl.child != nil {
 				sl.child.BindReactive(effect)
 			}
-			continue
-		}
-		// 结构插槽也接线：纯 scene 场景下 BindReactive 是唯一入口，
-		// For/Branch 靠这里的 effect 调 Resolve 驱动增删/切换。不注入 bctx——
-		// 让控制器继续用裸 BindReactive 给动态子树接线（onDirty 非必需）。
-		if sl.kind == slotBranch {
+		case slotBranch:
+			// 纯 scene 场景下 BindReactive 是唯一入口，For/Branch 靠这里的 effect
+			// 调 Resolve 驱动增删/切换。app 场景走 BindStructural——两条路径互斥，
+			// 由调用方择一，避免动态子树的 slotBranch 被双订阅。
 			if sl.child != nil {
 				sl.child.BindReactive(effect)
 			}
+			if sl.get != nil {
+				slot := s
+				getter := sl.get
+				if c := effect(func() { i.SetPart(slot, getter()) }); c != nil {
+					i.comps = append(i.comps, c)
+				}
+			}
+		default:
 			if sl.get == nil {
 				continue
 			}
@@ -846,9 +854,26 @@ func (i *Instance) BindReactive(effect func(func()) Computation) {
 			if c := effect(func() { i.SetPart(slot, getter()) }); c != nil {
 				i.comps = append(i.comps, c)
 			}
+		}
+	}
+}
+
+// bindLeaves 只给叶子插槽（slotChild/slotAttr/slotEvent）接线，不碰结构插槽；
+// slotComp 递归进子组件。供「已有 bindCtx 负责结构接线」的场景使用——动态子树
+// 的叶子需要自己的细粒度 effect（不在父级聚合 Update 的递归路径上），而结构由
+// bindRec(ctx) 统一处理，二者分工避免 selector 被双订阅。
+func (i *Instance) bindLeaves(effect func(func()) Computation) {
+	if i == nil || effect == nil {
+		return
+	}
+	for s, sl := range i.slots {
+		if sl.kind == slotComp {
+			if sl.child != nil {
+				sl.child.bindLeaves(effect)
+			}
 			continue
 		}
-		if sl.get == nil {
+		if sl.kind == slotBranch || sl.get == nil {
 			continue
 		}
 		slot := s
