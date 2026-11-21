@@ -27,12 +27,15 @@ const (
 	ChangeSetText                           // 设置文本；Value=新文本
 	ChangeSetHandler                        // 绑定/换绑事件；Key=事件名，Value=handler 原值
 	ChangeReplaceChildren                   // 节点的 Children 被整体重建；后端按 NodeID 重读 children（兜底）
-	ChangeAppendChild                       // 追加子节点；Value=子节点 *Node（完整子树）
 	ChangeRemoveChild                       // 移除子节点；ChildID=被移除节点，Value=该 *Node
-	ChangeDestroy                           // 节点从树中彻底移除；ChildID=节点，Value=该 *Node
-	ChangeInsertBefore                      // 插入子节点；ChildID/Value=新子树，BeforeID=锚点（空=追加末尾）
+	ChangeInsertBefore                      // 插入子节点；ChildID/Value=新子树，BeforeID=锚点（空=追加末尾，即 append）
 	ChangeMoveChild                         // 移动已有子节点；ChildID=要移动的节点，BeforeID=锚点（空=移到末尾）
 )
+
+// 注：曾有 ChangeAppendChild / ChangeDestroy 两个常量，但实现从未发出（追加等价于
+// BeforeID="" 的 InsertBefore，销毁等价于 RemoveChild + 后端自行释放缓存）。为避免
+// "协议许诺、实现不发"导致后端按表实现时漏更新，已从协议面移除——协议表只列实际
+// 会发出的指令。二者语义分别由 InsertBefore(BeforeID="") 与 RemoveChild 覆盖。
 
 // String 返回可读的指令名，便于日志/测试。
 func (k ChangeKind) String() string {
@@ -45,12 +48,8 @@ func (k ChangeKind) String() string {
 		return "SetHandler"
 	case ChangeReplaceChildren:
 		return "ReplaceChildren"
-	case ChangeAppendChild:
-		return "AppendChild"
 	case ChangeRemoveChild:
 		return "RemoveChild"
-	case ChangeDestroy:
-		return "Destroy"
 	case ChangeInsertBefore:
 		return "InsertBefore"
 	case ChangeMoveChild:
@@ -63,10 +62,10 @@ func (k ChangeKind) String() string {
 // Change 是一条增量变更指令。NodeID 为目标节点（跨帧稳定的逻辑 id），
 // Key/Value 依 Kind 而定；*Node 形态的 Value 让后端拿到完整子树内容。
 //
-// 细粒度结构指令（InsertBefore/RemoveChild/MoveChild/Destroy）用 ChildID 定位
+// 细粒度结构指令（InsertBefore/RemoveChild/MoveChild）用 ChildID 定位
 // 被操作的子节点、BeforeID 作为顺序锚点，二者均为跨帧稳定的 Node.ID：
 //   - InsertBefore：把 Value（完整子树）插到 NodeID 下 BeforeID 之前；BeforeID 空表示追加到末尾；
-//   - RemoveChild / Destroy：移除 ChildID 指向的子节点（Value 带出被移除子树，便于后端释放缓存）；
+//   - RemoveChild：移除 ChildID 指向的子节点（Value 带出被移除子树，便于后端释放缓存）；
 //   - MoveChild：把 ChildID 子节点移动到 BeforeID 之前（空表示移到末尾），节点指针/内容不变。
 //
 // 旧字段（NodeID/Key/Value）语义不变，向后兼容——只看旧字段的后端无需改动。
@@ -152,8 +151,14 @@ func (s *changeSink) peek() []Change {
 
 // ---------------- Instance 的公开变更 API ----------------
 
-// EnableChanges 打开增量变更记录。必须在产生变更的更新之前调用。
-// 不调用时完全退回旧行为：不分配、不记录，后端照常全量 Draw(root)。
+// EnableChanges 打开增量变更记录。不调用时完全退回旧行为：不分配、不记录，
+// 后端照常全量 Draw(root)。
+//
+// 首帧语义（重要）：Render 期间（含 applyAll 首渲染与接线时 effect 的首次执行）
+// sink 默认为关闭，产生的变更不记录。因此调用方应当：先 Render 首帧 → 再
+// EnableChanges → 之后每帧 TakeChanges 拿到的都是"相对首帧"的增量。若后端选择
+// 在 Render 之前EnableChanges，则会收到首帧建树的 InsertBefore 流——此时后端必须
+// 能从空镜像树逐条 apply 这些指令建起全量树；两种用法都合法，但一个后端应固定一种。
 func (i *Instance) EnableChanges() {
 	if i != nil {
 		i.changes.enable()
@@ -410,12 +415,41 @@ func applyChanges(root *Node, changes []Change) *Node {
 	}
 
 	for _, ch := range changes {
+		// 属性/文本/事件指令：直接按 NodeID 定位节点，不依赖父子关系。
+		switch ch.Kind {
+		case ChangeSetText:
+			if n := nodes[ch.NodeID]; n != nil {
+				n.Text, _ = ch.Value.(string)
+			}
+			continue
+		case ChangeSetAttr:
+			if n := nodes[ch.NodeID]; n != nil {
+				if n.Props == nil {
+					n.Props = map[string]any{}
+				}
+				n.Props[ch.Key] = ch.Value
+			}
+			continue
+		case ChangeSetHandler:
+			if n := nodes[ch.NodeID]; n != nil {
+				if n.Handlers == nil {
+					n.Handlers = map[string]any{}
+				}
+				n.Handlers[ch.Key] = ch.Value
+			}
+			continue
+		case ChangeReplaceChildren:
+			// 兜底：后端按 NodeID 重读 children；参考实现没有数据源可重读，
+			// 保持现状（全量 Draw 路径不受影响）。
+			continue
+		}
+
 		parent, kids := childrenOf(ch.NodeID)
 		if parent == nil {
 			continue
 		}
 		switch ch.Kind {
-		case ChangeInsertBefore, ChangeAppendChild:
+		case ChangeInsertBefore:
 			n, _ := ch.Value.(*Node)
 			if n == nil {
 				continue
@@ -425,7 +459,7 @@ func applyChanges(root *Node, changes []Change) *Node {
 			}
 			kids = insertAt(kids, ch.BeforeID, n)
 			setChildren(parent, kids)
-		case ChangeRemoveChild, ChangeDestroy:
+		case ChangeRemoveChild:
 			removeFrom(parent, ch.ChildID)
 		case ChangeMoveChild:
 			var moving *Node

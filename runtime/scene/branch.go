@@ -27,6 +27,7 @@ type Branch struct {
 	disposed bool
 	init     bool        // 是否已完成首次求值（idx 初始为 0，需要区分「从未求值」）
 	sink     *changeSink // 所属实例树的变更缓冲，传给各分支子实例
+	bctx     *bindCtx    // 统一接线上下文，传给新建的分支子树
 }
 
 // NewBranch 创建一个条件分支控制器。
@@ -101,7 +102,15 @@ func (b *Branch) Resolve() *Instance {
 				if b.sink != nil {
 					cur.changes = b.sink // 共享所属实例树的变更缓冲
 				}
-				cur.BindReactive(signal.Effect)
+				// 用所属实例树的统一接线上下文递归接线（含 onDirty 重绘回调）。
+				// 这替代了原先的裸 BindReactive——后者让嵌套分支切换后树变了却不重绘。
+				// 分支子树挂在 slotBranch.child 上、其叶子由根聚合 effect 的 Update
+				// 递归覆盖，因此这里只接结构插槽，不另建聚合 effect（避免重复重绘）。
+				if b.bctx != nil {
+					cur.bindStructure(b.bctx)
+				} else {
+					cur.BindReactive(signal.Effect)
+				}
 			}
 		})
 	}
@@ -122,6 +131,9 @@ func (b *Branch) Resolve() *Instance {
 
 // adoptSink 实现 subtreeController：记录所属实例树的变更缓冲，传给各分支子实例。
 func (b *Branch) adoptSink(s *changeSink) { b.sink = s }
+
+// adoptBind 实现 subtreeController：记录统一接线上下文，供 Resolve 构建新分支时递归接线。
+func (b *Branch) adoptBind(ctx *bindCtx) { b.bctx = ctx }
 
 // Dispose 销毁当前分支作用域（幂等）。级联停止子树内所有 Effect / Cleanup。
 func (b *Branch) Dispose() {

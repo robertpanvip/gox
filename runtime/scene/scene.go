@@ -18,9 +18,11 @@ package gxscene
 
 import (
 	"fmt"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/robertpanvip/gox/runtime/signal"
 )
@@ -153,6 +155,8 @@ type subtreeController interface {
 	Dispose()
 	// adoptSink 把所属实例树的变更 sink 传给控制器，供其动态构建的子实例共享。
 	adoptSink(*changeSink)
+	// adoptBind 把统一接线上下文传给控制器，供其 Resolve 构建的新子树递归接线。
+	adoptBind(*bindCtx)
 }
 
 // slot 描述一个动态插槽在场景树中的位置与绑定。
@@ -308,9 +312,21 @@ func childPath(n *Node) []int {
 	return path
 }
 
-// clone 复制静态骨架：结构共享常量，Props/Children 深拷贝，避免实例间相互污染。
-func clone(n *Node) *Node {
-	c := &Node{Kind: n.Kind, Type: n.Type, Text: n.Text, ID: n.ID, dirty: true}
+// 全局实例序号：每次 Render / 动态子树构建分配一个唯一短前缀，保证跨实例、跨列表
+// 的 Node.ID 全局唯一。同一实例生命周期内前缀固定，故其节点 ID 跨帧稳定。
+var instanceSeq atomic.Uint64
+
+func nextIDBase() string {
+	return "i" + strconv.FormatUint(instanceSeq.Add(1), 36)
+}
+
+// clone 复制静态骨架：Props/Children 深拷贝避免实例间污染，并把骨架里的相对
+// ID（根 "r"、子 "r/0"...）重写为以 base 开头的实例专属 ID。这样两棵由同一
+// 缓存骨架 clone 出的树不会共享 ID，后端按 ID 做缓存/焦点跟踪不再串台。
+func clone(n *Node, base string) *Node {
+	// 骨架根节点 ID 是 "r"，其后代是 "r/0/1" 形式；把前导 "r" 换成 base。
+	id := base + strings.TrimPrefix(n.ID, "r")
+	c := &Node{Kind: n.Kind, Type: n.Type, Text: n.Text, ID: id, dirty: true}
 	if n.Props != nil {
 		c.Props = make(map[string]any, len(n.Props))
 		for k, v := range n.Props {
@@ -326,7 +342,7 @@ func clone(n *Node) *Node {
 	if len(n.Children) > 0 {
 		c.Children = make([]*Node, len(n.Children))
 		for i, child := range n.Children {
-			c.Children[i] = clone(child)
+			c.Children[i] = clone(child, base)
 			c.Children[i].parent = c
 		}
 	}
@@ -353,8 +369,10 @@ type Instance struct {
 	comps   []Computation // BindReactive 建立的响应式计算句柄，Dispose 时统一清理
 	Writes  int           // 累计实际写入节点的次数（细粒度更新的可观测指标）
 	Updates int           // Update 调用次数
+	idBase  string        // 本实例专属 ID 前缀； graft 子树时据此重编号，保证全局唯一
 
 	changes *changeSink // 增量变更缓冲；根实例创建，子实例共享同一 sink
+	bctx    *bindCtx    // 统一接线上下文；动态子树构建后据此递归接线
 }
 
 // Computation 是响应式计算的可销毁句柄。用类型别名统一到 signal 包的定义，
@@ -380,8 +398,9 @@ func Render(tpl Template, getters ...func() any) *Instance {
 		cacheMu.Unlock()
 	}
 
-	root := clone(ct.root)
-	inst := &Instance{tpl: tpl, root: root, slots: make([]*slot, len(ct.slots)), changes: newChangeSink()}
+	base := nextIDBase()
+	root := clone(ct.root, base)
+	inst := &Instance{tpl: tpl, root: root, slots: make([]*slot, len(ct.slots)), changes: newChangeSink(), idBase: base}
 	for i, proto := range ct.slots {
 		s := &slot{
 			kind:  proto.kind,
@@ -726,12 +745,21 @@ func dispatchLocal(n *Node, name string, ctx EventContext) bool {
 // String 用 TextBackend 把常驻场景树渲染成文本，便于 fmt.Println 直接查看。
 func (i *Instance) String() string { return (TextBackend{}).Paint(i.root) }
 
-// equalValue 按类型严格比较，避免 true(bool) 与 "true"(string) 混淆。
+// equalValue 判断两个插槽值是否相等。类型严格（true(bool) != "true"(string)），
+// 但避免热路径每次 Sprintf 分配：可比较类型直接用 ==（含所有标量、指针、接口），
+// 不可比较类型（切片/map/函数）用 reflect.DeepEqual。
 func equalValue(a, b any) bool {
 	if a == nil || b == nil {
 		return a == nil && b == nil
 	}
-	return fmt.Sprintf("%T:%v", a, a) == fmt.Sprintf("%T:%v", b, b)
+	ta, tb := reflect.TypeOf(a), reflect.TypeOf(b)
+	if ta != tb {
+		return false // 类型不同即不等，无需比较值
+	}
+	if ta.Comparable() {
+		return a == b
+	}
+	return reflect.DeepEqual(a, b)
 }
 
 // SetPart 是 Update 的单插槽版本：直接写入一个值，绕过 getter（命令式更新）。
@@ -775,10 +803,11 @@ func (i *Instance) SetPart(slot int, v any) {
 	i.Writes++
 }
 
-// BindReactive 把整棵场景树的动态插槽接到外部响应式系统的 effect 原语上。
+// BindReactive 把整棵场景树的**叶子插槽**接到外部响应式系统的 effect 原语上，
+// 每个 getter 一个精确 effect（不用 Update）。结构插槽由 BindStructural 负责。
 //
 // effect 形如 signal.Effect：传入的函数立即执行一次，并在它读到的响应式数据源
-// 变化时自动重跑。BindReactive 为每个插槽建立一个这样的 effect：
+// 变化时自动重跑。BindReactive 为每个叶子插槽建立一个这样的 effect：
 //
 //   - 普通插槽（slotChild / slotAttr）：effect 体读 getter 后直接 SetPart，
 //     因此某个 signal 变化只精确命中依赖它的那个插槽——不遍历全树、不重建子树；
@@ -792,13 +821,30 @@ func (i *Instance) SetPart(slot int, v any) {
 // scene 核心不依赖任何具体响应式库：effect 由调用方注入（如 signal.Effect），
 // 渲染与响应式解耦——这也是 scene 后端从一开始就留白的那层。
 func (i *Instance) BindReactive(effect func(func()) Computation) {
-	if effect == nil {
+	if i == nil || effect == nil {
 		return
 	}
 	for s, sl := range i.slots {
 		if sl.kind == slotComp {
 			if sl.child != nil {
 				sl.child.BindReactive(effect)
+			}
+			continue
+		}
+		// 结构插槽也接线：纯 scene 场景下 BindReactive 是唯一入口，
+		// For/Branch 靠这里的 effect 调 Resolve 驱动增删/切换。不注入 bctx——
+		// 让控制器继续用裸 BindReactive 给动态子树接线（onDirty 非必需）。
+		if sl.kind == slotBranch {
+			if sl.child != nil {
+				sl.child.BindReactive(effect)
+			}
+			if sl.get == nil {
+				continue
+			}
+			slot := s
+			getter := sl.get
+			if c := effect(func() { i.SetPart(slot, getter()) }); c != nil {
+				i.comps = append(i.comps, c)
 			}
 			continue
 		}
@@ -813,30 +859,77 @@ func (i *Instance) BindReactive(effect func(func()) Computation) {
 	}
 }
 
-// BindStructural 仅为「动态结构插槽」（slotBranch：条件分支 / keyed 列表）接线，
-// 不触碰普通叶子插槽。它与 app 层的聚合 effect 配合使用：
-//   - 叶子插槽由聚合 effect（Instance.Update）统一求值，保证一帧内状态一致；
-//   - 结构插槽由这里的独立 effect 驱动：selector/each 变化时重建/复用子树。
+// bindCtx 是结构插槽的统一接线上下文：effect 用于建立订阅，onDirty 在结构
+// 变化后回调（app 层据此重绘）。它沿实例树与动态子树向下传递，保证任意深度的
+// 条件分支 / 列表都用同一套接线，不会在某一层漏掉 effect 或丢失重绘回调。
+type bindCtx struct {
+	effect  func(func()) Computation
+	onDirty func()
+}
+
+// BindStructural 为整棵实例树（含组件子组件与所有命中子树）的**结构插槽**
+// （slotBranch：条件分支 / keyed 列表）接线，每个插槽一个 effect：读 selector/each
+// → Resolve 重建/复用子树 → 子树继承同一 ctx → 变化后触发 onDirty。
 //
-// 传入的 effect 可包装额外副作用（如 app 层的窗口重绘）——结构变化后调用方
-// 往往需要重新绘制。返回的 Computation 句柄由 Instance 保存，Dispose 时清理。
-func (i *Instance) BindStructural(effect func(func()) Computation) {
-	if effect == nil {
+// 叶子插槽不在这里——它们由 BindReactive 的细粒度 effect 或 app 层的聚合 Update
+// 负责，二者职责分离。关键修复：递归 slotComp 与嵌套子树，使组件内的 if、分支
+// 内嵌的分支都能登记依赖并触发重绘（旧实现两个 P0 的根因即此处不递归）。
+//
+// effect 由调用方注入；onDirty 可为 nil（纯 scene 场景无需重绘）。ctx 同时注入
+// Branch/For 控制器，供其在 Resolve 构建新子树后递归接线。
+func (i *Instance) BindStructural(effect func(func()) Computation, onDirty ...func()) {
+	if i == nil || effect == nil {
 		return
 	}
+	var dirty func()
+	if len(onDirty) > 0 {
+		dirty = onDirty[0]
+	}
+	i.bindStructure(&bindCtx{effect: effect, onDirty: dirty})
+}
+
+// bindStructure 递归为所有层级的 slotBranch 接线。
+func (i *Instance) bindStructure(ctx *bindCtx) {
+	if i == nil || ctx == nil {
+		return
+	}
+	i.bctx = ctx
 	for s, sl := range i.slots {
-		if sl.kind != slotBranch {
-			continue
-		}
 		slot := s
-		getter := sl.get
-		if getter == nil {
-			continue
-		}
-		if c := effect(func() { i.SetPart(slot, getter()) }); c != nil {
-			i.comps = append(i.comps, c)
+		switch sl.kind {
+		case slotComp:
+			// 组件实例常驻：递归进子组件，接上组件内部的条件分支/列表。
+			if sl.child != nil {
+				sl.child.bindStructure(ctx)
+			}
+		case slotBranch:
+			if sl.ctrl != nil {
+				// ctx 交给控制器，供其后续 Resolve 构建的新子树递归接线。
+				sl.ctrl.adoptBind(ctx)
+				if sl.child != nil {
+					sl.child.bindStructure(ctx)
+				}
+			}
+			if sl.get == nil {
+				continue
+			}
+			getter := sl.get
+			if c := ctx.effect(func() {
+				i.SetPart(slot, getter())
+				if ctx.onDirty != nil {
+					ctx.onDirty()
+				}
+			}); c != nil {
+				i.comps = append(i.comps, c)
+			}
 		}
 	}
+}
+
+// bindRec 用已有 ctx 给一棵动态子树接结构插槽。供 Branch/For 在 Resolve 构建
+// 新子树后调用——新子树内的嵌套分支需要继承同一 ctx（含 onDirty 重绘回调）。
+func (i *Instance) bindRec(ctx *bindCtx) {
+	i.bindStructure(ctx)
 }
 
 // Dispose 销毁该实例通过 BindReactive 建立的所有响应式计算，停止订阅并清理。

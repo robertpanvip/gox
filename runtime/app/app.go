@@ -78,14 +78,12 @@ type Window interface {
 
 // App 是 open 返回的应用句柄，持有窗口后端与配置；render 之后再持有场景树实例。
 type App struct {
-	win    Window
-	cfg    WindowConfig
-	inst   *gxscene.Instance // render 前为 nil
-	owner  *signal.Owner     // render 建树的根 Owner：组件内 effect/computed/cleanup 归属它
-	closed bool
-	rendered        bool
-	reactivePriming bool                  // 聚合 effect 首次执行只登记依赖，不重绘（Render 已画首帧）
-	reactive        []gxscene.Computation // 内部 bindReactive 建立的聚合句柄，Close 时清理
+	win      Window
+	cfg      WindowConfig
+	inst     *gxscene.Instance // render 前为 nil
+	owner    *signal.Owner     // render 建树的根 Owner：组件内 effect/computed/cleanup 归属它
+	closed   bool
+	rendered bool
 }
 
 // Open 按配置创建默认 Headless 窗口，返回应用句柄。不接收 JSX——JSX 交给 Render。
@@ -162,70 +160,51 @@ func (a *App) Render(build func() any) error {
 // teardownTree 销毁当前场景树及其 Owner（含组件副作用）与订阅。
 func (a *App) teardownTree() {
 	if a.owner != nil {
-		a.owner.Dispose() // 级联销毁组件内 effect/computed，执行 onCleanup
+		a.owner.Dispose() // 级联销毁组件内 effect/computed、Bind 建立的订阅，执行 onCleanup
 		a.owner = nil
 	}
-	a.disposeReactive()
 	if a.inst != nil {
 		a.inst.Dispose() // 结构插槽 controller / 元素 Owner
 		a.inst = nil
 	}
 }
 
-// bindReactive 建立「单一聚合 effect」把 signal 接到场景树，并负责窗口重绘。
+// bindReactive 把 signal 接到整棵场景树，并负责窗口重绘，分两路：
 //
-// Instance.Update() 会递归读取整棵树的叶子 getter（从而登记全部依赖），
-// 并用 equalValue 裁剪，只写真正变化的节点；随后 Draw 一帧。于是：
+//  1. 叶子插槽：一个聚合 effect 调 Instance.Update() 读全部叶子 getter（含组件
+//     子树）并裁剪写入——保证一帧内叶子状态一致，只画一帧（ReactDOM 式批处理）；
+//  2. 结构插槽（条件分支 / keyed 列表）：BindStructural 递归整棵实例树（含组件内
+//     与嵌套分支），selector/each 变化时 Resolve 重建/复用子树并触发 onDirty 重绘。
 //
-//   - 一次 signal 写入 = 一次 Update + 一帧重绘，不会出现「某个插槽已更新、
-//     另一个还没更新」的中间态画面；
-//   - 写入次数仍精确（equalValue 裁剪），只是多做了几次便宜的 getter 求值；
-//   - 这正是 ReactDOM.render 式的批处理语义，适合应用入口。
-//
-// 动态结构插槽（条件分支 / keyed 列表）由 scene 层独立 effect 直接改写场景树，
-// 不经过上面的聚合 Update。这里为它们单独接线，并用「重绘包装」的 effect：
-// selector/each 变化时重建子树后，顺带画一帧，避免结构变了却没刷新窗口。
+// 两路的首次 effect 都会立即执行一次（接线期），用各自的 priming 标志跳过重绘
+// ——Render 已画过首帧。这两路都挂在 a.owner 下，teardown 时随 Owner 级联销毁。
 func (a *App) bindReactive() {
 	if a.inst == nil || a.closed {
 		return
 	}
-	a.reactivePriming = true
-	if c := signal.Effect(func() {
-		_ = a.inst.Update() // 递归读所有叶子 getter 登记依赖 + 裁剪写入
-		if a.reactivePriming {
-			// 首次执行（接线时立即触发）只登记依赖；Render 已画首帧，避免重复绘制。
-			a.reactivePriming = false
+	// 叶子聚合 effect：一帧一致性。挂在 a.owner 下，随 Owner 销毁。
+	leafPriming := true
+	signal.Effect(func() {
+		_ = a.inst.Update()
+		if leafPriming {
+			leafPriming = false
 			return
 		}
 		if !a.closed {
-			_ = a.Draw() // 一批更新完成，画一帧
+			_ = a.Draw()
 		}
-	}); c != nil {
-		a.reactive = append(a.reactive, c)
-	}
-
-	structuralPriming := true
-	structuralEffect := func(f func()) gxscene.Computation {
-		return signal.Effect(func() {
-			f() // Resolve：读 selector/each（登记依赖）+ 重建/复用子树
-			if structuralPriming {
-				structuralPriming = false
-				return // 首次接线由 Render 画过首帧
-			}
-			if !a.closed {
-				_ = a.Draw()
-			}
-		})
-	}
-	a.inst.BindStructural(structuralEffect)
-}
-
-// disposeReactive 清理内部聚合 effect；结构插槽句柄由 inst.Dispose 负责。
-func (a *App) disposeReactive() {
-	for _, c := range a.reactive {
-		c.Dispose()
-	}
-	a.reactive = nil
+	})
+	// 结构插槽：递归接线，变化后重绘。
+	structPriming := true
+	a.inst.BindStructural(signal.Effect, func() {
+		if structPriming {
+			structPriming = false
+			return
+		}
+		if !a.closed {
+			_ = a.Draw()
+		}
+	})
 }
 
 // Draw 立即把当前场景树绘制一帧到窗口。Render 之前调用为 no-op。

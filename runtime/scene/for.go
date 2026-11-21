@@ -30,6 +30,8 @@ type For struct {
 	// indexKey 为 true 时用元素下标作 key（未提供 key 函数时）。
 	indexKey bool
 	sink     *changeSink // 所属实例树的变更缓冲，传给各列表项子实例
+	bctx     *bindCtx    // 统一接线上下文，传给新建的列表项子树
+	idBase   string      // 本列表专属 ID 前缀；项节点 ID = idBase + "/[" + key + "]"，跨列表唯一
 }
 
 type forEntry struct {
@@ -51,6 +53,7 @@ func NewFor(each func() []any, key func(any) any, render func(any) *Instance) *F
 		render:   render,
 		entries:  make(map[any]*forEntry),
 		indexKey: key == nil,
+		idBase:   nextIDBase(),
 	}
 }
 
@@ -144,30 +147,27 @@ func (f *For) Resolve() *Instance {
 		}
 	}
 
-	// 新增或复用条目。
+	// 新增 / 复用 / 同 key 值变化重建条目。
 	for _, e := range newList {
 		if entry, ok := f.entries[e.key]; ok {
-			entry.value = e.value // 复用：更新值（子树内部 signal 自己更新，不重建）
+			if equalValue(entry.value, e.value) {
+				continue // 同 key 同值：节点与子树原样复用（重排只调顺序）。
+			}
+			// 同 key 但值变了：按值捕获的 render 不会自己感知新值，必须销毁旧
+			// Owner、重建该项子树，否则界面永远显示旧值（报告 P1）。
+			if entry.owner != nil {
+				entry.owner.Dispose()
+			}
+			entry.value = e.value
+			f.buildEntry(entry)
 			continue
 		}
-		// 列表项 ID 按 key 派生（非数组下标），重排/增删时同 key 项 ID 不变。
-		itemID := "r/[" + fmt.Sprint(e.key) + "]"
+		// 列表项 ID 按「本列表唯一前缀 + key」派生：同 key 重排/增删时 ID 不变，
+		// 不同列表即使同 key 也不撞车（各自的 idBase 不同）。
+		itemID := f.idBase + "/[" + fmt.Sprint(e.key) + "]"
 		entry := &forEntry{key: e.key, value: e.value, node: &Node{Kind: "#frag", Props: map[string]any{}, ID: itemID, dirty: true}}
 		f.entries[e.key] = entry
-		// 新 Owner 下构建子树并接线；子树内的 Effect 归属该 Owner，删除时级联清理。
-		entry.owner = signal.CreateRoot(func(o *signal.Owner) {
-			entry.inst = f.render(e.value)
-			if entry.inst != nil {
-				if f.sink != nil {
-					entry.inst.changes = f.sink // 共享所属实例树的变更缓冲
-				}
-				entry.inst.BindReactive(signal.Effect)
-				for _, c := range entry.inst.root.Children {
-					c.parent = entry.node
-					entry.node.Children = append(entry.node.Children, c)
-				}
-			}
-		})
+		f.buildEntry(entry)
 	}
 
 	// 按新顺序重排节点（复用 Node 指针，只调整顺序）。
@@ -181,7 +181,7 @@ func (f *For) Resolve() *Instance {
 	}
 
 	// 组装根子树（透明容器），供 mountBranch 类似的嫁接待用。
-	root := &Node{Kind: "#root", Props: map[string]any{}, ID: "r", dirty: true}
+	root := &Node{Kind: "#root", Props: map[string]any{}, ID: f.idBase + "/root", dirty: true}
 	for _, c := range children {
 		c.parent = root
 		root.Children = append(root.Children, c)
@@ -189,8 +189,36 @@ func (f *For) Resolve() *Instance {
 	return &Instance{root: root}
 }
 
+// buildEntry 在新 Owner 下为条目构建子树并接线，把子树 children 挂到 entry.node。
+// 新条目与同 key 值变化重建都走这里；调用方负责先 Dispose 旧 Owner、清空 node.Children。
+func (f *For) buildEntry(entry *forEntry) {
+	entry.node.Children = nil
+	entry.owner = signal.CreateRoot(func(o *signal.Owner) {
+		entry.inst = f.render(entry.value)
+		if entry.inst == nil {
+			return
+		}
+		if f.sink != nil {
+			entry.inst.changes = f.sink // 共享所属实例树的变更缓冲
+		}
+		// 列表项子树不在父级聚合 Update 的递归路径上，叶子需自己的细粒度
+		// effect；结构插槽则继承统一 ctx（含 onDirty 重绘回调）。
+		entry.inst.BindReactive(signal.Effect)
+		if f.bctx != nil {
+			entry.inst.bindRec(f.bctx)
+		}
+		for _, c := range entry.inst.root.Children {
+			c.parent = entry.node
+			entry.node.Children = append(entry.node.Children, c)
+		}
+	})
+}
+
 // adoptSink 实现 subtreeController：记录所属实例树的变更缓冲，传给各列表项子实例。
 func (f *For) adoptSink(s *changeSink) { f.sink = s }
+
+// adoptBind 实现 subtreeController：记录统一接线上下文，供 Resolve 构建新列表项时递归接线。
+func (f *For) adoptBind(ctx *bindCtx) { f.bctx = ctx }
 
 // Dispose 销毁所有元素 Owner（幂等）。
 func (f *For) Dispose() {
