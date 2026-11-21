@@ -24,7 +24,7 @@ Gox 是一个把 `.gx` 转译成标准 Go 的编译器。`.gx` = Go 语法 + 一
 | `r.URL` / `http.StatusOK` | 原样 | **全大写缩写写大写，原样保留** |
 | `gxscene.get[T](props, "x")` | `gxscene.Get[T](...)` | runtime 符号：小写书写，还原 |
 | `view.bindReactive(Signal.effect)` | `view.BindReactive(signal.Effect)` | 底层 scene 实例方法：小写书写；signal API 用大写 `Signal.` 前缀 |
-| `gxapp.open({ ... })` + `app.render(jsx)` | `gxapp.Open(gxapp.WindowConfig{...})` + `app.Render(...)` | **open 只收配置**（裸对象字面量，从签名推断类型）返回 App；**render 才是渲染 JSX 的入口**，内部已接好响应式，无需手写 bindReactive |
+| `gxapp.open({ ... })` + `app.render(() => <App/>)` | `gxapp.Open(gxapp.WindowConfig{...})` + `app.Render(func() any {...})` | **open 只收配置**（裸对象字面量，从签名推断类型）返回 App；**render 收建树函数**（SolidJS 风格），内部建根 Owner + 接线，无需手写 bindReactive |
 | `Signal.createRoot(...)` / `Signal.onCleanup(...)` | `signal.CreateRoot` / `signal.OnCleanup` | **signal API 一律大写 `Signal.` 前缀** |
 | `pub func Stat(...)` | `func Stat(...)` | **组件名 `pub func` 大写开头** |
 
@@ -39,20 +39,21 @@ Gox 是一个把 `.gx` 转译成标准 Go 的编译器。`.gx` = Go 语法 + 一
 ### 反面教材（本项目真实犯过的错，禁止重演）
 
 ```gx
-// ❌ 错：signal API 用小写前缀（与 signal 关键字混淆）/ 组件小写 / 配置写全类型名 / open 传 JSX
+// ❌ 错：signal API 用小写前缀（与 signal 关键字混淆）/ 组件小写 / 配置写全类型名 / open 传 JSX / render 收已建好的树
 signal.createRoot(func(o *signal.owner) { signal.onCleanup(...) })
 view.bindReactive(signal.effect)
 pub func stat(props gxscene.props) *gxscene.instance { ... }
 app, _ := gxapp.open(view, gxapp.windowConfig{...})
 app.bindReactive(signal.effect)
+app.render(view)
 
 // ✅ 对：signal API 大写 Signal. 前缀；pub 组件大写；配置用裸对象字面量；
-//      open 只收配置、render 才收 JSX 且自带响应式接线
+//      open 只收配置、render 收建树函数（圆括号箭头）且自带响应式与生命周期
 Signal.createRoot(func(o *signal.owner) { Signal.onCleanup(...) })
 view.bindReactive(Signal.effect)
 pub func Stat(props gxscene.props) *gxscene.instance { ... }
 app, _ := gxapp.open({ Title: "Gox", Width: 800 })
-app.render(view)
+app.render(() => <div><Stat/></div>)
 ```
 
 ## 2. 必须优先使用 GX 自身的语法糖
@@ -106,14 +107,39 @@ view := <ul>
     </For>
 </ul>
 
-// 阶段4：应用入口 open（只收配置）+ render（收 JSX，内部自带响应式接线）
+// 阶段4：应用入口 open（只收配置）+ render（收建树函数，内部建根 Owner + 接线）
 // 配置用裸对象字面量，编译器从 gxapp.open 签名推断为 gxapp.WindowConfig
 app, err := gxapp.open({ Title: "Gox", Width: 800 })
 if err != nil { panic(err) }
 defer app.close()
-app.render(view)                      // 画首帧 + 内部 bindReactive（结构变化也自动重绘）
+app.render(() => <div>{...}</div>)     // 在根 Owner 下建树 + 响应式接线
 Signal.batch(func() { count(5); visible(false) })
 ```
+
+### 有状态组件（SolidJS 风格，推荐）
+
+组件函数**只在建树时执行一次**，状态写在组件内部（不在 main 里），靠 signal + effect 保鲜；副作用用 `onMount` 启动、`onCleanup` 清理，二者归属 App 根 Owner，`app.close()` 时级联执行。完整可运行示例见 `examples/jsxapp-solid.gx`：
+
+```gx
+pub func Counter(props gxscene.props) *gxscene.instance {
+    signal count = 0
+    let doubled = Signal.computed(func() int { return count() * 2 })
+    Signal.effect(func() { fmt.println("tick", count, doubled) })
+    stop := make(chan struct{})
+    Signal.onMount(func() {
+        go func() { /* 定时器里 count += 1 */ }()
+    })
+    Signal.onCleanup(func() { close(stop); fmt.println("unmounted") })
+    return <div>{count} / {doubled}</div>
+}
+func main() {
+    app, _ := gxapp.open({ Title: "Solid", Width: 2, Height: 2 })
+    app.render(() => <div><Counter/></div>)   // 根 Owner 在此建立
+    app.close()                                // 级联执行 Counter 的 onCleanup
+}
+```
+
+约束：组件名大写开头（`pub func Counter` + `<Counter/>`）；JSX 里 signal 读 `count` 自动补 `()`；`onCleanup/onMount` 必须写在组件函数体内（建树时注册到 Owner），不要在 effect 回调外提前调用。
 
 约束：分支 selector 必须读 signal 才有响应式；`<For>` 必须提供 `key`；组件内 signal 要经 Props getter 传到叶子插槽才能在写入时更新；app 场景的响应式接线（叶子聚合 effect + 分支/列表结构重绘）全部封装在 `app.render` 内部，源码无需手写 bindReactive；外部包函数的配置参数（如 `gxapp.open({ ... })`）可直接写裸对象字面量——编译器从该包真实 Go 源码 AST 读取期望参数类型并补全（通用机制，见 `pkg/compiler/gosig.go`）。
 

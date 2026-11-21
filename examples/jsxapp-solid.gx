@@ -1,0 +1,67 @@
+// SolidJS 风格的有状态组件：组件自带局部 signal + computed + effect + 生命周期，
+// 由定时器自增驱动状态变化。构建：gox build examples/jsxapp-solid.gx -jsx=scene -o main.go && go run .
+//
+// 关键点（对照 SolidJS）：
+//   - 组件函数只在建树时执行一次，状态是组件「自己的」，不在 main 里；
+//   - signal / computed / effect 在组件内部声明，靠响应式保持 UI 新鲜；
+//   - onMount 启动副作用、onCleanup 清理——归属 App 的 Owner，close 时级联执行；
+//   - app.render(() => <App/>) 收「建树函数」而非已建好的树。
+package main
+
+import (
+    gxscene "github.com/robertpanvip/gox/runtime/scene"
+    gxapp "github.com/robertpanvip/gox/runtime/app"
+    "time"
+    "fmt"
+)
+
+// Counter 是一个「活」的组件：状态封装在组件内，外部只看到它渲染出的场景树。
+pub func Counter(props gxscene.props) *gxscene.instance {
+    name := gxscene.get[string](props, "name")
+
+    // 组件局部状态：源 signal + 派生 computed（不在 main 里）
+    signal count = 0
+    let doubled = Signal.computed(func() int { return count() * 2 })
+
+    // 组件自己的副作用：count 变化即重跑，打印状态变化逻辑
+    Signal.effect(func() {
+        fmt.println("[", name(), "] count:", count, "doubled:", doubled)
+    })
+
+    // onMount：挂载后启动定时器，每 20ms 自增一次，到 3 停止（自驱状态变化）
+    stop := make(chan struct{})
+    Signal.onMount(func() {
+        go func() {
+            ticker := time.newTicker(20 * time.millisecond)
+            defer ticker.stop()
+            for {
+                select {
+                case <-ticker.c:
+                    if count() >= 3 { return }
+                    count += 1
+                case <-stop:
+                    return
+                }
+            }
+        }()
+    })
+
+    // onCleanup：卸载时停定时器并打印清理日志，证明组件生命周期归属 App
+    Signal.onCleanup(func() {
+        close(stop)
+        fmt.println("[", name(), "] unmounted")
+    })
+
+    return <div class="counter"><span>{name()}: {count}</span><b>doubled={doubled}</b></div>
+}
+
+func main() {
+    app, err := gxapp.open({ Title: "Solid Counter", Width: 2, Height: 2 })
+    if err != nil { panic(err) }
+
+    // SolidJS 风格：render 收建树函数；根 Owner 在内部建立，组件的 effect/cleanup 归属它。
+    app.render(() => <div id="app"><Counter name="ticks"/></div>)
+
+    time.sleep(200 * time.millisecond)  // 等定时器自增完成
+    app.close()                          // 级联执行组件 onCleanup
+}

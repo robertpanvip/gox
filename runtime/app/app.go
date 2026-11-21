@@ -1,6 +1,6 @@
 // Package gxapp 是 GX 的应用级入口：先创建「窗口外壳」，再把一棵 JSX 场景树
 // 渲染进去。类比 ReactDOM.createRoot(container).render(element) —— 这里对应
-// gxapp.open(config) 得到 App，再 app.render(jsx)。
+// gxapp.open(config) 得到 App，再 app.render(() => jsx)。
 //
 // 分层：
 //   - gxscene 负责 JSX → opcode → 常驻场景树 + 细粒度更新（渲染核心）
@@ -78,10 +78,11 @@ type Window interface {
 
 // App 是 open 返回的应用句柄，持有窗口后端与配置；render 之后再持有场景树实例。
 type App struct {
-	win             Window
-	cfg             WindowConfig
-	inst            *gxscene.Instance // render 前为 nil
-	closed          bool
+	win    Window
+	cfg    WindowConfig
+	inst   *gxscene.Instance // render 前为 nil
+	owner  *signal.Owner     // render 建树的根 Owner：组件内 effect/computed/cleanup 归属它
+	closed bool
 	rendered        bool
 	reactivePriming bool                  // 聚合 effect 首次执行只登记依赖，不重绘（Render 已画首帧）
 	reactive        []gxscene.Computation // 内部 bindReactive 建立的聚合句柄，Close 时清理
@@ -112,33 +113,63 @@ func OpenWith(cfg WindowConfig, win Window) (*App, error) {
 	return &App{win: win, cfg: cfg}, nil
 }
 
-// Render 把一棵 JSX 场景树挂到窗口：画首帧，并在内部完成响应式接线
-// （signal 变化 → 精确更新 + 自动重绘，含条件分支 / keyed 列表的结构重绘）。
-// 调用方无需再手动接线 bindReactive。
+// Render 在一棵根 Owner 下运行 build 构建并挂载 JSX 场景树：画首帧，并在内部
+// 完成响应式接线（signal 变化 → 精确更新 + 自动重绘，含条件分支 / keyed 列表的结构重绘）。
 //
-// 重复调用会先清理上一棵树的订阅与 Owner，再渲染新树。
-func (a *App) Render(inst *gxscene.Instance) error {
+// build 是「建树函数」而非已建好的树——这是 SolidJS 风格的关键：组件内的
+// Signal.effect / Signal.computed / Signal.onCleanup / Signal.onMount 在建树时创建，
+// 归属本次 Render 建立的根 Owner；应用关闭或重复 Render 时随 Owner 级联销毁，
+// 不会残留永不停止的 Effect。调用方无需再手动接线 bindReactive。
+//
+// GX 用法（零参箭头即 func() any，故直接写）：
+//
+//	app.render(() => <div id="app">{count}</div>)
+//
+// 重复调用会先销毁上一棵树的 Owner（含组件副作用）与订阅，再渲染新树。
+func (a *App) Render(build func() any) error {
 	if a.closed {
 		return fmt.Errorf("gxapp: 应用已关闭，无法 Render")
 	}
-	if inst == nil {
-		return fmt.Errorf("gxapp: Render 的场景树实例不能为 nil")
+	if build == nil {
+		return fmt.Errorf("gxapp: Render 的建树函数不能为 nil")
 	}
 	if a.rendered {
-		// 重渲染：先停掉旧树的订阅与结构 effect，避免泄漏到新帧。
-		a.disposeReactive()
-		if a.inst != nil {
-			a.inst.Dispose()
+		// 重渲染：先销毁旧树的 Owner（级联组件 effect/cleanup）与订阅，避免泄漏到新帧。
+		a.teardownTree()
+	}
+
+	// 在根 Owner 下建树：组件函数内创建的 effect/computed/cleanup 自动归属它。
+	var inst *gxscene.Instance
+	a.owner = signal.CreateRoot(func(o *signal.Owner) {
+		v := build()
+		if i, ok := v.(*gxscene.Instance); ok {
+			inst = i
 		}
-	}
-	a.inst = inst
+		if inst != nil {
+			a.inst = inst
+			_ = a.Draw() // 首帧：此时组件的建树期副作用已登记
+			// 响应式接线也放在同一 Owner 内：聚合 effect 与结构 effect 随 Owner 一起销毁。
+			a.bindReactive()
+		}
+	})
 	a.rendered = true
-	if err := a.Draw(); err != nil {
-		return err
+	if inst == nil {
+		return fmt.Errorf("gxapp: 建树函数未返回场景树实例（*gxscene.Instance）")
 	}
-	// 响应式接线完全封装在 app 内部：signal 写入即更新 + 重绘一帧。
-	a.bindReactive()
 	return nil
+}
+
+// teardownTree 销毁当前场景树及其 Owner（含组件副作用）与订阅。
+func (a *App) teardownTree() {
+	if a.owner != nil {
+		a.owner.Dispose() // 级联销毁组件内 effect/computed，执行 onCleanup
+		a.owner = nil
+	}
+	a.disposeReactive()
+	if a.inst != nil {
+		a.inst.Dispose() // 结构插槽 controller / 元素 Owner
+		a.inst = nil
+	}
 }
 
 // bindReactive 建立「单一聚合 effect」把 signal 接到场景树，并负责窗口重绘。
@@ -230,12 +261,9 @@ func (a *App) Close() error {
 		return nil
 	}
 	a.closed = true
-	// 先停掉响应式订阅，避免关闭过程中 signal 写入触发已关闭窗口的重绘。
-	a.disposeReactive()
-	// 清理 scene 层为动态结构插槽（Branch/For）建立的 effect 与元素 Owner。
-	if a.inst != nil {
-		a.inst.Dispose()
-	}
+	// 先销毁整棵响应式树：停订阅、执行组件 onCleanup，避免关闭过程中 signal 写入
+	// 触发已关闭窗口的重绘。
+	a.teardownTree()
 	return a.win.Close()
 }
 

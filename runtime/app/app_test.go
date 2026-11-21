@@ -85,7 +85,7 @@ func TestRenderDrawsFirstFrame(t *testing.T) {
 	defer app.Close()
 
 	inst := helloInst()
-	if err := app.Render(inst); err != nil {
+	if err := app.Render(func() any { return inst }); err != nil {
 		t.Fatal(err)
 	}
 	if win.draws != 1 {
@@ -112,10 +112,10 @@ func TestRenderRejectsNilAndClosed(t *testing.T) {
 	win := &countingWindow{}
 	app := openApp(t, gxapp.DefaultConfig(), win)
 	if err := app.Render(nil); err == nil {
-		t.Fatal("nil 场景树应报错")
+		t.Fatal("nil 建树函数应报错")
 	}
 	_ = app.Close()
-	if err := app.Render(helloInst()); err == nil {
+	if err := app.Render(func() any { return helloInst() }); err == nil {
 		t.Fatal("关闭后 Render 应报错")
 	}
 }
@@ -123,6 +123,15 @@ func TestRenderRejectsNilAndClosed(t *testing.T) {
 func TestOpenRejectsNilWindow(t *testing.T) {
 	if _, err := gxapp.OpenWith(gxapp.DefaultConfig(), nil); err == nil {
 		t.Fatal("nil 窗口后端应报错")
+	}
+}
+
+func TestRenderRejectsNonInstanceBuilder(t *testing.T) {
+	win := &countingWindow{}
+	app := openApp(t, gxapp.DefaultConfig(), win)
+	defer app.Close()
+	if err := app.Render(func() any { return 42 }); err == nil {
+		t.Fatal("建树函数未返回 *gxscene.Instance 应报错")
 	}
 }
 
@@ -137,7 +146,7 @@ func TestUpdateRedraws(t *testing.T) {
 	}, N: 1}, func() any { return val })
 	app := openApp(t, gxapp.DefaultConfig(), win)
 	defer app.Close()
-	if err := app.Render(inst); err != nil {
+	if err := app.Render(func() any { return inst }); err != nil {
 		t.Fatal(err)
 	}
 
@@ -167,7 +176,7 @@ func TestRenderAutoWiresReactive(t *testing.T) {
 	defer app.Close()
 
 	// Render 内部自动接线：首帧已画，接线首次执行被抑制，不重复绘制。
-	if err := app.Render(inst); err != nil {
+	if err := app.Render(func() any { return inst }); err != nil {
 		t.Fatal(err)
 	}
 	framesAfterRender := win.Frames()
@@ -199,7 +208,7 @@ func TestRenderSameValueNoRedraw(t *testing.T) {
 	win := &countingWindow{}
 	app := openApp(t, gxapp.DefaultConfig(), win)
 	defer app.Close()
-	if err := app.Render(inst); err != nil {
+	if err := app.Render(func() any { return inst }); err != nil {
 		t.Fatal(err)
 	}
 
@@ -216,7 +225,7 @@ func TestRenderSameValueNoRedraw(t *testing.T) {
 func TestRunAndCloseIdempotent(t *testing.T) {
 	win := &countingWindow{}
 	app := openApp(t, gxapp.DefaultConfig(), win)
-	if err := app.Render(helloInst()); err != nil {
+	if err := app.Render(func() any { return helloInst() }); err != nil {
 		t.Fatal(err)
 	}
 	if err := app.Run(); err != nil {
@@ -275,7 +284,7 @@ func TestStructuralChangeTriggersRedraw(t *testing.T) {
 	win := &gxapp.HeadlessWindow{Out: &buf}
 	app := openApp(t, gxapp.DefaultConfig(), win)
 	defer app.Close()
-	if err := app.Render(inst); err != nil {
+	if err := app.Render(func() any { return inst }); err != nil {
 		t.Fatal(err)
 	}
 	framesAfterRender := win.Frames()
@@ -307,7 +316,7 @@ func TestBatchCoalescesRedraw(t *testing.T) {
 	win := &gxapp.HeadlessWindow{Out: &buf}
 	app := openApp(t, gxapp.DefaultConfig(), win)
 	defer app.Close()
-	if err := app.Render(inst); err != nil {
+	if err := app.Render(func() any { return inst }); err != nil {
 		t.Fatal(err)
 	}
 	base := win.Frames()
@@ -342,10 +351,10 @@ func TestReRenderReplacesTree(t *testing.T) {
 	win := &gxapp.HeadlessWindow{Out: &buf}
 	app := openApp(t, gxapp.DefaultConfig(), win)
 	defer app.Close()
-	if err := app.Render(makeInst(func() any { return oldVal() })); err != nil {
+	if err := app.Render(func() any { return makeInst(func() any { return oldVal() }) }); err != nil {
 		t.Fatal(err)
 	}
-	if err := app.Render(makeInst(func() any { return newVal() })); err != nil {
+	if err := app.Render(func() any { return makeInst(func() any { return newVal() }) }); err != nil {
 		t.Fatal(err)
 	}
 	base := win.Frames()
@@ -363,5 +372,71 @@ func TestReRenderReplacesTree(t *testing.T) {
 	last := lastFrameOf(buf.String(), "<p>")
 	if !strings.Contains(last, `"NEW2"`) {
 		t.Fatalf("最后一帧应含 NEW2:\n%s", last)
+	}
+}
+
+// 组件生命周期（SolidJS 风格）：组件在建树时创建的 onCleanup 归属本次 Render 的
+// 根 Owner，App.Close / 重复 Render 时级联执行；组件内 signal 写入照常驱动重绘。
+func TestComponentLocalStateAndCleanupOwnedByApp(t *testing.T) {
+	var buf strings.Builder
+	win := &gxapp.HeadlessWindow{Out: &buf}
+	app := openApp(t, gxapp.DefaultConfig(), win)
+
+	cleaned := 0
+	// build 模拟一个组件函数：局部 signal + computed + effect + onCleanup。
+	build := func() any {
+		title := signal.New("v0")
+		// 组件内 effect：登记 cleanup，读 title 登记依赖。
+		signal.Effect(func() {
+			_ = title()
+			signal.OnCleanup(func() { cleaned++ })
+		})
+		return gxscene.Render(gxscene.Template{Ops: []gxscene.Op{
+			{Code: gxscene.OpElem, Arg: "h2"}, {Code: gxscene.OpDynChild, Slot: 0}, {Code: gxscene.OpClose},
+		}, N: 1}, func() any { return title() })
+	}
+	if err := app.Render(build); err != nil {
+		t.Fatal(err)
+	}
+	base := win.Frames()
+
+	// cleanup 尚未执行（首次挂载）。
+	if cleaned != 0 {
+		t.Fatalf("挂载后不应执行 cleanup, got %d", cleaned)
+	}
+	// 关闭：级联执行组件 cleanup。
+	_ = app.Close()
+	if cleaned != 1 {
+		t.Fatalf("Close 应执行一次组件 cleanup, got %d", cleaned)
+	}
+	// 二次关闭幂等，不重复执行。
+	_ = app.Close()
+	if cleaned != 1 {
+		t.Fatalf("Close 应幂等, got %d", cleaned)
+	}
+	_ = base
+}
+
+func TestReRenderDisposesPreviousComponentCleanup(t *testing.T) {
+	win := &countingWindow{}
+	app := openApp(t, gxapp.DefaultConfig(), win)
+	defer app.Close()
+
+	cleaned := 0
+	build := func() any {
+		signal.Effect(func() {
+			signal.OnCleanup(func() { cleaned++ })
+		})
+		return helloInst()
+	}
+	if err := app.Render(build); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.Render(build); err != nil {
+		t.Fatal(err)
+	}
+	// 第二次 Render 销毁了第一棵树的 Owner，旧组件 cleanup 执行一次。
+	if cleaned != 1 {
+		t.Fatalf("重复 Render 应销毁旧组件 cleanup, got %d", cleaned)
 	}
 }

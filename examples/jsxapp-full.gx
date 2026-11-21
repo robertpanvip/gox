@@ -4,8 +4,8 @@
 // 这个例子把前面所有的点串起来：
 //   1. 复合组件：大写标签 = 组件；Props getter-map 让数据在组件树里保鲜
 //   2. 响应式：signal + Signal.computed，signal 沿 Props getter 传到叶子插槽
-//   3. 应用入口：gxapp.open(cfg) 返回 App，app.render(jsx) 渲染 JSX（源码小写，
-//      编译器还原为 gxapp.Open / App.Render）；响应式在 render 内部接好，无需手写接线
+//   3. 应用入口：gxapp.open(cfg) 返回 App，app.render(() => <App/>) 收建树函数
+//      （源码小写，编译器还原为 gxapp.Open / App.Render）；根 Owner + 响应式在内部接好
 // 写入 count=5 后，count 与 doubled 两行自动刷新到新帧，组件不重建。
 package main
 
@@ -52,9 +52,9 @@ func main() {
     if err != nil { panic(err) }
     defer app.close()
 
-    // 组合根视图：count/doubled 在插值里读，编成 getter 传给 Dashboard；
-    // render 内部完成 bindReactive 接线，signal 变化 → 更新插槽 → 自动重绘一帧。
-    app.render(<div id="app"><Dashboard count={count} doubled={doubled}/></div>)
+    // 组合根视图（SolidJS 风格建树函数）：count/doubled 在插值里读，编成 getter
+    // 传给 Dashboard；render 内部建根 Owner + 接线，signal 变化 → 更新插槽 → 自动重绘。
+    app.render(() => <div id="app"><Dashboard count={count} doubled={doubled}/></div>)
 
     // count=5 后，count→5、doubled→10，两行在同一次重绘里一致更新
     count = 5

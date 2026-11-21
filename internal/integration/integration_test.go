@@ -631,7 +631,7 @@ func main() {
 }
 
 // TestIntegrationBareWindowConfig 端到端验证：gxapp.open({ ... }) 裸对象字面量
-// 从外部包 AST 推断为 gxapp.WindowConfig，app.render(jsx) 渲染场景树并可真实编译运行。
+// 从外部包 AST 推断为 gxapp.WindowConfig，app.render(() => jsx) 渲染场景树并可真实编译运行。
 func TestIntegrationBareWindowConfig(t *testing.T) {
 	src := `package main
 import (
@@ -649,11 +649,10 @@ func main() {
 	cfg := { title: "Gox", width: 800, height: 600 }
 	{ title, width } := cfg
 	signal users = []user{{1,"Tom"}}
-	view := <div><Stat label={title}/><ul><For each={users} key={(u)=>u.id}>{(u)=><li>{u.name}</li>}</For></ul></div>
 	app, err := gxapp.open({ Title: title, Width: width, Height: cfg.height })
 	if err != nil { panic(err) }
 	defer app.close()
-	app.render(view)
+	app.render(() => <div><Stat label={title}/><ul><For each={users} key={(u)=>u.id}>{(u)=><li>{u.name}</li>}</For></ul></div>)
 	fmt.println(title)
 }
 `
@@ -663,7 +662,7 @@ func main() {
 	}
 }
 
-// TestIntegrationAppRenderAutoWiresReactive 端到端验证：app.render(jsx) 内部已完成
+// TestIntegrationAppRenderAutoWiresReactive 端到端验证：app.render(() => jsx) 内部已完成
 // bindReactive 接线——GX 源码无需手写 bindReactive，signal 写入即自动更新 + 重绘一帧。
 func TestIntegrationAppRenderAutoWiresReactive(t *testing.T) {
 	src := `package main
@@ -676,7 +675,7 @@ func main() {
 	app, err := gxapp.open({ Title: "Counter", Width: 800, Height: 600 })
 	if err != nil { panic(err) }
 	defer app.close()
-	app.render(<div id="app"><span>count = {count}</span></div>)
+	app.render(() => <div id="app"><span>count = {count}</span></div>)
 	fmt.println("---AFTER---")
 	count = 5
 }
@@ -691,5 +690,60 @@ func main() {
 	}
 	if !strings.Contains(parts[1], `"5"`) || strings.Contains(parts[1], `"0"`) {
 		t.Errorf("signal 写入后应自动重绘为 5（无手写接线）:\n%s", parts[1])
+	}
+}
+
+// TestIntegrationStatefulComponent 端到端验证 SolidJS 风格有状态组件：
+// 组件内声明局部 signal + computed + effect + onCleanup，定时器自增驱动状态变化；
+// app.render(() => <App/>) 建树时建立根 Owner，close 时级联执行组件 onCleanup。
+func TestIntegrationStatefulComponent(t *testing.T) {
+	src := `package main
+import (
+	gxapp "github.com/robertpanvip/gox/runtime/app"
+	gxscene "github.com/robertpanvip/gox/runtime/scene"
+	"fmt"
+	"time"
+)
+pub func Counter(props gxscene.props) *gxscene.instance {
+	signal count = 0
+	let doubled = Signal.computed(func() int { return count() * 2 })
+	Signal.effect(func() { fmt.println("tick", count, doubled) })
+	stop := make(chan struct{})
+	Signal.onMount(func() {
+		go func() {
+			ticker := time.newTicker(10 * time.millisecond)
+			defer ticker.stop()
+			for {
+				select {
+				case <-ticker.c:
+					if count() >= 3 { return }
+					count += 1
+				case <-stop:
+					return
+				}
+			}
+		}()
+	})
+	Signal.onCleanup(func() { close(stop); fmt.println("cleanup", count) })
+	return <div><b>{count}</b><i>{doubled}</i></div>
+}
+func main() {
+	app, err := gxapp.open({ Title: "x", Width: 2, Height: 2 })
+	if err != nil { panic(err) }
+	app.render(() => <div><Counter/></div>)
+	time.sleep(150 * time.millisecond)
+	app.close()
+}
+`
+	out := runGXScene(t, src)
+	// 局部状态自增到 3、computed 派生到 6
+	for _, want := range []string{`"3"`, `"6"`, "tick 3 6"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("输出应包含 %q, got:\n%s", want, out)
+		}
+	}
+	// 组件 onCleanup 在 close 时执行（生命周期归属 App）
+	if !strings.Contains(out, "cleanup 3") {
+		t.Errorf("close 时应执行组件 cleanup, got:\n%s", out)
 	}
 }

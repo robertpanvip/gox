@@ -100,11 +100,15 @@ view := <ul>
   新增 `Instance.BindStructural`：仅为动态结构插槽接线，与叶子聚合 effect 并存；
   `app.render` 内部用「重绘包装」的 effect 接线，selector/each 变化重建子树后自动画一帧。
 - **API 重构**：`Open(cfg)` 只收窗口配置、返回 `*App`（不收 JSX、不绘制）；
-  `App.Render(jsx)` 才是渲染入口——画首帧，并把叶子聚合 effect 与结构重绘接线
-  全部封装在内部（`bindReactive` 变为私有）。源码无需再手写 `app.BindReactive`。
-  重复 `Render` 会先清理旧树的订阅与 Owner；`App.Close` 级联清理所有订阅与 Owner。
-- **关闭清理**：`App.Close` dispose 内部聚合句柄并调用 `inst.Dispose()`，
-  清理结构 effect 与元素 Owner；Render 之前调用也安全。
+  `App.Render(build func() any)` 收「建树函数」（GX 写 `app.render(() => <App/>)`，
+  SolidJS 风格）——在内部建立的**根 Owner** 下建树、画首帧，并把叶子聚合 effect 与
+  结构重绘接线全部封装在内部（`bindReactive` 变为私有）。源码无需再手写 `app.BindReactive`。
+- **组件生命周期**：组件在建树时创建的 `Signal.effect` / `computed` / `onMount` /
+  `onCleanup` 归属本次 `Render` 的根 Owner；`App.Close` / 重复 `Render` 时随 Owner
+  级联销毁并执行 `onCleanup`，不会残留永不停止的 Effect。组件内局部 `signal` 变化
+  照常驱动 UI 更新（见 `examples/jsxapp-solid.gx`）。
+- **关闭清理**：`App.Close` dispose 根 Owner（级联组件副作用）与内部聚合句柄，
+  调用 `inst.Dispose()` 清理结构 effect 与元素 Owner；Render 之前调用也安全。
 - **批处理**：`Batch` 合并同一轮多次 signal 写入为一帧重绘（已验证）。
 - **压力测试**：Owner 500 轮创建/销毁、分支 200 轮切换，Effect/Cleanup 严格配对无泄漏。
 

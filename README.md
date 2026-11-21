@@ -25,7 +25,7 @@
 | **Signal 响应式** | `signal n = 0` / `Signal.effect(() => ...)` | `Signal.New(0)` + 函数式读写 + 依赖追踪自动重跑 |
 | **条件分支** | `if cond { <A/> } else { <B/> }`（JSX 内） | `gxscene.OpBranch` + `BranchGetter`，切换时销毁旧 Owner、只重建该区域 |
 | **Keyed 列表** | `<For each={xs} key={...}>{(x) => <Item/>}</For>` | `gxscene.OpFor` + `ForGetterOf[T]`，元素类型从 `each` 自动推断（可显式注解），按 key 复用节点、每元素独立 Owner |
-| **应用入口** | `gxapp.open(cfg)` + `app.render(<div/>)` | `gxapp.Open(cfg)` 返回 App + `App.Render(gxscene.Render(...))`；open 只收配置，render 才渲染 JSX 且内部封装 signal 自动重绘（源码小写，编译器还原大写） |
+| **应用入口** | `gxapp.open(cfg)` + `app.render(() => <App/>)` | `gxapp.Open(cfg)` 返回 App + `App.Render(func() any{...})`；open 只收配置，render 收建树函数（SolidJS 风格）并在内部建根 Owner + signal 自动重绘（源码小写，编译器还原大写） |
 
 > 响应式 UI 的 Owner / Cleanup / 条件分支 / Keyed For / 结构变化重绘等机制，详见
 > [响应式 UI 路线图落地说明](docs/reactive-ui-roadmap.md)。
@@ -141,7 +141,7 @@ scene 后端**没有 Diff、没有重建**。更新 = 重新求值 getter + 只�
 
 ##### signal 自动接线（底层 Instance 用法）
 
-> 若走**应用入口** `gxapp.open(cfg)` + `app.render(jsx)`，下面这一步已由 `render` 内部完成，无需手写。本节仅针对直接使用 `gxscene.Instance`（不经 App）的场景。
+> 若走**应用入口** `gxapp.open(cfg)` + `app.render(() => <App/>)`，下面这一步已由 `render` 内部完成，无需手写。本节仅针对直接使用 `gxscene.Instance`（不经 App）的场景。
 
 scene 核心**不依赖**任何响应式库——`BindReactive(effect)` 接受一个形如 `signal.Effect` 的 effect 原语注入。它为每个插槽建一个 effect：普通插槽读 getter 后直接 `SetPart`（signal 变化只精确命中依赖它的插槽，不遍历全树）；复合组件插槽则递归进子组件接线（组件不重建）。signal 从根经 Props getter 一路传到叶子、在叶子的动态插槽里读取，写入即自动刷新。
 
@@ -228,14 +228,14 @@ API：`CompileScene` / `CompileSceneWithModule`（对应默认的 `Compile` / `C
 
 ##### 应用入口：`gxapp.open` + `app.render`（类比 `ReactDOM.createRoot(...).render(...)`）
 
-`gxapp.open(cfg)` 先创建「窗口外壳」并返回 `App`；`app.render(jsx)` 才是把一棵 JSX 场景树挂进窗口的入口——类比 React 的 `createRoot(container).render(element)`。
+`gxapp.open(cfg)` 先创建「窗口外壳」并返回 `App`；`app.render(() => <App/>)` 收一个**建树函数**，把 JSX 场景树挂进窗口——类比 SolidJS / React 的 `render(() => <App/>, root)`。建树函数在内部建立的**根 Owner** 下运行，组件里的 `Signal.effect` / `onMount` / `onCleanup` 都归属它，`app.close()` 时级联销毁。
 
 > **源码小写、生成大写**：遵循 GX 的「外部符号按小写书写、编译器还原真实大小写」约定（同 `gxvdom.render`），源码写 `gxapp.open` / `app.render` / `app.close`，生成的 Go 是 `gxapp.Open` / `App.Render` / `App.Close`。配置写**裸对象字面量** `{ ... }`，编译器从 `open` 的真实 Go 源码 AST 推断为 `gxapp.WindowConfig`（通用机制，非特判）。
 
 | 步骤 | 参数 / 返回 | 含义 |
 |---|---|---|
 | `gxapp.open(cfg)` | 参数：**窗口配置裸对象** `{ Title, Width, Height, ... }`；返回 `(*App, error)` | 只创建窗口外壳，不收 JSX、不绘制 |
-| `app.render(jsx)` | 参数：**JSX**（编译后即 `gxscene.Render(...)` → `*gxscene.Instance`） | 画首帧，并在内部完成响应式接线 |
+| `app.render(build)` | 参数：**建树函数** `() => <App/>`（编译为 `func() any`，返回 `*gxscene.Instance`） | 在根 Owner 下建树、画首帧、完成响应式接线 |
 
 ```gx
 // gox build demo.gx -jsx=scene
@@ -244,7 +244,7 @@ import gxapp "github.com/robertpanvip/gox/runtime/app"
 app, err := gxapp.open({ Title: "Demo", Width: 800, Height: 600 })
 if err != nil { panic(err) }
 defer app.close()
-app.render(<div id="app">hello</div>)
+app.render(() => <div id="app">hello</div>)
 app.run()
 ```
 
@@ -257,7 +257,7 @@ app.run()
 | `gxapp.Open(cfg)` | 按配置打开默认 Headless 窗口，返回 `(*App, error)`（不绘制） |
 | `gxapp.OpenWith(cfg, win)` | 注入自定义窗口后端（实现 `Window` 接口） |
 | `Window` 接口 | `Open(cfg)` / `Draw(root)` / `Run()` / `Close()` / `Config()` |
-| `App.Render(jsx)` | 渲染场景树：画首帧 + 内部响应式接线（signal 变化自动更新 + 重绘） |
+| `App.Render(build)` | 收建树函数 `() => <App/>`：根 Owner 下建树 + 画首帧 + 内部响应式接线（signal 变化自动更新 + 重绘） |
 | `App.Draw()` / `App.Update()` | 手动重绘一帧 / 更新场景树并重绘 |
 | `App.Run()` / `App.Close()` | 进入事件循环 / 关闭（幂等，级联清理所有订阅与 Owner） |
 | `gxapp.RenderText(view)` | 不建窗口，直接把场景树绘制成字符串（测试用） |
@@ -268,11 +268,29 @@ app.run()
 signal count = 0
 let doubled = Signal.computed(func() int { return count() * 2 })
 app, _ := gxapp.open({ Title: "Demo", Width: 800, Height: 600 })
-app.render(<div><span>{count}</span><b>{doubled}</b></div>)   // 首帧 + 内部接线
+app.render(() => <div><span>{count}</span><b>{doubled}</b></div>)   // 根 Owner 下建树 + 接线
 count = 5                          // 自动更新 + 只画一帧：count=5、doubled=10 一致
 ```
 
-> **接入真实 GUI**：实现 `Window` 接口的 `Open/Draw/Run/Close/Config`，用 `OpenWith` 注入即可——Skia / wgpu / GLFW 后端无需改动 `gxapp` 或编译器。当前 Headless 后端让整条链路在无 GUI 环境端到端可验证。最小示例见 [`examples/jsxapp.gx`](examples/jsxapp.gx)；**复合组件 + signal 响应式 + open 的完整实战**见 [`examples/jsxapp-full.gx`](examples/jsxapp-full.gx)（含两层组件、signal 沿 Props 传递、两帧实测输出，HTML 指南「三·实战」章节有逐段拆解），运行时见 [`runtime/app/`](runtime/app/)。
+**有状态组件（SolidJS 风格）**：组件函数**只在建树时执行一次**，状态写在组件内部、不在 `main` 里；`signal` / `Signal.computed` / `Signal.effect` 在组件内声明，靠响应式保鲜；`Signal.onMount` 启动副作用、`Signal.onCleanup` 清理，二者归属 App 根 Owner，`app.close()` 时级联执行。完整可运行示例见 [`examples/jsxapp-solid.gx`](examples/jsxapp-solid.gx)：
+
+```gx
+pub func Counter(props gxscene.props) *gxscene.instance {
+    signal count = 0
+    let doubled = Signal.computed(func() int { return count() * 2 })
+    Signal.effect(func() { fmt.println("tick", count, doubled) })
+    stop := make(chan struct{})
+    Signal.onMount(func() {
+        go func() { /* 定时器里 count += 1 */ }()
+    })
+    Signal.onCleanup(func() { close(stop); fmt.println("unmounted") })  // close 时触发
+    return <div>{count} / {doubled}</div>
+}
+app.render(() => <div><Counter/></div>)
+app.close()   // 级联执行 Counter 的 onCleanup
+```
+
+> **接入真实 GUI**：实现 `Window` 接口的 `Open/Draw/Run/Close/Config`，用 `OpenWith` 注入即可——Skia / wgpu / GLFW 后端无需改动 `gxapp` 或编译器。当前 Headless 后端让整条链路在无 GUI 环境端到端可验证。最小示例见 [`examples/jsxapp.gx`](examples/jsxapp.gx)；**复合组件 + signal 响应式**见 [`examples/jsxapp-full.gx`](examples/jsxapp-full.gx)；**SolidJS 风格有状态组件**（组件内局部状态 + 定时器自增 + onMount/onCleanup 生命周期）见 [`examples/jsxapp-solid.gx`](examples/jsxapp-solid.gx)，运行时见 [`runtime/app/`](runtime/app/)。
 
 ## 4. 外部 Go 符号：按真实拼写书写
 
