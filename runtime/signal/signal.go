@@ -29,6 +29,7 @@ package signal
 import (
 	"runtime"
 	"sync"
+	"sync/atomic"
 )
 
 // Signal[T] 是读写一体的 signal。无参调用读，返回当前值；带参调用写第一个参数。
@@ -37,9 +38,10 @@ type Signal[T any] func(...T) T
 // ---------- 依赖追踪核心（非泛型） ----------
 
 var (
-	mu        sync.Mutex
-	recalc    = sync.NewCond(&mu)    // computed 重算完成广播，供并发读者等待（H-9）
-	observers = map[uint64][]*node{} // 各 goroutine 的观察者栈，按 goroutine id 隔离（H-8/P1-3）
+	mu              sync.Mutex
+	recalc          = sync.NewCond(&mu)    // computed 重算完成广播，供并发读者等待（H-9）
+	observers       = map[uint64][]*node{} // 各 goroutine 的观察者栈，按 goroutine id 隔离（H-8/P1-3）
+	activeObservers atomic.Int64           // 当前正在重算的 observer 数量；为 0 时读可走无锁快路径
 )
 
 // goid 返回当前 goroutine 的 id。通过 runtime.Stack 首行 "goroutine N ..." 解析。
@@ -116,6 +118,11 @@ func clearDeps(n *node) {
 // collectDirty 在 mu 持有期间调用：从 n 向下游传播脏标记，返回需要重跑的 effect。
 // computed 节点被标脏后继续向下传播；effect 节点收集去重后返回（锁外执行）。
 func collectDirty(n *node) []*node {
+	// 快路径：没有任何订阅者时无需建去重 map，直接返回。
+	// 大量 signal 没有下游（叶子信号 / 未被 effect 依赖），写它们不该付分配代价。
+	if len(n.subs) == 0 {
+		return nil
+	}
 	var effects []*node
 	seen := make(map[*node]bool)
 	var walk func(*node)
@@ -143,6 +150,7 @@ func collectDirty(n *node) []*node {
 // 恢复用 defer 保证：即便 fn panic（如循环依赖检测触发），当前 goroutine 的栈也不会被污染（M-10）。
 func withObserver(n *node, fn func()) {
 	id := goid()
+	activeObservers.Add(1) // 进入重算：此后其它 goroutine 的读必须走 track 慢路径
 	mu.Lock()
 	observers[id] = append(observers[id], n)
 	clearDeps(n)
@@ -157,6 +165,7 @@ func withObserver(n *node, fn func()) {
 			observers[id] = st[:len(st)-1] // 弹出栈顶（n 必为最后压入者）
 		}
 		mu.Unlock()
+		activeObservers.Add(-1) // 退出重算
 	}()
 
 	fn() // 用户回调在锁外执行，回调内读写 signal 会再次获取锁——不会自锁
@@ -166,20 +175,27 @@ func withObserver(n *node, fn func()) {
 
 // New 创建一个值为 v 的源 signal。
 func New[T any](v T) Signal[T] {
-	st := &state[T]{n: newNode(false), value: v}
+	st := &state[T]{n: newNode(false)}
+	st.value.Store(&boxedValue[T]{v: v})
 	return func(args ...T) T {
 		if len(args) > 0 {
 			mu.Lock()
-			st.value = args[0]
+			st.value.Store(&boxedValue[T]{v: args[0]})
 			effects := collectDirty(st.n)
 			mu.Unlock()
 			for _, e := range effects {
 				scheduleEffect(e)
 			}
 		}
+		// 读快路径：没有任何 observer 在重算时，track 必然是 no-op
+		// （观察者栈只在 withObserver 内非空），因此无需抓栈、无需加锁，
+		// 直接原子读取即可。这是绝大多数读取所处的路径。
+		if activeObservers.Load() == 0 {
+			return st.value.Load().v
+		}
 		mu.Lock()
 		track(st.n)
-		v := st.value
+		v := st.value.Load().v
 		mu.Unlock()
 		return v
 	}
@@ -189,9 +205,17 @@ func New[T any](v T) Signal[T] {
 // 派生 signal 是只读的（带参调用写入被忽略）。
 func Computed[T any](f func() T) Signal[T] {
 	st := &state[T]{n: newNode(false)}
+	st.value.Store(&boxedValue[T]{}) // 占位，recompute 首次成功后覆盖
 	recompute := func() {
-		id := goid()
 		mu.Lock()
+		// 性能快路径：缓存干净且无人重算时，绝大多数读取在此直接返回，
+		// 完全跳过 goid()（runtime.Stack 抓栈，约占原读取耗时的 80%）。
+		// 只有确有并发重算时才需要 goid() 来区分等待与重入（H-9）。
+		if !st.n.dirty && !st.n.computing {
+			mu.Unlock()
+			return
+		}
+		id := goid() // 延迟到此：只在可能需要等待/重入检测时才抓栈
 		for st.n.computing && st.n.computingBy != id {
 			// 别的 goroutine 正在重算：等待其完成，而不是重复执行 f()（H-9）。
 			// cond 唤醒后回到循环重新判定 dirty——若对方已完成且已清 dirty，直接返回。
@@ -251,7 +275,7 @@ func Computed[T any](f func() T) Signal[T] {
 				mu.Unlock()
 				continue
 			}
-			st.value = result
+			st.value.Store(&boxedValue[T]{v: result})
 			st.n.dirty = false
 			mu.Unlock()
 			return
@@ -260,15 +284,15 @@ func Computed[T any](f func() T) Signal[T] {
 	st.n.run = recompute
 	return func(args ...T) T {
 		if len(args) > 0 {
-			mu.Lock()
-			v := st.value // 只读：忽略写入
-			mu.Unlock()
-			return v
+			return st.value.Load().v // 只读：忽略写入
 		}
 		recompute()
+		if activeObservers.Load() == 0 {
+			return st.value.Load().v
+		}
 		mu.Lock()
 		track(st.n)
-		v := st.value
+		v := st.value.Load().v
 		mu.Unlock()
 		return v
 	}
@@ -323,8 +347,13 @@ func Effect(f func()) {
 	scheduleEffect(n) // 首次立即执行
 }
 
+// boxedValue 把任意类型 T 装进指针，使 value 能用 atomic.Pointer 无锁读写。
+type boxedValue[T any] struct{ v T }
+
 // state 保存 signal 的节点与当前值。
+// value 用原子指针存储：读走无锁快路径，写仍在 mu 临界区内 Store，
+// 保证读者要么看到旧值、要么看到完整新值，不会撕裂。
 type state[T any] struct {
 	n     *node
-	value T
+	value atomic.Pointer[boxedValue[T]]
 }

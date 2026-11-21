@@ -16,7 +16,10 @@ internal/            仅本仓库 cmd 使用
   buildcheck/        真实 go build 检查（可取消 + LRU）
 bindings/cabi/       C-ABI 共享库（JNA）
 runtime/             运行时组件（统一收纳）
-  vdom/ list/        具体运行时
+  vdom/ list/ signal/  具体运行时
+    signal/           响应式信号：函数式 Signal[T]、依赖图、惰性 computed、串行 effect
+                      读路径用 activeObservers 原子计数 + atomic value 走无锁快路径，
+                      仅重算期抓 goroutine id 登记依赖（详见 language-spec §11）
 ```
 
 外部前端（IDEA 插件）通过 `bindings/cabi` 或直接 import `pkg` 接入，不碰 `internal`。
