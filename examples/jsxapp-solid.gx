@@ -24,13 +24,13 @@ pub func Counter(props gxscene.props) *gxscene.instance {
     let doubled = Signal.computed(() => count() * 2)
 
     // 组件自己的副作用：count 变化即重跑，打印状态变化逻辑
-    Signal.effect(func() {
+    Signal.effect(() => {
         fmt.println("[", name(), "] count:", count, "doubled:", doubled)
     })
 
     // onMount：挂载后启动定时器，每 20ms 自增一次，到 3 停止（自驱状态变化）
     stop := make(chan struct{})
-    Signal.onMount(func() {
+    Signal.onMount(() => {
         go func() {
             ticker := time.newTicker(20 * time.millisecond)
             defer ticker.stop()
@@ -47,7 +47,7 @@ pub func Counter(props gxscene.props) *gxscene.instance {
     })
 
     // onCleanup：卸载时停定时器并打印清理日志，证明组件生命周期归属 App
-    Signal.onCleanup(func() {
+    Signal.onCleanup(() => {
         close(stop)
         fmt.println("[", name(), "] unmounted")
     })

@@ -467,6 +467,31 @@ func main() {
 	}
 }
 
+func TestIntegrationArrowBlockCallbacks(t *testing.T) {
+	// SolidJS 风格：signal 回调用箭头函数，多语句用花括号 body () => { ... }。
+	// batch 内两条写语句、effect 花括号 body 嵌套调用。
+	src := `package main
+import "fmt"
+signal n = 0
+func main() {
+    let doubled = Signal.computed(() => n() * 2)
+    Signal.effect(() => { fmt.Println("init", doubled()) })
+    Signal.batch(() => { n = 4; n = 5 })
+    fmt.Println("final", n(), doubled())
+}
+`
+	out := runGX(t, src)
+	for _, want := range []string{
+		"init 0",   // effect 花括号 body 首次执行
+		"init 10",  // batch 写入 n=5 后 effect 重跑，doubled=10
+		"final 5 10",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("输出应包含 %q, got:\n%s", want, out)
+		}
+	}
+}
+
 func TestIntegrationSignalBitwiseCompound(t *testing.T) {
 	// 位运算复合赋值：&= / |= / ^= / <<= / >>= / &^= 真实运行结果。
 	src := `package main

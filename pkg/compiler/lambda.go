@@ -27,6 +27,7 @@ type lambdaExpr struct {
 	paramOpen  int    // 参数区起始下标（单参数时即参数本身）
 	paramClose int    // 参数区结束下标
 	bodyResult string // 推断出的返回类型
+	blockBody  bool   // body 是花括号语句块 `() => { ... }`（SolidJS 风格副作用回调）
 	posZero    Pos    // lambda 位置
 }
 
@@ -87,6 +88,12 @@ func parseLambdaAt(toks []Token, arrowIdx int) *lambdaExpr {
 	bodyTo := lambdaBodyEnd(toks, bodyFrom)
 	if bodyTo <= bodyFrom {
 		return nil
+	}
+	// 花括号 body `() => { stmt; stmt }`：lambdaBodyEnd 的深度扫描会把整块
+	// { ... } 纳入 body（内部的 ) ; 换行因深度>0 不终止）。标记后由
+	// buildLambdaParts 生成 `func(){ ... }`（不再包裹 return）。
+	if toks[bodyFrom].Text == "{" {
+		l.blockBody = true
 	}
 	l.bodyFrom, l.bodyTo = bodyFrom, bodyTo
 	l.endIdx = bodyTo - 1
@@ -198,6 +205,13 @@ func inferLambdaTypes(toks []Token, l *lambdaExpr, an *Analysis, b *Bindings, si
 		if p.typeText == "" {
 			p.typeText = "any"
 		}
+	}
+
+	// 花括号语句块 body：整体作为 func body 原样输出，不返回值。
+	// 参数类型仍按上下文/显式标注推断（如 createRoot(o => { ... }) 的 o）。
+	if l.blockBody {
+		l.bodyResult = "void"
+		return
 	}
 
 	if l.bodyResult != "" {
@@ -770,6 +784,17 @@ func buildLambdaParts(in []Token, l *lambdaExpr) []Token {
 		parts = append(parts, tokenizeTypeText(param.typeText, p)...)
 	}
 	parts = append(parts, tokOp(")", p))
+
+	// 花括号语句块 body：body tokens 自带 { ... }，直接拼在参数后，
+	// 不再额外包裹 `{ return ... }`——生成 `func(x T) { stmt; stmt }`。
+	if l.blockBody {
+		parts = append(parts, tokSpace(" ", p))
+		for k := l.bodyFrom; k < l.bodyTo; k++ {
+			parts = append(parts, in[k])
+		}
+		return parts
+	}
+
 	isVoid := l.bodyResult == "void"
 	if !isVoid && l.bodyResult != "" {
 		parts = append(parts, tokSpace(" ", p))

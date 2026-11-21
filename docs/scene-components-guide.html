@@ -128,7 +128,7 @@
 ② <b>组件名大写开头</b>——<code>pub func Stat(...)</code> 配 <code>&lt;Stat/&gt;</code>。JSX 标签首字母大写 = 组件、小写 = 原生 HTML 标签，这是硬编码判定。
 ③ <b>配置对象写裸字面量</b>——<code>gxapp.open({ Title: ..., Width: ... })</code>，编译器用 <code>go list</code> + <code>go/parser</code> 读取 <code>gxapp.open</code> 所在包的真实 Go 源码 AST，取出参数类型并补全为 <code>gxapp.WindowConfig</code>（通用机制，对任意外部包函数都有效；读不到时回退匿名 struct）。无需也不应手写 <code>gxapp.windowConfig{...}</code>。
 ④ <b>open 与 render 分工</b>——<code>gxapp.open(cfg)</code> 只创建窗口外壳并返回 <code>App</code>，<code>app.render(() =&gt; &lt;App/&gt;)</code> 收一个<b>建树函数</b>（SolidJS 风格）：内部建立根 Owner、画首帧、封装 <code>bindReactive</code>（signal 变化 → 更新 + 重绘，含分支/列表结构重绘），源码无需手写接线。组件内的 <code>Signal.effect</code> / <code>onMount</code> / <code>onCleanup</code> 归属该 Owner，<code>app.close</code> 时级联清理。
-⑤ <b>回调首选箭头函数</b>——<code>Signal.computed(() =&gt; expr)</code> / <code>Signal.effect(() =&gt; ...)</code> 贴近 SolidJS 习惯，别写 <code>func() T { return ... }</code>。编译器从 body 反推类型：<code>() =&gt; count()</code> 这种单点 signal getter 会从 signal 声明类型反查返回类型（不降级 <code>any</code>）；只有多语句或需显式类型时才用 <code>func</code> 字面量。
+⑤ <b>回调用箭头函数</b>——<code>Signal.computed(() =&gt; expr)</code> / <code>Signal.effect(() =&gt; ...)</code> / <code>batch</code> / <code>onMount</code> / <code>onCleanup</code> 一律写箭头，贴近 SolidJS 习惯，别写 <code>func() T { return ... }</code>。单语句 <code>() =&gt; expr</code>，多语句 <code>() =&gt; { stmt; stmt }</code>（花括号 body 生成 <code>func(){...}</code>）；编译器从 body 反推类型，<code>() =&gt; count()</code> 单点 signal getter 会从声明类型反查（不降级 <code>any</code>），带参数的 <code>createRoot((o *Signal.owner) =&gt; {...})</code> 保留显式标注。
 </div>
 
 <h2>二、工作原理（三段流程）</h2>
@@ -207,8 +207,8 @@
         }
     &lt;/<span class="jx">div</span>&gt;)  <span class="cm">// 在根 Owner 下建树 + 内部 bindReactive</span>
 
-    <span class="cm">// 批处理：同一帧内 count→5、visible→false，只重绘一次</span>
-    <span class="fn">Signal</span>.<span class="fn">batch</span>(<span class="kw">func</span>() { count(<span class="ty">5</span>); visible(<span class="kw">false</span>) })
+    <span class="cm">// 批处理：同一帧内 count→5、visible→false，只重绘一次（多语句用花括号 body）</span>
+    <span class="fn">Signal</span>.<span class="fn">batch</span>(() =&gt; { count(<span class="ty">5</span>); visible(<span class="kw">false</span>) })
     fmt.<span class="fn">println</span>(doubled())  <span class="cm">// 10</span>
 }</pre>
 <div class="note"><b>实测输出要点：</b>初始渲染出 <code>"Tom"</code>/<code>"Jack"</code> 列表；<code>visible=false</code> 后条件分支切到 <code>Hidden</code>；<code>doubled()</code> 得到 <code>10</code>。<code>&lt;For&gt;</code> 的 render 参数 <code>(u)</code> 未写类型——编译器从 <code>each={users}</code> 的 <code>[]user</code> 自动推断出元素类型。</div>
@@ -217,11 +217,11 @@
 
 <h3>阶段 1 · Owner / Cleanup / Effect 句柄</h3>
 <p><code>Signal.effect</code> 返回可销毁句柄，挂在 Owner 树下；父 Owner 销毁会级联停掉子计算并执行清理。写副作用时把清理登记在 effect 内，重跑前与销毁时都会执行。</p>
-<pre class="code"><span class="fn">Signal</span>.<span class="fn">createRoot</span>(<span class="kw">func</span>(o *<span class="ty">signal</span>.<span class="ty">owner</span>) {
-    h := <span class="fn">Signal</span>.<span class="fn">effect</span>(<span class="kw">func</span>() {
+<pre class="code"><span class="fn">Signal</span>.<span class="fn">createRoot</span>((o *<span class="fn">Signal</span>.<span class="ty">owner</span>) =&gt; {
+    h := <span class="fn">Signal</span>.<span class="fn">effect</span>(() =&gt; {
         fmt.<span class="fn">println</span>(count)
-        <span class="fn">Signal</span>.<span class="fn">onCleanup</span>(<span class="kw">func</span>() { <span class="cm">/* 重跑前 / 销毁时执行 */</span> })
-        <span class="fn">Signal</span>.<span class="fn">onMount</span>(<span class="kw">func</span>() { <span class="cm">/* 首次挂载执行一次 */</span> })
+        <span class="fn">Signal</span>.<span class="fn">onCleanup</span>(() =&gt; { <span class="cm">/* 重跑前 / 销毁时执行 */</span> })
+        <span class="fn">Signal</span>.<span class="fn">onMount</span>(() =&gt; { <span class="cm">/* 首次挂载执行一次 */</span> })
     })
     _ = h  <span class="cm">// h.dispose() 幂等：断依赖、停订阅、执行清理</span>
 })
@@ -256,19 +256,19 @@
 <span class="kw">if</span> err != nil { <span class="fn">panic</span>(err) }
 <span class="kw">defer</span> app.<span class="fn">close</span>()
 app.<span class="fn">render</span>(() =&gt; &lt;<span class="jx">div</span>&gt;{...}&lt;/<span class="jx">div</span>&gt;)  <span class="cm">// 根 Owner 下建树 + 内部响应式接线</span>
-<span class="fn">Signal</span>.<span class="fn">batch</span>(<span class="kw">func</span>() { count(<span class="ty">5</span>); visible(<span class="kw">false</span>) })  <span class="cm">// 一次重绘</span></pre>
+<span class="fn">Signal</span>.<span class="fn">batch</span>(() =&gt; { count(<span class="ty">5</span>); visible(<span class="kw">false</span>) })  <span class="cm">// 一次重绘</span></pre>
 
 <h3>有状态组件（SolidJS 风格，推荐）</h3>
 <p>组件函数<b>只在建树时执行一次</b>——状态是组件「自己的」，写在组件内部而非 <code>main</code> 里，靠 signal + effect 保鲜。副作用用 <code>Signal.onMount</code> 启动、<code>Signal.onCleanup</code> 清理，二者归属 <code>app.render</code> 建立的根 Owner，<code>app.close</code> 时级联执行。完整可运行示例见 <code>examples/jsxapp-solid.gx</code>（组件内定时器自增，close 时打印 unmounted）。</p>
 <pre class="code"><span class="kw">pub func</span> <span class="fn">Counter</span>(props gxscene.<span class="ty">props</span>) *gxscene.<span class="ty">instance</span> {
     <span class="kw">signal</span> count = <span class="ty">0</span>   <span class="cm">// 组件局部状态</span>
     <span class="kw">let</span> doubled = <span class="fn">Signal</span>.<span class="fn">computed</span>(() =&gt; count() * <span class="ty">2</span>)
-    <span class="fn">Signal</span>.<span class="fn">effect</span>(<span class="kw">func</span>() { fmt.<span class="fn">println</span>(<span class="st">"tick"</span>, count, doubled) })  <span class="cm">// 状态变化逻辑</span>
+    <span class="fn">Signal</span>.<span class="fn">effect</span>(() =&gt; { fmt.<span class="fn">println</span>(<span class="st">"tick"</span>, count, doubled) })  <span class="cm">// 状态变化逻辑</span>
     stop := <span class="fn">make</span>(<span class="kw">chan</span> <span class="kw">struct</span>{})
-    <span class="fn">Signal</span>.<span class="fn">onMount</span>(<span class="kw">func</span>() {
+    <span class="fn">Signal</span>.<span class="fn">onMount</span>(() =&gt; {
         <span class="kw">go func</span>() { <span class="cm">/* 定时器里 count += 1 */</span> }()
     })
-    <span class="fn">Signal</span>.<span class="fn">onCleanup</span>(<span class="kw">func</span>() { <span class="fn">close</span>(stop); fmt.<span class="fn">println</span>(<span class="st">"unmounted"</span>) })  <span class="cm">// close 时触发</span>
+    <span class="fn">Signal</span>.<span class="fn">onCleanup</span>(() =&gt; { <span class="fn">close</span>(stop); fmt.<span class="fn">println</span>(<span class="st">"unmounted"</span>) })  <span class="cm">// close 时触发</span>
     <span class="kw">return</span> &lt;<span class="jx">div</span>&gt;{count} / {doubled}&lt;/<span class="jx">div</span>&gt;
 }
 app.<span class="fn">render</span>(() =&gt; &lt;<span class="jx">div</span>&gt;&lt;<span class="jx">Counter</span>/&gt;&lt;/<span class="jx">div</span>&gt;)  <span class="cm">// 根 Owner 在此建立</span>
@@ -279,7 +279,7 @@ app.<span class="fn">close</span>()  <span class="cm">// 级联执行 Counter �
 <ol class="constraints">
   <li><b>标识符小写书写</b>：GX 源码一律小写，编译器还原；全大写缩写写大写原样保留。</li>
   <li><b>signal API 大写前缀</b>：<code>Signal.computed</code> / <code>Signal.effect</code> / <code>Signal.createRoot</code> / <code>Signal.batch</code> 等一律大写 <code>Signal.</code>，避免与 <code>signal</code> 声明关键字混淆；不要写裸 <code>computed(...)</code>。</li>
-  <li><b>回调用箭头函数</b>：<code>Signal.computed(() =&gt; expr)</code> / <code>Signal.effect(() =&gt; ...)</code>，从 body 反推类型（含单点 signal getter），不写 <code>func() T { return ... }</code>。</li>
+  <li><b>回调用箭头函数</b>：<code>Signal.computed(() =&gt; expr)</code> / <code>Signal.effect(() =&gt; ...)</code>，多语句用 <code>() =&gt; { ... }</code>，从 body 反推类型（含单点 signal getter），不写 <code>func() T { return ... }</code>。</li>
   <li><b>组件名大写开头</b>：<code>pub func Stat(...)</code> + <code>&lt;Stat/&gt;</code>；组件标签不能小写。</li>
   <li><b>配置写裸对象字面量</b>：<code>gxapp.open({ ... })</code>（只收配置，返回 App），从签名推断具名类型，不手写 <code>gxapp.windowConfig{...}</code>。</li>
   <li><b>pub 声明小写 + JSX 标签大写</b>：<code>pub func card</code> 配 <code>&lt;Card/&gt;</code>；组件标签小写会被当成原生标签。</li>

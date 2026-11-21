@@ -221,3 +221,48 @@ func main() {
 		t.Fatalf("单点 signal getter 不应降级 any:\n%s", got)
 	}
 }
+
+// TestLambdaBlockBody 验证花括号多语句 body `() => { stmt; stmt }`：
+// 生成 `func() { ... }`（void，无 return），用于 effect/batch/onMount 等副作用回调。
+func TestLambdaBlockBody(t *testing.T) {
+	src := `package main
+func main() {
+	signal count = 0
+	Signal.batch(() => { count = 5; println("batch", count()) })
+	Signal.effect(() => {
+		println("eff", count())
+		println("again", count())
+	})
+}
+`
+	got := compileOK(t, "lambdablock.gx", src)
+	containsAll(t, got,
+		`Signal.Batch(func() { count(5); println("batch", count()) })`,
+		`println("eff", count())`,
+		`println("again", count())`,
+	)
+	// block body 不应生成 return
+	if strings.Contains(got, "return {") || strings.Contains(got, "return println") {
+		t.Fatalf("block body 不应包裹 return:\n%s", got)
+	}
+}
+
+// TestLambdaBlockBodyTypedParam 验证带显式参数标注 + 花括号 body 的箭头
+// （如 createRoot((o *signal.owner) => { ... })），以及内部嵌套箭头。
+func TestLambdaBlockBodyTypedParam(t *testing.T) {
+	src := `package main
+func main() {
+	Signal.createRoot((o *Signal.owner) => {
+		h := Signal.effect(() => println("eff"))
+		Signal.onCleanup(() => println("cleanup"))
+		_ = h
+	})
+}
+`
+	got := compileOK(t, "lambdablocktyped.gx", src)
+	containsAll(t, got,
+		`Signal.CreateRoot(func(o *Signal.Owner) {`,
+		`h := Signal.Effect(func() {println("eff")})`,
+		`Signal.OnCleanup(func() {println("cleanup")})`,
+	)
+}

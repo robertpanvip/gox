@@ -278,12 +278,12 @@ count = 5                          // 自动更新 + 只画一帧：count=5、do
 pub func Counter(props gxscene.props) *gxscene.instance {
     signal count = 0
     let doubled = Signal.computed(() => count() * 2)
-    Signal.effect(func() { fmt.println("tick", count, doubled) })
+    Signal.effect(() => { fmt.println("tick", count, doubled) })
     stop := make(chan struct{})
-    Signal.onMount(func() {
+    Signal.onMount(() => {
         go func() { /* 定时器里 count += 1 */ }()
     })
-    Signal.onCleanup(func() { close(stop); fmt.println("unmounted") })  // close 时触发
+    Signal.onCleanup(() => { close(stop); fmt.println("unmounted") })  // close 时触发
     return <div>{count} / {doubled}</div>
 }
 app.render(() => <div><Counter/></div>)

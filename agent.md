@@ -36,7 +36,7 @@ Gox 是一个把 `.gx` 转译成标准 Go 的编译器。`.gx` = Go 语法 + 一
 3. **`pub` 组件名与 JSX 标签都大写开头**：组件声明写 `pub func Stat(...)`，调用写 `<Stat/>`。JSX 里首字母大写 = 组件、小写 = 原生 HTML 标签，这是硬编码判定，不能把组件写成小写标签。
 4. **本文件私有类型写小写**：`type cardProps struct{...}` 保持私有小写；`pub type` 才导出。
 5. **裸标识符不碰**：内置函数等裸标识符一律不改，不要给它们加大小写。
-6. **回调首选箭头函数**：`Signal.computed` / `Signal.effect` / 集合回调（`map`/`filter`）等一律写箭头 `() => expr`、`x => expr`，贴近 SolidJS/JS 习惯，别写 `func() T { return ... }`。编译器会从 body 反推参数与返回类型——包括 `computed(() => count())` 这种单点 signal getter（从 signal 声明类型反查，不降级 `any`）；需要多语句或显式类型时才用 `func` 字面量。
+6. **回调用箭头函数**：`Signal.computed` / `Signal.effect` / `batch` / `onMount` / `onCleanup` / 集合回调（`map`/`filter`）等一律写箭头——单语句 `() => expr` / `x => expr`，多语句 `() => { stmt; stmt }`（花括号 body，生成 `func(){...}`），贴近 SolidJS/JS 习惯，别写 `func() T { return ... }`。编译器从 body 反推参数与返回类型，包括 `computed(() => count())` 单点 signal getter（从 signal 声明类型反查，不降级 `any`）；带参数的 `createRoot((o *Signal.owner) => { ... })` 保留显式类型标注。只有极少数需要显式多返回值的场合才用 `func` 字面量。
 
 ### 反面教材（本项目真实犯过的错，禁止重演）
 
@@ -51,7 +51,7 @@ app.render(view)
 
 // ✅ 对：signal API 大写 Signal. 前缀；pub 组件大写；配置用裸对象字面量；
 //      open 只收配置、render 收建树函数（圆括号箭头）且自带响应式与生命周期
-Signal.createRoot(func(o *signal.owner) { Signal.onCleanup(...) })
+Signal.createRoot((o *Signal.owner) => { Signal.onCleanup(() => { ... }) })
 view.bindReactive(Signal.effect)
 pub func Stat(props gxscene.props) *gxscene.instance { ... }
 app, _ := gxapp.open({ Title: "Gox", Width: 800 })
@@ -85,10 +85,10 @@ JSX 默认走 scene 后端（`gox build -jsx=scene`）：编译期 opcode + 常�
 
 ```gx
 // 阶段1：Owner / Cleanup / Effect 句柄（signal API 一律大写 Signal. 前缀）
-Signal.createRoot(func(o *signal.owner) {
-    h := Signal.effect(func() {
+Signal.createRoot((o *Signal.owner) => {
+    h := Signal.effect(() => {
         fmt.println(count)
-        Signal.onCleanup(func() { /* 重跑前 / 销毁时 */ })
+        Signal.onCleanup(() => { /* 重跑前 / 销毁时 */ })
     })
     _ = h // h.dispose() 幂等
 })
@@ -115,7 +115,7 @@ app, err := gxapp.open({ Title: "Gox", Width: 800 })
 if err != nil { panic(err) }
 defer app.close()
 app.render(() => <div>{...}</div>)     // 在根 Owner 下建树 + 响应式接线
-Signal.batch(func() { count(5); visible(false) })
+Signal.batch(() => { count(5); visible(false) })
 ```
 
 ### 有状态组件（SolidJS 风格，推荐）
@@ -126,12 +126,12 @@ Signal.batch(func() { count(5); visible(false) })
 pub func Counter(props gxscene.props) *gxscene.instance {
     signal count = 0
     let doubled = Signal.computed(() => count() * 2)
-    Signal.effect(func() { fmt.println("tick", count, doubled) })
+    Signal.effect(() => { fmt.println("tick", count, doubled) })
     stop := make(chan struct{})
-    Signal.onMount(func() {
+    Signal.onMount(() => {
         go func() { /* 定时器里 count += 1 */ }()
     })
-    Signal.onCleanup(func() { close(stop); fmt.println("unmounted") })
+    Signal.onCleanup(() => { close(stop); fmt.println("unmounted") })
     return <div>{count} / {doubled}</div>
 }
 func main() {
