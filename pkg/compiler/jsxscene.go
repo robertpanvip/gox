@@ -182,6 +182,31 @@ func getterCallTokens(expr string, pos Pos, ctx *jsxSceneCtx) []Token {
 	return out
 }
 
+// isEventAttrName 判断是否为事件属性。规则极宽：以 "on" 开头且后面还有内容即视为事件，
+// 前端**不设白名单**——onClick/onMouseEnter 等标准事件与后端自定义的 onFoo 一视同仁，
+// 全部原样透传。唯一的例外是 "once"/"only" 这类恰好以 on 开头的普通属性，这里用
+// 「第 3 个字符为大写字母」收窄：GX/JS 事件命名惯例是 onXxx（X 大写），故不会误伤。
+func isEventAttrName(name string) bool {
+	if len(name) <= 2 || name[0] != 'o' || name[1] != 'n' {
+		return false
+	}
+	c := name[2]
+	return c >= 'A' && c <= 'Z'
+}
+
+// eventGetter 为事件属性生成取值 getter。attrExpr 走正常表达式词法化；
+// 静态字符串/bool 事件包成常量 getter（后端按需解释，前端不假设签名）。
+func eventGetter(a jsxAttr) sceneGetter {
+	switch a.kind {
+	case attrExpr:
+		return sceneGetter{expr: a.value, pos: a.pos}
+	case attrString:
+		return sceneGetter{pos: a.pos, call: []Token{tokString(normalizeStringLit(a.value), a.pos)}}
+	default: // attrBool
+		return sceneGetter{pos: a.pos, call: []Token{tokIdent("true", a.pos)}}
+	}
+}
+
 // walkScene 深度优先遍历 jsxNode，产出 opcode 序列与 getter 列表。
 // slotCounter 在各子节点间共享，保证插槽索引连续。
 func walkScene(n *jsxNode, ops *[]sceneOp, getters *[]sceneGetter, slotCounter *int, ctx *jsxSceneCtx) {
@@ -189,6 +214,16 @@ func walkScene(n *jsxNode, ops *[]sceneOp, getters *[]sceneGetter, slotCounter *
 	*ops = append(*ops, sceneOp{code: "OpElem", argQuote: strconv.Quote(n.name), slot: -1})
 
 	for _, a := range n.attrs {
+		// 事件属性 on*：无条件透传为 OpEvent，前端不设白名单、不校验事件名，
+		// 后端自定义事件（如 onFoo）同样原样进 Node.Handlers。静态字符串/bool 的
+		// on* 也放行（编译为常量 getter，后端按需解释）。
+		if isEventAttrName(a.name) {
+			s := *slotCounter
+			*slotCounter++
+			*ops = append(*ops, sceneOp{code: "OpEvent", key: a.name, slot: s})
+			*getters = append(*getters, eventGetter(a))
+			continue
+		}
 		switch a.kind {
 		case attrBool:
 			*ops = append(*ops, sceneOp{code: "OpAttr", key: a.name, argQuote: strconv.Quote("true"), slot: -1})

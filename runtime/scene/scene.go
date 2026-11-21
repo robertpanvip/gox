@@ -37,6 +37,7 @@ const (
 	OpComp                    // 复合组件插槽：Arg=组件名, Slot=索引；getter 返回一个 *Instance
 	OpBranch                  // 条件分支插槽：Slot=索引；getter 返回一个动态子树控制器（*Branch）
 	OpFor                     // Keyed 列表插槽：Slot=索引；getter 返回一个动态子树控制器（*For）
+	OpEvent                   // 事件绑定插槽：Key=事件名（JSX 原样，如 "onClick"）, Slot=索引；getter 返回 handler
 )
 
 // Op 是一条 opcode 指令。Arg/Key/Slot 的含义由 Code 决定。
@@ -54,12 +55,62 @@ type Template struct {
 	N   int // 动态插槽总数
 }
 
-// Node 是常驻场景树的节点。Kind 为标签名（元素）或 "#text"（文本）。
+// NodeType 是暴露给渲染后端的协议级节点类型。前端只区分这两种形状，
+// 具体标签（div/span/button…）由 Kind 承载；后端按 Type 分派渲染逻辑。
+// 内部透明节点（#root/#frag）保留 Kind 标记，Type 为 NodeFragment，后端透传其 children。
+type NodeType uint8
+
+const (
+	NodeText     NodeType = iota // 文本节点：读 Text 画文字
+	NodeDiv                      // 元素节点（HTML 原生元素）：读 Kind 作标签、Props 作属性、递归 Children
+	NodeFragment                 // 内部透明包装（#root/#frag，含条件分支/keyed 列表）：不画，透传 children
+)
+
+// Event 是事件名类型。前端不解释事件语义，仅把 JSX 里的 on* 属性名原样作为 key 透传。
+type Event string
+
+// 标准事件表：仅作为「前端认识的已知事件」供 IDE 提示/文档使用，**不是白名单**。
+// 任何 on* 属性（含后端自定义的 onFoo）都会无条件透传进 Node.Handlers，不校验、不拦截。
+const (
+	EvClick      Event = "click"
+	EvMouseEnter Event = "mouseenter"
+	EvMouseLeave Event = "mouseleave"
+	EvMouseMove  Event = "mousemove"
+	EvMouseDown  Event = "mousedown"
+	EvMouseUp    Event = "mouseup"
+	EvKeyDown    Event = "keydown"
+	EvKeyUp      Event = "keyup"
+	EvInput      Event = "input"
+	EvChange     Event = "change"
+	EvFocus      Event = "focus"
+	EvBlur       Event = "blur"
+)
+
+// StandardEvents 是标准事件表的切片形式，供 LSP/文档枚举提示。表外事件同样可透传。
+var StandardEvents = []Event{
+	EvClick, EvMouseEnter, EvMouseLeave, EvMouseMove, EvMouseDown, EvMouseUp,
+	EvKeyDown, EvKeyUp, EvInput, EvChange, EvFocus, EvBlur,
+}
+
+// EventContext 是后端派发事件时构造的上下文。Raw 由后端填入平台原生事件对象，
+// 前端完全不碰——事件语义归后端。
+type EventContext struct {
+	Raw any
+}
+
+// Handler 是协议推荐的事件处理器签名。注意 Node.Handlers 存的是 any（handler 原值），
+// 后端可自行断言为 Handler 或自己约定的任意签名——前端不强制签名，不阻拦自定义事件。
+type Handler func(ctx EventContext)
+
+// Node 是常驻场景树的节点。Kind 为标签名（元素）或 "#text"/"#root"/"#frag"（内部）。
+// Type 是给后端分派用的协议类型；Handlers 存原样透传的事件处理器（key 为 JSX 事件名原样）。
 type Node struct {
+	Type     NodeType
 	Kind     string
 	Props    map[string]any
+	Handlers map[string]any // 事件处理器：key=JSX 原样事件名（如 "onClick"），value=handler 原值，前端不解释
 	Children []*Node
-	Text     string // 仅 #text 节点使用
+	Text     string // 仅 NodeText 节点使用
 	parent   *Node
 	dirty    bool
 }
@@ -72,6 +123,7 @@ const (
 	slotAttr
 	slotComp   // 复合组件：getter 返回一个 *Instance，挂载为子树，Update 递归驱动
 	slotBranch // 动态子树：getter 返回 subtreeController（*Branch 条件分支 / *For keyed 列表）
+	slotEvent  // 事件绑定：getter 返回 handler 原值，写入节点的 Handlers（不进 Props）
 )
 
 // subtreeController 是动态子树控制器的公共契约：Branch（条件分支）与 For（keyed 列表）
@@ -116,7 +168,7 @@ func templateKey(t Template) string {
 
 // compile 把 opcode 解释成一棵静态骨架树，并记录每个 slot 的目标路径。
 func compile(t Template) *compiledTemplate {
-	root := &Node{Kind: "#root"}
+	root := &Node{Kind: "#root", Type: NodeFragment}
 	stack := []*Node{root}
 	slots := make([]*slot, t.N)
 	childOfStack := func(parent *Node) int {
@@ -130,6 +182,7 @@ func compile(t Template) *compiledTemplate {
 			idx := childOfStack(cur)
 			n := cur.Children[idx]
 			n.Kind = op.Arg
+			n.Type = NodeDiv
 			n.Props = map[string]any{}
 			n.parent = cur
 			stack = append(stack, n)
@@ -146,12 +199,14 @@ func compile(t Template) *compiledTemplate {
 			idx := childOfStack(cur)
 			n := cur.Children[idx]
 			n.Kind = "#text"
+			n.Type = NodeText
 			n.Text = op.Arg
 			n.parent = cur
 		case OpDynChild:
 			idx := childOfStack(cur)
 			n := cur.Children[idx]
 			n.Kind = "#text"
+			n.Type = NodeText
 			n.parent = cur
 			if op.Slot >= 0 && op.Slot < t.N {
 				slots[op.Slot] = &slot{kind: slotChild, path: append(childPath(cur), idx)}
@@ -164,12 +219,23 @@ func compile(t Template) *compiledTemplate {
 			if op.Slot >= 0 && op.Slot < t.N {
 				slots[op.Slot] = &slot{kind: slotAttr, path: childPath(cur), attr: op.Key}
 			}
+		case OpEvent:
+			// 事件走独立的 Handlers 映射，不进 Props——后端绘制属性时不会看到 on*，
+			// 派发事件时也只查 Handlers。任何事件名原样透传，不设白名单。
+			if cur.Handlers == nil {
+				cur.Handlers = map[string]any{}
+			}
+			cur.Handlers[op.Key] = nil
+			if op.Slot >= 0 && op.Slot < t.N {
+				slots[op.Slot] = &slot{kind: slotEvent, path: childPath(cur), attr: op.Key}
+			}
 		case OpComp:
-			// 组件在场景树里是一个逻辑包装节点（Kind=组件名）。它的子节点在
-			// applyAll 时由子组件实例的根 children 嫁接而来；编译期只有空壳。
+			// 组件在场景树里是一个逻辑包装节点（Kind=组件名，Type=NodeFragment 透明透传）。
+			// 它的子节点在 applyAll 时由子组件实例的根 children 嫁接而来；编译期只有空壳。
 			idx := childOfStack(cur)
 			n := cur.Children[idx]
 			n.Kind = op.Arg
+			n.Type = NodeFragment
 			n.Props = map[string]any{}
 			n.parent = cur
 			if op.Slot >= 0 && op.Slot < t.N {
@@ -181,6 +247,7 @@ func compile(t Template) *compiledTemplate {
 			idx := childOfStack(cur)
 			n := cur.Children[idx]
 			n.Kind = "#frag"
+			n.Type = NodeFragment
 			n.Props = map[string]any{}
 			n.parent = cur
 			if op.Slot >= 0 && op.Slot < t.N {
@@ -219,11 +286,17 @@ func childPath(n *Node) []int {
 
 // clone 复制静态骨架：结构共享常量，Props/Children 深拷贝，避免实例间相互污染。
 func clone(n *Node) *Node {
-	c := &Node{Kind: n.Kind, Text: n.Text, dirty: true}
+	c := &Node{Kind: n.Kind, Type: n.Type, Text: n.Text, dirty: true}
 	if n.Props != nil {
 		c.Props = make(map[string]any, len(n.Props))
 		for k, v := range n.Props {
 			c.Props[k] = v
+		}
+	}
+	if n.Handlers != nil {
+		c.Handlers = make(map[string]any, len(n.Handlers))
+		for k, v := range n.Handlers {
+			c.Handlers[k] = v
 		}
 	}
 	if len(n.Children) > 0 {
@@ -373,18 +446,22 @@ func embedValue(s *slot, v any) {
 	switch x := v.(type) {
 	case *Instance:
 		s.node.Kind = "#frag"
+		s.node.Type = NodeFragment
 		s.child = x
 		graftNode(s.node, x.root)
 	case *Node:
 		s.node.Kind = "#frag"
+		s.node.Type = NodeFragment
 		graftNode(s.node, x)
 	case []any:
 		s.node.Kind = "#frag"
+		s.node.Type = NodeFragment
 		for _, e := range x {
 			embedAnyChild(s.node, e)
 		}
 	default:
 		s.node.Kind = "#text"
+		s.node.Type = NodeText
 		s.node.Text = valueText(v)
 	}
 }
@@ -400,7 +477,7 @@ func embedAnyChild(dst *Node, v any) {
 			embedAnyChild(dst, e)
 		}
 	default:
-		n := &Node{Kind: "#text", Text: valueText(v), parent: dst}
+		n := &Node{Kind: "#text", Type: NodeText, Text: valueText(v), parent: dst}
 		dst.Children = append(dst.Children, n)
 	}
 }
@@ -457,6 +534,12 @@ func (i *Instance) applyAll() {
 			embedValue(s, v)
 		case slotAttr:
 			s.node.Props[s.attr] = v
+		case slotEvent:
+			// handler 原样存入 Handlers——前端不解释、不校验签名、不进 Props。
+			if s.node.Handlers == nil {
+				s.node.Handlers = map[string]any{}
+			}
+			s.node.Handlers[s.attr] = v
 		case slotComp:
 			mountComp(s, v)
 		case slotBranch:
@@ -525,6 +608,12 @@ func (i *Instance) Update() int {
 			embedValue(s, v)
 		case slotAttr:
 			s.node.Props[s.attr] = v
+		case slotEvent:
+			// 事件 handler 换绑（SetGetter/命令式改绑）时更新槽位。
+			if s.node.Handlers == nil {
+				s.node.Handlers = map[string]any{}
+			}
+			s.node.Handlers[s.attr] = v
 		}
 		s.node.dirty = true
 		written++
@@ -553,6 +642,30 @@ func (i *Instance) Getters() []func() any {
 		out[j] = s.get
 	}
 	return out
+}
+
+// Handler 返回节点上绑定的某个事件处理器（原值），未绑定返回 nil。
+// 后端命中测试后据此取 handler 并按自己约定的签名调用——前端不解释事件语义。
+func (n *Node) Handler(name string) any {
+	if n == nil || n.Handlers == nil {
+		return nil
+	}
+	return n.Handlers[name]
+}
+
+// Dispatch 是便利派发方法：若 name 对应的 handler 是协议推荐的 Handler 签名，
+// 则构造 EventContext 调用之并返回 true；否则返回 false，由后端按自定义签名自行处理。
+// 这不影响自定义事件——handler 原值始终可通过 n.Handler(name) 取得。
+func (n *Node) Dispatch(name string, ctx EventContext) bool {
+	h := n.Handler(name)
+	if h == nil {
+		return false
+	}
+	if fn, ok := h.(Handler); ok {
+		fn(ctx)
+		return true
+	}
+	return false
 }
 
 // String 用 TextBackend 把常驻场景树渲染成文本，便于 fmt.Println 直接查看。

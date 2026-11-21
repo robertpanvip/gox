@@ -445,3 +445,52 @@ func main() {
 		t.Errorf("显式注解应生成 ForGetterOf[User], got:\n%s", out)
 	}
 }
+
+// 事件属性无条件透传为 OpEvent（前端不设白名单、不校验事件名）。
+func TestJSXSceneEventsTranspass(t *testing.T) {
+	res, err := CompileScene("evt.gx", `package main
+import gxscene "github.com/robertpanvip/gox/runtime/scene"
+func handle() {}
+func main() {
+	_ = <button id="b" onClick={handle} onCustomThing={func(){}} onMouseEnter={handle}>hi</button>
+}
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := res.GoSource
+	// 标准事件 + 自定义事件都编成 OpEvent，Key 原样保留
+	for _, key := range []string{`"onClick"`, `"onMouseEnter"`, `"onCustomThing"`} {
+		if !strings.Contains(out, "gxscene.OpEvent,Key:"+key) {
+			t.Errorf("应生成 OpEvent Key=%s, got:\n%s", key, out)
+		}
+	}
+	// 事件不能是 OpDynAttr（否则会进 Props 被当普通属性）
+	if strings.Contains(out, "OpDynAttr,Key:\"on") {
+		t.Errorf("事件不应编成 OpDynAttr, got:\n%s", out)
+	}
+	// 普通静态属性仍是 OpAttr，不受影响
+	if !strings.Contains(out, `gxscene.OpAttr,Arg:"b",Key:"id"`) {
+		t.Errorf("普通属性应仍是 OpAttr, got:\n%s", out)
+	}
+}
+
+// 恰好以 on 开头的普通属性（第 3 字符小写）不被误判为事件。
+func TestJSXSceneEventNameNotOverreach(t *testing.T) {
+	res, err := CompileScene("attr.gx", `package main
+import gxscene "github.com/robertpanvip/gox/runtime/scene"
+func main() {
+	_ = <div once="x" only="y">hi</div>
+}
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := res.GoSource
+	if strings.Contains(out, "OpEvent") {
+		t.Errorf("once/only 不应被当事件, got:\n%s", out)
+	}
+	if !strings.Contains(out, `gxscene.OpAttr,Arg:"x",Key:"once"`) || !strings.Contains(out, `gxscene.OpAttr,Arg:"y",Key:"only"`) {
+		t.Errorf("once/only 应编成普通 OpAttr, got:\n%s", out)
+	}
+}

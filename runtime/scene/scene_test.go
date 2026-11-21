@@ -227,3 +227,74 @@ func TestCompositeComponentChildrenGraft(t *testing.T) {
 		t.Fatalf("透明包装层不应出现在输出:\n%s", out)
 	}
 }
+
+// ---- 节点类型 + 事件透传协议 ----
+
+func TestNodeTypesAndEventTranspass(t *testing.T) {
+	called := 0
+	customCalled := 0
+	h := func(EventContext) { called++ }
+	tpl := Template{Ops: []Op{
+		{Code: OpElem, Arg: "button"},
+		{Code: OpEvent, Key: "onClick", Slot: 0},
+		{Code: OpEvent, Key: "onCustomThing", Slot: 1}, // 后端自定义事件，前端不拦
+		{Code: OpAttr, Key: "id", Arg: "btn"},
+		{Code: OpChildText, Arg: "go"},
+		{Code: OpClose},
+	}, N: 2}
+	inst := Render(tpl,
+		func() any { return Handler(h) },
+		func() any { return func() { customCalled++ } }, // 自定义签名前端不强制
+	)
+	btn := inst.Root().Children[0]
+
+	// 节点类型：元素=NodeDiv，文本=NodeText
+	if btn.Type != NodeDiv || btn.Kind != "button" {
+		t.Fatalf("button: Type=%v Kind=%q", btn.Type, btn.Kind)
+	}
+	if n := btn.Children[0]; n.Type != NodeText {
+		t.Fatalf("text child: Type=%v", n.Type)
+	}
+
+	// 事件进 Handlers，不进 Props；静态属性仍在 Props
+	if _, ok := btn.Props["onClick"]; ok {
+		t.Fatal("事件不应进 Props")
+	}
+	if btn.Props["id"] != "btn" {
+		t.Fatalf("静态属性丢失: %v", btn.Props)
+	}
+	if btn.Handler("onClick") == nil || btn.Handler("onCustomThing") == nil {
+		t.Fatal("标准与自定义事件都应在 Handlers")
+	}
+
+	// 标准事件按协议签名派发
+	if !btn.Dispatch("onClick", EventContext{Raw: "native"}) || called != 1 {
+		t.Fatalf("Dispatch: ok=%v called=%d", true, called)
+	}
+	// 自定义签名取原值自行调用
+	if fn, ok := btn.Handler("onCustomThing").(func()); ok {
+		fn()
+	}
+	if customCalled != 1 {
+		t.Fatalf("custom handler: %d", customCalled)
+	}
+	// 未绑定事件返回 false
+	if btn.Dispatch("onNone", EventContext{}) {
+		t.Fatal("未绑定事件应返回 false")
+	}
+}
+
+func TestStandardEventTableIsHintNotWhitelist(t *testing.T) {
+	// 表外事件照样透传——证明标准表只是提示，不是白名单。
+	inst := Render(Template{Ops: []Op{
+		{Code: OpElem, Arg: "div"},
+		{Code: OpEvent, Key: "onTotallyCustom", Slot: 0},
+		{Code: OpClose},
+	}, N: 1}, func() any { return Handler(func(EventContext) {}) })
+	if inst.Root().Children[0].Handler("onTotallyCustom") == nil {
+		t.Fatal("表外自定义事件必须透传")
+	}
+	if len(StandardEvents) == 0 {
+		t.Fatal("标准事件表不应为空（供 IDE 提示）")
+	}
+}

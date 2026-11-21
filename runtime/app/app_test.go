@@ -440,3 +440,57 @@ func TestReRenderDisposesPreviousComponentCleanup(t *testing.T) {
 		t.Fatalf("重复 Render 应销毁旧组件 cleanup, got %d", cleaned)
 	}
 }
+
+// TestEventDispatchToSignalRedraw 是事件协议的端到端 PoC：
+// 后端命中节点 → Dispatch 事件 → handler 写 signal → App 自动 Update + 重绘一帧。
+// 前端只负责把 handler 原样放进 Handlers，事件语义/命中归后端，响应式归 signal。
+func TestEventDispatchToSignalRedraw(t *testing.T) {
+	var buf strings.Builder
+	clicks := signal.New(0)
+
+	// 按钮：onClick handler 内写 signal；一个动态子节点显示点击数（读 signal）。
+	// getter 返回 gxscene.Handler 签名（协议推荐），后端 Dispatch 即可调用。
+	inst := gxscene.Render(gxscene.Template{Ops: []gxscene.Op{
+		{Code: gxscene.OpElem, Arg: "button"},
+		{Code: gxscene.OpEvent, Key: "onClick", Slot: 0},
+		{Code: gxscene.OpElem, Arg: "span"},
+		{Code: gxscene.OpDynChild, Slot: 1},
+		{Code: gxscene.OpClose},
+		{Code: gxscene.OpClose},
+	}, N: 2},
+		func() any {
+			return gxscene.Handler(func(gxscene.EventContext) { clicks(clicks() + 1) })
+		},
+		func() any { return clicks() },
+	)
+
+	win := &gxapp.HeadlessWindow{Out: &buf}
+	app := openApp(t, gxapp.DefaultConfig(), win)
+	defer app.Close()
+	if err := app.Render(func() any { return inst }); err != nil {
+		t.Fatal(err)
+	}
+	frames0 := win.Frames()
+	if !strings.Contains(buf.String(), `"0"`) {
+		t.Fatalf("初始帧应含 0:\n%s", buf.String())
+	}
+
+	// ——模拟后端命中测试后派发事件——
+	btn := app.Instance().Root().Children[0]
+	if btn.Type != gxscene.NodeDiv {
+		t.Fatalf("button 应为 NodeDiv, got %v", btn.Type)
+	}
+	if !btn.Dispatch("onClick", gxscene.EventContext{Raw: "native-click"}) {
+		t.Fatal("onClick 应可派发")
+	}
+	if clicks() != 1 {
+		t.Fatalf("handler 应把 signal 加到 1, got %d", clicks())
+	}
+	if win.Frames() != frames0+1 {
+		t.Errorf("事件改 signal 后应重绘恰好 1 帧, before=%d now=%d", frames0, win.Frames())
+	}
+	last := lastFrameOf(buf.String(), "<button")
+	if !strings.Contains(last, `"1"`) {
+		t.Fatalf("最后一帧应显示 1:\n%s", last)
+	}
+}
