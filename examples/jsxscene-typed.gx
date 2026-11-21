@@ -1,5 +1,5 @@
 // JSX scene 后端 + 强类型组件契约示例。
-// 构建：gox build examples/jsxscene-typed.gx -jsx=scene -o main.go && go run .
+// 构建：gox build examples/jsxscene-typed.gx -o main.go && go run .
 //
 // 演示「省略类型名 + 按组件签名补全 + 字段校验」：
 //   - type CardProps struct 声明 props 契约

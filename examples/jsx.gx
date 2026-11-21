@@ -2,9 +2,10 @@ package main
 
 import (
     "fmt"
-    gxvdom "github.com/robertpanvip/gox/runtime/vdom"
+    gxscene "github.com/robertpanvip/gox/runtime/scene"
 )
 
+// card 把标题与列表渲染成常驻场景树；JSX 被编译成 gxscene opcode 模板 + getter。
 pub func card(title string, items []string) any {
     return <div class="card">
         <h1>{title}</h1>
@@ -16,5 +17,6 @@ pub func card(title string, items []string) any {
 }
 
 func main() {
-    fmt.println(gxvdom.render(card("GX", []string{"a", "b"})))
+    view := card("GX", []string{"a", "b"})
+    fmt.println(view)
 }

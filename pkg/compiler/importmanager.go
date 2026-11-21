@@ -6,7 +6,7 @@ import (
 )
 
 // ImportManager 统一管理运行时 import 的别名，解决各 transform 各自注入 import、
-// 并硬编码占位包名（list / gxvdom / strconv）导致的别名不一致问题。
+// 并硬编码占位包名（list / gxscene / strconv）导致的别名不一致问题。
 //
 // 典型故障：源码写 import mylist ".../runtime/list"，而集合提升生成 list.List[T]，
 // 结果是 undefined: list + mylist imported and not used。
@@ -107,7 +107,7 @@ func (m *ImportManager) recordImport(toks []Token, start, limit int) int {
 }
 
 // placeholderUsed 判断占位包名是否在 token 流里被真正用作 selector 前缀
-// （如 list.List / gxvdom.CreateElement / strconv.Itoa）。只认生成 token，
+// （如 list.List / gxscene.Render / strconv.Itoa）。只认生成 token，
 // 避免把用户源码里的同名变量误当成运行时依赖。
 func placeholderUsed(toks []Token, placeholder string) bool {
 	for i := 0; i < len(toks); i++ {
@@ -159,7 +159,6 @@ func ReconcileImports(in []Token, module string) []Token {
 	m := newImportManager(in, module)
 	deps := []runtimeDep{
 		{placeholder: "list", path: listImportPath(module)},
-		{placeholder: "gxvdom", path: "github.com/robertpanvip/gox/runtime/vdom"},
 		{placeholder: "gxscene", path: sceneImportPath(module)},
 		{placeholder: "Signal", path: signalImportPath(module)},
 		{placeholder: "strconv", path: "strconv"},

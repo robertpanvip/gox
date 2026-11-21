@@ -16,7 +16,7 @@ internal/            仅本仓库 cmd 使用
   buildcheck/        真实 go build 检查（可取消 + LRU）
 bindings/cabi/       C-ABI 共享库（JNA）
 runtime/             运行时组件（统一收纳）
-  vdom/ list/        具体运行时
+  scene/ app/ signal/ list/   具体运行时
 ```
 
 外部前端（IDEA 插件）通过 `bindings/cabi` 或直接 import `pkg` 接入，不碰 `internal`。
@@ -31,7 +31,7 @@ transformEnum      enum → 具名类型 + const + String/Parse（注入 strconv
   ▼
 transformPub       pub 声明处大写，收集「小写原名 → 导出名」到 names
   ▼
-transformJSX       JSX → gxvdom.CreateElement 嵌套（注入 vdom import）
+transformJSXScene  JSX → gxscene opcode 模板 + getter（注入 scene import）
   ▼
 transformCollections  []T → list.List[T]（全局提升）+ 方法名大写 + 注入 list import
   ▼
@@ -70,7 +70,7 @@ emit               拼装 Go 源码，同时记录输出 token → 输入位置�
 
 - `emit` 为每个非空白输出 token 记录 `OutLine/OutCol → InLine/InCol` 原始映射。
 - `sourcemap.Build` 归并为可查询结构，提供 `GoToGx` / `GxToGo`（最近邻）与 JSON 序列化。
-- 生成代码（枚举的 String/Parse、JSX 的 CreateElement、注入的 import）的位置重定位到触发生成的源 token，故编译错误能准确回投到 `.gx` 对应行。
+- 生成代码（枚举的 String/Parse、JSX 的 opcode 模板、注入的 import）的位置重定位到触发生成的源 token，故编译错误能准确回投到 `.gx` 对应行。
 
 ## 编译检查与诊断回投
 
@@ -78,7 +78,7 @@ emit               拼装 Go 源码，同时记录输出 token → 输入位置�
 - 把 Go 源码写入临时 module（`go.mod` 声明 `go 1.27`），执行 `go build`；
 - 解析 `file:line:col: msg` 为结构化诊断；
 - `context` 可取消；结果按源码 hash 做 LRU 缓存；
-- `AddReplace` 注入 `go.mod replace`，使生成代码能解析到本地运行时（runtime/vdom、runtime/list）。
+- `AddReplace` 注入 `go.mod replace`，使生成代码能解析到本地运行时（runtime/scene、runtime/list）。
 
 诊断的 Go 坐标经 `sourcemap.GoToGx` 转成 `.gx` 坐标后输出（CLI `-check` 与 LSP 诊断共用此路径）。多文件场景用 `CheckFiles([]SourceFile)`：每份产物以相对路径（如 `util/math.go`）写入临时 module，`SetModulePath` 设项目 module 使本地包 import 可解析，诊断的 `File` 字段保留相对路径，CLI 据此选择对应 `.gx` 的 sourcemap 回投到正确文件与行。
 

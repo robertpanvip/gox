@@ -94,7 +94,7 @@
   <h1>Gox <span class="tag">scene 后端</span> · 响应式组件使用指南</h1>
   <p class="sub">编译期 opcode + 常驻场景树 + getter 保鲜 + 细粒度更新。用 GX 语法书写，编译器还原为标准 Go。</p>
   <div class="meta">
-    <span>gox build -jsx=scene</span>
+    <span>gox build</span>
     <span>runtime/scene</span>
     <span>Owner / Cleanup</span>
     <span>条件分支 + Keyed For</span>
@@ -166,7 +166,7 @@
 
 <h2>三、完整实战（一条龙）</h2>
 <p>下面这段是<b>经过 <code>go run</code> 实测</b>的完整 GX 源码，同时用到了对象字面量、对象解构、signal、条件分支、Keyed For 和应用入口——全部小写写法。</p>
-<pre class="code"><span class="cap">demo.gx · 编译：gox build demo.gx -jsx=scene -o main.go && go run .</span><span class="kw">package</span> main
+<pre class="code"><span class="cap">demo.gx · 编译：gox build demo.gx -o main.go && go run .</span><span class="kw">package</span> main
 
 <span class="kw">import</span> (
     gxscene <span class="st">"github.com/robertpanvip/gox/runtime/scene"</span>
@@ -298,7 +298,7 @@ app.<span class="fn">close</span>()  <span class="cm">// 级联执行 Counter �
 <p>左列是你在 <code>.gx</code> 里写的，右列是生成的 Go。<b>请照抄左列。</b>函数/方法/字段写小写、编译器还原为大写；<b>类型名例外</b>——<code>gxscene.Props</code> / <code>gxscene.Instance</code> 按真实拼写大写开头，原样保留。</p>
 <table>
   <tr><th>GX 写法（你写的）</th><th>生成 Go</th><th>作用</th></tr>
-  <tr><td><code>gox build -jsx=scene</code></td><td>CLI</td><td>转译入口，只看/产出 JSX → opcode</td></tr>
+  <tr><td><code>gox build</code></td><td>CLI</td><td>转译入口，只看/产出 JSX → opcode</td></tr>
   <tr><td><code>gxscene.Props</code> / <code>gxscene.Instance</code></td><td>原样</td><td><b>类型名按真实拼写大写开头</b>，编译器原样保留；不要写小写 <code>gxscene.props</code></td></tr>
   <tr><td><code>gxscene.get[T]</code></td><td><code>Get[T]</code></td><td>组件 props 读取方法（小写书写，还原；getter 语义）</td></tr>
   <tr><td><code>gxscene.render</code> / <code>gxscene.renderText</code></td><td><code>Render</code> / <code>RenderText</code></td><td>渲染模板：返回实例 / 直接返回 string</td></tr>
@@ -317,7 +317,7 @@ app.<span class="fn">close</span>()  <span class="cm">// 级联执行 Counter �
 
 <div class="term">
 <span class="cmd">$</span> export GOTOOLCHAIN=<span class="hl">go1.27.4</span>   <span class="cm"># 必设：泛型方法依赖</span>
-<span class="cmd">$</span> gox build demo.gx -jsx=scene -o main.go &amp;&amp; go run .
+<span class="cmd">$</span> gox build demo.gx -o main.go &amp;&amp; go run .
 <span class="out">  BEFORE / AFTER / doubled: 10   —— 小写 GX 写法，实测通过</span>
 </div>
 

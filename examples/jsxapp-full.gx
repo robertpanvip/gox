@@ -1,5 +1,5 @@
 // 完整实战：复合组件设计 + Signal 响应式 + gxapp.open/app.render 应用入口，一条龙。
-// 构建：gox build examples/jsxapp-full.gx -jsx=scene -o main.go && go run .
+// 构建：gox build examples/jsxapp-full.gx -o main.go && go run .
 //
 // 这个例子把前面所有的点串起来：
 //   1. 复合组件：大写标签 = 组件；Props getter-map 让数据在组件树里保鲜

@@ -1,5 +1,5 @@
 // JSX scene 后端 + Signal 响应式：端到端示例。
-// 构建：gox build examples/jsxscene-signal.gx -jsx=scene -o main.go && go run .
+// 构建：gox build examples/jsxscene-signal.gx -o main.go && go run .
 //
 // 演示 signal 语法糖 + JSX 插值 + BindReactive 一行接线：
 //   - signal count = 0 降级为 var count = Signal.New(0)

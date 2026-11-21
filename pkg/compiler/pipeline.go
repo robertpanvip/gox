@@ -28,14 +28,6 @@ func (r *Result) Validate() error {
 	return err
 }
 
-// jsxMode 选择 JSX 的降级后端：createElement(VNode+Diff) 或 opcode(常驻场景树)。
-type jsxMode int
-
-const (
-	jsxVNode jsxMode = iota // 默认：gxvdom.CreateElement
-	jsxScene                // 路线三：gxscene opcode 模板 + 细粒度更新
-)
-
 // Compile 执行完整管线：
 // lex → stripDefaults → signals(Signal 语法糖：声明消除 + 读写调用式改写)
 // → analyze(GX 语义层：符号表 / 收窄 / 诊断) → union(联合类型擦除)
@@ -60,36 +52,37 @@ func Compile(file, src string) (*Result, error) {
 }
 
 // CompileWithModule 以指定 module 转译。<module>/runtime/list 作为集合运行时 import 路径。
-// JSX 默认降级为 gxvdom.CreateElement。imports 为 nil（单文件模式），
-// 所有 import 按 Go 来源处理，行为与改造前一致。
+// JSX 走 gxscene opcode 后端（常驻场景树 + 细粒度更新）。imports 为 nil（单文件模式），
+// 所有 import 按 Go 来源处理。
 func CompileWithModule(file, src, module string) (*Result, error) {
-	return compileWithMode(file, src, module, jsxVNode, nil)
+	return compileWithMode(file, src, module, nil)
 }
 
-// CompileWithProject 以指定 module 和 import 来源表转译（JSX 用默认 vdom 后端）。
+// CompileWithProject 以指定 module 和 import 来源表转译。
 // imports 的键是 import 路径（未加引号），值是该 import 的解析结果（来源 + GX 导出表）。
 // 仅当某条 import 命中 imports 且来源为 ImportGX 时，selector 右侧才严格查导出表；
 // 其余一律维持原 upperFirst 行为。imports 为 nil 等价于 CompileWithModule。
 //
-// 跨文件模块模式（pkg/module）走此入口；本分支的 scene JSX 后端见 CompileSceneWithModule。
+// 跨文件模块模式（pkg/module）走此入口。
 func CompileWithProject(file, src, module string, imports map[string]ImportInfo) (*Result, error) {
-	return compileWithMode(file, src, module, jsxVNode, imports)
+	return compileWithMode(file, src, module, imports)
 }
 
-// CompileScene 以 opcode（路线三）后端转译 JSX：静态结构编译成 gxscene opcode 模板，
+// CompileScene 以 opcode 后端转译 JSX：静态结构编译成 gxscene opcode 模板，
 // 动态插值变成 getter，运行时维护常驻场景树并做细粒度更新。
+// 保留为 Compile 的同义入口，兼容既有调用点。
 func CompileScene(file, src string) (*Result, error) {
 	return CompileSceneWithModule(file, src, defaultModule)
 }
 
 // CompileSceneWithModule 同 CompileScene，可指定 module（决定 runtime import 路径）。
 func CompileSceneWithModule(file, src, module string) (*Result, error) {
-	return compileWithMode(file, src, module, jsxScene, nil)
+	return compileWithMode(file, src, module, nil)
 }
 
-// compileWithMode 是全部公开入口的共享管线：mode 选择 JSX 后端，
+// compileWithMode 是全部公开入口的共享管线：JSX 统一走 gxscene opcode 后端，
 // imports 提供跨文件 import 来源表（nil 表示单文件、一律按 Go 来源处理）。
-func compileWithMode(file, src, module string, mode jsxMode, imports map[string]ImportInfo) (*Result, error) {
+func compileWithMode(file, src, module string, imports map[string]ImportInfo) (*Result, error) {
 	toks := New(src).AllTokens()
 	// 统一绑定表 + 表达式 AST：lex 之后、任何 transform 之前构建一次，贯穿整条管线。
 	// 以 Pos.Offset 为稳定身份，不受后续 desugar 增删 token 的下标漂移影响。
@@ -101,7 +94,7 @@ func compileWithMode(file, src, module string, mode jsxMode, imports map[string]
 	// Signal 语法糖：signal/let 声明消除 + signal 变量读写改写为调用式。
 	// 放在 Analyze 之前，让语义层看到标准 Go（signal/let 已消除、读写已是调用）。
 	// 先收集 signal 变量名并透传给 JSX 转换：JSX 插值 {count} 在此时是整体 token，
-	// 信号改写穿透不到；scene/vdom 后端重新词法化插值时需据此补上读调用 count()。
+	// 信号改写穿透不到；scene 后端重新词法化插值时需据此补上读调用 count()。
 	sigs := collectSignalVars(toks)
 	// 在 signal 改写前收集 signal 变量的声明类型（如 users→[]User）。
 	// 改写后初值被 Signal.New(...) 包裹，字面量类型无法直接推断，故必须在此处采集。
@@ -132,22 +125,18 @@ func compileWithMode(file, src, module string, mode jsxMode, imports map[string]
 	}
 	toks = transformEnum(toks, names)
 	toks = transformPub(toks, names)
-	if mode == jsxScene {
-		// 收集强类型组件契约（func Card(props CardProps)）供 JSX 转换分流。
-		// 命中契约的组件生成裸对象字面量 Card({...})，随后第二次 objectlit
-		// 会从签名补全 Card(CardProps{...}) 并校验字段。
-		structs := collectStructTypes(toks)
-		comps := collectCompContracts(toks, structs)
-		ctx := &jsxSceneCtx{sigs: sigs, comps: comps, sigTypes: sigTypes, bindings: bindings}
-		toks = transformJSXScene(toks, ctx)
-		// 第二次对象字面量变换：补全 JSX 转换新产生的 Card({...}) 期望类型并校验。
-		// 第一次已在 desugar 早期处理非 JSX 字面量；这里处理 JSX 阶段新增的。
-		toks, err = transformObjectLits(toks, analysis, bindings)
-		if err != nil {
-			return nil, err
-		}
-	} else {
-		toks = transformJSX(toks, bindings)
+	// 收集强类型组件契约（func Card(props CardProps)）供 JSX 转换分流。
+	// 命中契约的组件生成裸对象字面量 Card({...})，随后第二次 objectlit
+	// 会从签名补全 Card(CardProps{...}) 并校验字段。
+	structs := collectStructTypes(toks)
+	comps := collectCompContracts(toks, structs)
+	ctx := &jsxSceneCtx{sigs: sigs, comps: comps, sigTypes: sigTypes, bindings: bindings}
+	toks = transformJSXScene(toks, ctx)
+	// 第二次对象字面量变换：补全 JSX 转换新产生的 Card({...}) 期望类型并校验。
+	// 第一次已在 desugar 早期处理非 JSX 字面量；这里处理 JSX 阶段新增的。
+	toks, err = transformObjectLits(toks, analysis, bindings)
+	if err != nil {
+		return nil, err
 	}
 	toks = transformCollections(toks, module)
 	// 统一 import 别名：源码若已用别名导入 list/vdom/strconv，生成代码的占位包名
@@ -212,7 +201,8 @@ func CompileStage(src, stage string) (string, error) {
 	case "enum":
 		toks = transformEnum(toks, names)
 	case "jsx":
-		toks = transformJSX(toks, nil)
+		toks = transformJSXScene(toks, &jsxSceneCtx{})
+		toks = ReconcileImports(toks, defaultModule)
 	case "jsxscene":
 		toks = transformJSXScene(toks, &jsxSceneCtx{})
 		toks = ReconcileImports(toks, defaultModule)
@@ -228,6 +218,7 @@ func CompileStage(src, stage string) (string, error) {
 		bindings := Bind(toks)
 		templateAST := ParseTemplateExprs(toks)
 		toks, defaultDefs := stripDefaults(toks)
+		sigs := collectSignalVars(toks)
 		sigTypes := collectSignalTypes(toks)
 		toks = transformSignals(toks, bindings)
 		analysis := Analyze(toks)
@@ -246,7 +237,14 @@ func CompileStage(src, stage string) (string, error) {
 		toks = transformTypeGuard(toks, analysis)
 		toks = transformEnum(toks, names)
 		toks = transformPub(toks, names)
-		toks = transformJSX(toks, bindings)
+		structs := collectStructTypes(toks)
+		comps := collectCompContracts(toks, structs)
+		ctx := &jsxSceneCtx{sigs: sigs, comps: comps, sigTypes: sigTypes, bindings: bindings}
+		toks = transformJSXScene(toks, ctx)
+		toks, err = transformObjectLits(toks, analysis, bindings)
+		if err != nil {
+			return "", err
+		}
 		toks = transformCollections(toks, defaultModule)
 		toks = ReconcileImports(toks, defaultModule)
 		scope := collectScope(toks)

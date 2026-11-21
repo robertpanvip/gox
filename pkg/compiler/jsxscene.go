@@ -5,9 +5,9 @@ import (
 	"strings"
 )
 
-// ---------------- JSX → gxscene opcode 模板（路线三） ----------------
+// ---------------- JSX → gxscene opcode 模板 ----------------
 //
-// 与 jsx.go 的 createElement 路径并列。JSX 被拆成两部分：
+// 这是唯一的 JSX 后端。JSX 被拆成两部分：
 //
 //   - 静态结构 → gxscene.Template{Ops: []gxscene.Op{...}, N: n}
 //     opcode 在编译期确定；gxscene.Render 内部按 opcode 结构缓存静态骨架，只解析一次。
@@ -561,7 +561,19 @@ func tokNumber(s string, p Pos) Token { return Token{Kind: Number, Text: s, Pos:
 func lexExprScene(expr string, base Pos, ctx *jsxSceneCtx) []Token {
 	toks := New(expr).AllTokens()
 	if len(ctx.sigs) > 0 {
-		toks = rewriteJSXInterpSignals(toks, ctx.sigs)
+		// 按 JSX 根位置解析绑定：被局部变量遮蔽的同名 signal 不应改写（{count}
+		// 在 count := 3 作用域内读的是局部变量）。sigs 是全局名字集合，需先按
+		// bindings+jsxPos 过滤出该位置真正指向 signal 的名字，再交回形态改写逻辑。
+		effective := ctx.sigs
+		if ctx.bindings != nil {
+			effective = make(map[string]bool, len(ctx.sigs))
+			for name := range ctx.sigs {
+				if isSignalRefAt(ctx.bindings, name, ctx.jsxPos) {
+					effective[name] = true
+				}
+			}
+		}
+		toks = rewriteJSXInterpSignals(toks, effective)
 	}
 	// 对象字面量自动推断：{ { name: "x", age: 1 } } → struct{ name string; age int }{...}。
 	// 插值片段无期望类型上下文，走匿名 struct 推断路径。
@@ -640,7 +652,7 @@ func genSceneExpr(node *jsxNode, ctx *jsxSceneCtx) []Token {
 }
 
 // transformJSXScene 把 token 流里的 JSX 元素替换为 gxscene opcode 渲染表达式。
-// 与 transformJSX 并列，由管线按模式二选一调用。
+// 管线的唯一 JSX 后端。
 func transformJSXScene(in []Token, ctx *jsxSceneCtx) []Token {
 	found := false
 	for _, t := range in {

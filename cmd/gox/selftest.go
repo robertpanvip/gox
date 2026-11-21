@@ -32,13 +32,13 @@ func cmdSelfTest(_ []string) error {
 pub enum method string { get = "GET", post = "POST" }`, []string{`type Method string`, `MethodGet Method = "GET"`, "func ParseMethod"}, nil},
 		{"位标志 enum", "package main\npub enum perm { read = 1 << iota, write, exec }", []string{"type Perm int", "PermRead Perm = 1 << iota", "PermWrite Perm = 1 << iota"}, nil},
 
-		// ---- JSX（3）----
+		// ---- JSX（3，scene opcode 后端）----
 		{"JSX 元素", `package main
-pub func v() any { return <div class="box">hi</div> }`, []string{"gxvdom.CreateElement", `"div"`, `"class"`, `"box"`, `"hi"`}, nil},
+pub func v() any { return <div class="box">hi</div> }`, []string{"gxscene.Render", "gxscene.OpElem", `Arg:"div"`, "gxscene.OpAttr", `Key:"class"`, `Arg:"box"`, "gxscene.OpChildText", `Arg:"hi"`}, nil},
 		{"JSX 嵌套+表达式", `package main
-pub func v(n string) any { return <div><span id={n}/></div> }`, []string{"gxvdom.CreateElement(\"div\"", "gxvdom.CreateElement(\"span\"", "n"}, nil},
+pub func v(n string) any { return <div><span id={n}/></div> }`, []string{"gxscene.Render", "gxscene.OpElem", `Arg:"div"`, `Arg:"span"`, "gxscene.OpDynAttr", `Key:"id"`}, nil},
 		{"JSX 自闭合", `package main
-pub func v() any { return <br/> }`, []string{`gxvdom.CreateElement("br"`}, nil},
+pub func v() any { return <br/> }`, []string{"gxscene.Render", "gxscene.OpElem", `Arg:"br"`}, nil},
 
 		// ---- 外部符号（5）----
 		{"包级还原", `package main

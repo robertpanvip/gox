@@ -1,6 +1,6 @@
 // Package gxscene 是 GX JSX「路线三」的运行时：编译期 opcode + 常驻场景树。
 //
-// 与 gxvdom（createElement：每次重建整棵树 + Diff）不同，这里把 JSX 拆成两部分：
+// 与「每次重建整棵树 + Diff」的传统虚拟 DOM 方案不同，这里把 JSX 拆成两部分：
 //
 //   - 静态结构：编译期展开成一串 opcode（Op 序列），只解析一次并缓存成骨架；
 //   - 动态插槽：每个 {expr} / attr={expr} 是一个 slot，绑定一个 func() any getter。

@@ -327,12 +327,12 @@ func main() {
 `
 	got := compileOK(t, "sigjsx.gx", src)
 	containsAll(t, got,
-		`"id": name()`,
-		`nil, count(),`,
+		`return name()`,
+		`return count()`,
 		`a() + b()`,
 	)
-	// 不得残留裸 signal 名作为 vdom 参数
-	if strings.Contains(got, "nil, count,") || strings.Contains(got, `"id": name,`) {
+	// 不得残留裸 signal 名作为 scene getter 返回值
+	if strings.Contains(got, "return count }") || strings.Contains(got, "return name }") {
 		t.Errorf("JSX 插值内 signal 未改写为 getter():\n%s", got)
 	}
 }
@@ -349,7 +349,7 @@ func main() {
 `
 	got := compileOK(t, "sigjsxshadow.gx", src)
 	containsAll(t, got, `count := 3`)
-	if !strings.Contains(got, "nil, count,") {
+	if !strings.Contains(got, "return count }") {
 		t.Errorf("被遮蔽的局部变量 count 不应改写为 count():\n%s", got)
 	}
 }
@@ -370,8 +370,8 @@ func main() {
 }
 
 // TestSignalJSXComponentNameNotRewritten 回归：JSX 组件名（大写开头的引用）
-// 即使与 signal 同名，也不应被改写成调用——组件名是 createElement 的第一个参数，
-// 是要渲染的组件引用，不是 signal 读取。改写只应作用于插值片段。
+// 即使与 signal 同名，也不应被改写成 signal 读取——组件名是要调用的组件引用，
+// 不是 signal 读取。改写只应作用于插值片段。
 func TestSignalJSXComponentNameNotRewritten(t *testing.T) {
 	src := `package main
 signal Card = 1
@@ -381,8 +381,8 @@ func main() {
 }
 `
 	got := compileOK(t, "sigjsxcomp.gx", src)
-	containsAll(t, got, `gxvdom.CreateElement(Card, nil)`)
-	if strings.Contains(got, "CreateElement(Card()") {
+	containsAll(t, got, `Card(gxscene.Props{})`)
+	if strings.Contains(got, "Card()(") {
 		t.Errorf("JSX 组件名不应被误改写为 Card():\n%s", got)
 	}
 }

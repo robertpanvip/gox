@@ -88,7 +88,7 @@ app.render(() => <div><Stat/></div>)
 
 ## 3. Scene / 响应式 UI（scene 后端 + 四阶段增强）
 
-JSX 默认走 scene 后端（`gox build -jsx=scene`）：编译期 opcode + 常驻场景树 + getter 保鲜 + 递归细粒度更新，不是 vdom diff。
+JSX 统一走 scene 后端：编译期 opcode + 常驻场景树 + getter 保鲜 + 递归细粒度更新，不是 vdom diff（vdom 后端已移除）。
 
 四阶段响应式增强的**源码写法**（详见 `docs/reactive-ui-roadmap.md`）：
 
@@ -161,7 +161,7 @@ export GOTOOLCHAIN=go1.27.4        # 必设：泛型方法依赖
 
 go build ./...                      # 全量编译
 go test ./...                       # 全量测试（必须全绿）
-gox build examples/xxx.gx -jsx=scene -o main.go && go run .   # 端到端验证单个示例
+gox build examples/xxx.gx -o main.go && go run .   # 端到端验证单个示例
 ```
 
 修改编译器 / runtime 后：先 `go test ./...`，再用真实 `.gx` 端到端 `go run` 验证生成代码能编译运行。写文档示例时同理——**示例必须是你验证过能真实编译运行的小写 GX 写法**，不要凭空写 Go 大写 API。

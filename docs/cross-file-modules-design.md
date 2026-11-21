@@ -264,7 +264,7 @@ if info, ok := scope.ImportOf(pkgName); ok && info.Origin == ImportGX {
 
 ### 6.4 `ImportManager` 与运行时包
 
-`ImportManager` 注入的运行时 import（`Signal` / `list` / `gxvdom` / `strconv`）都是 Go 来源，维持现状。需确保它们不会被 GX 解析器误判为本地 GX 包（用 `<module>/runtime/*` 路径前缀白名单排除）。
+`ImportManager` 注入的运行时 import（`Signal` / `list` / `gxscene` / `strconv`）都是 Go 来源，维持现状。需确保它们不会被 GX 解析器误判为本地 GX 包（用 `<module>/runtime/*` 路径前缀白名单排除）。
 
 ---
 

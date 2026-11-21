@@ -2,7 +2,7 @@
 
 `gox`（源码后缀 `.gx`）是一门**以 Go 为基底**的语言：所有标准 Go 语法原样可用，在此之上增加语法糖。转译器把 `.gx` 降级为**等价、可读、可 go build 的标准 Go 源码**，并产出双向 sourcemap。**需要 Go 1.27+**（集合方法使用泛型方法）。
 
-> 设计原则：**零运行时魔法**。JSX 只是嵌套的函数调用，枚举只是具名类型 + const + String/Parse，集合只是切片类型提升 + 泛型方法。生成代码可直接提交、阅读、调试。
+> 设计原则：**零运行时魔法**。JSX 编译成 opcode 模板 + getter（常驻场景树），枚举只是具名类型 + const + String/Parse，集合只是切片类型提升 + 泛型方法。生成代码可直接提交、阅读、调试。
 >
 > **书写约定核心：声明用 `pub` 显式导出；标识符按 Go 真实拼写书写，全大写缩写（如 `URL`）直接写大写、原样保留。** 小写形式兼容旧写法、机械还原，无需类型推导、无需读取第三方包符号表。
 
@@ -12,7 +12,7 @@
 |---|---|---|
 | **pub 导出** | `pub func greet(){}` | `func Greet(){}`（引用处作用域感知还原） |
 | **枚举** | `pub enum color { red, green }` | `type Color int` + `const(ColorRed…)` + `String()`/`ParseColor()` |
-| **JSX** | `<div class="box">hi</div>` | `gxvdom.CreateElement("div", …)` 嵌套 |
+| **JSX** | `<div class="box">hi</div>` | `gxscene.Render(gxscene.Template{Ops:[…]})` opcode 模板 + getter |
 | **外部符号** | `http.NewRequest`、`URL` | 原样保留；小写形式 `http.newRequest`、`newRequest` 机械还原 |
 | **集合链式** | `xs.map(f).filter(g)` | `list.List[T].Map(f).Filter(g)`，切片 `[]T` 全局提升 |
 | **is 类型守卫** | `if (x is float64) { … }` | `if v, ok := x.(float64); ok { x := v; … }`（块内 x 窄化为 float64） |
@@ -60,7 +60,7 @@ pub enum perm { read = 1 << iota, write }  // 位标志 1,2
 
 ## 3. JSX
 
-`<tag>` 转成 `gxvdom.CreateElement(tag, props, children...)` 嵌套调用。运行时 [`runtime/vdom/`](runtime/vdom/) 提供 `VNode` / `CreateElement` / `Render` / `Diff`（Diff 产出结构化补丁，不含调度）。
+JSX 统一编译成 **opcode 模板 + getter**：`<tag>` 变成 `gxscene.Template{Ops:[…]}`，静态结构编译期只解析一次并缓存成骨架；每个 `{expr}` / `attr={expr}` 是一个 `func() any` getter 插槽。运行时 [`runtime/scene/`](runtime/scene/) 提供 `Render` / `Instance` / `Update`（零 Diff，只回写变化的插槽）。
 
 ```gx
 pub func render(name string) any {
@@ -70,29 +70,19 @@ pub func render(name string) any {
 
 | JSX 形态 | 生成 |
 |---|---|
-| `<div class="x">` | `CreateElement("div", map[string]any{"class":"x"}, …)` |
-| `<input disabled/>` | `map[string]any{"disabled": true}` |
-| `{name}` 表达式子节点 | 作为 child 参数 `name` |
-| `<Foo/>` 组件 | `CreateElement(Foo, …)`（不加引号） |
+| `<div class="x">` | `gxscene.OpElem Arg:"div"` + `gxscene.OpAttr Key:"class" Arg:"x"` |
+| `<input disabled/>` | `gxscene.OpAttr Key:"disabled" Arg:"true"` |
+| `{name}` 表达式子节点 | `gxscene.OpDynChild` + getter `func() any{ return name }` |
+| `<Foo/>` 组件 | `gxscene.OpComp` + `Foo(gxscene.Props{…})`（不加引号） |
 
-### JSX 双后端（`-jsx`）
+借鉴 lit-html 的「静态模板 + 动态 part」：`gxscene.Render` 按 opcode 结构缓存静态骨架，clone 得到常驻场景树；数据变化后调 `Update()` 只回写变化节点（可观测指标 `Instance.Writes`）。绘制经 `Backend` 接口抽象，第一版提供 `TextBackend`，Skia / wgpu 后端可后续接入，编译器与场景树无需改动。
 
-JSX 有两种降级后端，按场景选择（默认 `vdom`）：
-
-| 后端 | 生成 | 更新方式 | 适合 |
-|---|---|---|---|
-| `vdom`（默认） | `gxvdom.CreateElement` 嵌套 | 每次重建整树 + `Diff` | SSR / 无状态 / 可移植 |
-| `scene`（路线三） | `gxscene.Template{Ops:[...]}` opcode 模板 + getter | 静态骨架只解析一次；`Instance.Update()` 只写变化的插槽，零 Diff | 桌面客户端 UI / 细粒度响应式 |
-
-`scene` 后端借鉴 lit-html 的「静态模板 + 动态 part」：`gxscene.Render` 按 opcode 结构缓存静态骨架，clone 得到常驻场景树；每个 `{expr}` / `attr={expr}` 是一个 getter 插槽。数据变化后调 `Update()` 只回写变化节点（可观测指标 `Instance.Writes`）。绘制经 `Backend` 接口抽象，第一版提供 `TextBackend`，Skia / wgpu 后端可后续接入，编译器与场景树无需改动。
-
-#### 使用指南（scene 后端）
+#### 使用指南
 
 一个完整例子，覆盖**组件定义 → JSX 组合 → 数据更新 → 约束**（可直接对照 `examples/jsxscene.gx`）：
 
 ```gx
-// 构建：gox build demo.gx -jsx=scene
-package main
+// 构建：gox build demo.gxpackage main
 
 import (
     gxscene "github.com/robertpanvip/gox/runtime/scene"
@@ -148,8 +138,7 @@ scene 核心**不依赖**任何响应式库——`BindReactive(effect)` 接受�
 完整可运行示例见 [`examples/jsxscene-signal.gx`](examples/jsxscene-signal.gx)：
 
 ```gx
-// gox build demo.gx -jsx=scene
-import (
+// gox build demo.gximport (
     gxscene "github.com/robertpanvip/gox/runtime/scene"
     "github.com/robertpanvip/gox/runtime/signal"
 )
@@ -168,7 +157,7 @@ func main() {
 }
 ```
 
-> **编译器细节**：`signal` 语法糖在管线早期消除声明并改写读写，但 JSX 插值当时是整体 token、信号改写穿透不到。JSX 后端重新词法化插值时会拿到同一个 signal 变量集合，补上读调用——因此 `{count}` 正确编成 `count()` 而非把 signal 函数对象当值。scene 与 vdom 两个后端都已覆盖。
+> **编译器细节**：`signal` 语法糖在管线早期消除声明并改写读写，但 JSX 插值当时是整体 token、信号改写穿透不到。scene 后端重新词法化插值时会拿到同一个 signal 变量集合，补上读调用——因此 `{count}` 正确编成 `count()` 而非把 signal 函数对象当值（且按 JSX 位置解析绑定，被局部变量遮蔽的同名 signal 不会被误改写）。
 
 验证见 [`runtime/scene/reactive_test.go`](runtime/scene/reactive_test.go)（运行时：signal 经两层组件 Props 传到叶子、写入自动刷新、组件不重建、写同值零冗余写入）与 `pkg/compiler/jsxscene_test.go`（编译器：插值/属性/组件 Props 里的 signal 读补全）。
 
@@ -184,8 +173,7 @@ func main() {
 强类型形态复用了[对象字面量](#11-对象字面量)的「省略类型名 + 期望类型补全 + 校验」机制：JSX 编译期生成裸对象字面量 `Card({title:"x", n:42})`，transpiler 从 `func Card(props CardProps)` 签名推断期望类型 `CardProps`，补全为 `Card(CardProps{...})`，并校验——**字段拼错、类型不符、缺字段都会编译报错（带 GX 坐标）**。
 
 ```gx
-// gox build demo.gx -jsx=scene
-import gxscene "github.com/robertpanvip/gox/runtime/scene"
+// gox build demo.gximport gxscene "github.com/robertpanvip/gox/runtime/scene"
 
 type CardProps struct {
     title string
@@ -218,7 +206,7 @@ n := view.Update()                      // 更新，返回写入节点数
 | 2 | 组件只执行一次 | 组件体是建树逻辑；不要把「每次刷新要做的事」放这里，放到 getter 里 |
 | 3 | getter-map 形态动态数据必须是 getter | 属性传变量（`title={title}`）而非快照字面量；组件体用 `Get[T]()()` 读。`Get` 断言失败返回零值，不 panic |
 | 3b | 强类型形态字段编译期校验 | 属性名必须存在于 struct、值类型须兼容、所有字段须提供；否则编译报错（带 GX 坐标）。属性是快照值，不随变量变化刷新 |
-| 4 | 大写/带点 = 组件，其余 = 原生标签 | 与 `vdom` 后端判定一致 |
+| 4 | 大写/带点 = 组件，其余 = 原生标签 | JSX 后端的统一判定 |
 | 5 | children 用 `gxscene.Child(props)()` 读（getter-map） | 值是子 `Instance`，透明摊平，无多余标签层；强类型形态 children 作为 struct 字段传入 |
 | 6 | 更新靠 `Update()` 或 `BindReactive` 驱动 | scene 不内置响应式；`BindReactive(signal.Effect)` 可把 signal 直接接到插槽，免手动 Update |
 | 7 | `SetPart` / `SetGetter` 用插槽下标 | 下标由编译期分配，手写 opcode 时才需要；JSX 开发中优先用 getter |
@@ -230,7 +218,7 @@ API：`CompileScene` / `CompileSceneWithModule`（对应默认的 `Compile` / `C
 
 `gxapp.open(cfg)` 先创建「窗口外壳」并返回 `App`；`app.render(() => <App/>)` 收一个**建树函数**，把 JSX 场景树挂进窗口——类比 SolidJS / React 的 `render(() => <App/>, root)`。建树函数在内部建立的**根 Owner** 下运行，组件里的 `Signal.effect` / `onMount` / `onCleanup` 都归属它，`app.close()` 时级联销毁。
 
-> **源码小写、生成大写**：`gxapp` 是外部 Go 包，遵循 GX 对 Go 来源的「标识符一律小写书写、编译器 `upperFirst` 还原」约定（同 `gxvdom.render`；本地 GX 模块则严格大小写，见 §4.1），源码写 `gxapp.open` / `app.render` / `app.close`，生成的 Go 是 `gxapp.Open` / `App.Render` / `App.Close`。配置写**裸对象字面量**且字段也小写，如 `gxapp.open({ title: "Demo", width: 800 })`，编译器从 `open` 的真实 Go 源码 AST 推断为 `gxapp.WindowConfig` 并把字段还原成真实拼写（通用机制，非特判；大小写混写、省略可选字段也支持）。
+> **源码小写、生成大写**：`gxapp` 是外部 Go 包，遵循 GX 对 Go 来源的「标识符一律小写书写、编译器 `upperFirst` 还原」约定（本地 GX 模块则严格大小写，见 §4.1），源码写 `gxapp.open` / `app.render` / `app.close`，生成的 Go 是 `gxapp.Open` / `App.Render` / `App.Close`。配置写**裸对象字面量**且字段也小写，如 `gxapp.open({ title: "Demo", width: 800 })`，编译器从 `open` 的真实 Go 源码 AST 推断为 `gxapp.WindowConfig` 并把字段还原成真实拼写（通用机制，非特判；大小写混写、省略可选字段也支持）。
 
 | 步骤 | 参数 / 返回 | 含义 |
 |---|---|---|
@@ -238,8 +226,7 @@ API：`CompileScene` / `CompileSceneWithModule`（对应默认的 `Compile` / `C
 | `app.render(build)` | 参数：**建树函数** `() => <App/>`（编译为 `func() any`，返回 `*gxscene.Instance`） | 在根 Owner 下建树、画首帧、完成响应式接线 |
 
 ```gx
-// gox build demo.gx -jsx=scene
-import gxapp "github.com/robertpanvip/gox/runtime/app"
+// gox build demo.gximport gxapp "github.com/robertpanvip/gox/runtime/app"
 
 app, err := gxapp.open({ title: "Demo", width: 800, height: 600 })
 if err != nil { panic(err) }
@@ -582,8 +569,9 @@ gox/
 ├── testdata/           golden 产物 + LSP 端到端驱动脚本
 ├── docs/               设计与集成文档
 └── runtime/            运行时组件
-    ├── vdom/           VNode / CreateElement / Render / Diff（JSX 默认后端）
-    ├── scene/          opcode 模板 + 常驻场景树 + 细粒度 Update（JSX scene 后端）
+    ├── scene/          opcode 模板 + 常驻场景树 + 细粒度 Update（JSX 后端）
+    ├── app/            窗口外壳 + Owner/Cleanup + 响应式重绘
+    ├── signal/         Signal / Computed / Effect / Batch
     └── list/           List[T] + 泛型 Map/Filter/Reduce 运行时
 ```
 

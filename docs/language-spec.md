@@ -56,17 +56,17 @@ pub enum perm { read = 1 << iota, write, exec }  // 位标志 1,2,4
 
 ## 3. JSX
 
-`<tag>` → `gxvdom.CreateElement(tag, props, children...)` 嵌套调用，是普通 Go 表达式，不含 diff 调度。
+`<tag>` → `gxscene.Render(gxscene.Template{Ops:[…]}, getters...)`：静态结构编译期编成 opcode 模板并缓存，动态插值变成 getter 插槽；是普通 Go 表达式，不含 Diff（零整树重建）。
 
 | JSX 形态 | 生成 |
 |---|---|
-| 属性 `class="x"` / `id={name}` | `map[string]any{"class":"x", "id":name}` |
-| 无值属性 `<input disabled/>` | `map[string]any{"disabled": true}` |
-| 文本 / 表达式子节点 | 字符串字面量 / 表达式参数 |
-| `<br/>` 空元素 | `CreateElement("br", map[string]any{})` |
-| `<Foo/>` 组件 | `CreateElement(Foo, …)` |
+| 属性 `class="x"` / `id={name}` | `gxscene.OpAttr Key:"class" Arg:"x"` / `gxscene.OpDynAttr Key:"id" Slot:n` + getter |
+| 无值属性 `<input disabled/>` | `gxscene.OpAttr Key:"disabled" Arg:"true"` |
+| 文本 / 表达式子节点 | `gxscene.OpChildText Arg:"…"` / `gxscene.OpDynChild Slot:n` + getter |
+| `<br/>` 空元素 | `gxscene.OpElem Arg:"br"` + `gxscene.OpClose` |
+| `<Foo/>` 组件 | `gxscene.OpComp` + `Foo(gxscene.Props{…})` |
 
-运行时 `runtime/vdom/`：`VNode`（`Element` 为其别名）、`CreateElement`、`Render`、`Diff`。`Diff(old,new)` 产出 `[]Patch`（set-text / set-prop / remove-prop / replace / append / remove），只描述"做什么"，不含调度。
+运行时 `runtime/scene/`：`Template` / `Op` / `Render` / `Instance`。`Render` 缓存静态骨架、clone 出常驻场景树；`Instance.Update()` 只回写变化的插槽（可观测指标 `Writes`），绘制经 `Backend` 接口抽象（内置 `TextBackend`），不含调度。
 
 ## 4. 外部 Go 符号
 

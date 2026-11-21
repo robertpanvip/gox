@@ -89,18 +89,21 @@ func main() {
 }
 
 func TestIntegrationJSXRender(t *testing.T) {
+	// 默认 Compile 入口统一走 scene opcode 后端：JSX → gxscene.Render。
 	src := `package main
 
-import gxvdom "github.com/robertpanvip/gox/runtime/vdom"
+import "fmt"
 
 func main() {
-	node := <div class="box">hello</div>
-	println(gxvdom.Render(node))
+	view := <div class="box">hello</div>
+	fmt.print(view)
 }
 `
 	out := runGX(t, src)
-	if !strings.Contains(out, `<div class="box">hello</div>`) {
-		t.Errorf("JSX 渲染输出不符, got:\n%s", out)
+	for _, want := range []string{`<div class="box">`, `"hello"`, `</div>`} {
+		if !strings.Contains(out, want) {
+			t.Errorf("JSX 渲染输出应包含 %q, got:\n%s", want, out)
+		}
 	}
 }
 

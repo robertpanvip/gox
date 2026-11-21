@@ -1,5 +1,5 @@
 // SolidJS 风格的有状态组件：组件自带局部 signal + computed + effect + 生命周期，
-// 由定时器自增驱动状态变化。构建：gox build examples/jsxapp-solid.gx -jsx=scene -o main.go && go run .
+// 由定时器自增驱动状态变化。构建：gox build examples/jsxapp-solid.gx -o main.go && go run .
 //
 // 关键点（对照 SolidJS）：
 //   - 组件函数只在建树时执行一次，状态是组件「自己的」，不在 main 里；

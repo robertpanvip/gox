@@ -85,10 +85,13 @@ pub func view(name string) any {
 `
 	got := compileOK(t, "jsx.gx", src)
 	containsAll(t, got,
-		`import gxvdom "github.com/robertpanvip/gox/runtime/vdom"`,
-		"gxvdom.CreateElement", `"div"`, `"class"`, `"box"`,
-		`"id": name`, `"disabled": true`, `"hello"`,
-		"gxvdom.CreateElement(\"span\"", "gxvdom.CreateElement(\"br\"")
+		`import gxscene "github.com/robertpanvip/gox/runtime/scene"`,
+		"gxscene.Render", "gxscene.OpElem", `Arg:"div"`,
+		"gxscene.OpAttr", `Key:"class"`, `Arg:"box"`,
+		"gxscene.OpDynAttr", `Key:"id"`,
+		`Arg:"true"`, `Key:"disabled"`,
+		"gxscene.OpChildText", `Arg:"hello"`,
+		`Arg:"span"`, `Arg:"br"`)
 }
 
 func TestExternalPreciseAndGlobal(t *testing.T) {
@@ -305,15 +308,15 @@ func main() { _ = <Foo title="hi"/> }
 	if err != nil {
 		t.Fatal(err)
 	}
-	// 组件名 Foo 应作为标识符（可调用的函数）传入，而不是被引号包成字符串标签。
-	if !strings.Contains(res.GoSource, "CreateElement(Foo") {
-		t.Fatalf("组件应生成 CreateElement(Foo, ...):\n%s", res.GoSource)
+	// 组件名 Foo 应作为标识符（可调用的函数）出现，而不是被引号包成字符串标签。
+	if !strings.Contains(res.GoSource, "Foo(gxscene.Props{") {
+		t.Fatalf("组件应生成 Foo(gxscene.Props{...}):\n%s", res.GoSource)
 	}
-	// 原生标签仍应是字符串字面量。
+	// 原生标签仍应是字符串字面量（OpElem 的 Arg）。
 	native, _ := CompileSource(`package main
 func main() { _ = <div/> }
 `)
-	if !strings.Contains(native.GoSource, `CreateElement("div"`) {
+	if !strings.Contains(native.GoSource, `gxscene.OpElem,Arg:"div"`) {
 		t.Fatalf("原生标签应生成字符串 tag:\n%s", native.GoSource)
 	}
 	if err := res.Validate(); err != nil {
@@ -445,7 +448,7 @@ func main() {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, unwanted := range []string{"runtime/vdom", `"strconv"`, "strconv."} {
+	for _, unwanted := range []string{"runtime/scene", `"strconv"`, "strconv."} {
 		if strings.Contains(res.GoSource, unwanted) {
 			t.Errorf("未使用的特性不应注入 %q:\n%s", unwanted, res.GoSource)
 		}

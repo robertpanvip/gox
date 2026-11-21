@@ -200,7 +200,7 @@ func wrapChainReceivers(in []Token, listVars map[string]bool) []Token {
 		if before >= 0 && in[before].Text == "." {
 			continue
 		}
-		if isGoKeyword(in[recv].Text) || in[recv].Text == "list" || in[recv].Text == "gxvdom" {
+		if isGoKeyword(in[recv].Text) || in[recv].Text == "list" || in[recv].Text == "gxscene" {
 			continue
 		}
 		// 已是 List 的变量（来自提升的 []T 字面量/参数）无需包装

@@ -60,9 +60,8 @@ func usage() {
 	fmt.Println(`gox — GX（编译到 Go）命令行工具
 
 用法:
-  gox build <file.gx> [-o out.go] [-module path] [-jsx vdom|scene] [-check] [-replace old=new] [-root dir] [-prefer gx|go]
+  gox build <file.gx> [-o out.go] [-module path] [-check] [-replace old=new] [-root dir] [-prefer gx|go]
        -module   集合/JSX 运行时的 module 路径（默认 github.com/robertpanvip/gox）
-       -jsx      JSX 后端：vdom=CreateElement+Diff（默认）；scene=opcode 常驻场景树+细粒度更新
        -check    转译后执行真实 go build，并把错误回投到 .gx 位置
        -replace  go.mod replace 指令，可重复（module=本地目录）
        -root     项目根目录（默认取入口文件所在目录）；启用跨文件 .gx 模块模式
@@ -90,7 +89,6 @@ type buildFlags struct {
 	file     string
 	out      string
 	module   string
-	jsx      string // "vdom"（默认）或 "scene"（opcode 常驻场景树）
 	check    bool
 	replaces []string
 	root     string // 项目根目录；非空则启用跨文件模块模式
@@ -104,17 +102,6 @@ func parseBuildFlags(args []string) (*buildFlags, error) {
 	}
 	f.file = args[0]
 	for i := 1; i < len(args); i++ {
-		// 支持 -key=value 形式（与空格分隔等价）
-		if k, v, ok := strings.Cut(args[i], "="); ok {
-			switch k {
-			case "-jsx":
-				f.jsx = v
-				if f.jsx != "vdom" && f.jsx != "scene" {
-					return nil, fmt.Errorf("-jsx 只能是 vdom 或 scene，得到 %q", f.jsx)
-				}
-				continue
-			}
-		}
 		switch args[i] {
 		case "-o":
 			if i+1 >= len(args) {
@@ -136,15 +123,6 @@ func parseBuildFlags(args []string) (*buildFlags, error) {
 			}
 			i++
 			f.replaces = append(f.replaces, args[i])
-		case "-jsx":
-			if i+1 >= len(args) {
-				return nil, fmt.Errorf("-jsx 缺少参数")
-			}
-			i++
-			f.jsx = args[i]
-			if f.jsx != "vdom" && f.jsx != "scene" {
-				return nil, fmt.Errorf("-jsx 只能是 vdom 或 scene，得到 %q", f.jsx)
-			}
 		case "-root":
 			if i+1 >= len(args) {
 				return nil, fmt.Errorf("-root 缺少参数")
@@ -206,12 +184,7 @@ func cmdBuild(args []string) error {
 	if err != nil {
 		return err
 	}
-	var res *compiler.Result
-	if f.jsx == "scene" {
-		res, err = compiler.CompileSceneWithModule(f.file, src, f.module)
-	} else {
-		res, err = compiler.CompileWithModule(f.file, src, f.module)
-	}
+	res, err := compiler.CompileWithModule(f.file, src, f.module)
 	if err != nil {
 		return err
 	}
