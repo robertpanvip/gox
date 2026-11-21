@@ -92,6 +92,15 @@ view := <ul>
 **编译器**：`<For>` 产出 `gxscene.OpFor` + `gxscene.ForGetterOfSignal[T](each, key, render)`，
 render 签名为 `func(u func() T) *gxscene.Instance`，body 内 `u.field` 改写为 `u().field`。
 
+> **组件边界限制（item 逃逸回退）**：组件 props 是挂载时求值一次的值快照（组件插槽
+> getter 只调一次），item signal 无法驱动它。若 render body 里把 item 传入组件 props
+> （如 `<Card name={u.name}/>` / `<Card u={u}/>`），编译器检测到该逃逸后，整个 `<For>`
+> 回退到值快照 `ForGetterOf[T]`（render 签名 `func(u T)`、props 内 `u.field` 不改写），
+> 同 key 值变化走销毁重建以取到新 props 值——行为正确但失去 item signal 的零重建收益。
+> 直接插值 `{u.name}`、item 参与事件/普通表达式等不跨组件边界的场景仍走信号化。
+> 同理，`let x = u` 这类在组件内手动缓存 item 的写法会固化为快照，不受 item signal 驱动，
+> 应始终在需要响应式的位置直接读 item getter。
+
 > 元素类型 `T` 的推断优先级：render 参数显式注解 > `each` 集合类型推断（`[]T` /
 > `[N]T` / signal 声明字面量）> 降级 `any`。推断复用统一绑定表与 signal 声明类型
 > 采集，在 signal 改写前完成，确保初值字面量类型不被 `Signal.New(...)` 包裹遮蔽。

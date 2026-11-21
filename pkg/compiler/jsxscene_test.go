@@ -232,6 +232,61 @@ func main() {
 	}
 }
 
+// For item 逃逸检测：item 传给组件 props 时，必须回退到值快照 ForGetterOf，
+// 而非信号化 ForGetterOfSignal——组件 props 是挂载时求值一次的值快照，item signal
+// 无法驱动它，否则 item 变化后子组件静默停在旧值。
+func TestJSXSceneForItemEscapesIntoCompProps(t *testing.T) {
+	src := `package main
+import gxscene "github.com/robertpanvip/gox/runtime/scene"
+type User struct { id int; name string }
+type CardProps struct { name string }
+func Card(props CardProps) *gxscene.Instance { return nil }
+func main() {
+	signal users = []User{{1,"Tom"}}
+	_ = <ul><For each={users} key={(u) => u.id}>{(u User) => <li><Card name={u.name}/></li>}</For></ul>
+}
+`
+	res, err := CompileScene("for-escape.gx", src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := res.GoSource
+	if !strings.Contains(out, "gxscene.ForGetterOf[User]") {
+		t.Errorf("item 进组件 props 应回退 ForGetterOf（值快照）, got:\n%s", out)
+	}
+	if strings.Contains(out, "ForGetterOfSignal") {
+		t.Errorf("逃逸场景不应使用 ForGetterOfSignal, got:\n%s", out)
+	}
+	if !strings.Contains(out, "func(u User) *gxscene.Instance") {
+		t.Errorf("render 应为值参数 func(u User), got:\n%s", out)
+	}
+	if strings.Contains(out, "u().name") {
+		t.Errorf("props 里应保持值快照 u.name，不应改写为 u().name, got:\n%s", out)
+	}
+}
+
+// 直接插值（不经过组件边界）仍应走信号化，保持 item signal 零重建。
+func TestJSXSceneForDirectInterpStaysSignal(t *testing.T) {
+	res, err := CompileScene("for-direct.gx", `package main
+import gxscene "github.com/robertpanvip/gox/runtime/scene"
+type User struct { id int; name string }
+func main() {
+	signal users = []User{{1,"Tom"}}
+	_ = <ul><For each={users} key={(u) => u.id}>{(u User) => <li>{u.name}</li>}</For></ul>
+}
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := res.GoSource
+	if !strings.Contains(out, "gxscene.ForGetterOfSignal[User]") {
+		t.Errorf("直接插值应走 ForGetterOfSignal, got:\n%s", out)
+	}
+	if !strings.Contains(out, "u().name") {
+		t.Errorf("直接插值应改写为 u().name 登记 item signal 依赖, got:\n%s", out)
+	}
+}
+
 func TestJSXSceneTypedPropsValidation(t *testing.T) {
 	cases := []struct {
 		name string

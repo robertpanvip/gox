@@ -341,6 +341,65 @@ func branchGetterTokens(c *jsxCond, ctx *jsxSceneCtx) []Token {
 	return out
 }
 
+// itemEscapesIntoComponentProps 检测 For 的 render body 里，item 参数是否被传入
+// 组件 props（<Card name={u.name}/> / <Card u={u}/>）。
+//
+// 组件是值快照语义：slotComp 的 getter 只在挂载时调用一次，props 表达式里的
+// u().name 会被立即求值成死字符串；item signal 后续变化，子组件静默停在旧值
+// （静默功能回归）。这类场景必须回退到 ForGetterOf 值快照模式——整项重建时
+// 重新调用 render，props 才是新值，行为与 item signal 引入前一致。
+//
+// 只检测组件 props 这一处确定的逃逸点；直接插值 {u.name} 是 signal 模式的主路径，
+// 不算逃逸。item 被赋给局部变量等更边缘的逃逸由文档约束（见 language-spec）。
+func itemEscapesIntoComponentProps(body, param string) bool {
+	if param == "" {
+		return false
+	}
+	root := newJSXParser(body, NoPos).parseElement()
+	return nodeHasItemInCompProps(root, param)
+}
+
+// nodeHasItemInCompProps 递归检查节点树：组件节点的 props 表达式引用了 param 即逃逸。
+func nodeHasItemInCompProps(n *jsxNode, param string) bool {
+	if n == nil {
+		return false
+	}
+	if n.component {
+		for _, a := range n.attrs {
+			if a.kind == attrExpr && exprMentionsIdent(a.value, param) {
+				return true
+			}
+		}
+	}
+	for _, c := range n.children {
+		switch c.kind {
+		case childElement:
+			if nodeHasItemInCompProps(c.node, param) {
+				return true
+			}
+		case childCond:
+			for _, br := range c.cond.branches {
+				for _, ch := range br.children {
+					if ch.kind == childElement && nodeHasItemInCompProps(ch.node, param) {
+						return true
+					}
+				}
+			}
+		}
+	}
+	return false
+}
+
+// exprMentionsIdent 判断表达式源码里是否出现标识符 name。
+func exprMentionsIdent(expr, name string) bool {
+	for _, t := range New(expr).AllTokens() {
+		if t.Kind == Ident && t.Text == name {
+			return true
+		}
+	}
+	return false
+}
+
 // forTokens 为 <For> 节点生成 gxscene.ForGetterOf[T](each, key, render)。
 //
 // 语法（render lambda 参数类型可省略，从 each 推断；显式注解优先）：
@@ -394,8 +453,17 @@ func forTokens(n *jsxNode, ctx *jsxSceneCtx) []Token {
 		}
 	}
 
+	// 逃逸检测：item 传入组件 props 时，组件插槽只求值一次、props 是值快照，
+	// item signal 无法驱动它。回退到 ForGetterOf 值快照模式（整项重建），
+	// 保持与 item signal 引入前一致的行为——静默旧值比重建更危险。
+	escaped := itemEscapesIntoComponentProps(rBody, paramName)
+
+	factory := "ForGetterOfSignal"
+	if escaped {
+		factory = "ForGetterOf"
+	}
 	out := []Token{
-		tokIdent("gxscene", p), tokOp(".", p), tokIdent("ForGetterOfSignal", p), tokOp("[", p),
+		tokIdent("gxscene", p), tokOp(".", p), tokIdent(factory, p), tokOp("[", p),
 		tokIdent(strings.TrimSpace(elemType), p), tokOp("]", p), tokOp("(", p),
 	}
 
@@ -440,18 +508,24 @@ func forTokens(n *jsxNode, ctx *jsxSceneCtx) []Token {
 	}
 	out = append(out, tokOp(",", p))
 
-	// render（信号化）：func(T) *gxscene.Instance 的参数改为 item getter func() T：
-	//   func(u func() T) *gxscene.Instance { return <renderBody JSX> }
-	// renderBody 里对 u 的读取会被补写成 u()（登记对 item signal 的依赖）。
-	out = append(out, tokIdent("func", p), tokOp("(", p), tokIdent(paramName, p), tokSpace(" ", p),
-		tokIdent("func", p), tokOp("(", p), tokOp(")", p), tokSpace(" ", p),
+	// render 参数形态：
+	//   - 常规（信号化）：func(u func() T) *gxscene.Instance，renderBody 里 u.name → u().name 登记 item signal 依赖；
+	//   - 逃逸（item 进组件 props）：func(u T) *gxscene.Instance，值快照，整项重建时重跑 render 取新值。
+	out = append(out, tokIdent("func", p), tokOp("(", p), tokIdent(paramName, p), tokSpace(" ", p))
+	if !escaped {
+		out = append(out, tokIdent("func", p), tokOp("(", p), tokOp(")", p), tokSpace(" ", p))
+	}
+	out = append(out,
 		tokIdent(elemType, p), tokOp(")", p), tokSpace(" ", p),
 		tokOp("*", p), tokIdent("gxscene", p), tokOp(".", p), tokIdent("Instance", p), tokSpace(" ", p),
 		tokOp("{", p), tokSpace(" ", p), tokIdent("return", p), tokSpace(" ", p))
 	// renderBody 是 JSX（如 <li>{u.name}</li>），走 scene 表达式转换。
-	// 设置 forItemParam 让插值里的 u.name → u().name；保存旧值以支持嵌套 For。
+	// 非逃逸时设置 forItemParam 让插值里的 u.name → u().name；保存旧值以支持嵌套 For。
+	// 逃逸时保持 forItemParam 不变，u.name 保持值快照语义。
 	oldItemParam := ctx.forItemParam
-	ctx.forItemParam = paramName
+	if !escaped {
+		ctx.forItemParam = paramName
+	}
 	bodyToks := New(rBody).AllTokens()
 	bodyToks = transformJSXScene(bodyToks, ctx)
 	ctx.forItemParam = oldItemParam

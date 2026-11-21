@@ -36,6 +36,10 @@ type For struct {
 	order    []any             // 当前 key 顺序
 	disposed bool
 
+	// lastRoot 缓存上次 Resolve 构造的根实例。列表长度/顺序/每项值都未变时直接复用，
+	// 避免每次 each 依赖 signal 写入都重建 order/children 切片与 root Instance。
+	lastRoot *Instance
+
 	// indexKey 为 true 时用元素下标作 key（未提供 key 函数时）。
 	indexKey bool
 	sink     *changeSink // 所属实例树的变更缓冲，传给各列表项子实例
@@ -52,10 +56,15 @@ type forEntry struct {
 	item  signal.Signal[any] // 信号化模式：该项的 item signal，子树 getter 经它读值并登记依赖
 }
 
-// NewFor 创建 keyed 列表控制器。
+// NewFor 创建 keyed 列表控制器（值快照模式）。
 //   - each: 返回当前元素列表；在其中读 signal 会被自动追踪。
 //   - key: 为元素生成稳定键；nil 时用下标（仅适用于纯追加/尾部删除场景）。
 //   - render: 为单个元素构建子树；在新 Owner 下运行。
+//
+// Deprecated: 同 key 值变化时此模式需销毁并重建整项子树（补发 ReplaceChildren、
+// 用 rebaseTreeIDs 兜底项内 ID），开销高且 rebase 不覆盖嵌套控制器。新代码请用
+// NewForSignal（item signal：值变化只更新叶子、ID 天然稳定）。此 API 保留以兼容
+// 手写调用与编译器逃逸回退，将在后续 breaking 版本移除。
 func NewFor(each func() []any, key func(any) any, render func(any) *Instance) *For {
 	return &For{
 		each:     each,
@@ -129,19 +138,24 @@ func ForGetterOfSignal[T any](each func() []T, key func(T) any, render func(func
 	return func() any { return f }
 }
 
-// ForGetter 是编译器生成 <For> 时使用的工厂：捕获稳定的 *For，返回 getter 闭包。
+// ForGetter 是值快照模式的工厂：捕获稳定的 *For，返回 getter 闭包。
 // getter 每次返回同一对象；列表的求值在 Resolve 内完成（在 effect 上下文登记依赖）。
+//
+// Deprecated: 请用 ForGetterSignal（item signal 根治模式）。
 func ForGetter(each func() []any, key func(any) any, render func(any) *Instance) func() any {
 	f := NewFor(each, key, render)
 	return func() any { return f }
 }
 
-// ForGetterOf 是带显式元素类型的泛型工厂，供编译器生成的带类型 lambda 使用。
+// ForGetterOf 是带显式元素类型的泛型工厂（值快照模式），供编译器逃逸回退使用。
 //   - each: 返回 []T；
 //   - key: func(T) any，可传 nil 用下标；
 //   - render: func(T) *Instance。
 //
 // 泛型在编译期保留 T 的类型安全，内部擦除成 any 复用同一套 keyed 机制。
+//
+// Deprecated: 值快照模式同 key 值变化需重建整项子树。编译器仅在 item 逃逸到组件
+// props 等无法用 item signal 的场景回退到此工厂；常规场景请用 ForGetterOfSignal。
 func ForGetterOf[T any](each func() []T, key func(T) any, render func(T) *Instance) func() any {
 	f := NewFor(
 		func() []any {
@@ -201,6 +215,28 @@ func (f *For) Resolve() *Instance {
 			k = f.key(item)
 		}
 		newList[i] = kv{key: k, value: item}
+	}
+
+	// 短路：列表长度、key 顺序、每个 key 的值都未变时，直接复用上次的 root。
+	// 常见场景是"别的 signal 变了触发 each 重算，但列表本身没变"——此时无需
+	// 重建 order/children 切片与 root Instance，也避免 diffChildren 空跑。
+	// 注意：equalValue 的调用与下方逐项检测等价，短路只省掉分配与组装。
+	if f.lastRoot != nil && len(newList) == len(f.order) {
+		unchanged := true
+		for i, e := range newList {
+			if !equalValue(f.order[i], e.key) {
+				unchanged = false
+				break
+			}
+			entry, ok := f.entries[e.key]
+			if !ok || !equalValue(entry.value, e.value) {
+				unchanged = false
+				break
+			}
+		}
+		if unchanged {
+			return f.lastRoot
+		}
 	}
 
 	// 标记新 keys 集合。
@@ -275,7 +311,9 @@ func (f *For) Resolve() *Instance {
 		c.parent = root
 		root.Children = append(root.Children, c)
 	}
-	return &Instance{root: root}
+	inst := &Instance{root: root}
+	f.lastRoot = inst
+	return inst
 }
 
 // buildEntry 在新 Owner 下为条目构建子树并接线，把子树 children 挂到 entry.node。

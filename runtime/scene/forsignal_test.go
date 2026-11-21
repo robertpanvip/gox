@@ -194,3 +194,35 @@ func TestForGetterOfSignalTyped(t *testing.T) {
 		t.Fatalf("泛型信号化工广应刷新:\n%s", out)
 	}
 }
+
+// Resolve 短路：列表长度/顺序/每项值都未变时，应复用上次的 root 指针，
+// 避免每次 each 重算都重建 order/children 与 root Instance（评审 P3）。
+func TestForResolveShortCircuitWhenUnchanged(t *testing.T) {
+	items := []any{testUser{1, "Tom"}, testUser{2, "Jack"}}
+	f := gxscene.NewForSignal(
+		func() []any { return items },
+		func(v any) any { return v.(testUser).id },
+		func(item func() any) *gxscene.Instance {
+			return gxscene.Render(itemTpl(), func() any { return item().(testUser).name })
+		},
+	)
+	r1 := f.Resolve()
+	r2 := f.Resolve()
+	if r1 != r2 {
+		t.Fatalf("列表未变时 Resolve 应复用上次 root 指针（短路），got different instances")
+	}
+
+	// 值变化后不再短路：应产出新 root（信号化模式走 item signal，但结构仍重组一次）。
+	items = []any{testUser{1, "Thomas"}, testUser{2, "Jack"}}
+	r3 := f.Resolve()
+	if r3 == r1 {
+		t.Fatalf("值变化后 Resolve 不应复用旧 root")
+	}
+
+	// 顺序变化后也不短路。
+	items = []any{testUser{2, "Jack"}, testUser{1, "Thomas"}}
+	r4 := f.Resolve()
+	if r4 == r3 {
+		t.Fatalf("顺序变化后 Resolve 不应复用旧 root")
+	}
+}

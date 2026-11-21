@@ -663,6 +663,45 @@ func main() {
 	}
 }
 
+func TestIntegrationJSXSceneForItemIntoCompProps(t *testing.T) {
+	// P1 回归：item 传给子组件 props 时，编译器逃逸检测应回退到值快照 ForGetterOf，
+	// 同 key 值变化靠整项重建取新值，子组件不会静默停在旧值。
+	src := `package main
+import (
+	gxscene "github.com/robertpanvip/gox/runtime/scene"
+	"fmt"
+)
+type User struct { id int; name string }
+type CardProps struct { text string }
+func Card(props CardProps) *gxscene.Instance {
+	return <b>{props.text}</b>
+}
+func main() {
+	signal users = []User{{1,"Tom"}}
+	view := <ul>
+		<For each={users} key={(u) => u.id}>
+			{(u User) => <li><Card text={u.name}/></li>}
+		</For>
+	</ul>
+	view.BindReactive(Signal.Effect)
+	users = []User{{1,"Thomas"}}
+	fmt.Print("UPD:", view)
+}
+`
+	out := runGXScene(t, src)
+	idx := strings.LastIndex(out, "UPD:")
+	if idx < 0 {
+		t.Fatalf("应有 UPD 输出, got:\n%s", out)
+	}
+	seg := out[idx:]
+	if !strings.Contains(seg, `"Thomas"`) {
+		t.Errorf("item 进组件 props 回退后应刷新为 Thomas, got:\n%s", seg)
+	}
+	if strings.Contains(seg, `"Tom"`) {
+		t.Errorf("不应残留旧值 Tom, got:\n%s", seg)
+	}
+}
+
 func TestIntegrationJSXSceneForInferElemType(t *testing.T) {
 	// render 参数无类型注解：应从 each={users}（signal []User）推断元素类型 User，
 	// 生成可编译的 gxscene.ForGetterOfSignal[User](...)（item signal 根治）。
