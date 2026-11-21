@@ -887,9 +887,26 @@ func (i *Instance) bindLeaves(effect func(func()) Computation) {
 // bindCtx 是结构插槽的统一接线上下文：effect 用于建立订阅，onDirty 在结构
 // 变化后回调（app 层据此重绘）。它沿实例树与动态子树向下传递，保证任意深度的
 // 条件分支 / 列表都用同一套接线，不会在某一层漏掉 effect 或丢失重绘回调。
+//
+// silent 是共享的静音开关：接线期、以及 For/Branch 动态构建子树期间置位，
+// 此时各 effect 的首次回调不触发 onDirty（避免首帧或批量新增时重复重绘）。
+// 所有动态子树共享同一个 ctx 指针，故值字段即可全局生效。
 type bindCtx struct {
 	effect  func(func()) Computation
 	onDirty func()
+	silent  bool
+}
+
+// withSilent 在静音状态下执行 fn，结束后恢复原状态（支持嵌套）。
+func (c *bindCtx) withSilent(fn func()) {
+	if c == nil {
+		fn()
+		return
+	}
+	old := c.silent
+	c.silent = true
+	defer func() { c.silent = old }()
+	fn()
 }
 
 // BindStructural 为整棵实例树（含组件子组件与所有命中子树）的**结构插槽**
@@ -910,7 +927,12 @@ func (i *Instance) BindStructural(effect func(func()) Computation, onDirty ...fu
 	if len(onDirty) > 0 {
 		dirty = onDirty[0]
 	}
-	i.bindStructure(&bindCtx{effect: effect, onDirty: dirty})
+	ctx := &bindCtx{effect: effect, onDirty: dirty}
+	// 接线期整体静音：各 effect 首次立即执行会读 selector 建子树并调 onDirty，
+	// 但 Render 已画首帧，这些首次回调不该各自触发重绘（N 个结构插槽 = N 帧）。
+	ctx.silent = true
+	i.bindStructure(ctx)
+	ctx.silent = false
 }
 
 // bindStructure 递归为所有层级的 slotBranch 接线。
@@ -941,7 +963,7 @@ func (i *Instance) bindStructure(ctx *bindCtx) {
 			getter := sl.get
 			if c := ctx.effect(func() {
 				i.SetPart(slot, getter())
-				if ctx.onDirty != nil {
+				if ctx.onDirty != nil && !ctx.silent {
 					ctx.onDirty()
 				}
 			}); c != nil {

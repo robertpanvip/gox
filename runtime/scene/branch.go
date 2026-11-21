@@ -107,7 +107,9 @@ func (b *Branch) Resolve() *Instance {
 				// 分支子树挂在 slotBranch.child 上、其叶子由根聚合 effect 的 Update
 				// 递归覆盖，因此这里只接结构插槽，不另建聚合 effect（避免重复重绘）。
 				if b.bctx != nil {
-					cur.bindStructure(b.bctx)
+					// 构建子树期间的静音：新子树内的结构 effect 首次回调不该各自触发重绘；
+					// 分支切换本身的重绘由外层 SetPart effect 的 onDirty 负责（1 帧）。
+					b.bctx.withSilent(func() { cur.bindStructure(b.bctx) })
 				} else {
 					cur.BindReactive(signal.Effect)
 				}

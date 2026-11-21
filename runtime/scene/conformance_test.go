@@ -233,3 +233,51 @@ func TestConformanceForKeyedRebuildEmitsReplaceChildren(t *testing.T) {
 		t.Fatalf("重建后应显示新值:\n%s", out)
 	}
 }
+
+// 同 key 值变化重建时，项内节点 ID 必须跨重建稳定（P1 回归守护）。
+// 后端按 ID 缓存 rect/焦点/滚动，一次文本更新不该让项内 ID 全换。
+func TestConformanceForKeyedRebuildKeepsInnerIDs(t *testing.T) {
+	items := signal.New([]string{"old"})
+	f := NewFor(
+		func() []any { return []any{items()[0]} },
+		func(v any) any { return 1 },
+		func(v any) *Instance {
+			s := v.(string)
+			return Render(Template{Ops: []Op{
+				{Code: OpElem, Arg: "li"}, {Code: OpDynChild, Slot: 0}, {Code: OpClose},
+			}, N: 1}, func() any { return s })
+		},
+	)
+	view := Render(Template{Ops: []Op{
+		{Code: OpElem, Arg: "ul"}, {Code: OpFor, Slot: 0}, {Code: OpClose},
+	}, N: 1}, func() any { return f })
+	view.BindReactive(signal.Effect)
+
+	collect := func() map[string]bool {
+		out := map[string]bool{}
+		var walk func(*Node)
+		walk = func(n *Node) {
+			if n == nil {
+				return
+			}
+			out[n.ID] = true
+			for _, c := range n.Children {
+				walk(c)
+			}
+		}
+		walk(view.Root())
+		return out
+	}
+	before := collect()
+	items([]string{"new"})
+	after := collect()
+	// 包装节点与项内所有 ID 都应保留（新增的只有值文本，无新节点）。
+	for id := range before {
+		if !after[id] {
+			t.Fatalf("重建后 ID %q 消失，项内 ID 应跨重建稳定: before=%v after=%v", id, before, after)
+		}
+	}
+	if !strings.Contains(view.String(), "new") {
+		t.Fatalf("重建后应显示新值:\n%s", view.String())
+	}
+}

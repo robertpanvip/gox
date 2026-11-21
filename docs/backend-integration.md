@@ -139,7 +139,7 @@ for _, ch := range app.TakeChanges() { // 取走自上帧以来的有序变更
     case gxscene.ChangeInsertBefore: /* ch.NodeID 下，把 ch.Value(*Node) 插到 ch.BeforeID 之前；BeforeID="" 即追加末尾 */
     case gxscene.ChangeMoveChild:    /* 把 ch.ChildID 子节点移到 ch.BeforeID 之前 */
     case gxscene.ChangeRemoveChild:  /* 移除 ch.ChildID 子节点 */
-    case gxscene.ChangeReplaceChildren: /* 整块兜底：ch.NodeID 的 children 重建，重读之 */
+    case gxscene.ChangeReplaceChildren: /* 删 ch.NodeID 下全部旧 children，重读实时树 */
     }
 }
 ```
@@ -154,15 +154,19 @@ for _, ch := range app.TakeChanges() { // 取走自上帧以来的有序变更
 | `InsertBefore` | 父节点 | 新子节点 ID | 锚点 ID（`""`=末尾） | 完整 `*Node` 子树 | 列表新增、动态 children 插入、追加末尾 |
 | `MoveChild` | 父节点 | 被移动节点 ID | 锚点 ID（`""`=末尾） | — | keyed 列表重排（节点复用，只调顺序） |
 | `RemoveChild` | 父节点 | 被移除节点 ID | — | 被移除 `*Node` | 列表删项、children 移除 |
-| `ReplaceChildren` | 父节点 | — | — | — | 整块兜底：文本↔容器互转等大结构变化 |
+| `ReplaceChildren` | 目标节点自身（常是 `#frag` 透明容器，见下方说明） | — | — | — | 整块兜底：文本↔容器互转、For 同 key 值重建 |
 
 > 协议表只列**实际会发出**的指令。追加末尾用 `InsertBefore(BeforeID="")`，节点销毁用 `RemoveChild`（后端自行释放该 ID 的缓存）——曾有 `AppendChild`/`Destroy` 两个常量但实现从不发出，已从协议面移除，避免后端按表实现时漏更新。
+
+**`ReplaceChildren` 的消费语义（易错）**：它的 `NodeID` 指向**目标节点自身**，通常是列表项的 `#frag` 透明包装节点（如 `i1/[1]`），不是它的父容器。后端若不物化 `#frag`、只认可见节点，会找不到目标。收到后必须：① 删除该节点下**所有**旧 children（按当前镜像树，指令不带旧列表）；② 从全量 `Draw(root)` 的对应节点重读新的 children 子树并建立映射。仅"重读 children"而不删旧的，会残留旧节点。此指令不带 `Value`，新内容需回读实时树。
+
+**首帧契约（重要）**：`EnableChanges()` 之前产生的变更（含首帧 `Render` 与接线期 effect 的首次执行）**不会记录**，`TakeChanges()` 返回空。因此后端**必须在首帧做一次全量 `Draw(root)`** 建立镜像树，之后才用增量补丁跟进。增量通道默认是关闭的（未 `EnableChanges()` 时零分配、零开销）。
 
 **逐节点增删/移动是真实的，不是占位符**：`For` 的 keyed diff 在增删/重排时会精确发出 `InsertBefore`/`RemoveChild`/`MoveChild`；动态 children 变化会先对旧/新子节点做基于 `*Node` 指针身份的 diff，只发变化的部分。为把移动次数降到最少，复用节点按旧索引求最长递增子序列（LIS），LIS 上的节点保持原位，其余发 `MoveChild`；指令从右往左生成、`BeforeID` 始终指向右侧已就位的节点，后端顺序 apply 即得目标顺序。
 
 - 变更用 `Node.ID` 定位（`ChildID`/`BeforeID` 同为跨帧稳定 ID）；整棵实例树（组件/分支/列表项）共享同一 sink，一次 `TakeChanges` 取全。
 - 这是 opcode 常驻树 + 细粒度 `Update()` 的自然产物——`Update` 本来就算出"哪些插槽变了"，这里只是暴露出来，**不像被移除的 vdom 后端那样每次重建整树**；细粒度 diff 只作用于单个动态插槽的 children，不产生 `createElement`、不重建整棵树。
-- 后端可忽略它、继续每次全量 `Draw(root)`（零改动），也可消费它做增量重绘。`ReplaceChildren` 作为兜底保留：后端即便只实现这一条、忽略其余细粒度指令，也能正确工作（只是退化为整块重读）。
+- 后端要么**完全不消费**增量、每次全量 `Draw(root)`（零改动），要么**完整消费**上面全部指令做增量重绘。二者择一即可；**不能只实现其中一条**：例如新增列表项只发 `InsertBefore`、不发 `ReplaceChildren`，只实现后者的后端会永远不显示新增项。`ReplaceChildren` 只是少数场景（文本↔容器互转、同 key 值重建）的兜底指令，不是"一条通用替代"。
 
 **diff 策略可替换**：host 内建的 LIS diff 只是默认实现。若后端已维护自己的镜像树、或有更契合自身渲染模型的高效 diff，可用 `SetChildDiffer` 注入自己的算法直接产出协议 `Change`，覆盖内建——host 不再跑那一遍 LIS：
 

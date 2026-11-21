@@ -1,6 +1,7 @@
 package gxapp_test
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -596,5 +597,68 @@ func TestForKeyedItemSelectorSubscribedOnce(t *testing.T) {
 	inner(false) // 一次项内分支切换
 	if calls != 1 {
 		t.Fatalf("一次分支切换 selector 应调用 1 次（无双订阅）, got %d", calls)
+	}
+}
+
+// P2 回归守护：批量新增含 if 的列表项，无论多少项都只画 1 帧。
+// 静音下沉到 bindCtx 前，每项内分支 effect 首次回调各画一帧（N 项 = N+1 帧）。
+func TestBatchAddWithIfDrawsOneFrame(t *testing.T) {
+	for _, n := range []int{3, 10, 50} {
+		items := signal.New([]string{"init"})
+		f := gxscene.NewFor(
+			func() []any {
+				out := []any{}
+				for _, s := range items() {
+					out = append(out, s)
+				}
+				return out
+			},
+			func(v any) any { return v },
+			func(v any) *gxscene.Instance {
+				s := v.(string)
+				flag := signal.New(true)
+				br := gxscene.NewBranch(
+					func() int {
+						if flag() {
+							return 0
+						}
+						return 1
+					},
+					func() *gxscene.Instance {
+						return gxscene.Render(gxscene.Template{Ops: []gxscene.Op{
+							{Code: gxscene.OpElem, Arg: "span"}, {Code: gxscene.OpDynChild, Slot: 0}, {Code: gxscene.OpClose},
+						}, N: 1}, func() any { return s })
+					},
+					func() *gxscene.Instance {
+						return gxscene.Render(gxscene.Template{Ops: []gxscene.Op{
+							{Code: gxscene.OpElem, Arg: "b"}, {Code: gxscene.OpChildText, Arg: "x"}, {Code: gxscene.OpClose},
+						}})
+					},
+				)
+				return gxscene.Render(gxscene.Template{Ops: []gxscene.Op{
+					{Code: gxscene.OpElem, Arg: "li"}, {Code: gxscene.OpBranch, Slot: 0}, {Code: gxscene.OpClose},
+				}, N: 1}, func() any { return br })
+			},
+		)
+		win := &countingWindow{}
+		app := openApp(t, gxapp.DefaultConfig(), win)
+		app.Render(func() any {
+			return gxscene.Render(gxscene.Template{Ops: []gxscene.Op{
+				{Code: gxscene.OpElem, Arg: "ul"}, {Code: gxscene.OpFor, Slot: 0}, {Code: gxscene.OpClose},
+			}, N: 1}, func() any { return f })
+		})
+		defer app.Close()
+		base := win.draws
+		// 用唯一 key 避免 For 把相同值的项去重成一项。
+		next := []string{"init"}
+		for i := 0; i < n; i++ {
+			next = append(next, fmt.Sprintf("x%d", i))
+		}
+		items(next)
+		t.Run(fmt.Sprintf("n=%d", n), func(t *testing.T) {
+			if got := win.draws - base; got != 1 {
+				t.Errorf("批量新增 %d 个含 if 的项应只画 1 帧, got %d", n, got)
+			}
+		})
 	}
 }

@@ -177,29 +177,35 @@ func (a *App) teardownTree() {
 //     与嵌套分支），selector/each 变化时 Resolve 重建/复用子树并触发 onDirty 重绘。
 //
 // 接线期（各 effect 首次立即执行）产生的重绘全部静音——Render 已画过首帧。
-// 用单个 binding 标志包裹整个接线过程即可：effect 首次回调同步发生在 bindReactive
-// 内，binding 为 true 时 onDirty 直接返回；接线完成后置 false。这样无论有多少个
-// 结构插槽都只画首帧那 1 帧（旧的 structPriming 布尔只能挡第一个插槽的首次回调，
-// 其余每个都会各画一帧）。两路 effect 都挂在 a.owner 下，teardown 时随 Owner 级联销毁。
+//
+// 结构插槽的静音已下沉到 scene 的 bindCtx.silent：BindStructural 接线期整体静音，
+// 且 For/Branch 动态构建子树期间也静音（批量新增 N 项不再画 N 帧）。app 层只需：
+//   - 叶子聚合 effect 用独立 priming 跳过首次重绘（它不走 bindCtx）；
+//   - 结构插槽把 Draw 作为 onDirty 交给 BindStructural。
+//
+// 两路 effect 都挂在 a.owner 下，teardown 时随 Owner 级联销毁。
 func (a *App) bindReactive() {
 	if a.inst == nil || a.closed {
 		return
 	}
-	binding := true
-	onDirty := func() {
-		if binding || a.closed {
-			return // 接线期静音 + 关闭后不再重绘
-		}
-		_ = a.Draw()
-	}
-	// 叶子聚合 effect：一帧一致性。挂在 a.owner 下，随 Owner 销毁。
+	// 叶子聚合 effect：一帧一致性。首次执行只登记依赖，不重绘。
+	leafPriming := true
 	signal.Effect(func() {
 		_ = a.inst.Update()
-		onDirty()
+		if leafPriming {
+			leafPriming = false
+			return
+		}
+		if !a.closed {
+			_ = a.Draw()
+		}
 	})
-	// 结构插槽：递归接线，变化后重绘。
-	a.inst.BindStructural(signal.Effect, onDirty)
-	binding = false // 接线期结束，此后变化正常触发重绘
+	// 结构插槽：递归接线（接线期静音由 BindStructural 内部负责），变化后重绘。
+	a.inst.BindStructural(signal.Effect, func() {
+		if !a.closed {
+			_ = a.Draw()
+		}
+	})
 }
 
 // Draw 立即把当前场景树绘制一帧到窗口。Render 之前调用为 no-op。

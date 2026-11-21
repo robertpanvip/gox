@@ -2,6 +2,7 @@ package gxscene
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/robertpanvip/gox/runtime/signal"
@@ -163,7 +164,10 @@ func (f *For) Resolve() *Instance {
 			// entry.node 指针未变，父级 diff 用指针身份比较不会发指令（内容重建
 			// 发生在该节点内部）。补发一条 ReplaceChildren，让按补丁更新的后端
 			// 重读该节点的 children——否则只显示旧内容的镜像树会漏掉这一项。
-			f.sink.add(Change{Kind: ChangeReplaceChildren, NodeID: entry.node.ID})
+			// sink 判空后记录：For 未挂载（无 sink）时手工 Resolve 也能安全运行。
+			if f.sink != nil {
+				f.sink.add(Change{Kind: ChangeReplaceChildren, NodeID: entry.node.ID})
+			}
 			continue
 		}
 		// 列表项 ID 按「本列表唯一前缀 + key」派生：同 key 重排/增删时 ID 不变，
@@ -196,11 +200,22 @@ func (f *For) Resolve() *Instance {
 // buildEntry 在新 Owner 下为条目构建子树并接线，把子树 children 挂到 entry.node。
 // 新条目与同 key 值变化重建都走这里；调用方负责先 Dispose 旧 Owner、清空 node.Children。
 func (f *For) buildEntry(entry *forEntry) {
+	// 重建（同 key 值变化）时复用旧实例的 idBase：render 每次 Render 会分配新前缀，
+	// 导致项内所有节点 ID 变化，破坏"跨帧稳定"。把新树的 ID 前缀重写回旧 base，
+	// 后端按 ID 缓存的 rect/焦点/滚动状态才不会因一次文本更新而全部失效。
+	oldBase := ""
+	if entry.inst != nil {
+		oldBase = entry.inst.idBase
+	}
 	entry.node.Children = nil
 	entry.owner = signal.CreateRoot(func(o *signal.Owner) {
 		entry.inst = f.render(entry.value)
 		if entry.inst == nil {
 			return
+		}
+		if oldBase != "" && entry.inst.idBase != oldBase {
+			rebaseTreeIDs(entry.inst.root, entry.inst.idBase, oldBase)
+			entry.inst.idBase = oldBase
 		}
 		if f.sink != nil {
 			entry.inst.changes = f.sink // 共享所属实例树的变更缓冲
@@ -209,8 +224,13 @@ func (f *For) buildEntry(entry *forEntry) {
 		// 有统一 ctx（app 场景）时，叶子用 bindLeaves、结构用 bindRec 继承 ctx；
 		// 无 ctx（纯 scene）时，BindReactive 一并接叶子与结构。
 		if f.bctx != nil {
-			entry.inst.bindLeaves(signal.Effect)
-			entry.inst.bindRec(f.bctx)
+			// 构建列表项子树期间静音：项内含 if 时，bindRec 建立的分支 effect 首次
+			// 回调会调 onDirty；批量新增 N 项就是 N 帧。静音后由 each 的外层 effect
+			// 统一画 1 帧。
+			f.bctx.withSilent(func() {
+				entry.inst.bindLeaves(signal.Effect)
+				entry.inst.bindRec(f.bctx)
+			})
 		} else {
 			entry.inst.BindReactive(signal.Effect)
 		}
@@ -219,6 +239,23 @@ func (f *For) buildEntry(entry *forEntry) {
 			entry.node.Children = append(entry.node.Children, c)
 		}
 	})
+}
+
+// rebaseTreeIDs 把子树里所有以 from 为前缀的 Node.ID 改写成以 to 开头。
+// 只动本实例骨架派生的 ID（"iN"、"iN/0/1"）；项内若嵌了子 For/Branch，它们的
+// idBase 是独立的 nextIDBase，不以 from 开头，故不受影响。
+func rebaseTreeIDs(n *Node, from, to string) {
+	if n == nil || from == "" {
+		return
+	}
+	if n.ID == from {
+		n.ID = to
+	} else if strings.HasPrefix(n.ID, from+"/") {
+		n.ID = to + strings.TrimPrefix(n.ID, from)
+	}
+	for _, c := range n.Children {
+		rebaseTreeIDs(c, from, to)
+	}
 }
 
 // adoptSink 实现 subtreeController：记录所属实例树的变更缓冲，传给各列表项子实例。
