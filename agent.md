@@ -42,11 +42,10 @@ Gox 是一个把 `.gx` 转译成标准 Go 的编译器。`.gx` = Go 语法 + 一
 
 1. **多词符号只小写首字母，其余照抄 Go 拼写**：`bindReactive` → `BindReactive`、`newWithEquals` → `NewWithEquals`（不能写 `bindreactive`，那会生成 `Bindreactive`，拼错）。
 2. **所有 signal API 用大写 `Signal.` 前缀**：`Signal.computed` / `Signal.effect` / `Signal.createRoot` / `Signal.onCleanup` / `Signal.onMount` / `Signal.batch` / `Signal.getOwner` / `Signal.runWithOwner` / `Signal.newWithEquals` 等一律以大写 `Signal` 开头。原因有二：`Signal` 是语法糖占位包名（ImportManager 解析为 `import Signal "<module>/runtime/signal"`），且**避免与 `signal` 声明关键字（`signal n = 0`）混淆**。不要写裸 `computed(...)`（裸标识符不会被还原，会生成不存在的函数）。生成产物统一是 `signal.XXX`（小写包名）。
-3. **`pub` 组件名与 JSX 标签都大写开头**：组件声明写 `pub func Stat(...)`，调用写 `<Stat/>`。JSX 里首字母大写 = 组件、小写 = 原生 HTML 标签，这是硬编码判定，不能把组件写成小写标签。
-4. **本文件私有类型写小写**：`type cardProps struct{...}` 保持私有小写；`pub type` 才导出。
-5. **裸标识符不碰**：内置函数等裸标识符一律不改，不要给它们加大小写。
-6. **回调用箭头函数**：`Signal.computed` / `Signal.effect` / `batch` / `onMount` / `onCleanup` / 集合回调（`map`/`filter`）等一律写箭头——单语句 `() => expr` / `x => expr`，多语句 `() => { stmt; stmt }`（花括号 body，生成 `func(){...}`），贴近 SolidJS/JS 习惯，别写 `func() T { return ... }`。编译器从 body 反推参数与返回类型，包括 `computed(() => count)` 单点 signal getter（裸写，从 signal 声明类型反查，不降级 `any`）；带参数的 `createRoot((o *Signal.owner) => { ... })` 保留显式类型标注。只有极少数需要显式多返回值的场合才用 `func` 字面量。
-7. **本地 GX 模块严格大小写，别套 Go 的裸写约定**：对本地 `.gx` 模块（import 命中项目内 `.gx`），符号/字段大小写必须与被导入方 `pub` 导出名一致，不能像外部 Go 包那样"随便写小写等还原"。写小写源名（如 `util.add`）可查表还原；写错大小写（如 `util.ADD`、`model.box{VALUE:9}`）由检查器报 `import-case` / `import-field-case`，产物原样保留不改赌。用 `gox build <entry.gx> -root <项目根>` 或 `gox check <entry.gx> -root <项目根>` 触发项目模式；详见 `examples/crossfile/`。
+3. **导出/私有只由 `pub` 决定，与名字大小写无关**：加 `pub` 即导出（编译器首字母大写并登记到导出表），不加即私有、名字大小写原样保留——例如 `type cardProps` 和 `type CardProps`（无 `pub`）都是私有类型，不需要靠写小写来"表示私有"。跨文件导出表也只收 `pub` 符号。组件同理：`pub func Stat(...)` 导出，调用写 `<Stat/>`；JSX 里首字母大写 = 组件、小写 = 原生 HTML 标签，这是硬编码判定，不能把组件写成小写标签。
+4. **裸标识符不碰**：内置函数等裸标识符一律不改，不要给它们加大小写。
+5. **回调用箭头函数**：`Signal.computed` / `Signal.effect` / `batch` / `onMount` / `onCleanup` / 集合回调（`map`/`filter`）等一律写箭头——单语句 `() => expr` / `x => expr`，多语句 `() => { stmt; stmt }`（花括号 body，生成 `func(){...}`），贴近 SolidJS/JS 习惯，别写 `func() T { return ... }`。编译器从 body 反推参数与返回类型，包括 `computed(() => count)` 单点 signal getter（裸写，从 signal 声明类型反查，不降级 `any`）；带参数的 `createRoot((o *Signal.owner) => { ... })` 保留显式类型标注。只有极少数需要显式多返回值的场合才用 `func` 字面量。
+6. **本地 GX 模块严格大小写，别套 Go 的裸写约定**：对本地 `.gx` 模块（import 命中项目内 `.gx`），符号/字段大小写必须与被导入方 `pub` 导出名一致，不能像外部 Go 包那样"随便写小写等还原"。写小写源名（如 `util.add`）可查表还原；写错大小写（如 `util.ADD`、`model.box{VALUE:9}`）由检查器报 `import-case` / `import-field-case`，产物原样保留不改赌。用 `gox build <entry.gx> -root <项目根>` 或 `gox check <entry.gx> -root <项目根>` 触发项目模式；详见 `examples/crossfile/`。
 
 ### 反面教材（本项目真实犯过的错，禁止重演）
 
