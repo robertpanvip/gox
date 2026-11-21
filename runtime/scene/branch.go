@@ -25,7 +25,8 @@ type Branch struct {
 	cur      *Instance
 	owner    *signal.Owner
 	disposed bool
-	init     bool // 是否已完成首次求值（idx 初始为 0，需要区分「从未求值」）
+	init     bool        // 是否已完成首次求值（idx 初始为 0，需要区分「从未求值」）
+	sink     *changeSink // 所属实例树的变更缓冲，传给各分支子实例
 }
 
 // NewBranch 创建一个条件分支控制器。
@@ -97,6 +98,9 @@ func (b *Branch) Resolve() *Instance {
 		b.owner = signal.CreateRoot(func(o *signal.Owner) {
 			cur = b.builders[sel]()
 			if cur != nil {
+				if b.sink != nil {
+					cur.changes = b.sink // 共享所属实例树的变更缓冲
+				}
 				cur.BindReactive(signal.Effect)
 			}
 		})
@@ -115,6 +119,9 @@ func (b *Branch) Resolve() *Instance {
 	b.mu.Unlock()
 	return cur
 }
+
+// adoptSink 实现 subtreeController：记录所属实例树的变更缓冲，传给各分支子实例。
+func (b *Branch) adoptSink(s *changeSink) { b.sink = s }
 
 // Dispose 销毁当前分支作用域（幂等）。级联停止子树内所有 Effect / Cleanup。
 func (b *Branch) Dispose() {

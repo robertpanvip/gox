@@ -11,11 +11,12 @@
 | 改动类型 | 例子 | 后端是否要动 |
 |---|---|---|
 | **host 内部实现**（协议不变） | 编译器优化、opcode 增删内部指令、`Update()` 算法、`signal` 调度、内置 Headless/Text 实现、`App` 内部字段、新增不暴露的辅助 API | **不用动** |
-| **协议变更**（契约面变了） | `Window` 接口增删方法或改签名、`Node` 字段增删改、`NodeType` 枚举变化、`Handler`/`EventContext` 签名变化、`WindowConfig` 字段语义变化 | **必须跟着实现** |
+| **协议变更**（契约面变了） | `Window` 接口增删方法或改签名、**已有** `Node` 字段语义变化或删除、`NodeType` 枚举变化、`Handler`/`EventContext` 签名变化、`WindowConfig` 字段语义变化 | **必须跟着实现** |
+| **additive 字段/方法**（协议面扩展但向后兼容） | 新增 `Node.ID`/`Node.Layout`、合成事件、`Changes()` 等——只加不删、不改已有签名，旧后端忽略即可 | **不用动**（可选采用） |
 
-**协议面**就是第 2 节列出的那几样：`gxapp.Window`、`gxapp.WindowConfig`、`gxscene.Node` / `NodeType`、事件约定（`Handlers` / `Handler` / `EventContext`）、以及 `gxscene.Backend`。它们是后端唯一依赖的东西，其余 host 代码对后端透明。
+**协议面**就是第 2 节列出的那几样：`gxapp.Window`、`gxapp.WindowConfig`、`gxscene.Node` / `NodeType`、事件约定（`Handlers` / `Handler` / `EventContext`）。它们是后端唯一依赖的东西，其余 host 代码对后端透明。host **不定义绘制后端接口**——曾有的 `gxscene.Backend interface{Paint(root) string}` 已删除（返回字符串只适合文本，对 Skia/wgpu 是误导）；`TextBackend` 降级为具体文本工具，不是要实现的协议。
 
-其中 `SyntheticEvent` / `DispatchBubble` / `DispatchCapture` / `NormalizeEventName` / `Modifier` 属于 **additive 扩展**（见 §2.3）：它们只新增类型与方法，`Node`/`Window`/`Handler` 的既有签名一个没动，因此归入"host 内部实现（协议不变）"一类 —— 后端不采用就完全无感。
+其中 `SyntheticEvent` / `DispatchBubble` / `DispatchCapture` / `NormalizeEventName` / `Modifier`（§2.3）以及 `Node.ID` / `Node.Layout` / `Changes()`（§2.4）属于 **additive 扩展**：它们只新增类型、字段与方法，`Window`/`Handler` 的既有签名一个没动，因此归入"additive 字段/方法"一类 —— 后端不采用就完全无感。
 
 这条规则是拆库的价值所在：host 可以持续迭代渲染核心和编译器，后端只在协议升级时才需要跟进。因此**协议变更要当作 breaking change 对待**——尽量 additive（加可选字段/新方法给默认实现），避免改动已有签名，并在 host 侧 bump 版本、后端侧同步升级。
 
@@ -32,7 +33,7 @@
 ┌──────────────────────────┐   ┌───────────────────────────────┐
 │ host：github.com/.../gox │   │ 外部后端项目                   │
 │  - compiler（GX → Go）   │◀──│  - 实现 gxapp.Window          │
-│  - gxscene（场景树/协议） │   │  - 实现 gxscene.Backend（可选）│
+│  - gxscene（场景树/协议） │   │  - 读 Node.ID / Layout（可选） │
 │  - gxapp（窗口接口/调度） │   │  - 布局 / 命中 / 事件派发      │
 │  - signal（响应式）       │   │  - 胶水入口 run(app)          │
 └──────────────────────────┘   └───────────────────────────────┘
@@ -112,17 +113,39 @@ host 额外提供一套**跨后端一致的合成事件 + 冒泡/捕获派发**�
   - `node.DispatchCapture(name, ctx)`：自根向命中节点捕获派发，`StopPropagation` 语义相同。
   - 两者都自动补 `Synthetic`（若后端没填），`Target` 固定为命中节点；自定义签名 handler 不被拦截，仍可经 `Handler(name)` 取原值。
 
-> 这里没有引入任何新的**必做**契约，因此不触发"协议变更 → 后端必须跟进"：`Window`/`Node` 字段没动、`Handler`/`EventContext` 的既有用法没变。后端可以一直用 `Dispatch` + `Raw`，也可以在需要跨后端一致性时逐步切到 `Synthetic` + `DispatchBubble`。
+> 这里没有引入任何新的**必做**契约，因此不触发"协议变更 → 后端必须跟进"：`Window` 接口没动、`Handler`/`EventContext` 的既有用法没变。新增的 `Node.ID`/`Node.Layout`（§2.4）与合成事件一样是 additive 字段，后端不读则无感。后端可以一直用 `Dispatch` + `Raw`，也可按需切到 `Synthetic` + `DispatchBubble` 或增量变更通道。
 
-### 2.4 渲染后端接口 `gxscene.Backend`（可选）
+### 2.4 节点身份、布局挂载点与增量变更通道（全部 additive）
 
+host **不定义绘制后端接口**（旧 `gxscene.Backend interface{Paint}` 已删除——返回字符串只适合文本，对 Skia/wgpu 是误导）。真实 GUI 后端实现 `Window`，直接吃 `*Node` 树。为让后端少做全量遍历，host 提供三样**可选**能力：
+
+**① 稳定节点 ID** — `Node.ID string`
+- host 按结构位置/key 派生，跨帧稳定：`r/0/1`（静态）、`r/[key]`（keyed 列表项）、`.../tN`（动态文本）。
+- 用途：后端做命中缓存、焦点/hover 跟踪时按 ID 定位节点，不依赖易失效的 `*Node` 指针。**host 只生成、不解释**。
+
+**② 布局挂载点** — `Node.Layout any`
+- host 给后端存自己布局结果（rect/尺寸等）的空槽位，host 不解释/不填充/不计算。
+- 用途：避免每个后端维护 `map[*Node]any` 旁路结构。不用则为 nil。
+
+**③ 增量变更通道** — `Instance.Changes()/TakeChanges()`（App 同名转发）
 ```go
-type Backend interface {
-    Paint(root *Node) string
+app.EnableChanges()                  // 打开记录（不调用则零开销、行为不变）
+// ... signal 变化触发更新 ...
+for _, ch := range app.TakeChanges() { // 取走自上帧以来的有序变更
+    switch ch.Kind {
+    case gxscene.ChangeSetAttr:    /* ch.NodeID / ch.Key / ch.Value */
+    case gxscene.ChangeSetText:    /* ch.Value 为新文本 */
+    case gxscene.ChangeSetHandler: /* 事件换绑 */
+    case gxscene.ChangeReplaceChildren: /* ch.NodeID 的 children 重建，重读之 */
+    }
 }
 ```
+- `ChangeKind`：`SetAttr` / `SetText` / `SetHandler` / `ReplaceChildren` / `AppendChild` / `RemoveChild` / `Destroy`。
+- 变更用 `Node.ID` 定位；整棵实例树（组件/分支/列表项）共享同一 sink，一次 `TakeChanges` 取全。
+- 这是 opcode 常驻树 + 细粒度 `Update()` 的自然产物——`Update` 本来就算出"哪些插槽变了"，这里只是暴露出来，**不像被移除的 vdom 后端那样每次重建整树**。
+- 后端可忽略它、继续每次全量 `Draw(root)`（零改动），也可消费它做增量重绘。
 
-该接口返回字符串，只适合文本渲染（内置 `TextBackend` 用它做 golden/断言）。**真实 GUI 后端走 `Window.Draw(*Node)` 直接吃节点树，不需要实现 `Backend`**。两者职责不同：Backend 是"渲染成字符串"，Window 是"窗口生命周期 + 吃节点树画帧"。
+> 三样都不触碰命中/布局/绘制：ID 是身份、Layout 是空容器、Changes 是"什么变了"的数据描述。决策与实现仍 100% 归后端。
 
 ## 3. 拆成两个项目如何跑通
 
@@ -205,9 +228,9 @@ func Run(cfg gxapp.WindowConfig, build func() any) error {
 | **协议靠代码隐式约定** | 没有 IDL / 独立规范，后端必须 import host 包才能拿到 `Window`/`Node`/`Handler` | 用胶水层隔离；把本文作为接入契约随仓库维护 |
 | **协议变更触发后端跟进** | 只有协议面（`Node`/`Window`/事件签名）改了后端才需改；host 内部实现改动对后端透明。两仓库独立发布时协议版本易错配 | 后端 pin 明确的 host 版本；host 把协议变更当 breaking change（优先 additive），改协议时同步发版 |
 | **事件回路隐式** | `Window` 无事件输入方法，命中→派发全靠约定 | 后端在 `Run()` 内集中实现这条回路，并写清命中策略 |
-| **`Backend`/`Window` 职责分散** | 两个接口容易混淆该实现哪个 | 记住：真实 GUI 只实现 `Window`，`Backend` 仅文本渲染用 |
+| **增量变更可选导致两套路径** | 后端可选消费 `Changes()` 或继续全量 `Draw`；混用需注意幂等 | 一个后端固定一种策略；消费增量的后端每帧 `TakeChanges()` 一次，配合 `Node.ID` 定位 |
 
-**进一步稳定化（可选，需改 host，与"不改这边代码"冲突，属下一阶段）**：在 host 侧把事件回路显式化（给 `App` 加 `Dispatch`/命中接口），或把 `Backend`/`Window` 合并为更清晰的单一后端协议。当前阶段不建议动，先靠胶水层和文档把边界定住。
+**边界澄清（本轮已落实）**：host **不做命中/布局/绘制**，也不定义绘制后端接口（旧 `Backend` 已删）。`Node.ID`/`Layout`/`Changes()` 只是给后端提供身份、存放位置与"什么变了"的数据，决策仍在后端。剩下的隐式点是事件回路——它属后端职责，靠 `Run()` 内的胶水层与本文约定即可，不需要在 host 侧加命中接口。
 
 ## 5. 一句话总结
 

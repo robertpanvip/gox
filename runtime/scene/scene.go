@@ -10,7 +10,8 @@
 // 它重算每个 slot，只把「值真的变了」的写回对应节点，零 Diff、零整树重建。
 //
 // 这正是 lit-html「静态模板只解析一次 + 动态 part 原地更新」的思想，但终点不是
-// DOM，而是一棵可移植的场景树；绘制由 Backend 抽象，Skia / wgpu 后端可后续接入。
+// DOM，而是一棵可移植的场景树；host 不定义绘制后端协议——真实 GUI 后端（Skia /
+// wgpu / GLFW）实现 gxapp.Window，直接吃 *Node 树自行布局/绘制，host 不碰命中/绘制。
 // 依赖追踪也刻意留白：slot getter 是普通闭包，任何响应式系统（如 signal）都能
 // 用「读取时订阅、变化时调 Update」的方式驱动它——渲染与响应式核心解耦。
 package gxscene
@@ -119,8 +120,19 @@ type Node struct {
 	Handlers map[string]any // 事件处理器：key=JSX 原样事件名（如 "onClick"），value=handler 原值，前端不解释
 	Children []*Node
 	Text     string // 仅 NodeText 节点使用
-	parent   *Node
-	dirty    bool
+
+	// ID 是 host 生成、跨帧稳定的逻辑节点 id，供后端做命中缓存、焦点/hover 跟踪等。
+	// host 只按结构位置/key 派生它，不解释其语义；后端可完全忽略。
+	// 规则：静态节点=结构路径（如 "r/0/1"）；keyed 列表项=".../[key]"；动态文本=".../tN"。
+	ID string
+
+	// Layout 是给后端存放自己布局结果（rect/尺寸等）的空挂载点。
+	// host 不解释、不填充、不计算——命中/布局/绘制全部归后端，这里只提供存放位置，
+	// 避免每个后端被迫维护 map[*Node]any 旁路结构。后端不采用时为 nil。
+	Layout any
+
+	parent *Node
+	dirty  bool
 }
 
 // slotKind 区分动态子节点与动态属性。
@@ -139,6 +151,8 @@ const (
 type subtreeController interface {
 	Resolve() *Instance
 	Dispose()
+	// adoptSink 把所属实例树的变更 sink 传给控制器，供其动态构建的子实例共享。
+	adoptSink(*changeSink)
 }
 
 // slot 描述一个动态插槽在场景树中的位置与绑定。
@@ -151,6 +165,7 @@ type slot struct {
 	node  *Node             // clone 后回填的实际节点
 	child *Instance         // slotComp 时挂载的子组件实例
 	ctrl  subtreeController // slotBranch/OpFor 时挂载的动态子树控制器
+	owner *Instance         // 所属实例，供挂载子实例时共享变更 sink
 }
 
 // compiledTemplate 是解析 opcode 一次得到的静态骨架（只解析一次，全局缓存）。
@@ -176,12 +191,13 @@ func templateKey(t Template) string {
 
 // compile 把 opcode 解释成一棵静态骨架树，并记录每个 slot 的目标路径。
 func compile(t Template) *compiledTemplate {
-	root := &Node{Kind: "#root", Type: NodeFragment}
+	root := &Node{Kind: "#root", Type: NodeFragment, ID: "r"}
 	stack := []*Node{root}
 	slots := make([]*slot, t.N)
 	childOfStack := func(parent *Node) int {
-		parent.Children = append(parent.Children, &Node{})
-		return len(parent.Children) - 1
+		idx := len(parent.Children)
+		parent.Children = append(parent.Children, &Node{ID: parent.ID + "/" + strconv.Itoa(idx)})
+		return idx
 	}
 	for _, op := range t.Ops {
 		cur := stack[len(stack)-1]
@@ -294,7 +310,7 @@ func childPath(n *Node) []int {
 
 // clone 复制静态骨架：结构共享常量，Props/Children 深拷贝，避免实例间相互污染。
 func clone(n *Node) *Node {
-	c := &Node{Kind: n.Kind, Type: n.Type, Text: n.Text, dirty: true}
+	c := &Node{Kind: n.Kind, Type: n.Type, Text: n.Text, ID: n.ID, dirty: true}
 	if n.Props != nil {
 		c.Props = make(map[string]any, len(n.Props))
 		for k, v := range n.Props {
@@ -337,6 +353,8 @@ type Instance struct {
 	comps   []Computation // BindReactive 建立的响应式计算句柄，Dispose 时统一清理
 	Writes  int           // 累计实际写入节点的次数（细粒度更新的可观测指标）
 	Updates int           // Update 调用次数
+
+	changes *changeSink // 增量变更缓冲；根实例创建，子实例共享同一 sink
 }
 
 // Computation 是响应式计算的可销毁句柄。用类型别名统一到 signal 包的定义，
@@ -363,13 +381,14 @@ func Render(tpl Template, getters ...func() any) *Instance {
 	}
 
 	root := clone(ct.root)
-	inst := &Instance{tpl: tpl, root: root, slots: make([]*slot, len(ct.slots))}
+	inst := &Instance{tpl: tpl, root: root, slots: make([]*slot, len(ct.slots)), changes: newChangeSink()}
 	for i, proto := range ct.slots {
 		s := &slot{
-			kind: proto.kind,
-			path: proto.path,
-			attr: proto.attr,
-			node: atPath(root, proto.path),
+			kind:  proto.kind,
+			path:  proto.path,
+			attr:  proto.attr,
+			node:  atPath(root, proto.path),
+			owner: inst,
 		}
 		if i < len(getters) {
 			s.get = getters[i]
@@ -456,6 +475,7 @@ func embedValue(s *slot, v any) {
 		s.node.Kind = "#frag"
 		s.node.Type = NodeFragment
 		s.child = x
+		s.owner.adoptSink(x)
 		graftNode(s.node, x.root)
 	case *Node:
 		s.node.Kind = "#frag"
@@ -465,7 +485,7 @@ func embedValue(s *slot, v any) {
 		s.node.Kind = "#frag"
 		s.node.Type = NodeFragment
 		for _, e := range x {
-			embedAnyChild(s.node, e)
+			embedAnyChild(s.owner, s.node, e)
 		}
 	default:
 		s.node.Kind = "#text"
@@ -474,18 +494,20 @@ func embedValue(s *slot, v any) {
 	}
 }
 
-func embedAnyChild(dst *Node, v any) {
+func embedAnyChild(owner *Instance, dst *Node, v any) {
 	switch x := v.(type) {
 	case *Instance:
+		owner.adoptSink(x)
 		graftNode(dst, x.root)
 	case *Node:
 		graftNode(dst, x)
 	case []any:
 		for _, e := range x {
-			embedAnyChild(dst, e)
+			embedAnyChild(owner, dst, e)
 		}
 	default:
-		n := &Node{Kind: "#text", Type: NodeText, Text: valueText(v), parent: dst}
+		n := &Node{Kind: "#text", Type: NodeText, Text: valueText(v), parent: dst,
+			ID: dst.ID + "/t" + strconv.Itoa(len(dst.Children))}
 		dst.Children = append(dst.Children, n)
 	}
 }
@@ -503,6 +525,7 @@ func mountComp(s *slot, v any) {
 		return
 	}
 	s.child = inst
+	s.owner.adoptSink(inst)
 	for _, c := range inst.root.Children {
 		c.parent = s.node
 		s.node.Children = append(s.node.Children, c)
@@ -523,6 +546,7 @@ func mountBranch(s *slot, sub *Instance) {
 	}
 	s.child = sub
 	s.node.Kind = "#frag"
+	s.owner.adoptSink(sub)
 	for _, c := range sub.root.Children {
 		c.parent = s.node
 		s.node.Children = append(s.node.Children, c)
@@ -564,6 +588,7 @@ func attachController(i *Instance, s *slot, v any) {
 		return
 	}
 	s.ctrl = ctrl
+	ctrl.adoptSink(i.changes)
 	mountBranch(s, ctrl.Resolve())
 }
 
@@ -614,14 +639,21 @@ func (i *Instance) Update() int {
 		switch s.kind {
 		case slotChild:
 			embedValue(s, v)
+			if s.node.Kind == "#text" {
+				i.record(ChangeSetText, s.node, "", s.node.Text)
+			} else {
+				i.record(ChangeReplaceChildren, s.node, "", nil)
+			}
 		case slotAttr:
 			s.node.Props[s.attr] = v
+			i.record(ChangeSetAttr, s.node, s.attr, v)
 		case slotEvent:
 			// 事件 handler 换绑（SetGetter/命令式改绑）时更新槽位。
 			if s.node.Handlers == nil {
 				s.node.Handlers = map[string]any{}
 			}
 			s.node.Handlers[s.attr] = v
+			i.record(ChangeSetHandler, s.node, s.attr, v)
 		}
 		s.node.dirty = true
 		written++
@@ -637,7 +669,7 @@ func (i *Instance) SetGetter(slot int, get func() any) {
 	}
 }
 
-// Root 返回场景树根（供 Backend 绘制 / 测试检查）。
+// Root 返回场景树根（供 Window.Draw 绘制 / 测试检查）。
 func (i *Instance) Root() *Node { return i.root }
 
 // TPL 返回绑定的模板（供高级用法：把同一模板渲染到不同 backend / 数据源）。
@@ -712,6 +744,7 @@ func (i *Instance) SetPart(slot int, v any) {
 		}
 		s.ctrl = ctrl
 		mountBranch(s, ctrl.Resolve())
+		i.record(ChangeReplaceChildren, s.node, "", nil)
 		i.Writes++
 		return
 	}
@@ -722,10 +755,17 @@ func (i *Instance) SetPart(slot int, v any) {
 	switch s.kind {
 	case slotChild:
 		embedValue(s, v)
+		if s.node.Kind == "#text" {
+			i.record(ChangeSetText, s.node, "", s.node.Text)
+		} else {
+			i.record(ChangeReplaceChildren, s.node, "", nil)
+		}
 	case slotAttr:
 		s.node.Props[s.attr] = v
+		i.record(ChangeSetAttr, s.node, s.attr, v)
 	case slotComp:
 		mountComp(s, v)
+		i.record(ChangeReplaceChildren, s.node, "", nil)
 	}
 	s.node.dirty = true
 	i.Writes++
@@ -812,18 +852,19 @@ func (i *Instance) Dispose() {
 	}
 }
 
-// ---------- Backend：绘制抽象，为 Skia / wgpu 留接口 ----------
-
-// Backend 把常驻场景树绘制到具体输出。第一版提供 TextBackend 便于测试；
-// Skia / wgpu 后端可另行实现，无需改动编译器或场景树。
-type Backend interface {
-	Paint(root *Node) string
-}
+// ---------- 文本渲染工具（非后端协议） ----------
+//
+// 注意：host 不定义「绘制后端协议」。真实 GUI 后端（Skia / wgpu / GLFW）实现的是
+// gxapp.Window，直接吃 *Node 树自行布局/绘制。这里只有 TextBackend 一个具体工具，
+// 用于把场景树渲染成确定性文本（golden / 断言 / HeadlessWindow 输出），它不是
+// 需要后端去实现的接口。曾有一个 Backend interface（Paint(root) string）已被移除：
+// 返回字符串只适合文本，对真实 GUI 后端是误导。
 
 // TextBackend 把场景树渲染成缩进的类 HTML 文本（确定性输出，便于 golden / 断言）。
+// 它是具体渲染工具，不是后端需要实现的协议接口。
 type TextBackend struct{}
 
-// Paint 实现 Backend。
+// Paint 把场景树渲染成文本字符串。
 func (TextBackend) Paint(root *Node) string {
 	var b strings.Builder
 	for _, c := range root.Children {

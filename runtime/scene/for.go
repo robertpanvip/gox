@@ -1,6 +1,7 @@
 package gxscene
 
 import (
+	"fmt"
 	"sync"
 
 	"github.com/robertpanvip/gox/runtime/signal"
@@ -28,6 +29,7 @@ type For struct {
 
 	// indexKey 为 true 时用元素下标作 key（未提供 key 函数时）。
 	indexKey bool
+	sink     *changeSink // 所属实例树的变更缓冲，传给各列表项子实例
 }
 
 type forEntry struct {
@@ -148,12 +150,17 @@ func (f *For) Resolve() *Instance {
 			entry.value = e.value // 复用：更新值（子树内部 signal 自己更新，不重建）
 			continue
 		}
-		entry := &forEntry{key: e.key, value: e.value, node: &Node{Kind: "#frag", Props: map[string]any{}, dirty: true}}
+		// 列表项 ID 按 key 派生（非数组下标），重排/增删时同 key 项 ID 不变。
+		itemID := "r/[" + fmt.Sprint(e.key) + "]"
+		entry := &forEntry{key: e.key, value: e.value, node: &Node{Kind: "#frag", Props: map[string]any{}, ID: itemID, dirty: true}}
 		f.entries[e.key] = entry
 		// 新 Owner 下构建子树并接线；子树内的 Effect 归属该 Owner，删除时级联清理。
 		entry.owner = signal.CreateRoot(func(o *signal.Owner) {
 			entry.inst = f.render(e.value)
 			if entry.inst != nil {
+				if f.sink != nil {
+					entry.inst.changes = f.sink // 共享所属实例树的变更缓冲
+				}
 				entry.inst.BindReactive(signal.Effect)
 				for _, c := range entry.inst.root.Children {
 					c.parent = entry.node
@@ -174,13 +181,16 @@ func (f *For) Resolve() *Instance {
 	}
 
 	// 组装根子树（透明容器），供 mountBranch 类似的嫁接待用。
-	root := &Node{Kind: "#root", Props: map[string]any{}, dirty: true}
+	root := &Node{Kind: "#root", Props: map[string]any{}, ID: "r", dirty: true}
 	for _, c := range children {
 		c.parent = root
 		root.Children = append(root.Children, c)
 	}
 	return &Instance{root: root}
 }
+
+// adoptSink 实现 subtreeController：记录所属实例树的变更缓冲，传给各列表项子实例。
+func (f *For) adoptSink(s *changeSink) { f.sink = s }
 
 // Dispose 销毁所有元素 Owner（幂等）。
 func (f *For) Dispose() {

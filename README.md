@@ -75,7 +75,7 @@ pub func render(name string) any {
 | `{name}` 表达式子节点 | `gxscene.OpDynChild` + getter `func() any{ return name }` |
 | `<Foo/>` 组件 | `gxscene.OpComp` + `Foo(gxscene.Props{…})`（不加引号） |
 
-借鉴 lit-html 的「静态模板 + 动态 part」：`gxscene.Render` 按 opcode 结构缓存静态骨架，clone 得到常驻场景树；数据变化后调 `Update()` 只回写变化节点（可观测指标 `Instance.Writes`）。绘制经 `Backend` 接口抽象，第一版提供 `TextBackend`，Skia / wgpu 后端可后续接入，编译器与场景树无需改动。
+借鉴 lit-html 的「静态模板 + 动态 part」：`gxscene.Render` 按 opcode 结构缓存静态骨架，clone 得到常驻场景树；数据变化后调 `Update()` 只回写变化节点（可观测指标 `Instance.Writes`）。**host 不定义绘制后端接口**——真实 GUI 后端（Skia / wgpu / GLFW）实现 `gxapp.Window` 直接吃 `*Node` 树自行布局/绘制；host 只通过 `Node.ID`（稳定身份）、`Node.Layout`（布局挂载点）、`Changes()`（增量变更流）提供可选能力，命中/布局/绘制全归后端。详见[后端接入契约](docs/backend-integration.md)。
 
 #### 使用指南
 
@@ -210,7 +210,7 @@ n := view.Update()                      // 更新，返回写入节点数
 | 5 | children 用 `gxscene.Child(props)()` 读（getter-map） | 值是子 `Instance`，透明摊平，无多余标签层；强类型形态 children 作为 struct 字段传入 |
 | 6 | 更新靠 `Update()` 或 `BindReactive` 驱动 | scene 不内置响应式；`BindReactive(signal.Effect)` 可把 signal 直接接到插槽，免手动 Update |
 | 7 | `SetPart` / `SetGetter` 用插槽下标 | 下标由编译期分配，手写 opcode 时才需要；JSX 开发中优先用 getter |
-| 8 | 绘制后端目前只有 `TextBackend` | 经 `Backend` 接口抽象，Skia / wgpu 可后续接入，编译器无需改动 |
+| 8 | host 不定义绘制后端接口 | `TextBackend` 只是文本工具；GUI 后端实现 `gxapp.Window`，可用 `Node.ID`/`Layout`/`Changes()` 做增量绘制，编译器无需改动 |
 
 API：`CompileScene` / `CompileSceneWithModule`（对应默认的 `Compile` / `CompileWithModule`）；调试单步用 `gox jsxscene`。运行时见 [`runtime/scene/`](runtime/scene/)，完整示例见 `examples/jsxscene.gx`。
 

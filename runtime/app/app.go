@@ -270,6 +270,31 @@ func (a *App) Close() error {
 // Instance 返回底层场景树实例（Render 之前为 nil；供 SetPart / SetGetter 等高级用法）。
 func (a *App) Instance() *gxscene.Instance { return a.inst }
 
+// EnableChanges 打开增量变更记录。Render 之后调用；之后每次更新产生的变更可被
+// Changes/TakeChanges 读取。不调用时完全退回全量 Draw 行为（零开销）。
+func (a *App) EnableChanges() {
+	if a != nil && a.inst != nil {
+		a.inst.EnableChanges()
+	}
+}
+
+// Changes 返回自上次 TakeChanges 以来的增量变更（副本，不清空）。
+// 每条变更用 Node.ID 定位，后端可选消费做增量重绘，也可忽略继续全量 Draw。
+func (a *App) Changes() []gxscene.Change {
+	if a == nil || a.inst == nil {
+		return nil
+	}
+	return a.inst.Changes()
+}
+
+// TakeChanges 取走并清空当前所有增量变更。后端每帧调用一次即可拿到增量补丁。
+func (a *App) TakeChanges() []gxscene.Change {
+	if a == nil || a.inst == nil {
+		return nil
+	}
+	return a.inst.TakeChanges()
+}
+
 // Window 返回窗口后端（供特定后端的额外 API 使用）。
 func (a *App) Window() Window { return a.win }
 

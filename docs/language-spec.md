@@ -66,7 +66,7 @@ pub enum perm { read = 1 << iota, write, exec }  // 位标志 1,2,4
 | `<br/>` 空元素 | `gxscene.OpElem Arg:"br"` + `gxscene.OpClose` |
 | `<Foo/>` 组件 | `gxscene.OpComp` + `Foo(gxscene.Props{…})` |
 
-运行时 `runtime/scene/`：`Template` / `Op` / `Render` / `Instance`。`Render` 缓存静态骨架、clone 出常驻场景树；`Instance.Update()` 只回写变化的插槽（可观测指标 `Writes`），绘制经 `Backend` 接口抽象（内置 `TextBackend`），不含调度。
+运行时 `runtime/scene/`：`Template` / `Op` / `Render` / `Instance`。`Render` 缓存静态骨架、clone 出常驻场景树；`Instance.Update()` 只回写变化的插槽（可观测指标 `Writes`），不含调度。host 不定义绘制后端接口：GUI 后端实现 `gxapp.Window`，可用 `Node.ID` / `Node.Layout` / `Changes()` 做增量绘制；内置 `TextBackend` 只是文本工具。
 
 ## 4. 外部 Go 符号
 
