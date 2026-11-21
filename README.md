@@ -156,7 +156,7 @@ import (
 
 func main() {
     signal count = 0
-    let doubled = Signal.computed(func() int { return count() * 2 })
+    let doubled = Signal.computed(() => count() * 2)
 
     // JSX 插值 {count} / {doubled} 由编译器编成 getter 并自动补读调用：
     //   func() any { return count() } / { return doubled() }
@@ -266,7 +266,7 @@ app.run()
 
 ```gx
 signal count = 0
-let doubled = Signal.computed(func() int { return count() * 2 })
+let doubled = Signal.computed(() => count() * 2)
 app, _ := gxapp.open({ Title: "Demo", Width: 800, Height: 600 })
 app.render(() => <div><span>{count}</span><b>{doubled}</b></div>)   // 根 Owner 下建树 + 接线
 count = 5                          // 自动更新 + 只画一帧：count=5、doubled=10 一致
@@ -277,7 +277,7 @@ count = 5                          // 自动更新 + 只画一帧：count=5、do
 ```gx
 pub func Counter(props gxscene.props) *gxscene.instance {
     signal count = 0
-    let doubled = Signal.computed(func() int { return count() * 2 })
+    let doubled = Signal.computed(() => count() * 2)
     Signal.effect(func() { fmt.println("tick", count, doubled) })
     stop := make(chan struct{})
     Signal.onMount(func() {

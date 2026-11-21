@@ -21,7 +21,7 @@ pub func Counter(props gxscene.props) *gxscene.instance {
 
     // 组件局部状态：源 signal + 派生 computed（不在 main 里）
     signal count = 0
-    let doubled = Signal.computed(func() int { return count() * 2 })
+    let doubled = Signal.computed(() => count() * 2)
 
     // 组件自己的副作用：count 变化即重跑，打印状态变化逻辑
     Signal.effect(func() {

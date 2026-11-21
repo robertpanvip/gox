@@ -1,6 +1,9 @@
 package compiler
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestLambdaSingleParamInfer(t *testing.T) {
 	src := `package main
@@ -188,4 +191,33 @@ func main() {
 `
 	got := compileOK(t, "lambdactx3.gx", src)
 	containsAll(t, got, `func(n int,s string) bool {return true}`)
+}
+
+// TestLambdaComputedGetterArrow 验证 SolidJS 风格：computed 的箭头函数 body 是
+// 单点 signal getter 调用时，从改写前采集的 signal 声明类型反查返回类型，
+// 不降级 any。这是 computed(() => count()) 正确工作的关键。
+func TestLambdaComputedGetterArrow(t *testing.T) {
+	src := `package main
+func main() {
+	signal count = 0
+	signal name = "gx"
+	signal ok = true
+	_ = Signal.computed(() => count())
+	_ = Signal.computed(() => name())
+	_ = Signal.computed(() => ok())
+	_ = Signal.computed(() => count() * 2)
+}
+`
+	got := compileOK(t, "lambdacomp.gx", src)
+	containsAll(t, got,
+		`Computed(func() int {return count()})`,
+		`Computed(func() string {return name()})`,
+		`Computed(func() bool {return ok()})`,
+		`Computed(func() int {return count() * 2})`,
+	)
+	if strings.Contains(got, `func() any {return count()}`) ||
+		strings.Contains(got, `func() any {return name()}`) ||
+		strings.Contains(got, `func() any {return ok()}`) {
+		t.Fatalf("单点 signal getter 不应降级 any:\n%s", got)
+	}
 }

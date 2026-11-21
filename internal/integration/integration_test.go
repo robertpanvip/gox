@@ -706,8 +706,9 @@ import (
 )
 pub func Counter(props gxscene.props) *gxscene.instance {
 	signal count = 0
-	let doubled = Signal.computed(func() int { return count() * 2 })
-	Signal.effect(func() { fmt.println("tick", count, doubled) })
+	let doubled = Signal.computed(() => count() * 2)
+	let same = Signal.computed(() => count())
+	Signal.effect(func() { fmt.println("tick", count, doubled, same) })
 	stop := make(chan struct{})
 	Signal.onMount(func() {
 		go func() {
@@ -736,8 +737,8 @@ func main() {
 }
 `
 	out := runGXScene(t, src)
-	// 局部状态自增到 3、computed 派生到 6
-	for _, want := range []string{`"3"`, `"6"`, "tick 3 6"} {
+	// 局部状态自增到 3、computed 派生到 6、单点 getter computed 恒等于 count=3
+	for _, want := range []string{`"3"`, `"6"`, "tick 3 6 3"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("输出应包含 %q, got:\n%s", want, out)
 		}

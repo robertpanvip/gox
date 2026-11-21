@@ -40,7 +40,7 @@ pub func Dashboard(props gxscene.Props) *gxscene.Instance {
 func main() {
     // signal 源 + computed 派生（源码小写 computed，编译器还原为 Computed）
     signal count = 0
-    let doubled = Signal.computed(func() int { return count() * 2 })
+    let doubled = Signal.computed(() => count() * 2)
 
     // 应用入口：open 只传配置（裸对象字面量，编译器从签名推断为 WindowConfig），
     // 返回 App；render 才是渲染 JSX 的入口，内部自动接好响应式。

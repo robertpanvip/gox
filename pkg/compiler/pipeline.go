@@ -99,7 +99,7 @@ func compileWithMode(file, src, module string, mode jsxMode) (*Result, error) {
 	analysis := Analyze(toks)    // desugar 之前的 GX 语义层（联合未擦除）
 	names := map[string]string{} // 小写原名 → 大写导出名（自身 pub 符号）
 	toks = expandDefaults(toks, defaultDefs)
-	toks = transformLambdas(toks, analysis, bindings)
+	toks = transformLambdas(toks, analysis, bindings, sigTypes)
 	// 对象字面量：期望类型校验失败时返回带 GX 坐标的错误。
 	toks, err := transformObjectLits(toks, analysis, bindings)
 	if err != nil {
@@ -213,10 +213,11 @@ func CompileStage(src, stage string) (string, error) {
 		bindings := Bind(toks)
 		templateAST := ParseTemplateExprs(toks)
 		toks, defaultDefs := stripDefaults(toks)
+		sigTypes := collectSignalTypes(toks)
 		toks = transformSignals(toks, bindings)
 		analysis := Analyze(toks)
 		toks = expandDefaults(toks, defaultDefs)
-		toks = transformLambdas(toks, analysis, bindings)
+		toks = transformLambdas(toks, analysis, bindings, sigTypes)
 		toks, err := transformObjectLits(toks, analysis, bindings)
 		if err != nil {
 			return "", err

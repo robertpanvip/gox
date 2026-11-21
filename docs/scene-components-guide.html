@@ -124,10 +124,11 @@
 </table>
 
 <div class="note">
-<b>三条边界（踩过的坑）：</b>① <b>所有 signal API 用大写 <code>Signal.</code> 前缀</b>——<code>Signal.computed</code> / <code>Signal.effect</code> / <code>Signal.createRoot</code> / <code>Signal.batch</code> 等。<code>Signal</code> 是语法糖占位包名，既避免与 <code>signal</code> 声明关键字混淆，也保证还原；<b>不要</b>写裸 <code>computed(...)</code> 或小写 <code>signal.effect(...)</code>。
+<b>五条边界（踩过的坑）：</b>① <b>所有 signal API 用大写 <code>Signal.</code> 前缀</b>——<code>Signal.computed</code> / <code>Signal.effect</code> / <code>Signal.createRoot</code> / <code>Signal.batch</code> 等。<code>Signal</code> 是语法糖占位包名，既避免与 <code>signal</code> 声明关键字混淆，也保证还原；<b>不要</b>写裸 <code>computed(...)</code> 或小写 <code>signal.effect(...)</code>。
 ② <b>组件名大写开头</b>——<code>pub func Stat(...)</code> 配 <code>&lt;Stat/&gt;</code>。JSX 标签首字母大写 = 组件、小写 = 原生 HTML 标签，这是硬编码判定。
 ③ <b>配置对象写裸字面量</b>——<code>gxapp.open({ Title: ..., Width: ... })</code>，编译器用 <code>go list</code> + <code>go/parser</code> 读取 <code>gxapp.open</code> 所在包的真实 Go 源码 AST，取出参数类型并补全为 <code>gxapp.WindowConfig</code>（通用机制，对任意外部包函数都有效；读不到时回退匿名 struct）。无需也不应手写 <code>gxapp.windowConfig{...}</code>。
 ④ <b>open 与 render 分工</b>——<code>gxapp.open(cfg)</code> 只创建窗口外壳并返回 <code>App</code>，<code>app.render(() =&gt; &lt;App/&gt;)</code> 收一个<b>建树函数</b>（SolidJS 风格）：内部建立根 Owner、画首帧、封装 <code>bindReactive</code>（signal 变化 → 更新 + 重绘，含分支/列表结构重绘），源码无需手写接线。组件内的 <code>Signal.effect</code> / <code>onMount</code> / <code>onCleanup</code> 归属该 Owner，<code>app.close</code> 时级联清理。
+⑤ <b>回调首选箭头函数</b>——<code>Signal.computed(() =&gt; expr)</code> / <code>Signal.effect(() =&gt; ...)</code> 贴近 SolidJS 习惯，别写 <code>func() T { return ... }</code>。编译器从 body 反推类型：<code>() =&gt; count()</code> 这种单点 signal getter 会从 signal 声明类型反查返回类型（不降级 <code>any</code>）；只有多语句或需显式类型时才用 <code>func</code> 字面量。
 </div>
 
 <h2>二、工作原理（三段流程）</h2>
@@ -190,7 +191,7 @@
     <span class="kw">signal</span> count = <span class="ty">0</span>
     <span class="kw">signal</span> visible = <span class="kw">true</span>
     <span class="kw">signal</span> users = []<span class="ty">user</span>{{<span class="ty">1</span>, <span class="st">"Tom"</span>}, {<span class="ty">2</span>, <span class="st">"Jack"</span>}}
-    doubled := Signal.<span class="fn">computed</span>(<span class="kw">func</span>() <span class="kw">int</span> { <span class="kw">return</span> count() * <span class="ty">2</span> })
+    doubled := Signal.<span class="fn">computed</span>(() =&gt; count() * <span class="ty">2</span>)
 
     <span class="cm">// 应用入口：open 只收配置（裸对象字面量）；render 收建树函数，内部建根 Owner + 接线</span>
     app, err := gxapp.<span class="fn">open</span>({ Title: title, Width: width, Height: cfg.height })
@@ -261,7 +262,7 @@ app.<span class="fn">render</span>(() =&gt; &lt;<span class="jx">div</span>&gt;{
 <p>组件函数<b>只在建树时执行一次</b>——状态是组件「自己的」，写在组件内部而非 <code>main</code> 里，靠 signal + effect 保鲜。副作用用 <code>Signal.onMount</code> 启动、<code>Signal.onCleanup</code> 清理，二者归属 <code>app.render</code> 建立的根 Owner，<code>app.close</code> 时级联执行。完整可运行示例见 <code>examples/jsxapp-solid.gx</code>（组件内定时器自增，close 时打印 unmounted）。</p>
 <pre class="code"><span class="kw">pub func</span> <span class="fn">Counter</span>(props gxscene.<span class="ty">props</span>) *gxscene.<span class="ty">instance</span> {
     <span class="kw">signal</span> count = <span class="ty">0</span>   <span class="cm">// 组件局部状态</span>
-    <span class="kw">let</span> doubled = <span class="fn">Signal</span>.<span class="fn">computed</span>(<span class="kw">func</span>() <span class="kw">int</span> { <span class="kw">return</span> count() * <span class="ty">2</span> })
+    <span class="kw">let</span> doubled = <span class="fn">Signal</span>.<span class="fn">computed</span>(() =&gt; count() * <span class="ty">2</span>)
     <span class="fn">Signal</span>.<span class="fn">effect</span>(<span class="kw">func</span>() { fmt.<span class="fn">println</span>(<span class="st">"tick"</span>, count, doubled) })  <span class="cm">// 状态变化逻辑</span>
     stop := <span class="fn">make</span>(<span class="kw">chan</span> <span class="kw">struct</span>{})
     <span class="fn">Signal</span>.<span class="fn">onMount</span>(<span class="kw">func</span>() {
@@ -278,6 +279,7 @@ app.<span class="fn">close</span>()  <span class="cm">// 级联执行 Counter �
 <ol class="constraints">
   <li><b>标识符小写书写</b>：GX 源码一律小写，编译器还原；全大写缩写写大写原样保留。</li>
   <li><b>signal API 大写前缀</b>：<code>Signal.computed</code> / <code>Signal.effect</code> / <code>Signal.createRoot</code> / <code>Signal.batch</code> 等一律大写 <code>Signal.</code>，避免与 <code>signal</code> 声明关键字混淆；不要写裸 <code>computed(...)</code>。</li>
+  <li><b>回调用箭头函数</b>：<code>Signal.computed(() =&gt; expr)</code> / <code>Signal.effect(() =&gt; ...)</code>，从 body 反推类型（含单点 signal getter），不写 <code>func() T { return ... }</code>。</li>
   <li><b>组件名大写开头</b>：<code>pub func Stat(...)</code> + <code>&lt;Stat/&gt;</code>；组件标签不能小写。</li>
   <li><b>配置写裸对象字面量</b>：<code>gxapp.open({ ... })</code>（只收配置，返回 App），从签名推断具名类型，不手写 <code>gxapp.windowConfig{...}</code>。</li>
   <li><b>pub 声明小写 + JSX 标签大写</b>：<code>pub func card</code> 配 <code>&lt;Card/&gt;</code>；组件标签小写会被当成原生标签。</li>
@@ -300,7 +302,7 @@ app.<span class="fn">close</span>()  <span class="cm">// 级联执行 Counter �
   <tr><td><code>view.bindReactive(effect)</code></td><td><code>Instance.BindReactive</code></td><td>把 effect 接到所有插槽 + 结构插槽：写入自动精确更新与重绘</td></tr>
   <tr><td><code>view.dispose()</code></td><td><code>Instance.Dispose</code></td><td>销毁实例：停订阅与结构 Owner</td></tr>
   <tr><td><code>Signal.new</code> / <code>Signal.newWithEquals</code></td><td><code>signal.New</code> / <code>signal.NewWithEquals</code></td><td>响应式源：默认裁剪 / 自定义比较</td></tr>
-  <tr><td><code>Signal.computed</code> / <code>Signal.computedWithHandle</code></td><td><code>signal.Computed</code> / <code>ComputedWithHandle</code></td><td>派生只读信号（后者带可销毁句柄）</td></tr>
+  <tr><td><code>Signal.computed(() =&gt; expr)</code> / <code>Signal.computedWithHandle</code></td><td><code>signal.Computed</code> / <code>ComputedWithHandle</code></td><td>派生只读信号（后者带可销毁句柄）；回调用箭头函数，body 是单点 signal getter 也能推断类型</td></tr>
   <tr><td><code>Signal.effect</code></td><td><code>signal.Effect → Computation</code></td><td>可销毁 effect，幂等 dispose，自动挂 Owner</td></tr>
   <tr><td><code>Signal.createRoot</code> / <code>Signal.getOwner</code> / <code>Signal.runWithOwner</code></td><td><code>CreateRoot</code> / <code>GetOwner</code> / <code>RunWithOwner</code></td><td>Owner 树：建作用域、取当前、切换归属</td></tr>
   <tr><td><code>Signal.onCleanup</code> / <code>Signal.onMount</code> / <code>Signal.batch</code></td><td><code>OnCleanup</code> / <code>OnMount</code> / <code>Batch</code></td><td>生命周期清理 / 首挂载 / 合并写入</td></tr>

@@ -180,9 +180,9 @@ func matchDelimBack(toks []Token, close int, r string) int {
 
 // inferLambdaTypes 为一个 lambda 推断参数类型与返回类型。
 // an 可为 nil（无 Analysis 时只用显式标注 + 表达式反推）。
-func inferLambdaTypes(toks []Token, l *lambdaExpr, an *Analysis, b *Bindings) {
+func inferLambdaTypes(toks []Token, l *lambdaExpr, an *Analysis, b *Bindings, sigTypes map[string]string) {
 	// 上下文函数类型优先：拿到参数类型列表与返回类型。
-	ctxParams, ctxResult := inferContextFuncType(toks, l, an)
+	ctxParams, ctxResult := inferContextFuncType(toks, l, an, sigTypes)
 
 	for i := range l.params {
 		p := &l.params[i]
@@ -213,7 +213,7 @@ func inferLambdaTypes(toks []Token, l *lambdaExpr, an *Analysis, b *Bindings) {
 		l.bodyResult = ctxResult
 		return
 	}
-	l.bodyResult = inferExprType(toks, l.bodyFrom, l.bodyTo, l.params)
+	l.bodyResult = inferExprType(toks, l.bodyFrom, l.bodyTo, l.params, sigTypes)
 	if l.bodyResult == "" {
 		l.bodyResult = "any"
 	}
@@ -314,7 +314,7 @@ func inVoidCallbackContext(toks []Token, l *lambdaExpr) bool {
 //
 // 后两种拿到的是函数类型文本（如 "func(int)int"），用 parseFuncTypeString 拆成
 // 参数类型列表与返回类型；联合参数（含 |）在 tokenizeTypeText 处统一擦除为 any。
-func inferContextFuncType(toks []Token, l *lambdaExpr, an *Analysis) ([]string, string) {
+func inferContextFuncType(toks []Token, l *lambdaExpr, an *Analysis, sigTypes map[string]string) ([]string, string) {
 	// 1) 集合回调：向前找 ".map"/".filter"/".reduce" 等方法名，再找接收者元素类型。
 	if p := prevSig(toks, l.paramOpen-1); p >= 0 && toks[p].Text == "(" {
 		method := prevSig(toks, p-1)
@@ -331,7 +331,7 @@ func inferContextFuncType(toks []Token, l *lambdaExpr, an *Analysis) ([]string, 
 						// reduce 的第一参数是累加器（初值类型），第二参数才是元素
 						if toks[method].Text == "reduce" || toks[method].Text == "Reduce" {
 							if len(params) >= 2 {
-								params[0] = inferExprType(toks, l.bodyFrom, l.bodyFrom+1, l.params)
+								params[0] = inferExprType(toks, l.bodyFrom, l.bodyFrom+1, l.params, sigTypes)
 							}
 						}
 						return params, "" // 返回类型交给 body 反推
@@ -552,10 +552,52 @@ func inferParamTypeFromBody(toks []Token, l *lambdaExpr, name string) string {
 	return ""
 }
 
+// signalGetterResultType 判断 [start,end) 是否为「signal getter 单点调用」形态
+// （即 body 恰好是 `name()`，例如 `() => count()` 的 body），若是则返回该
+// signal 的声明类型（如 count → int）。这是 SolidJS 风格 `computed(() => count())`
+// 正确推断返回类型的关键：改写后 count 的读是 count()，单点调用时 inferExprType
+// 的通用规则（字面量/比较/算术）都不命中，只能靠改写前采集的 sigTypes 反查。
+//
+// sigTypes 为 nil 或名字不在表内时返回空，交给其它推断路径。
+func signalGetterResultType(toks []Token, start, end int, params []lambdaParam, sigTypes map[string]string) string {
+	if len(sigTypes) == 0 || start >= end {
+		return ""
+	}
+	// 去掉首尾空白，要求恰好是 ident ( ) 三个有效 token。
+	first := nextSigIn(toks, start, end)
+	if first < 0 || toks[first].Kind != Ident {
+		return ""
+	}
+	name := toks[first].Text
+	open := nextSigIn(toks, first+1, end)
+	if open < 0 || toks[open].Text != "(" {
+		return ""
+	}
+	close := nextSigIn(toks, open+1, end)
+	if close < 0 || toks[close].Text != ")" {
+		return ""
+	}
+	if nextSigIn(toks, close+1, end) >= 0 {
+		return "" // ')' 后还有 token，不是单点调用
+	}
+	// 不能是 lambda 参数名（参数类型另有来源），只查 signal 声明类型表。
+	for _, p := range params {
+		if p.name == name {
+			return ""
+		}
+	}
+	return sigTypes[name]
+}
+
 // inferExprType 推断 [start,end) 表达式的结果类型。
-func inferExprType(toks []Token, start, end int, params []lambdaParam) string {
+func inferExprType(toks []Token, start, end int, params []lambdaParam, sigTypes map[string]string) string {
 	if start >= end {
 		return ""
+	}
+	// 单点 signal getter 调用（computed(() => count())）优先：从改写前采集的
+	// 声明类型表反查，避免降级 any。
+	if t := signalGetterResultType(toks, start, end, params, sigTypes); t != "" {
+		return t
 	}
 	// 顶层二元比较 → bool
 	depth := 0
@@ -684,7 +726,14 @@ func literalType(t Token) string {
 // 然后重新 detect。这样下标始终基于最新 token 流，且内层先被转成 func 字面量后，
 // 外层 body 里嵌的就是已转换的结果——避免嵌套 lambda 用旧下标替换导致区间错位、
 // 内层 => 残留的 bug。
-func transformLambdas(in []Token, an *Analysis, b *Bindings) []Token {
+// sigTypes 为可选参数（signal 声明类型表，来自 collectSignalTypes），用于在 lambda
+// body 是单点 signal getter 调用时推断返回类型（SolidJS 风格 computed(() => count())）。
+// 省略时该推断路径关闭，其它规则照常工作——保持既有调用点兼容。
+func transformLambdas(in []Token, an *Analysis, b *Bindings, sigTypes ...map[string]string) []Token {
+	var st map[string]string
+	if len(sigTypes) > 0 {
+		st = sigTypes[0]
+	}
 	for {
 		lambdas := detectLambdas(in)
 		if len(lambdas) == 0 {
@@ -697,7 +746,7 @@ func transformLambdas(in []Token, an *Analysis, b *Bindings) []Token {
 			}
 		}
 		l := &lambdas[sel]
-		inferLambdaTypes(in, l, an, b)
+		inferLambdaTypes(in, l, an, b, st)
 		parts := buildLambdaParts(in, l)
 		out := make([]Token, 0, len(in)+len(parts))
 		out = append(out, in[:l.paramOpen]...)
