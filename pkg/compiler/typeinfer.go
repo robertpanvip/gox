@@ -192,6 +192,22 @@ func inferExprLitType(toks []Token, from, to int) string {
 	if from >= to {
 		return ""
 	}
+	// 具名复合字面量 TypeName{...}（含 &TypeName{...}）→ 返回类型名。
+	// 这是 struct signal 字段读写解包判定 receiver 类型的关键依据：
+	// `p := CardProps{...}` 必须推断出 p 的类型是 CardProps。
+	// 注意排除 map[K]V{...} / []T{...} 等：它们的起点是 `map`/`[` 而非裸 Ident。
+	nameIdx := from
+	if toks[nameIdx].Text == "&" {
+		nameIdx = nextSigIn(toks, from+1, to)
+	}
+	if nameIdx >= 0 && toks[nameIdx].Kind == Ident && !isGoKeyword(toks[nameIdx].Text) {
+		if brace := nextSigIn(toks, nameIdx+1, to); brace >= 0 && toks[brace].Text == "{" {
+			// 确认这个 '{' 确实是复合字面量体（有匹配的 '}'，或至少是起始），
+			// 而不是 `if x {` 之类——但此处 from 是表达式起点，前面不会出现控制关键字，
+			// 且调用方（:= 右侧）确保是值上下文，故可直接认定。
+			return toks[nameIdx].Text
+		}
+	}
 	// 单个标识符：再查一次它的声明（支持链式 i := j; j := 0）
 	if to-from == 1 && toks[from].Kind == Ident {
 		if toks[from].is("true") || toks[from].is("false") {

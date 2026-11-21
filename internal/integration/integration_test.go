@@ -440,3 +440,53 @@ func main() {
 		}
 	}
 }
+
+func TestIntegrationSignalFieldLiveProps(t *testing.T) {
+	// struct signal 字段语言特性：组件/持有者函数读到的是外部 signal 的实时值，
+	// 而非构造时的一次性快照（用户核心诉求："组件值不是一次性的"）。
+	src := `package main
+type CardProps struct {
+    signal name string
+    age int
+}
+func show(p CardProps) string { return p.name }
+func main() {
+    signal src = "x"
+    p := CardProps{name: src, age: 3}
+    println(show(p))
+    src("changed")
+    println(show(p))
+    p.name = "direct"
+    println(p.name)
+}
+`
+	out := runGX(t, src)
+	lines := strings.Fields(strings.TrimSpace(out))
+	// println 逐个输出：x / changed / direct（顺序严格）
+	want := []string{"x", "changed", "direct"}
+	if len(lines) < len(want) {
+		t.Fatalf("输出行数不足: %q", out)
+	}
+	for i, w := range want {
+		if lines[i] != w {
+			t.Errorf("第 %d 行应为 %q, got %q\n完整输出:\n%s", i+1, w, lines[i], out)
+		}
+	}
+}
+
+func TestIntegrationSignalFieldNestedStruct(t *testing.T) {
+	// signal 字段与复合写/自增的真实运行。
+	src := `package main
+type Counter struct { signal n int }
+func main() {
+    c := Counter{n: 1}
+    c.n += 2
+    c.n++
+    println(c.n)
+}
+`
+	out := runGX(t, src)
+	if !strings.Contains(out, "4") {
+		t.Errorf("复合写+自增结果应为 4, got:\n%s", out)
+	}
+}
