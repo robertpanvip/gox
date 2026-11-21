@@ -94,8 +94,13 @@ var StandardEvents = []Event{
 
 // EventContext 是后端派发事件时构造的上下文。Raw 由后端填入平台原生事件对象，
 // 前端完全不碰——事件语义归后端。
+//
+// Synthetic 是可选的统一合成事件（见 event.go）：后端若已把原生事件映射为
+// SyntheticEvent 就填进来，业务 handler 可从此拿到跨后端一致的字段。为 nil 时
+// 完全退回旧的裸透传行为——这是 additive 扩展，老后端不需要任何改动。
 type EventContext struct {
-	Raw any
+	Raw       any
+	Synthetic *SyntheticEvent
 }
 
 // Handler 是协议推荐的事件处理器签名。注意 Node.Handlers 存的是 any（handler 原值），
@@ -656,7 +661,17 @@ func (n *Node) Handler(name string) any {
 // Dispatch 是便利派发方法：若 name 对应的 handler 是协议推荐的 Handler 签名，
 // 则构造 EventContext 调用之并返回 true；否则返回 false，由后端按自定义签名自行处理。
 // 这不影响自定义事件——handler 原值始终可通过 n.Handler(name) 取得。
+// 只在命中节点本地派发，不冒泡；需要冒泡见 DispatchBubble。
 func (n *Node) Dispatch(name string, ctx EventContext) bool {
+	return dispatchLocal(n, name, ctx)
+}
+
+// dispatchLocal 是单节点派发的内部实现，供 Dispatch 与冒泡/捕获共用。
+// 冒泡/捕获时在调用前会更新 ctx.Synthetic.CurrentTarget。
+func dispatchLocal(n *Node, name string, ctx EventContext) bool {
+	if n == nil {
+		return false
+	}
 	h := n.Handler(name)
 	if h == nil {
 		return false

@@ -15,6 +15,8 @@
 
 **协议面**就是第 2 节列出的那几样：`gxapp.Window`、`gxapp.WindowConfig`、`gxscene.Node` / `NodeType`、事件约定（`Handlers` / `Handler` / `EventContext`）、以及 `gxscene.Backend`。它们是后端唯一依赖的东西，其余 host 代码对后端透明。
 
+其中 `SyntheticEvent` / `DispatchBubble` / `DispatchCapture` / `NormalizeEventName` / `Modifier` 属于 **additive 扩展**（见 §2.3）：它们只新增类型与方法，`Node`/`Window`/`Handler` 的既有签名一个没动，因此归入"host 内部实现（协议不变）"一类 —— 后端不采用就完全无感。
+
 这条规则是拆库的价值所在：host 可以持续迭代渲染核心和编译器，后端只在协议升级时才需要跟进。因此**协议变更要当作 breaking change 对待**——尽量 additive（加可选字段/新方法给默认实现），避免改动已有签名，并在 host 侧 bump 版本、后端侧同步升级。
 
 ## 1. 分层与职责
@@ -90,12 +92,27 @@ type Node struct {
 
 - JSX 里任何 `on*`（如 `onClick`、`onMouseEnter`，含后端自定义的 `onFoo`）都**无条件透传**进 `Node.Handlers`，key 为**原样事件名**（`"onClick"`）。前端不设白名单、不校验、不拦截。
 - `StandardEvents`（`click`/`mouseenter`/…）**仅供 IDE 提示和文档**，不是白名单，表外事件一样透传。
-- `Handler func(ctx EventContext)` 是**推荐签名**，非强制。`EventContext{Raw any}` 的 `Raw` 由后端填平台原生事件对象，前端完全不碰。
+- `Handler func(ctx EventContext)` 是**推荐签名**，非强制。`EventContext` 的 `Raw` 由后端填平台原生事件对象，前端完全不碰。
 - 派发两种方式：
   - `node.Handler(name) any`：取原值，后端按自己约定的签名调用（自定义事件走这条）。
-  - `node.Dispatch(name, EventContext) bool`：若 handler 恰为推荐签名 `Handler` 则调用并返回 `true`，否则 `false`（后端改用自定义签名处理）。
+  - `node.Dispatch(name, EventContext) bool`：若 handler 恰为推荐签名 `Handler` 则调用并返回 `true`，否则 `false`（后端改用自定义签名处理）。**只在命中节点本地派发，不冒泡。**
 
 **事件回路（重要）**：`Window` 接口没有专门的事件输入通道。约定是后端在 `Run()` 的事件循环里收到原生事件 → 自己做命中测试找到目标 `Node` → 调 `Handler()` / `Dispatch()` → handler 内写 signal → host 的 `bindReactive` 自动 `Update()` 并 `Draw()` 一帧。这条路径目前是**约定**，未固化为接口方法，接入方需按此实现。
+
+#### 统一合成事件与冒泡 / 捕获（additive，可选）
+
+host 额外提供一套**跨后端一致的合成事件 + 冒泡/捕获派发**，解决"`Raw` 形状由后端决定、业务 handler 写 `raw.(xxxEvent)` 就被绑死"的问题。这部分是**纯增量**：不填 `Synthetic` 就完全退回上面的裸透传，老后端零改动；命中测试、布局、"先捕获还是先冒泡"的调度仍归后端。
+
+- `gxscene.SyntheticEvent`：host 定义的统一事件对象，字段有 `Type`(规范化事件类型) / `NativeName` / `Target` / `CurrentTarget` / `X`,`Y` / `Button` / `Key` / `Mods` / `Raw`(原生对象不丢) / `Data`(后端扩展位)。方法 `StopPropagation()` / `PreventDefault()` 及其 `Is*` 查询。
+- `gxscene.EventContext` 多一个可选字段 `Synthetic *SyntheticEvent`（`Raw` 保留）。后端把原生事件映射进来即可；业务 handler 从此读统一字段，换后端不改业务代码。
+- `gxscene.NormalizeEventName("onMouseEnter") → "mouseenter"`（去 `on` + 整体小写，与 `EvClick` 等常量对齐，表外事件同样适用）；`NewSyntheticEvent(name, target, raw)` 便捷构造。
+- `Modifier` 位掩码（`ModShift`/`ModCtrl`/`ModAlt`/`ModMeta` + `Has`），统一各平台修饰键。
+- 两个可选派发方法（后端按需调用，替代/补充 `Dispatch`）：
+  - `node.DispatchBubble(name, ctx)`：从命中节点沿 `parent` 链向根冒泡，逐节点更新 `CurrentTarget` 并调 handler；某 handler 调 `StopPropagation()` 即停止。
+  - `node.DispatchCapture(name, ctx)`：自根向命中节点捕获派发，`StopPropagation` 语义相同。
+  - 两者都自动补 `Synthetic`（若后端没填），`Target` 固定为命中节点；自定义签名 handler 不被拦截，仍可经 `Handler(name)` 取原值。
+
+> 这里没有引入任何新的**必做**契约，因此不触发"协议变更 → 后端必须跟进"：`Window`/`Node` 字段没动、`Handler`/`EventContext` 的既有用法没变。后端可以一直用 `Dispatch` + `Raw`，也可以在需要跨后端一致性时逐步切到 `Synthetic` + `DispatchBubble`。
 
 ### 2.4 渲染后端接口 `gxscene.Backend`（可选）
 
