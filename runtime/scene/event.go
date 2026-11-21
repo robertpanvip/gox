@@ -69,16 +69,29 @@ func (e *SyntheticEvent) IsDefaultPrevented() bool {
 	return e != nil && e.defaultPrevented
 }
 
-// NormalizeEventName 把 JSX 事件名规范化为 Event 类型：
-// 去掉 "on" 前缀并整体小写（"onClick"→"click"，"onMouseEnter"→"mouseenter"，
-// "onFoo"→"foo"）。整体小写是为了和标准事件表常量对齐——业务可写
-// ev.Type == gxscene.EvMouseEnter。表外自定义事件同样适用——它不是白名单。
+// NormalizeEventName 把 JSX 事件名规范化为 Event 类型：去掉 "on" 前缀、
+// 首字母小写，**保留内部驼峰**（"onClick"→"click"，"onMouseEnter"→"mouseEnter"，
+// "onCustomThing"→"customThing"）。
+//
+// 保留驼峰是硬要求：自定义事件 onCustomThing 若被拍平成 "customthing"，
+// 后端与业务就认不出原名——等于变相拦截，违背「on* 无条件透传」的黄金规则。
+// 标准事件表常量（EvMouseEnter 等）同样用驼峰值，与 Type 直接 == 比较即可；
+// 需要大小写不敏感时用 Event.Is。表外事件同样适用——规范化不是白名单。
 func NormalizeEventName(name string) Event {
 	s := name
 	if len(s) > 2 && strings.HasPrefix(s, "on") && s[2] >= 'A' && s[2] <= 'Z' {
 		s = s[2:]
 	}
-	return Event(strings.ToLower(s))
+	if s == "" {
+		return Event(name)
+	}
+	return Event(strings.ToLower(s[:1]) + s[1:])
+}
+
+// Is 做大小写不敏感的事件名比较，兼容后端传入小写/驼峰等不同写法。
+// 精确比较直接用 ==（Type 与标准常量同为驼峰）：ev.Type == gxscene.EvMouseEnter。
+func (e Event) Is(other Event) bool {
+	return strings.EqualFold(string(e), string(other))
 }
 
 // NewSyntheticEvent 构造合成事件，自动填好 Type / NativeName / Target / CurrentTarget，

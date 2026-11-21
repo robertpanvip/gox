@@ -8,17 +8,34 @@ import (
 func TestNormalizeEventName(t *testing.T) {
 	cases := map[string]Event{
 		"onClick":       EvClick,
-		"onMouseEnter":  "mouseenter",
+		"onMouseEnter":  "mouseEnter", // 保留内部驼峰
+		"onMouseLeave":  EvMouseLeave, // 与标准常量直接相等
+		"onKeyDown":     EvKeyDown,
 		"onFoo":         "foo",
-		"click":         "click",   // 已规范化
-		"on":            "on",      // 太短，不去前缀
-		"onclick":       "onclick", // on 后小写，不去前缀（避免误伤）
-		"CustomerEvent": "customerevent",
+		"onCustomThing": "customThing",   // 自定义事件驼峰不丢
+		"click":         "click",         // 已规范化
+		"on":            "on",            // 太短，不去前缀
+		"onclick":       "onclick",       // on 后小写，不去前缀（避免误伤）
+		"CustomerEvent": "customerEvent", // 首字母小写，其余保留
 	}
 	for in, want := range cases {
 		if got := NormalizeEventName(in); got != want {
 			t.Errorf("NormalizeEventName(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+func TestEventIsCaseInsensitive(t *testing.T) {
+	// 驼峰 Type 与小写写法应互相匹配（兼容后端传入不同大小写）。
+	if !Event("mouseEnter").Is(Event("mouseenter")) || !Event("mouseenter").Is("mouseEnter") {
+		t.Fatal("Event.Is 应大小写不敏感")
+	}
+	if Event("click").Is("mouseEnter") {
+		t.Fatal("不同事件名不应匹配")
+	}
+	// 精确比较仍成立
+	if NormalizeEventName("onMouseEnter") != EvMouseEnter {
+		t.Fatal("Type 应与标准常量驼峰值直接相等")
 	}
 }
 

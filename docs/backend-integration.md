@@ -91,7 +91,7 @@ type Node struct {
 ### 2.3 事件协议
 
 - JSX 里任何 `on*`（如 `onClick`、`onMouseEnter`，含后端自定义的 `onFoo`）都**无条件透传**进 `Node.Handlers`，key 为**原样事件名**（`"onClick"`）。前端不设白名单、不校验、不拦截。
-- `StandardEvents`（`click`/`mouseenter`/…）**仅供 IDE 提示和文档**，不是白名单，表外事件一样透传。
+- `StandardEvents`（`click`/`mouseEnter`/…，**驼峰值**）**仅供 IDE 提示和文档**，不是白名单，表外事件一样透传。
 - `Handler func(ctx EventContext)` 是**推荐签名**，非强制。`EventContext` 的 `Raw` 由后端填平台原生事件对象，前端完全不碰。
 - 派发两种方式：
   - `node.Handler(name) any`：取原值，后端按自己约定的签名调用（自定义事件走这条）。
@@ -105,7 +105,7 @@ host 额外提供一套**跨后端一致的合成事件 + 冒泡/捕获派发**�
 
 - `gxscene.SyntheticEvent`：host 定义的统一事件对象，字段有 `Type`(规范化事件类型) / `NativeName` / `Target` / `CurrentTarget` / `X`,`Y` / `Button` / `Key` / `Mods` / `Raw`(原生对象不丢) / `Data`(后端扩展位)。方法 `StopPropagation()` / `PreventDefault()` 及其 `Is*` 查询。
 - `gxscene.EventContext` 多一个可选字段 `Synthetic *SyntheticEvent`（`Raw` 保留）。后端把原生事件映射进来即可；业务 handler 从此读统一字段，换后端不改业务代码。
-- `gxscene.NormalizeEventName("onMouseEnter") → "mouseenter"`（去 `on` + 整体小写，与 `EvClick` 等常量对齐，表外事件同样适用）；`NewSyntheticEvent(name, target, raw)` 便捷构造。
+- `gxscene.NormalizeEventName("onMouseEnter") → "mouseEnter"`（去 `on` + 首字母小写、**保留内部驼峰**，与 `EvMouseEnter` 等常量同值可直接 `==`；`Event.Is` 做大小写不敏感比较）。保留驼峰是硬要求：自定义事件 `onCustomThing → customThing`，名字不丢，否则等于变相拦截。表外事件同样适用——不是白名单。`NewSyntheticEvent(name, target, raw)` 便捷构造。
 - `Modifier` 位掩码（`ModShift`/`ModCtrl`/`ModAlt`/`ModMeta` + `Has`），统一各平台修饰键。
 - 两个可选派发方法（后端按需调用，替代/补充 `Dispatch`）：
   - `node.DispatchBubble(name, ctx)`：从命中节点沿 `parent` 链向根冒泡，逐节点更新 `CurrentTarget` 并调 handler；某 handler 调 `StopPropagation()` 即停止。

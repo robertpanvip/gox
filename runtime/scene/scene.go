@@ -71,15 +71,18 @@ type Event string
 
 // 标准事件表：仅作为「前端认识的已知事件」供 IDE 提示/文档使用，**不是白名单**。
 // 任何 on* 属性（含后端自定义的 onFoo）都会无条件透传进 Node.Handlers，不校验、不拦截。
+//
+// 常量值用驼峰（与 NormalizeEventName 的产物一致），使业务可写 ev.Type == EvMouseEnter
+// 直接比较。需要兼容后端传入的小写写法时用 Event.Is（大小写不敏感）。
 const (
 	EvClick      Event = "click"
-	EvMouseEnter Event = "mouseenter"
-	EvMouseLeave Event = "mouseleave"
-	EvMouseMove  Event = "mousemove"
-	EvMouseDown  Event = "mousedown"
-	EvMouseUp    Event = "mouseup"
-	EvKeyDown    Event = "keydown"
-	EvKeyUp      Event = "keyup"
+	EvMouseEnter Event = "mouseEnter"
+	EvMouseLeave Event = "mouseLeave"
+	EvMouseMove  Event = "mouseMove"
+	EvMouseDown  Event = "mouseDown"
+	EvMouseUp    Event = "mouseUp"
+	EvKeyDown    Event = "keyDown"
+	EvKeyUp      Event = "keyUp"
 	EvInput      Event = "input"
 	EvChange     Event = "change"
 	EvFocus      Event = "focus"
