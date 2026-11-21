@@ -8,7 +8,7 @@
 
 ```bash
 cd gox
-GOTOOLCHAIN=go1.27.3 CGO_ENABLED=1 \
+CGO_ENABLED=1 \
   go build -buildmode=c-shared -o libgox.so ./bindings/cabi
 ```
 

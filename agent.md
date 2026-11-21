@@ -9,7 +9,7 @@ Gox 是一个把 `.gx` 转译成标准 Go 的编译器。`.gx` = Go 语法 + 一
 - 语言规范权威来源：`docs/language-spec.md`（大小写来源分流见 §4.1、跨文件项目见 §13）
 - 书写约定的活例子：`examples/lowerext.gx`（Go 来源「一律写小写」）
 - 跨文件导入示例：`examples/crossfile/`（本地 GX 模块严格大小写，见下）
-- 需要 Go **1.27+**（泛型方法）；本仓库用 `GOTOOLCHAIN=go1.27.4`
+- 需要 Go **1.27+**（泛型方法）；`go.mod` 已声明 `toolchain go1.27.4`，默认 `GOTOOLCHAIN=auto` 会自动使用，无需手动设置
 
 ## 1. 最高规则：大小写按 import 来源分流（最重要）
 
@@ -157,7 +157,8 @@ func main() {
 ## 4. 环境与命令
 
 ```bash
-export GOTOOLCHAIN=go1.27.4        # 必设：泛型方法依赖
+# go.mod 已声明 toolchain go1.27.4；GOTOOLCHAIN=auto（默认）会自动使用该工具链。
+# 仅当你显式设为 local 时，才需自行把 go 升到 ≥ 1.27。
 
 go build ./...                      # 全量编译
 go test ./...                       # 全量测试（必须全绿）
