@@ -524,7 +524,32 @@ func inferArgExpectType(toks []Token, open int, an *Analysis, b *Bindings) strin
 			return t
 		}
 	}
-	return declaredParamTypeAt(toks, funcName, argIdx)
+	if t := declaredParamTypeAt(toks, funcName, argIdx); t != "" {
+		return t
+	}
+	// selector 调用 pkg.fn(...)：本文件无声明，从外部包的真实 Go 源码 AST 读取
+	// 函数签名，取第 argIdx 个参数类型。例：gxapp.open(view, { Title: ... })
+	// → 解析 <module>/runtime/app 包 Open 的签名 → gxapp.WindowConfig。
+	if pkg := selectorPkgBefore(toks, fnIdx); pkg != "" {
+		if t := externalFuncParamType(toks, pkg, funcName, argIdx); t != "" {
+			return t
+		}
+	}
+	return ""
+}
+
+// selectorPkgBefore 若 fnIdx 处标识符是 selector 右侧（pkg.fn），返回左侧 pkg 名。
+// 跳过 fnIdx 与 '.'、'.' 与 pkg 之间的空白/注释。
+func selectorPkgBefore(toks []Token, fnIdx int) string {
+	dot := prevSig(toks, fnIdx-1)
+	if dot < 0 || toks[dot].Text != "." {
+		return ""
+	}
+	pkgIdx := prevSig(toks, dot-1)
+	if pkgIdx < 0 || toks[pkgIdx].Kind != Ident {
+		return ""
+	}
+	return toks[pkgIdx].Text
 }
 
 // declaredParamTypeAt 从 `func name(p0 T0, p1 T1, ...)` 声明里取第 idx 个参数的类型文本。
@@ -808,7 +833,13 @@ func transformObjectLits(in []Token, an *Analysis, b *Bindings) ([]Token, error)
 					return nil, err
 				}
 				if info != nil {
-					typeText = lit.expectTyp // 省略结构体类型名，用期望类型补全
+					typeText = lit.expectTyp // 本文件具名 struct：省略类型名，用期望类型补全
+				} else if strings.Contains(lit.expectTyp, ".") {
+					// 外部包 selector 类型（如 gxapp.windowConfig）：本文件无 struct 定义、
+					// 无法做字段校验，但该期望类型来自已知 runtime 签名，是合法具名类型，
+					// 直接用它补全（生成 gxapp.windowConfig{...}，后续 transformExternal 还原大写）。
+					// 字段正确性交给 Go 编译器；不降级匿名 struct（否则与具名参数类型不匹配）。
+					typeText = lit.expectTyp
 				} else {
 					typeText = buildAnonymousStructType(out, lit.open, lit.close, b)
 				}

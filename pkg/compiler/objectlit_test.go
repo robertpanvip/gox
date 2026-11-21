@@ -271,3 +271,30 @@ func main() {
 		})
 	}
 }
+
+// TestObjectLitRuntimeCtorExpect 验证：对象字面量作为已知 runtime 构造函数实参时，
+// 从内置签名表推断期望类型并补全为具名配置类型（而非降级匿名 struct）。
+func TestObjectLitRuntimeCtorExpect(t *testing.T) {
+	src := `package main
+import (
+	gxapp "github.com/robertpanvip/gox/runtime/app"
+	gxscene "github.com/robertpanvip/gox/runtime/scene"
+)
+func main() {
+	view := gxscene.render(nil)
+	_, _ = gxapp.open(view, { Title: "Gox", Width: 800, Height: 600 })
+	_, _ = gxapp.openWith(view, { Title: "Gox", Width: 800 }, nil)
+}
+`
+	res, err := CompileScene("obj_runtime_ctor.gx", src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	containsAll(t, res.GoSource,
+		"gxapp.Open(view, gxapp.WindowConfig{",
+		"gxapp.OpenWith(view, gxapp.WindowConfig{",
+	)
+	if strings.Contains(res.GoSource, "struct{ Title") {
+		t.Errorf("不应降级为匿名 struct:\n%s", res.GoSource)
+	}
+}

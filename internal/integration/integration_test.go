@@ -629,3 +629,36 @@ func main() {
 		}
 	}
 }
+
+// TestIntegrationBareWindowConfig 端到端验证：gxapp.open(view, { ... }) 裸对象字面量
+// 从内置 runtime 签名推断为 gxapp.WindowConfig，可真实编译运行。
+func TestIntegrationBareWindowConfig(t *testing.T) {
+	src := `package main
+import (
+	gxscene "github.com/robertpanvip/gox/runtime/scene"
+	gxapp "github.com/robertpanvip/gox/runtime/app"
+	"github.com/robertpanvip/gox/runtime/signal"
+	"fmt"
+)
+type user struct { id int; name string }
+pub func Stat(props gxscene.props) *gxscene.instance {
+	label := gxscene.get[string](props, "label")
+	return <div>{label()}</div>
+}
+func main() {
+	cfg := { title: "Gox", width: 800, height: 600 }
+	{ title, width } := cfg
+	signal users = []user{{1,"Tom"}}
+	view := <div><Stat label={title}/><ul><For each={users} key={(u)=>u.id}>{(u)=><li>{u.name}</li>}</For></ul></div>
+	app, err := gxapp.open(view, { Title: title, Width: width, Height: cfg.height })
+	if err != nil { panic(err) }
+	defer app.close()
+	app.bindReactive(Signal.effect)
+	fmt.println(title)
+}
+`
+	out := runGXScene(t, src)
+	if !strings.Contains(out, "Tom") {
+		t.Errorf("应渲染 Tom，got:\n%s", out)
+	}
+}
