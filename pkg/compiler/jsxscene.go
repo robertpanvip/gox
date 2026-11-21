@@ -43,6 +43,10 @@ type jsxSceneCtx struct {
 	// 的 <For>）的 pos 是解析器生成的相对偏移，不能直接用于 bindings 查询，
 	// 故以根 JSX token 的绝对 pos 作为锚点。
 	jsxPos Pos
+	// forItemParam: 当前正在生成的 <For> render lambda 的参数名（信号化模式）。
+	// 该参数是 item getter（func() T），render body 里对它的读取须补写成 u()，
+	// 才能让子树 getter 登记对 item signal 的依赖。仅 render body 生成期间非空。
+	forItemParam string
 }
 
 // sceneOp 是一条待发射的 opcode 描述（编译期中间结构）。
@@ -391,7 +395,7 @@ func forTokens(n *jsxNode, ctx *jsxSceneCtx) []Token {
 	}
 
 	out := []Token{
-		tokIdent("gxscene", p), tokOp(".", p), tokIdent("ForGetterOf", p), tokOp("[", p),
+		tokIdent("gxscene", p), tokOp(".", p), tokIdent("ForGetterOfSignal", p), tokOp("[", p),
 		tokIdent(strings.TrimSpace(elemType), p), tokOp("]", p), tokOp("(", p),
 	}
 
@@ -436,14 +440,21 @@ func forTokens(n *jsxNode, ctx *jsxSceneCtx) []Token {
 	}
 	out = append(out, tokOp(",", p))
 
-	// render: func(T) *gxscene.Instance { return <renderBody JSX> }
+	// render（信号化）：func(T) *gxscene.Instance 的参数改为 item getter func() T：
+	//   func(u func() T) *gxscene.Instance { return <renderBody JSX> }
+	// renderBody 里对 u 的读取会被补写成 u()（登记对 item signal 的依赖）。
 	out = append(out, tokIdent("func", p), tokOp("(", p), tokIdent(paramName, p), tokSpace(" ", p),
+		tokIdent("func", p), tokOp("(", p), tokOp(")", p), tokSpace(" ", p),
 		tokIdent(elemType, p), tokOp(")", p), tokSpace(" ", p),
 		tokOp("*", p), tokIdent("gxscene", p), tokOp(".", p), tokIdent("Instance", p), tokSpace(" ", p),
 		tokOp("{", p), tokSpace(" ", p), tokIdent("return", p), tokSpace(" ", p))
 	// renderBody 是 JSX（如 <li>{u.name}</li>），走 scene 表达式转换。
+	// 设置 forItemParam 让插值里的 u.name → u().name；保存旧值以支持嵌套 For。
+	oldItemParam := ctx.forItemParam
+	ctx.forItemParam = paramName
 	bodyToks := New(rBody).AllTokens()
 	bodyToks = transformJSXScene(bodyToks, ctx)
+	ctx.forItemParam = oldItemParam
 	for _, t := range bodyToks {
 		if t.Kind == EOF {
 			continue
@@ -560,7 +571,11 @@ func tokNumber(s string, p Pos) Token { return Token{Kind: Number, Text: s, Pos:
 // 弥补 transformSignals 无法穿透 JSX 整体 token 的盲区。
 func lexExprScene(expr string, base Pos, ctx *jsxSceneCtx) []Token {
 	toks := New(expr).AllTokens()
-	if len(ctx.sigs) > 0 {
+	// 需要补写 () 的名字集合：全局 signal + 当前 <For> 的 item getter 参数。
+	// item 参数（信号化模式）是 func() T，读它必须写成 u() 才能让子树 getter
+	// 登记对 item signal 的依赖——这是 For item signal 根治方案在编译器的落点。
+	needRewrite := len(ctx.sigs) > 0 || ctx.forItemParam != ""
+	if needRewrite {
 		// 按 JSX 根位置解析绑定：被局部变量遮蔽的同名 signal 不应改写（{count}
 		// 在 count := 3 作用域内读的是局部变量）。sigs 是全局名字集合，需先按
 		// bindings+jsxPos 过滤出该位置真正指向 signal 的名字，再交回形态改写逻辑。
@@ -572,6 +587,19 @@ func lexExprScene(expr string, base Pos, ctx *jsxSceneCtx) []Token {
 					effective[name] = true
 				}
 			}
+		} else if len(ctx.sigs) > 0 && ctx.forItemParam != "" {
+			// 无绑定表但需补 item 参数：复制一份再改，避免污染全局 sigs map。
+			cp := make(map[string]bool, len(ctx.sigs)+1)
+			for name := range ctx.sigs {
+				cp[name] = true
+			}
+			effective = cp
+		}
+		if ctx.forItemParam != "" {
+			if effective == nil {
+				effective = map[string]bool{}
+			}
+			effective[ctx.forItemParam] = true
 		}
 		toks = rewriteJSXInterpSignals(toks, effective)
 	}

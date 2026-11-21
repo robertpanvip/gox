@@ -70,7 +70,7 @@ view := <ul>
 ```
 
 > `(u)` 无类型注解时，编译器从 `each={users}` 的集合类型（`[]User`）推断元素类型
-> `User`，生成 `ForGetterOf[User]`。以下写法均受支持：
+> `User`，生成 `ForGetterOfSignal[User]`。以下写法均受支持：
 > - signal 变量：`signal users = []User{...}`（改写前采集声明类型）
 > - 普通变量：`users := []User{...}`（查询绑定表）
 > - 显式注解：`(u User) => ...` 始终优先于推断，可用于 `each` 类型无法静态确定的场景。
@@ -83,9 +83,14 @@ view := <ul>
 - 新增元素：新 Owner 下构建子树；删除元素：销毁 Owner（级联清理 Effect/Cleanup）；
 - 重排：只调整节点顺序，不重跑 render；
 - 每个元素独立 Owner，元素内 signal 变化只更新对应项；
-- 泛型工厂 `ForGetterOf[T]` 编译期保留元素类型安全。
+- **item signal 根治**：每项持有一个 item signal，render 参数是它的 getter `func() T`。
+  同 key 值变化时只写该 signal，子树 getter（编译成 `u().field`）登记的依赖精确重跑，
+  只发 `SetText/SetAttr`——不销毁重建、不发 `ReplaceChildren`、项内 ID 天然稳定；
+- 泛型工厂 `ForGetterOfSignal[T]` 编译期保留元素类型安全（旧 `ForGetterOf[T]` /
+  `NewFor` 值快照模式仍保留兼容，同 key 值变化走销毁重建）。
 
-**编译器**：`<For>` 产出 `gxscene.OpFor` + `gxscene.ForGetterOf[T](each, key, render)`。
+**编译器**：`<For>` 产出 `gxscene.OpFor` + `gxscene.ForGetterOfSignal[T](each, key, render)`，
+render 签名为 `func(u func() T) *gxscene.Instance`，body 内 `u.field` 改写为 `u().field`。
 
 > 元素类型 `T` 的推断优先级：render 参数显式注解 > `each` 集合类型推断（`[]T` /
 > `[N]T` / signal 声明字面量）> 降级 `any`。推断复用统一绑定表与 signal 声明类型

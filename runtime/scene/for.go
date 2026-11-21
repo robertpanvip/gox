@@ -18,11 +18,19 @@ import (
 //   - 重排：只调整节点顺序，不重建、不重新运行 render。
 //
 // 每个元素拥有独立 Owner，这是条件分支/列表元素能精确释放副作用的基础。
+//
+// 两种 render 模式：
+//   - 值快照模式（render）：render 收到元素值，子树 getter 捕获该值。同 key 值变化
+//     必须销毁 Owner、重建整棵子树（并补发 ReplaceChildren）——兼容旧编译器与手写调用。
+//   - 信号化模式（sigRender，item signal 根治）：render 收到项的 getter（读 item signal），
+//     子树 getter 通过它读值并登记依赖。同 key 值变化只写 item signal，依赖它的叶子
+//     effect 精确重跑 → 只发 SetText/SetAttr，不重建、不换 ID、不发 ReplaceChildren。
 type For struct {
-	mu     sync.Mutex
-	each   func() []any
-	key    func(any) any
-	render func(any) *Instance
+	mu        sync.Mutex
+	each      func() []any
+	key       func(any) any
+	render    func(any) *Instance        // 值快照模式（旧）
+	sigRender func(func() any) *Instance // 信号化模式（新）；非 nil 时优先于 render
 
 	entries  map[any]*forEntry // key -> 元素条目
 	order    []any             // 当前 key 顺序
@@ -40,7 +48,8 @@ type forEntry struct {
 	value any
 	inst  *Instance
 	owner *signal.Owner
-	node  *Node // 该元素在场景树中的包装节点（透明 #frag）
+	node  *Node              // 该元素在场景树中的包装节点（透明 #frag）
+	item  signal.Signal[any] // 信号化模式：该项的 item signal，子树 getter 经它读值并登记依赖
 }
 
 // NewFor 创建 keyed 列表控制器。
@@ -56,6 +65,68 @@ func NewFor(each func() []any, key func(any) any, render func(any) *Instance) *F
 		indexKey: key == nil,
 		idBase:   nextIDBase(),
 	}
+}
+
+// NewForSignal 创建信号化 keyed 列表控制器（item signal 根治模式）。
+//   - each: 返回当前元素列表；在其中读 signal 会被自动追踪。
+//   - key: 为元素生成稳定键；nil 时用下标。
+//   - render: 为单个元素构建子树；参数是该元素的值 getter（读 item signal）。
+//     子树里的动态 getter 应通过它读值，从而登记依赖——值变化时只更新受影响的叶子。
+//
+// 与 NewFor 的区别：同 key 值变化时只写 item signal，不销毁重建、不发 ReplaceChildren。
+func NewForSignal(each func() []any, key func(any) any, render func(func() any) *Instance) *For {
+	return &For{
+		each:      each,
+		key:       key,
+		sigRender: render,
+		entries:   make(map[any]*forEntry),
+		indexKey:  key == nil,
+		idBase:    nextIDBase(),
+	}
+}
+
+// ForGetterSignal 是信号化模式的工厂：捕获稳定的 *For，返回 getter 闭包。
+func ForGetterSignal(each func() []any, key func(any) any, render func(func() any) *Instance) func() any {
+	f := NewForSignal(each, key, render)
+	return func() any { return f }
+}
+
+// ForGetterOfSignal 是带显式元素类型的信号化工广，供编译器生成的带类型 lambda 使用。
+// render 的签名是 func(func(T) *Instance)：参数是元素值的 getter，子树 getter 经它读值。
+// 泛型在编译期保留 T 的类型安全，内部擦除成 any 复用同一套 keyed 机制。
+func ForGetterOfSignal[T any](each func() []T, key func(T) any, render func(func() T) *Instance) func() any {
+	f := NewForSignal(
+		func() []any {
+			src := each()
+			out := make([]any, len(src))
+			for i, x := range src {
+				out[i] = x
+			}
+			return out
+		},
+		func(v any) any {
+			if key == nil {
+				return nil
+			}
+			t, ok := v.(T)
+			if !ok {
+				return nil
+			}
+			return key(t)
+		},
+		func(get func() any) *Instance {
+			return render(func() T {
+				v := get()
+				t, ok := v.(T)
+				if !ok {
+					var zero T
+					return zero
+				}
+				return t
+			})
+		},
+	)
+	return func() any { return f }
 }
 
 // ForGetter 是编译器生成 <For> 时使用的工厂：捕获稳定的 *For，返回 getter 闭包。
@@ -148,14 +219,24 @@ func (f *For) Resolve() *Instance {
 		}
 	}
 
-	// 新增 / 复用 / 同 key 值变化重建条目。
+	// 新增 / 复用 / 同 key 值变化。
 	for _, e := range newList {
 		if entry, ok := f.entries[e.key]; ok {
 			if equalValue(entry.value, e.value) {
 				continue // 同 key 同值：节点与子树原样复用（重排只调顺序）。
 			}
-			// 同 key 但值变了：按值捕获的 render 不会自己感知新值，必须销毁旧
-			// Owner、重建该项子树，否则界面永远显示旧值（报告 P1）。
+			if f.sigRender != nil {
+				// 信号化根治：同 key 值变化只写 item signal。子树 getter 在读 item()
+				// 时已登记依赖，写入会精确重跑那些叶子的 effect → 只发 SetText/SetAttr。
+				// 不销毁 Owner、不重建子树、ID 天然稳定、无需补发 ReplaceChildren。
+				entry.value = e.value
+				if entry.item != nil {
+					entry.item(e.value)
+				}
+				continue
+			}
+			// 值快照模式：同 key 但值变了，按值捕获的 render 不会自己感知新值，
+			// 必须销毁旧 Owner、重建该项子树，否则界面永远显示旧值（报告 P1）。
 			if entry.owner != nil {
 				entry.owner.Dispose()
 			}
@@ -208,8 +289,17 @@ func (f *For) buildEntry(entry *forEntry) {
 		oldBase = entry.inst.idBase
 	}
 	entry.node.Children = nil
+	// 信号化模式：item signal 在 Owner 外创建（纯信号，不挂 Effect），首次构建时
+	// 初始化一次；同 key 值变化走 Resolve 里写 signal 的路径，不再进 buildEntry。
+	if f.sigRender != nil && entry.item == nil {
+		entry.item = signal.New(entry.value)
+	}
 	entry.owner = signal.CreateRoot(func(o *signal.Owner) {
-		entry.inst = f.render(entry.value)
+		if f.sigRender != nil {
+			entry.inst = f.sigRender(func() any { return entry.item() })
+		} else {
+			entry.inst = f.render(entry.value)
+		}
 		if entry.inst == nil {
 			return
 		}

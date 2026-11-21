@@ -24,7 +24,7 @@
 | **对象解构** | `{ name, age } := p` / `var { name, age } = p` | `name := p.name; age := p.age`（逐字段，校验字段存在） |
 | **Signal 响应式** | `signal n = 0` / `Signal.effect(() => ...)` | `Signal.New(0)` + 函数式读写 + 依赖追踪自动重跑 |
 | **条件分支** | `if cond { <A/> } else { <B/> }`（JSX 内） | `gxscene.OpBranch` + `BranchGetter`，切换时销毁旧 Owner、只重建该区域 |
-| **Keyed 列表** | `<For each={xs} key={...}>{(x) => <Item/>}</For>` | `gxscene.OpFor` + `ForGetterOf[T]`，元素类型从 `each` 自动推断（可显式注解），按 key 复用节点、每元素独立 Owner |
+| **Keyed 列表** | `<For each={xs} key={...}>{(x) => <Item/>}</For>` | `gxscene.OpFor` + `ForGetterOfSignal[T]`，元素类型从 `each` 自动推断（可显式注解），按 key 复用节点、每元素独立 Owner；item signal 使同 key 值变化只更新叶子、不重建 |
 | **应用入口** | `gxapp.open(cfg)` + `app.render(() => <App/>)` | `gxapp.Open(cfg)` 返回 App + `App.Render(func() any{...})`；open 只收配置，render 收建树函数（SolidJS 风格）并在内部建根 Owner + signal 自动重绘（源码小写，编译器还原大写） |
 
 > 响应式 UI 的 Owner / Cleanup / 条件分支 / Keyed For / 结构变化重绘等机制，详见

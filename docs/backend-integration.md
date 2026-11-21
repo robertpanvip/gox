@@ -154,7 +154,7 @@ for _, ch := range app.TakeChanges() { // 取走自上帧以来的有序变更
 | `InsertBefore` | 父节点 | 新子节点 ID | 锚点 ID（`""`=末尾） | 完整 `*Node` 子树 | 列表新增、动态 children 插入、追加末尾 |
 | `MoveChild` | 父节点 | 被移动节点 ID | 锚点 ID（`""`=末尾） | — | keyed 列表重排（节点复用，只调顺序） |
 | `RemoveChild` | 父节点 | 被移除节点 ID | — | 被移除 `*Node` | 列表删项、children 移除 |
-| `ReplaceChildren` | 目标节点自身（常是 `#frag` 透明容器，见下方说明） | — | — | — | 整块兜底：文本↔容器互转、For 同 key 值重建 |
+| `ReplaceChildren` | 目标节点自身（常是 `#frag` 透明容器，见下方说明） | — | — | — | 整块兜底：文本↔容器互转、旧值快照模式 `NewFor` 的同 key 重建（新 `ForGetterOfSignal` 同 key 值变化改发 `SetText`） |
 
 > 协议表只列**实际会发出**的指令。追加末尾用 `InsertBefore(BeforeID="")`，节点销毁用 `RemoveChild`（后端自行释放该 ID 的缓存）——曾有 `AppendChild`/`Destroy` 两个常量但实现从不发出，已从协议面移除，避免后端按表实现时漏更新。
 
@@ -166,7 +166,8 @@ for _, ch := range app.TakeChanges() { // 取走自上帧以来的有序变更
 
 - 变更用 `Node.ID` 定位（`ChildID`/`BeforeID` 同为跨帧稳定 ID）；整棵实例树（组件/分支/列表项）共享同一 sink，一次 `TakeChanges` 取全。
 - 这是 opcode 常驻树 + 细粒度 `Update()` 的自然产物——`Update` 本来就算出"哪些插槽变了"，这里只是暴露出来，**不像被移除的 vdom 后端那样每次重建整树**；细粒度 diff 只作用于单个动态插槽的 children，不产生 `createElement`、不重建整棵树。
-- 后端要么**完全不消费**增量、每次全量 `Draw(root)`（零改动），要么**完整消费**上面全部指令做增量重绘。二者择一即可；**不能只实现其中一条**：例如新增列表项只发 `InsertBefore`、不发 `ReplaceChildren`，只实现后者的后端会永远不显示新增项。`ReplaceChildren` 只是少数场景（文本↔容器互转、同 key 值重建）的兜底指令，不是"一条通用替代"。
+- 后端要么**完全不消费**增量、每次全量 `Draw(root)`（零改动），要么**完整消费**上面全部指令做增量重绘。二者择一即可；**不能只实现其中一条**：例如新增列表项只发 `InsertBefore`、不发 `ReplaceChildren`，只实现后者的后端会永远不显示新增项。`ReplaceChildren` 只是少数场景（文本↔容器互转、旧值快照模式的同 key 重建）的兜底指令，不是"一条通用替代"。
+- **For 同 key 值变化**：编译器生成的 `<For>` 走 item signal（`ForGetterOfSignal`），值变化只写 item signal → 依赖它的叶子精确重跑 → 发 `SetText/SetAttr`，**不发** `ReplaceChildren`、项内 ID 不变；只有手写的旧 `NewFor`（值快照）在同 key 值变化时仍走销毁重建并发 `ReplaceChildren`。后端两种都支持即可。
 
 **diff 策略可替换**：host 内建的 LIS diff 只是默认实现。若后端已维护自己的镜像树、或有更契合自身渲染模型的高效 diff，可用 `SetChildDiffer` 注入自己的算法直接产出协议 `Change`，覆盖内建——host 不再跑那一遍 LIS：
 

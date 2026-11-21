@@ -348,7 +348,8 @@ func main() {
 	}
 }
 
-// Keyed For：JSX <For> 编译成 OpFor + ForGetterOf[T]。
+// Keyed For（item signal 根治）：JSX <For> 编译成 OpFor + ForGetterOfSignal[T]，
+// render 参数是 item getter func() T，插值 u.name 改写为 u().name 登记依赖。
 func TestJSXSceneFor(t *testing.T) {
 	res, err := CompileScene("for.gx", `package main
 import gxscene "github.com/robertpanvip/gox/runtime/scene"
@@ -364,10 +365,11 @@ func main() {
 	out := res.GoSource
 	for _, want := range []string{
 		"gxscene.OpFor", "Slot:0", "N:1",
-		"gxscene.ForGetterOf[User]",
+		"gxscene.ForGetterOfSignal[User]",
 		"func() []User", "users()",
-		"func(u User) any", "u.id",
-		"func(u User) *gxscene.Instance",
+		"func(u User) any", "u.id", // key 仍是值参数
+		"func(u func() User) *gxscene.Instance", // render 参数是 item getter
+		"u().name",                              // item getter 读补 ()
 		`Arg:"li"`,
 	} {
 		if !strings.Contains(out, want) {
@@ -391,16 +393,16 @@ func main() {
 	}
 	out := res.GoSource
 	for _, want := range []string{
-		"gxscene.ForGetterOf[User]", // 关键：从 signal users 推断出 User，而非 any
+		"gxscene.ForGetterOfSignal[User]", // 关键：从 signal users 推断出 User，而非 any
 		"func() []User", "users()",
 		"func(u User) any", "u.id",
-		"func(u User) *gxscene.Instance",
+		"func(u func() User) *gxscene.Instance",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("无类型 render 应推断为 User，期望产物包含 %q, got:\n%s", want, out)
 		}
 	}
-	if strings.Contains(out, "ForGetterOf[any]") {
+	if strings.Contains(out, "ForGetterOfSignal[any]") {
 		t.Errorf("不应降级为 any, got:\n%s", out)
 	}
 }
@@ -419,10 +421,10 @@ func main() {
 		t.Fatal(err)
 	}
 	out := res.GoSource
-	if !strings.Contains(out, "gxscene.ForGetterOf[User]") {
+	if !strings.Contains(out, "gxscene.ForGetterOfSignal[User]") {
 		t.Errorf("普通变量应推断为 User, got:\n%s", out)
 	}
-	if strings.Contains(out, "ForGetterOf[any]") {
+	if strings.Contains(out, "ForGetterOfSignal[any]") {
 		t.Errorf("不应降级为 any, got:\n%s", out)
 	}
 }
@@ -441,8 +443,8 @@ func main() {
 		t.Fatal(err)
 	}
 	out := res.GoSource
-	if !strings.Contains(out, "gxscene.ForGetterOf[User]") {
-		t.Errorf("显式注解应生成 ForGetterOf[User], got:\n%s", out)
+	if !strings.Contains(out, "gxscene.ForGetterOfSignal[User]") {
+		t.Errorf("显式注解应生成 ForGetterOfSignal[User], got:\n%s", out)
 	}
 }
 

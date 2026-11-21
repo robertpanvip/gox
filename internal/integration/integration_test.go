@@ -485,8 +485,8 @@ func main() {
 `
 	out := runGX(t, src)
 	for _, want := range []string{
-		"init 0",   // effect 花括号 body 首次执行
-		"init 10",  // batch 写入 n=5 后 effect 重跑，doubled=10
+		"init 0",  // effect 花括号 body 首次执行
+		"init 10", // batch 写入 n=5 后 effect 重跑，doubled=10
 		"final 5 10",
 	} {
 		if !strings.Contains(out, want) {
@@ -625,9 +625,47 @@ func main() {
 	}
 }
 
+func TestIntegrationJSXSceneForValueUpdate(t *testing.T) {
+	// item signal 根治端到端：同 key（id 不变）但值变化（name 改写）时必须刷新该项。
+	// 旧的值快照实现会显示旧值（除非销毁重建），这里通过 u().name 直接读 item signal。
+	src := `package main
+import (
+	gxscene "github.com/robertpanvip/gox/runtime/scene"
+	"fmt"
+)
+type User struct { id int; name string }
+func main() {
+	signal users = []User{{1,"Tom"},{2,"Jack"}}
+	view := <ul>
+		<For each={users} key={(u) => u.id}>
+			{(u User) => <li>{u.name}</li>}
+		</For>
+	</ul>
+	view.BindReactive(Signal.Effect)
+	users = []User{{1,"Thomas"},{2,"Jack"}}
+	fmt.Print("UPD:", view)
+}
+`
+	out := runGXScene(t, src)
+	idx := strings.LastIndex(out, "UPD:")
+	if idx < 0 {
+		t.Fatalf("应有 UPD 输出, got:\n%s", out)
+	}
+	seg := out[idx:]
+	if !strings.Contains(seg, `"Thomas"`) {
+		t.Errorf("同 key 值变化应刷新为 Thomas, got:\n%s", seg)
+	}
+	if strings.Contains(seg, `"Tom"`) {
+		t.Errorf("不应残留旧值 Tom, got:\n%s", seg)
+	}
+	if !strings.Contains(seg, `"Jack"`) {
+		t.Errorf("未变更的项应保持 Jack, got:\n%s", seg)
+	}
+}
+
 func TestIntegrationJSXSceneForInferElemType(t *testing.T) {
 	// render 参数无类型注解：应从 each={users}（signal []User）推断元素类型 User，
-	// 生成可编译的 gxscene.ForGetterOf[User](...)。
+	// 生成可编译的 gxscene.ForGetterOfSignal[User](...)（item signal 根治）。
 	src := `package main
 import (
 	gxscene "github.com/robertpanvip/gox/runtime/scene"
