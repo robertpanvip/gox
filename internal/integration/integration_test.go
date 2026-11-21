@@ -630,8 +630,8 @@ func main() {
 	}
 }
 
-// TestIntegrationBareWindowConfig 端到端验证：gxapp.open(view, { ... }) 裸对象字面量
-// 从内置 runtime 签名推断为 gxapp.WindowConfig，可真实编译运行。
+// TestIntegrationBareWindowConfig 端到端验证：gxapp.open({ ... }) 裸对象字面量
+// 从外部包 AST 推断为 gxapp.WindowConfig，app.render(jsx) 渲染场景树并可真实编译运行。
 func TestIntegrationBareWindowConfig(t *testing.T) {
 	src := `package main
 import (
@@ -650,15 +650,46 @@ func main() {
 	{ title, width } := cfg
 	signal users = []user{{1,"Tom"}}
 	view := <div><Stat label={title}/><ul><For each={users} key={(u)=>u.id}>{(u)=><li>{u.name}</li>}</For></ul></div>
-	app, err := gxapp.open(view, { Title: title, Width: width, Height: cfg.height })
+	app, err := gxapp.open({ Title: title, Width: width, Height: cfg.height })
 	if err != nil { panic(err) }
 	defer app.close()
-	app.bindReactive(Signal.effect)
+	app.render(view)
 	fmt.println(title)
 }
 `
 	out := runGXScene(t, src)
 	if !strings.Contains(out, "Tom") {
-		t.Errorf("应渲染 Tom，got:\n%s", out)
+		t.Errorf("render 后应渲染 Tom，got:\n%s", out)
+	}
+}
+
+// TestIntegrationAppRenderAutoWiresReactive 端到端验证：app.render(jsx) 内部已完成
+// bindReactive 接线——GX 源码无需手写 bindReactive，signal 写入即自动更新 + 重绘一帧。
+func TestIntegrationAppRenderAutoWiresReactive(t *testing.T) {
+	src := `package main
+import (
+	gxapp "github.com/robertpanvip/gox/runtime/app"
+	"fmt"
+)
+func main() {
+	signal count = 0
+	app, err := gxapp.open({ Title: "Counter", Width: 800, Height: 600 })
+	if err != nil { panic(err) }
+	defer app.close()
+	app.render(<div id="app"><span>count = {count}</span></div>)
+	fmt.println("---AFTER---")
+	count = 5
+}
+`
+	out := runGXScene(t, src)
+	parts := strings.SplitN(out, "---AFTER---", 2)
+	if len(parts) != 2 {
+		t.Fatalf("应输出分界标记, got:\n%s", out)
+	}
+	if !strings.Contains(parts[0], `"0"`) {
+		t.Errorf("首帧应含初始值 0:\n%s", parts[0])
+	}
+	if !strings.Contains(parts[1], `"5"`) || strings.Contains(parts[1], `"0"`) {
+		t.Errorf("signal 写入后应自动重绘为 5（无手写接线）:\n%s", parts[1])
 	}
 }

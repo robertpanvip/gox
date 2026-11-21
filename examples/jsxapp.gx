@@ -1,11 +1,10 @@
-// 应用级入口 gxapp.open — 类比 ReactDOM.render：把 JSX 挂到「窗口」上。
+// 应用级入口 gxapp.open — 先创建窗口外壳，再 app.render(jsx) 渲染场景树。
 // 构建：gox build examples/jsxapp.gx -jsx=scene -o main.go && go run .
 //
 // GX 约定：外部符号源码一律小写书写，编译器自动还原真实大小写——
-//   gxapp.open → gxapp.Open、gxapp.windowConfig → gxapp.WindowConfig（同 gxvdom.render）。
-// gxapp.open 的两个参数正好是：
-//   第一个参数：JSX（编译后即 gxscene.Render(...) → *Instance）
-//   第二个参数：窗口配置 gxapp.windowConfig（标题、尺寸、位置等）
+//   gxapp.open → gxapp.Open、app.render → app.Render（同 gxvdom.render）。
+// open 只收窗口配置（裸对象字面量，编译器从签名推断为 gxapp.WindowConfig），
+// 返回 *App；render 才是渲染 JSX 的入口，内部自动接好 signal 响应式。
 //
 // 窗口后端由 Window 接口抽象。第一版内置 Headless（TextBackend 绘制到终端）；
 // Skia / wgpu / GLFW 后端实现同一接口即可接入，app 层与编译器无需改动。
@@ -13,23 +12,15 @@ package main
 
 import (
     gxapp "github.com/robertpanvip/gox/runtime/app"
-    "github.com/robertpanvip/gox/runtime/signal"
 )
 
 func main() {
-    // signal 响应式：signal 变化由 app.BindReactive 自动更新场景树并重绘窗口。
+    // signal 响应式：render 内部自动接线，signal 变化即更新场景树并重绘窗口。
     signal count = 0
     let doubled = Signal.computed(func() int { return count() * 2 })
 
-    view := <div id="app">
-        <h1>Counter</h1>
-        <span>count = {count}</span>
-        <b>doubled = {doubled}</b>
-    </div>
-
-    // 打开窗口：第一个参数是 JSX（场景树），第二个是窗口配置。
-    // 返回 (*App, error)：窗口后端创建失败时报错（Headless 不会失败）。
-    app, err := gxapp.open(view, gxapp.windowConfig{
+    // 打开窗口：只传配置（裸对象字面量），返回 (*App, error)。
+    app, err := gxapp.open({
         Title:  "Gox Counter",
         Width:  800,
         Height: 600,
@@ -37,10 +28,14 @@ func main() {
     if err != nil {
         panic(err)
     }
-    defer app.Close()
+    defer app.close()
 
-    // 一行接线：signal 变化 → 精确更新插槽 → 自动重绘窗口（无需手动 Update/Draw）。
-    app.BindReactive(signal.Effect)
+    // render 才是渲染 JSX 的入口；内部完成 bindReactive 接线，无需手动接线。
+    app.render(<div id="app">
+        <h1>Counter</h1>
+        <span>count = {count}</span>
+        <b>doubled = {doubled}</b>
+    </div>)
 
     // count = 5 后，count 与 doubled 两行自动刷新到新帧。
     count = 5

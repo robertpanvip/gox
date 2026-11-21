@@ -25,7 +25,7 @@
 | **Signal 响应式** | `signal n = 0` / `Signal.effect(() => ...)` | `Signal.New(0)` + 函数式读写 + 依赖追踪自动重跑 |
 | **条件分支** | `if cond { <A/> } else { <B/> }`（JSX 内） | `gxscene.OpBranch` + `BranchGetter`，切换时销毁旧 Owner、只重建该区域 |
 | **Keyed 列表** | `<For each={xs} key={...}>{(x) => <Item/>}</For>` | `gxscene.OpFor` + `ForGetterOf[T]`，元素类型从 `each` 自动推断（可显式注解），按 key 复用节点、每元素独立 Owner |
-| **应用入口** | `gxapp.open(<div/>, cfg)` | `gxapp.Open(gxscene.Render(...), cfg)` + Window 抽象 + signal 自动重绘（源码小写 `open`，编译器还原大写） |
+| **应用入口** | `gxapp.open(cfg)` + `app.render(<div/>)` | `gxapp.Open(cfg)` 返回 App + `App.Render(gxscene.Render(...))`；open 只收配置，render 才渲染 JSX 且内部封装 signal 自动重绘（源码小写，编译器还原大写） |
 
 > 响应式 UI 的 Owner / Cleanup / 条件分支 / Keyed For / 结构变化重绘等机制，详见
 > [响应式 UI 路线图落地说明](docs/reactive-ui-roadmap.md)。
@@ -139,7 +139,9 @@ scene 后端**没有 Diff、没有重建**。更新 = 重新求值 getter + 只�
 
 `Update()` 返回本次**实际写入的节点数**，值没变则写 0（`equalValue` 按类型严格比较）。观测指标：`Instance.Writes`（累计写入，各 `Instance` 独立，不跨子树累加）、`Instance.Updates`（Update 调用次数）。
 
-##### signal 自动接线（一行搞定响应式）
+##### signal 自动接线（底层 Instance 用法）
+
+> 若走**应用入口** `gxapp.open(cfg)` + `app.render(jsx)`，下面这一步已由 `render` 内部完成，无需手写。本节仅针对直接使用 `gxscene.Instance`（不经 App）的场景。
 
 scene 核心**不依赖**任何响应式库——`BindReactive(effect)` 接受一个形如 `signal.Effect` 的 effect 原语注入。它为每个插槽建一个 effect：普通插槽读 getter 后直接 `SetPart`（signal 变化只精确命中依赖它的插槽，不遍历全树）；复合组件插槽则递归进子组件接线（组件不重建）。signal 从根经 Props getter 一路传到叶子、在叶子的动态插槽里读取，写入即自动刷新。
 
@@ -224,27 +226,26 @@ n := view.Update()                      // 更新，返回写入节点数
 
 API：`CompileScene` / `CompileSceneWithModule`（对应默认的 `Compile` / `CompileWithModule`）；调试单步用 `gox jsxscene`。运行时见 [`runtime/scene/`](runtime/scene/)，完整示例见 `examples/jsxscene.gx`。
 
-##### 应用入口：`gxapp.open`（类比 `ReactDOM.render`）
+##### 应用入口：`gxapp.open` + `app.render`（类比 `ReactDOM.createRoot(...).render(...)`）
 
-`gxapp.open` 把一棵 JSX 场景树挂到「窗口」上，是应用外壳层——类比 React 的 `ReactDOM.render(element, container)`。
+`gxapp.open(cfg)` 先创建「窗口外壳」并返回 `App`；`app.render(jsx)` 才是把一棵 JSX 场景树挂进窗口的入口——类比 React 的 `createRoot(container).render(element)`。
 
-> **源码小写、生成大写**：遵循 GX 的「外部符号按小写书写、编译器还原真实大小写」约定（同 `gxvdom.render`），源码写 `gxapp.open` / `gxapp.windowConfig`，生成的 Go 是 `gxapp.Open` / `gxapp.WindowConfig`。运行时库里定义的仍是大写 `Open`（Go 导出可见性要求）。
+> **源码小写、生成大写**：遵循 GX 的「外部符号按小写书写、编译器还原真实大小写」约定（同 `gxvdom.render`），源码写 `gxapp.open` / `app.render` / `app.close`，生成的 Go 是 `gxapp.Open` / `App.Render` / `App.Close`。配置写**裸对象字面量** `{ ... }`，编译器从 `open` 的真实 Go 源码 AST 推断为 `gxapp.WindowConfig`（通用机制，非特判）。
 
-| 参数 | 含义 |
-|---|---|
-| 第一个 | **JSX**（编译后即 `gxscene.Render(...)` → `*gxscene.Instance`） |
-| 第二个 | **窗口配置** `gxapp.windowConfig`（标题、尺寸、位置、全屏、后端提示） |
+| 步骤 | 参数 / 返回 | 含义 |
+|---|---|---|
+| `gxapp.open(cfg)` | 参数：**窗口配置裸对象** `{ Title, Width, Height, ... }`；返回 `(*App, error)` | 只创建窗口外壳，不收 JSX、不绘制 |
+| `app.render(jsx)` | 参数：**JSX**（编译后即 `gxscene.Render(...)` → `*gxscene.Instance`） | 画首帧，并在内部完成响应式接线 |
 
 ```gx
 // gox build demo.gx -jsx=scene
 import gxapp "github.com/robertpanvip/gox/runtime/app"
 
-app, err := gxapp.open(<div id="app">hello</div>, gxapp.windowConfig{
-    Title: "Demo", Width: 800, Height: 600,
-})
+app, err := gxapp.open({ Title: "Demo", Width: 800, Height: 600 })
 if err != nil { panic(err) }
-defer app.Close()
-app.Run()
+defer app.close()
+app.render(<div id="app">hello</div>)
+app.run()
 ```
 
 `WindowConfig` 字段：`Title` / `Width` / `Height` / `X` / `Y` / `Resizable` / `Fullscreen` / `Backend`。零值尺寸自动补 800×600，`Backend` 空值补 `"headless"`；`gxapp.defaultConfig()` 返回一份带默认值的配置。
@@ -253,22 +254,21 @@ app.Run()
 
 | API | 作用 |
 |---|---|
-| `gxapp.Open(view, cfg)` | 打开默认 Headless 窗口并绘制首帧，返回 `(*App, error)` |
-| `gxapp.OpenWith(view, cfg, win)` | 注入自定义窗口后端（实现 `Window` 接口） |
+| `gxapp.Open(cfg)` | 按配置打开默认 Headless 窗口，返回 `(*App, error)`（不绘制） |
+| `gxapp.OpenWith(cfg, win)` | 注入自定义窗口后端（实现 `Window` 接口） |
 | `Window` 接口 | `Open(cfg)` / `Draw(root)` / `Run()` / `Close()` / `Config()` |
+| `App.Render(jsx)` | 渲染场景树：画首帧 + 内部响应式接线（signal 变化自动更新 + 重绘） |
 | `App.Draw()` / `App.Update()` | 手动重绘一帧 / 更新场景树并重绘 |
-| `App.BindReactive(effect)` | signal 变化时自动更新 + 重绘一帧（批处理，见下） |
-| `App.Run()` / `App.Close()` | 进入事件循环 / 关闭（幂等） |
+| `App.Run()` / `App.Close()` | 进入事件循环 / 关闭（幂等，级联清理所有订阅与 Owner） |
 | `gxapp.RenderText(view)` | 不建窗口，直接把场景树绘制成字符串（测试用） |
 
-**signal 自动重绘**：`app.BindReactive(signal.Effect)` 建一个聚合 effect——`Instance.Update()` 递归读所有 getter 登记依赖并裁剪写入，随后 `Draw()` 一帧。一次 signal 写入 = **一帧**，不会出现「部分插槽已更新」的中间态画面（这是应用入口该有的批处理语义，区别于底层 `Instance.BindReactive` 的逐插槽精确模式）。
+**signal 自动重绘（已封装进 render）**：`app.render` 内部建一个聚合 effect——`Instance.Update()` 递归读所有 getter 登记依赖并裁剪写入，随后 `Draw()` 一帧；条件分支 / keyed 列表的结构变化另有独立 effect 接线，重建子树后同样自动画一帧。一次 signal 写入 = **一帧**，不会出现「部分插槽已更新」的中间态画面（这是应用入口该有的批处理语义，区别于底层 `Instance.BindReactive` 的逐插槽精确模式）。源码**无需手写 `BindReactive`**。
 
 ```gx
 signal count = 0
 let doubled = Signal.computed(func() int { return count() * 2 })
-view := <div><span>{count}</span><b>{doubled}</b></div>
-app, _ := gxapp.open(view, gxapp.defaultConfig())
-app.BindReactive(signal.Effect)   // 接线（抑制首帧重复绘制）
+app, _ := gxapp.open({ Title: "Demo", Width: 800, Height: 600 })
+app.render(<div><span>{count}</span><b>{doubled}</b></div>)   // 首帧 + 内部接线
 count = 5                          // 自动更新 + 只画一帧：count=5、doubled=10 一致
 ```
 

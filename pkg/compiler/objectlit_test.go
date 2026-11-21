@@ -272,18 +272,17 @@ func main() {
 	}
 }
 
-// TestObjectLitRuntimeCtorExpect 验证：对象字面量作为已知 runtime 构造函数实参时，
-// 从内置签名表推断期望类型并补全为具名配置类型（而非降级匿名 struct）。
+// TestObjectLitRuntimeCtorExpect 验证：对象字面量作为外部 runtime 函数实参时，
+// 从该包真实 Go 源码 AST 推断期望类型并补全为具名配置类型（而非降级匿名 struct）。
+// open / openWith 现在只收配置一个参数，期望类型取自第 0 个形参。
 func TestObjectLitRuntimeCtorExpect(t *testing.T) {
 	src := `package main
 import (
 	gxapp "github.com/robertpanvip/gox/runtime/app"
-	gxscene "github.com/robertpanvip/gox/runtime/scene"
 )
 func main() {
-	view := gxscene.render(nil)
-	_, _ = gxapp.open(view, { Title: "Gox", Width: 800, Height: 600 })
-	_, _ = gxapp.openWith(view, { Title: "Gox", Width: 800 }, nil)
+	_, _ = gxapp.open({ Title: "Gox", Width: 800, Height: 600 })
+	_, _ = gxapp.openWith({ Title: "Gox", Width: 800 }, nil)
 }
 `
 	res, err := CompileScene("obj_runtime_ctor.gx", src)
@@ -291,8 +290,8 @@ func main() {
 		t.Fatal(err)
 	}
 	containsAll(t, res.GoSource,
-		"gxapp.Open(view, gxapp.WindowConfig{",
-		"gxapp.OpenWith(view, gxapp.WindowConfig{",
+		"gxapp.Open(gxapp.WindowConfig{",
+		"gxapp.OpenWith(gxapp.WindowConfig{",
 	)
 	if strings.Contains(res.GoSource, "struct{ Title") {
 		t.Errorf("不应降级为匿名 struct:\n%s", res.GoSource)

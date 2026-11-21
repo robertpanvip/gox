@@ -528,7 +528,7 @@ func inferArgExpectType(toks []Token, open int, an *Analysis, b *Bindings) strin
 		return t
 	}
 	// selector 调用 pkg.fn(...)：本文件无声明，从外部包的真实 Go 源码 AST 读取
-	// 函数签名，取第 argIdx 个参数类型。例：gxapp.open(view, { Title: ... })
+	// 函数签名，取第 argIdx 个参数类型。例：gxapp.open({ Title: ... })
 	// → 解析 <module>/runtime/app 包 Open 的签名 → gxapp.WindowConfig。
 	if pkg := selectorPkgBefore(toks, fnIdx); pkg != "" {
 		if t := externalFuncParamType(toks, pkg, funcName, argIdx); t != "" {

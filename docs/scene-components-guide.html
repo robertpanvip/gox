@@ -118,7 +118,7 @@
   <tr><td><code>r.URL</code> / <code>http.StatusOK</code></td><td>原样保留</td><td>全大写缩写：<b>写大写</b>，不动</td></tr>
   <tr><td><code>gxscene.get[T]()</code></td><td><code>gxscene.Get[T]()</code></td><td>runtime 符号：小写书写，还原</td></tr>
   <tr><td><code>view.bindReactive(Signal.effect)</code></td><td><code>view.BindReactive(signal.Effect)</code></td><td>方法小写；signal API 用大写 <code>Signal.</code> 前缀</td></tr>
-  <tr><td><code>gxapp.open(view, { Title: "Gox", Width: 800 })</code></td><td><code>gxapp.Open(view, gxapp.WindowConfig{...})</code></td><td>配置用<b>裸对象字面量</b>，从签名推断具名类型</td></tr>
+  <tr><td><code>gxapp.open({ ... })</code> + <code>app.render(jsx)</code></td><td><code>gxapp.Open(gxapp.WindowConfig{...})</code> + <code>app.Render(...)</code></td><td><b>open 只收配置</b>（裸对象字面量，从签名推断）；<b>render 才收 JSX</b>，内部自带响应式接线</td></tr>
   <tr><td><code>pub func Stat(...)</code> + <code>&lt;Stat/&gt;</code></td><td><code>func Stat(...)</code></td><td><b>组件名大写开头</b>（pub 声明与 JSX 标签一致）</td></tr>
   <tr><td><code>pub func card</code> + <code>&lt;Card/&gt;</code></td><td><code>func Card</code></td><td>pub 声明小写；<b>JSX 标签必须大写</b></td></tr>
 </table>
@@ -126,7 +126,8 @@
 <div class="note">
 <b>三条边界（踩过的坑）：</b>① <b>所有 signal API 用大写 <code>Signal.</code> 前缀</b>——<code>Signal.computed</code> / <code>Signal.effect</code> / <code>Signal.createRoot</code> / <code>Signal.batch</code> 等。<code>Signal</code> 是语法糖占位包名，既避免与 <code>signal</code> 声明关键字混淆，也保证还原；<b>不要</b>写裸 <code>computed(...)</code> 或小写 <code>signal.effect(...)</code>。
 ② <b>组件名大写开头</b>——<code>pub func Stat(...)</code> 配 <code>&lt;Stat/&gt;</code>。JSX 标签首字母大写 = 组件、小写 = 原生 HTML 标签，这是硬编码判定。
-③ <b>配置对象写裸字面量</b>——<code>gxapp.open(view, { Title: ..., Width: ... })</code>，编译器用 <code>go list</code> + <code>go/parser</code> 读取 <code>gxapp.open</code> 所在包的真实 Go 源码 AST，取出参数类型并补全为 <code>gxapp.WindowConfig</code>（通用机制，对任意外部包函数都有效；读不到时回退匿名 struct）。无需也不应手写 <code>gxapp.windowConfig{...}</code>。
+③ <b>配置对象写裸字面量</b>——<code>gxapp.open({ Title: ..., Width: ... })</code>，编译器用 <code>go list</code> + <code>go/parser</code> 读取 <code>gxapp.open</code> 所在包的真实 Go 源码 AST，取出参数类型并补全为 <code>gxapp.WindowConfig</code>（通用机制，对任意外部包函数都有效；读不到时回退匿名 struct）。无需也不应手写 <code>gxapp.windowConfig{...}</code>。
+④ <b>open 与 render 分工</b>——<code>gxapp.open(cfg)</code> 只创建窗口外壳并返回 <code>App</code>，<code>app.render(jsx)</code> 才是渲染 JSX 的入口，且内部已封装 <code>bindReactive</code>（signal 变化 → 更新 + 重绘，含分支/列表结构重绘），源码无需手写接线。
 </div>
 
 <h2>二、工作原理（三段流程）</h2>
@@ -202,16 +203,14 @@
         }
     &lt;/<span class="jx">div</span>&gt;
 
-    <span class="cm">// 应用入口：gxapp.open 小写书写；配置写裸对象字面量；app.close 同理</span>
-    app, err := gxapp.<span class="fn">open</span>(view, { Title: title, Width: width, Height: cfg.height })
+    <span class="cm">// 应用入口：open 只收配置（裸对象字面量）；render 才收 JSX，内部已接好响应式</span>
+    app, err := gxapp.<span class="fn">open</span>({ Title: title, Width: width, Height: cfg.height })
     <span class="kw">if</span> err != nil { <span class="fn">panic</span>(err) }
     <span class="kw">defer</span> app.<span class="fn">close</span>()
-
-    <span class="cm">// 一行接线：signal 写入 → 精确更新插槽 → 结构变化自动重绘</span>
-    app.<span class="fn">bindReactive</span>(signal.<span class="fn">effect</span>)
+    app.<span class="fn">render</span>(view)  <span class="cm">// 画首帧 + 内部 bindReactive：signal 写入 → 更新 + 结构变化自动重绘</span>
 
     <span class="cm">// 批处理：同一帧内 count→5、visible→false，只重绘一次</span>
-    signal.<span class="fn">batch</span>(<span class="kw">func</span>() { count(<span class="ty">5</span>); visible(<span class="kw">false</span>) })
+    <span class="fn">Signal</span>.<span class="fn">batch</span>(<span class="kw">func</span>() { count(<span class="ty">5</span>); visible(<span class="kw">false</span>) })
     fmt.<span class="fn">println</span>(doubled())  <span class="cm">// 10</span>
 }</pre>
 <div class="note"><b>实测输出要点：</b>初始渲染出 <code>"Tom"</code>/<code>"Jack"</code> 列表；<code>visible=false</code> 后条件分支切到 <code>Hidden</code>；<code>doubled()</code> 得到 <code>10</code>。<code>&lt;For&gt;</code> 的 render 参数 <code>(u)</code> 未写类型——编译器从 <code>each={users}</code> 的 <code>[]user</code> 自动推断出元素类型。</div>
@@ -230,7 +229,7 @@
 })
 <span class="cm">// 相同值不触发下游；自定义比较用 Signal.newWithEquals</span>
 <span class="cm">// 派生需要提前销毁时用 Signal.computedWithHandle</span></pre>
-<div class="note"><code>signal</code> 源信号默认用 <code>reflect.DeepEqual</code> 做相等性裁剪——值未变不触发下游。<code>scene.computation</code> 是 <code>signal.computation</code> 的类型别名，因此 <code>Signal.effect</code> 可直接作为 <code>bindReactive</code> 的实参。</div>
+<div class="note"><code>signal</code> 源信号默认用 <code>reflect.DeepEqual</code> 做相等性裁剪——值未变不触发下游。<code>scene.computation</code> 是 <code>signal.computation</code> 的类型别名，因此 <code>Signal.effect</code> 可作为底层 <code>bindReactive</code> 的实参；应用入口的 <code>app.render</code> 内部已经用 <code>Signal.effect</code> 完成接线，无需手写。</div>
 
 <h3>阶段 2 · 条件分支</h3>
 <p>JSX 内支持 <code>if / else if / else</code> 子节点。selector 读 signal 登记依赖；索引变化时销毁旧 Owner、重建局部子树，索引不变时只更新叶子。</p>
@@ -254,11 +253,11 @@
 <div class="note">元素类型推断支持 signal 变量、普通 <code>:=</code> 变量和函数返回值；若写了显式注解如 <code>(u user)</code>，则以注解为准。</div>
 
 <h3>阶段 4 · GUI 调度与生命周期</h3>
-<p>应用入口把「叶子聚合 effect」与「结构插槽接线」合并：<code>bindReactive</code> 在分支/列表切换重建子树后自动画一帧；<code>batch</code> 合并同一轮多次写入为一次重绘；<code>close</code> 销毁时级联清理所有订阅与 Owner。</p>
-<pre class="code">app, err := gxapp.<span class="fn">open</span>(view, { Title: <span class="st">"Gox"</span>, Width: <span class="ty">800</span> })
+<p>应用入口把「叶子聚合 effect」与「结构插槽接线」封装进 <code>app.render</code>：<code>open(cfg)</code> 先建好窗口外壳，<code>render(jsx)</code> 画首帧并在内部接好响应式——分支/列表切换重建子树后自动画一帧；<code>Signal.batch</code> 合并同一轮多次写入为一次重绘；<code>app.close</code> 销毁时级联清理所有订阅与 Owner。</p>
+<pre class="code">app, err := gxapp.<span class="fn">open</span>({ Title: <span class="st">"Gox"</span>, Width: <span class="ty">800</span> })
 <span class="kw">if</span> err != nil { <span class="fn">panic</span>(err) }
 <span class="kw">defer</span> app.<span class="fn">close</span>()
-app.<span class="fn">bindReactive</span>(<span class="fn">Signal</span>.<span class="fn">effect</span>)
+app.<span class="fn">render</span>(view)  <span class="cm">// 渲染 JSX + 内部响应式接线（无需手写 bindReactive）</span>
 <span class="fn">Signal</span>.<span class="fn">batch</span>(<span class="kw">func</span>() { count(<span class="ty">5</span>); visible(<span class="kw">false</span>) })  <span class="cm">// 一次重绘</span></pre>
 
 <h2>五、约束清单</h2>
@@ -266,13 +265,13 @@ app.<span class="fn">bindReactive</span>(<span class="fn">Signal</span>.<span cl
   <li><b>标识符小写书写</b>：GX 源码一律小写，编译器还原；全大写缩写写大写原样保留。</li>
   <li><b>signal API 大写前缀</b>：<code>Signal.computed</code> / <code>Signal.effect</code> / <code>Signal.createRoot</code> / <code>Signal.batch</code> 等一律大写 <code>Signal.</code>，避免与 <code>signal</code> 声明关键字混淆；不要写裸 <code>computed(...)</code>。</li>
   <li><b>组件名大写开头</b>：<code>pub func Stat(...)</code> + <code>&lt;Stat/&gt;</code>；组件标签不能小写。</li>
-  <li><b>配置写裸对象字面量</b>：<code>gxapp.open(view, { ... })</code>，从签名推断具名类型，不手写 <code>gxapp.windowConfig{...}</code>。</li>
+  <li><b>配置写裸对象字面量</b>：<code>gxapp.open({ ... })</code>（只收配置，返回 App），从签名推断具名类型，不手写 <code>gxapp.windowConfig{...}</code>。</li>
   <li><b>pub 声明小写 + JSX 标签大写</b>：<code>pub func card</code> 配 <code>&lt;Card/&gt;</code>；组件标签小写会被当成原生标签。</li>
   <li><b>Props 用 getter 保鲜</b>：<code>gxscene.get[T](props,...)</code> 得到 getter，在插槽里 <code>value()</code> 读；写成 <code>value</code> 会变成不更新的快照。</li>
   <li><b>组件只建树一次</b>：函数体是「建树」而非「每次渲染」，不要在组件函数里放依赖刷新的副作用。</li>
   <li><b>分支 selector 必须读 signal</b> 才有响应式；<code>&lt;For&gt;</code> 必须提供 <code>key</code> 才能做 keyed 复用。</li>
   <li><b>Owner 作用域</b>：effect / cleanup 归属当前 Owner，父销毁级联子；需要独立生命周期时用 <code>Signal.createRoot</code>。</li>
-  <li><b>结构变化重绘</b>：app 场景用 <code>app.bindReactive(Signal.effect)</code> 接线，分支/列表切换才会自动重绘一帧。</li>
+  <li><b>结构变化重绘</b>：<code>app.render(jsx)</code> 内部已接好响应式，分支/列表切换自动重绘一帧，无需手写 <code>bindReactive</code>。</li>
   <li><b>相等性裁剪</b>：signal 默认 <code>DeepEqual</code>，相同值不触发；需要自定义比较用 <code>Signal.newWithEquals</code>。</li>
 </ol>
 
@@ -293,8 +292,7 @@ app.<span class="fn">bindReactive</span>(<span class="fn">Signal</span>.<span cl
   <tr><td><code>Signal.onCleanup</code> / <code>Signal.onMount</code> / <code>Signal.batch</code></td><td><code>OnCleanup</code> / <code>OnMount</code> / <code>Batch</code></td><td>生命周期清理 / 首挂载 / 合并写入</td></tr>
   <tr><td><code>分支 if / else</code></td><td><code>gxscene.opBranch</code> + <code>branchGetter</code></td><td>条件分支：切换时销毁旧 Owner 重建子树</td></tr>
   <tr><td><code>&lt;For each key&gt;</code></td><td><code>gxscene.opFor</code> + <code>forGetterOf[T]</code></td><td>Keyed 列表：按 key 复用、每元素独立 Owner，T 可推断</td></tr>
-  <tr><td><code>gxapp.open(view, { ... })</code> / <code>app.close</code></td><td><code>gxapp.Open</code> / <code>App.Close</code></td><td>应用入口：JSX + 裸对象配置 → App；配置从签名推断为 WindowConfig</td></tr>
-  <tr><td><code>app.bindReactive</code> / <code>app.close</code></td><td><code>App.BindReactive</code> / <code>Close</code></td><td>应用接线 + 关闭清理</td></tr>
+  <tr><td><code>gxapp.open({ ... })</code> / <code>app.render(jsx)</code> / <code>app.close</code></td><td><code>gxapp.Open</code> / <code>App.Render</code> / <code>App.Close</code></td><td>应用入口：open 只收裸对象配置（推断为 WindowConfig）返回 App；render 收 JSX 且内部封装响应式接线；close 清理</td></tr>
 </table>
 
 <div class="term">

@@ -23,8 +23,8 @@ Gox 是一个把 `.gx` 转译成标准 Go 的编译器。`.gx` = Go 语法 + 一
 | `req.method` / `u.path` | `req.Method` / `u.Path` | 结构体字段：小写书写，还原 |
 | `r.URL` / `http.StatusOK` | 原样 | **全大写缩写写大写，原样保留** |
 | `gxscene.get[T](props, "x")` | `gxscene.Get[T](...)` | runtime 符号：小写书写，还原 |
-| `view.bindReactive(Signal.effect)` | `view.BindReactive(signal.Effect)` | 方法小写；signal API 用大写 `Signal.` 前缀 |
-| `gxapp.open(view, { Title: "Gox", Width: 800 })` | `gxapp.Open(view, gxapp.WindowConfig{...})` | 配置对象用裸字面量，从签名推断类型 |
+| `view.bindReactive(Signal.effect)` | `view.BindReactive(signal.Effect)` | 底层 scene 实例方法：小写书写；signal API 用大写 `Signal.` 前缀 |
+| `gxapp.open({ ... })` + `app.render(jsx)` | `gxapp.Open(gxapp.WindowConfig{...})` + `app.Render(...)` | **open 只收配置**（裸对象字面量，从签名推断类型）返回 App；**render 才是渲染 JSX 的入口**，内部已接好响应式，无需手写 bindReactive |
 | `Signal.createRoot(...)` / `Signal.onCleanup(...)` | `signal.CreateRoot` / `signal.OnCleanup` | **signal API 一律大写 `Signal.` 前缀** |
 | `pub func Stat(...)` | `func Stat(...)` | **组件名 `pub func` 大写开头** |
 
@@ -39,17 +39,20 @@ Gox 是一个把 `.gx` 转译成标准 Go 的编译器。`.gx` = Go 语法 + 一
 ### 反面教材（本项目真实犯过的错，禁止重演）
 
 ```gx
-// ❌ 错：signal API 用小写前缀（与 signal 关键字混淆）/ 组件小写 / 配置写全类型名
+// ❌ 错：signal API 用小写前缀（与 signal 关键字混淆）/ 组件小写 / 配置写全类型名 / open 传 JSX
 signal.createRoot(func(o *signal.owner) { signal.onCleanup(...) })
 view.bindReactive(signal.effect)
 pub func stat(props gxscene.props) *gxscene.instance { ... }
 app, _ := gxapp.open(view, gxapp.windowConfig{...})
+app.bindReactive(signal.effect)
 
-// ✅ 对：signal API 大写 Signal. 前缀；pub 组件大写；配置用裸对象字面量
+// ✅ 对：signal API 大写 Signal. 前缀；pub 组件大写；配置用裸对象字面量；
+//      open 只收配置、render 才收 JSX 且自带响应式接线
 Signal.createRoot(func(o *signal.owner) { Signal.onCleanup(...) })
 view.bindReactive(Signal.effect)
 pub func Stat(props gxscene.props) *gxscene.instance { ... }
-app, _ := gxapp.open(view, { Title: "Gox", Width: 800 })
+app, _ := gxapp.open({ Title: "Gox", Width: 800 })
+app.render(view)
 ```
 
 ## 2. 必须优先使用 GX 自身的语法糖
@@ -65,7 +68,7 @@ app, _ := gxapp.open(view, { Title: "Gox", Width: 800 })
 | 模板字符串 | `` `hi ${name}` `` | 编译为字符串拼接 |
 | 参数默认值 | `func f(x int = 5)` | TS 语义，补尾部缺失参数 |
 | Lambda | `x => x+1` | 单表达式 body；类型可推断 |
-| 对象字面量 | `{ title: "Gox", n: 1 }` | 无期望类型→匿名 struct；有期望类型→补全具名类型并校验字段。作为外部包函数实参时（如 `gxapp.open(view, {...})`），编译器用 `go list` + `go/parser` 读该包真实 Go 源码 AST 取参数类型（通用机制，非特判；失败则回退匿名 struct） |
+| 对象字面量 | `{ title: "Gox", n: 1 }` | 无期望类型→匿名 struct；有期望类型→补全具名类型并校验字段。作为外部包函数实参时（如 `gxapp.open({ Title: ... })`），编译器用 `go list` + `go/parser` 读该包真实 Go 源码 AST 取参数类型（通用机制，非特判；失败则回退匿名 struct） |
 | 对象解构 | `{ title, n } := cfg` | 纯标识符列表，逐字段生成赋值 |
 | is 守卫 | `if (v is int) { ... }` | 块内窄化为具体类型 |
 | 联合类型 | `v int \| string \| bool` | 擦除为 any + 入口守卫 |
@@ -103,16 +106,16 @@ view := <ul>
     </For>
 </ul>
 
-// 阶段4：应用入口 + 一行接线（结构变化也会自动重绘）
+// 阶段4：应用入口 open（只收配置）+ render（收 JSX，内部自带响应式接线）
 // 配置用裸对象字面量，编译器从 gxapp.open 签名推断为 gxapp.WindowConfig
-app, err := gxapp.open(view, { Title: "Gox", Width: 800 })
+app, err := gxapp.open({ Title: "Gox", Width: 800 })
 if err != nil { panic(err) }
 defer app.close()
-app.bindReactive(Signal.effect)
+app.render(view)                      // 画首帧 + 内部 bindReactive（结构变化也自动重绘）
 Signal.batch(func() { count(5); visible(false) })
 ```
 
-约束：分支 selector 必须读 signal 才有响应式；`<For>` 必须提供 `key`；组件内 signal 要经 Props getter 传到叶子插槽才能在写入时更新；app 场景结构变化（分支/列表）由 `bindReactive` 自动重绘；外部包函数的配置参数（如 `gxapp.open(view, {...})`）可直接写裸对象字面量——编译器从该包真实 Go 源码 AST 读取期望参数类型并补全（通用机制，见 `pkg/compiler/gosig.go`）。
+约束：分支 selector 必须读 signal 才有响应式；`<For>` 必须提供 `key`；组件内 signal 要经 Props getter 传到叶子插槽才能在写入时更新；app 场景的响应式接线（叶子聚合 effect + 分支/列表结构重绘）全部封装在 `app.render` 内部，源码无需手写 bindReactive；外部包函数的配置参数（如 `gxapp.open({ ... })`）可直接写裸对象字面量——编译器从该包真实 Go 源码 AST 读取期望参数类型并补全（通用机制，见 `pkg/compiler/gosig.go`）。
 
 ## 4. 环境与命令
 

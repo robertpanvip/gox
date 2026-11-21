@@ -2,7 +2,7 @@ package compiler
 
 // gosig.go — 通用的外部 Go 包函数签名查询。
 //
-// 目标：当对象字面量作为外部包的 selector 调用实参（如 gxapp.open(view, {...})）
+// 目标：当对象字面量作为外部包的 selector 调用实参（如 gxapp.open({...})）
 // 时，拿到该函数的参数类型（WindowConfig），把匿名 struct 补全为具名类型。
 //
 // 做法不是硬编码某个包的签名，而是真实读取外部包的 Go 源码 AST：

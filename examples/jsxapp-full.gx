@@ -1,10 +1,11 @@
-// 完整实战：复合组件设计 + Signal 响应式 + gxapp.open 应用入口，一条龙。
+// 完整实战：复合组件设计 + Signal 响应式 + gxapp.open/app.render 应用入口，一条龙。
 // 构建：gox build examples/jsxapp-full.gx -jsx=scene -o main.go && go run .
 //
 // 这个例子把前面所有的点串起来：
 //   1. 复合组件：大写标签 = 组件；Props getter-map 让数据在组件树里保鲜
 //   2. 响应式：signal + Signal.computed，signal 沿 Props getter 传到叶子插槽
-//   3. 应用入口：gxapp.open（源码小写，编译器还原为 gxapp.Open）+ 一行 BindReactive
+//   3. 应用入口：gxapp.open(cfg) 返回 App，app.render(jsx) 渲染 JSX（源码小写，
+//      编译器还原为 gxapp.Open / App.Render）；响应式在 render 内部接好，无需手写接线
 // 写入 count=5 后，count 与 doubled 两行自动刷新到新帧，组件不重建。
 package main
 
@@ -24,7 +25,7 @@ pub func Stat(props gxscene.Props) *gxscene.Instance {
 }
 
 // Dashboard 是中间组件：把上层传来的 getter 原样转发给两个 Stat。
-// count()/doubled() 在 Props getter 里读取——app.BindReactive 的聚合 effect
+// count()/doubled() 在 Props getter 里读取——app.render 内部建立的聚合 effect
 // 重跑时会读到 signal 并登记依赖，因此 signal 变化能穿透组件树命中叶子插槽。
 pub func Dashboard(props gxscene.Props) *gxscene.Instance {
     count   := gxscene.Get[int](props, "count")
@@ -41,20 +42,19 @@ func main() {
     signal count = 0
     let doubled = Signal.computed(func() int { return count() * 2 })
 
-    // 组合根视图：count/doubled 在插值里读，编成 getter 传给 Dashboard
-    view := <div id="app"><Dashboard count={count} doubled={doubled}/></div>
-
-    // 应用入口：源码 gxapp.open / gxapp.windowConfig（编译器还原大写）
-    app, err := gxapp.open(view, gxapp.windowConfig{
+    // 应用入口：open 只传配置（裸对象字面量，编译器从签名推断为 WindowConfig），
+    // 返回 App；render 才是渲染 JSX 的入口，内部自动接好响应式。
+    app, err := gxapp.open({
         Title:  "Gox Dashboard",
         Width:  800,
         Height: 600,
     })
     if err != nil { panic(err) }
-    defer app.Close()
+    defer app.close()
 
-    // 一行接线：signal 变化 → 精确更新插槽 → 自动重绘一帧
-    app.BindReactive(signal.Effect)
+    // 组合根视图：count/doubled 在插值里读，编成 getter 传给 Dashboard；
+    // render 内部完成 bindReactive 接线，signal 变化 → 更新插槽 → 自动重绘一帧。
+    app.render(<div id="app"><Dashboard count={count} doubled={doubled}/></div>)
 
     // count=5 后，count→5、doubled→10，两行在同一次重绘里一致更新
     count = 5

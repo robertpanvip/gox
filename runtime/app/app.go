@@ -1,10 +1,12 @@
-// Package gxapp 是 GX 的应用级入口：把一棵已渲染的常驻场景树挂到「窗口」上，
-// 类比 ReactDOM.render(element, container) —— 这里对应 gxapp.Open(view, config)。
+// Package gxapp 是 GX 的应用级入口：先创建「窗口外壳」，再把一棵 JSX 场景树
+// 渲染进去。类比 ReactDOM.createRoot(container).render(element) —— 这里对应
+// gxapp.open(config) 得到 App，再 app.render(jsx)。
 //
 // 分层：
 //   - gxscene 负责 JSX → opcode → 常驻场景树 + 细粒度更新（渲染核心）
 //   - signal 负责响应式依赖追踪
-//   - gxapp 负责「应用外壳」：窗口配置、窗口后端抽象、生命周期、signal 变化时自动重绘
+//   - gxapp 负责「应用外壳」：窗口配置、窗口后端抽象、生命周期，以及把
+//     signal 变化翻译成「更新场景树 + 重绘窗口」的调度（bindReactive 封装在内部）
 //
 // gxapp 不重新实现渲染或响应式：它包装 Instance 与 effect 原语，
 // 让 signal 写入在更新场景树后顺带触发一次窗口重绘。Skia / wgpu / GLFW
@@ -18,9 +20,10 @@ import (
 	"strings"
 
 	gxscene "github.com/robertpanvip/gox/runtime/scene"
+	"github.com/robertpanvip/gox/runtime/signal"
 )
 
-// WindowConfig 是窗口配置（open 的第二个参数）。零值字段由各 Window 后端给默认值。
+// WindowConfig 是窗口配置（open 的唯一参数）。零值字段由各 Window 后端给默认值。
 type WindowConfig struct {
 	Title      string
 	Width      int
@@ -73,33 +76,32 @@ type Window interface {
 	Config() WindowConfig
 }
 
-// App 是 open 返回的应用句柄，持有场景树实例、窗口后端与配置。
+// App 是 open 返回的应用句柄，持有窗口后端与配置；render 之后再持有场景树实例。
 type App struct {
-	inst            *gxscene.Instance
 	win             Window
 	cfg             WindowConfig
+	inst            *gxscene.Instance // render 前为 nil
 	closed          bool
-	reactivePriming bool                  // 聚合 effect 首次执行只登记依赖，不重绘（Open 已画首帧）
-	reactive        []gxscene.Computation // BindReactive 建立的响应式句柄，Close 时清理
+	rendered        bool
+	reactivePriming bool                  // 聚合 effect 首次执行只登记依赖，不重绘（Render 已画首帧）
+	reactive        []gxscene.Computation // 内部 bindReactive 建立的聚合句柄，Close 时清理
 }
 
-// Open 把场景树挂到默认 Headless 窗口并首次绘制。
+// Open 按配置创建默认 Headless 窗口，返回应用句柄。不接收 JSX——JSX 交给 Render。
 //
-//	view := <div id="app">hello</div>
-//	app := gxapp.Open(view, gxapp.WindowConfig{Title:"Demo", Width:800, Height:600})
+//	app, err := gxapp.Open(gxapp.WindowConfig{Title: "Demo", Width: 800, Height: 600})
+//	if err != nil { panic(err) }
 //	defer app.Close()
+//	app.Render(view)   // view 是 JSX 编译出的 *gxscene.Instance
 //	app.Run()
 //
-// 等价用法：OpenWith(view, cfg, &gxapp.HeadlessWindow{Out: os.Stdout})。
-func Open(inst *gxscene.Instance, cfg WindowConfig) (*App, error) {
-	return OpenWith(inst, cfg, &HeadlessWindow{Out: os.Stdout})
+// 等价用法：OpenWith(cfg, &gxapp.HeadlessWindow{Out: os.Stdout})。
+func Open(cfg WindowConfig) (*App, error) {
+	return OpenWith(cfg, &HeadlessWindow{Out: os.Stdout})
 }
 
 // OpenWith 同 Open，但允许注入自定义窗口后端（Skia / wgpu / GLFW ...）。
-func OpenWith(inst *gxscene.Instance, cfg WindowConfig, win Window) (*App, error) {
-	if inst == nil {
-		return nil, fmt.Errorf("gxapp: Open 的第一个参数（场景树实例）不能为 nil")
-	}
+func OpenWith(cfg WindowConfig, win Window) (*App, error) {
 	if win == nil {
 		return nil, fmt.Errorf("gxapp: 窗口后端不能为 nil")
 	}
@@ -107,53 +109,60 @@ func OpenWith(inst *gxscene.Instance, cfg WindowConfig, win Window) (*App, error
 	if err := win.Open(cfg); err != nil {
 		return nil, fmt.Errorf("gxapp: 打开窗口失败: %w", err)
 	}
-	a := &App{inst: inst, win: win, cfg: cfg}
-	if err := a.Draw(); err != nil {
-		return nil, err
-	}
-	return a, nil
+	return &App{win: win, cfg: cfg}, nil
 }
 
-// Draw 立即把当前场景树绘制一帧到窗口。
-func (a *App) Draw() error {
-	if a.closed {
-		return nil
-	}
-	return a.win.Draw(a.inst.Root())
-}
-
-// Update 触发场景树细粒度更新（转发 Instance.Update），成功后重绘一帧。
-// 返回本次实际写入的节点数（与 Instance.Update 一致）。
-func (a *App) Update() int {
-	n := a.inst.Update()
-	_ = a.Draw()
-	return n
-}
-
-// BindReactive 把 signal 接到场景树，并在 signal 变化时自动重绘窗口。
+// Render 把一棵 JSX 场景树挂到窗口：画首帧，并在内部完成响应式接线
+// （signal 变化 → 精确更新 + 自动重绘，含条件分支 / keyed 列表的结构重绘）。
+// 调用方无需再手动接线 bindReactive。
 //
-// 采用「单一聚合 effect」而非 Instance.BindReactive 的逐插槽 effect：
+// 重复调用会先清理上一棵树的订阅与 Owner，再渲染新树。
+func (a *App) Render(inst *gxscene.Instance) error {
+	if a.closed {
+		return fmt.Errorf("gxapp: 应用已关闭，无法 Render")
+	}
+	if inst == nil {
+		return fmt.Errorf("gxapp: Render 的场景树实例不能为 nil")
+	}
+	if a.rendered {
+		// 重渲染：先停掉旧树的订阅与结构 effect，避免泄漏到新帧。
+		a.disposeReactive()
+		if a.inst != nil {
+			a.inst.Dispose()
+		}
+	}
+	a.inst = inst
+	a.rendered = true
+	if err := a.Draw(); err != nil {
+		return err
+	}
+	// 响应式接线完全封装在 app 内部：signal 写入即更新 + 重绘一帧。
+	a.bindReactive()
+	return nil
+}
+
+// bindReactive 建立「单一聚合 effect」把 signal 接到场景树，并负责窗口重绘。
+//
 // Instance.Update() 会递归读取整棵树的叶子 getter（从而登记全部依赖），
 // 并用 equalValue 裁剪，只写真正变化的节点；随后 Draw 一帧。于是：
 //
 //   - 一次 signal 写入 = 一次 Update + 一帧重绘，不会出现「某个插槽已更新、
-//     另一个还没更新」的中间态画面（逐插槽 effect 会产生这种闪烁）；
+//     另一个还没更新」的中间态画面；
 //   - 写入次数仍精确（equalValue 裁剪），只是多做了几次便宜的 getter 求值；
 //   - 这正是 ReactDOM.render 式的批处理语义，适合应用入口。
 //
-// 若需要「精确命中单插槽、完全不求值其他 getter」的极致性能，可用
-// 底层 Instance.BindReactive（但不会产生窗口帧）。
-//
-//	app.BindReactive(signal.Effect)   // signal 变化 → 更新 + 自动重绘一帧
-func (a *App) BindReactive(effect func(func()) gxscene.Computation) {
-	if effect == nil || a.closed {
+// 动态结构插槽（条件分支 / keyed 列表）由 scene 层独立 effect 直接改写场景树，
+// 不经过上面的聚合 Update。这里为它们单独接线，并用「重绘包装」的 effect：
+// selector/each 变化时重建子树后，顺带画一帧，避免结构变了却没刷新窗口。
+func (a *App) bindReactive() {
+	if a.inst == nil || a.closed {
 		return
 	}
 	a.reactivePriming = true
-	if c := effect(func() {
+	if c := signal.Effect(func() {
 		_ = a.inst.Update() // 递归读所有叶子 getter 登记依赖 + 裁剪写入
 		if a.reactivePriming {
-			// 首次执行（接线时立即触发）只登记依赖；Open 已画首帧，避免重复绘制。
+			// 首次执行（接线时立即触发）只登记依赖；Render 已画首帧，避免重复绘制。
 			a.reactivePriming = false
 			return
 		}
@@ -164,16 +173,13 @@ func (a *App) BindReactive(effect func(func()) gxscene.Computation) {
 		a.reactive = append(a.reactive, c)
 	}
 
-	// 动态结构插槽（条件分支 / keyed 列表）由 scene 层独立 effect 直接改写场景树，
-	// 不经过上面的聚合 Update。这里为它们单独接线，并用「重绘包装」的 effect：
-	// selector/each 变化时重建子树后，顺带画一帧，避免结构变了却没刷新窗口。
 	structuralPriming := true
 	structuralEffect := func(f func()) gxscene.Computation {
-		return effect(func() {
+		return signal.Effect(func() {
 			f() // Resolve：读 selector/each（登记依赖）+ 重建/复用子树
 			if structuralPriming {
 				structuralPriming = false
-				return // 首次接线由 Open 画过首帧
+				return // 首次接线由 Render 画过首帧
 			}
 			if !a.closed {
 				_ = a.Draw()
@@ -181,6 +187,33 @@ func (a *App) BindReactive(effect func(func()) gxscene.Computation) {
 		})
 	}
 	a.inst.BindStructural(structuralEffect)
+}
+
+// disposeReactive 清理内部聚合 effect；结构插槽句柄由 inst.Dispose 负责。
+func (a *App) disposeReactive() {
+	for _, c := range a.reactive {
+		c.Dispose()
+	}
+	a.reactive = nil
+}
+
+// Draw 立即把当前场景树绘制一帧到窗口。Render 之前调用为 no-op。
+func (a *App) Draw() error {
+	if a.closed || a.inst == nil {
+		return nil
+	}
+	return a.win.Draw(a.inst.Root())
+}
+
+// Update 触发场景树细粒度更新（转发 Instance.Update），成功后重绘一帧。
+// 返回本次实际写入的节点数（与 Instance.Update 一致）。
+func (a *App) Update() int {
+	if a.closed || a.inst == nil {
+		return 0
+	}
+	n := a.inst.Update()
+	_ = a.Draw()
+	return n
 }
 
 // Run 进入窗口事件循环，直到窗口关闭。Headless 后端立即返回 nil。
@@ -198,17 +231,15 @@ func (a *App) Close() error {
 	}
 	a.closed = true
 	// 先停掉响应式订阅，避免关闭过程中 signal 写入触发已关闭窗口的重绘。
-	for _, c := range a.reactive {
-		c.Dispose()
-	}
-	a.reactive = nil
+	a.disposeReactive()
 	// 清理 scene 层为动态结构插槽（Branch/For）建立的 effect 与元素 Owner。
-	// BindStructural 的句柄存在 inst.comps 中，不由 a.reactive 覆盖。
-	a.inst.Dispose()
+	if a.inst != nil {
+		a.inst.Dispose()
+	}
 	return a.win.Close()
 }
 
-// Instance 返回底层场景树实例（供 SetPart / SetGetter 等高级用法）。
+// Instance 返回底层场景树实例（Render 之前为 nil；供 SetPart / SetGetter 等高级用法）。
 func (a *App) Instance() *gxscene.Instance { return a.inst }
 
 // Window 返回窗口后端（供特定后端的额外 API 使用）。
