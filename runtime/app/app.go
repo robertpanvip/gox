@@ -278,6 +278,14 @@ func (a *App) EnableChanges() {
 	}
 }
 
+// SetChildDiffer 注入自定义子节点 diff 策略，覆盖 host 内建算法（nil 恢复内建）。
+// 后端若已有更高效的 diff，可用它直接产出协议 Change，避免 host 再跑一遍。
+func (a *App) SetChildDiffer(d gxscene.ChildDiffer) {
+	if a != nil && a.inst != nil {
+		a.inst.SetChildDiffer(d)
+	}
+}
+
 // Changes 返回自上次 TakeChanges 以来的增量变更（副本，不清空）。
 // 每条变更用 Node.ID 定位，后端可选消费做增量重绘，也可忽略继续全量 Draw。
 func (a *App) Changes() []gxscene.Change {

@@ -355,3 +355,86 @@ func TestForEmitsFineGrainedChanges(t *testing.T) {
 		t.Fatalf("列表重排应产生 MoveChild: %v", reordered)
 	}
 }
+
+// 后端注入自己的 diff 策略后，应覆盖内建算法（不再发内建的 MoveChild/InsertBefore）。
+func TestCustomChildDifferOverridesBuiltin(t *testing.T) {
+	parent := &Node{ID: "p", Kind: "#frag"}
+	a := &Node{ID: "a", Kind: "div"}
+	b := &Node{ID: "b", Kind: "div"}
+	parent.Children = []*Node{a, b}
+
+	sink := newChangeSink()
+	sink.enable()
+	called := 0
+	sink.setDiffer(func(p *Node, old, next []*Node, emit func(Change)) {
+		called++
+		// 自定义策略：只发一条 ReplaceChildren（模拟"用自己的镜像树整块重画"）。
+		emit(Change{Kind: ChangeReplaceChildren, NodeID: p.ID})
+	})
+
+	diffChildren(sink, parent, parent.Children, []*Node{b, a})
+	changes := sink.take()
+
+	if called != 1 {
+		t.Fatalf("自定义 diff 应被调用一次, got %d", called)
+	}
+	if countKind(changes, ChangeReplaceChildren) != 1 || len(changes) != 1 {
+		t.Fatalf("应只用自定义策略产出的指令: %v", changes)
+	}
+	if countKind(changes, ChangeMoveChild) != 0 {
+		t.Fatalf("不应再走内建 MoveChild: %v", changes)
+	}
+}
+
+// setDiffer(nil) 恢复内建 diff。
+func TestSetDifferNilRestoresBuiltin(t *testing.T) {
+	parent := &Node{ID: "p", Kind: "#frag"}
+	a := &Node{ID: "a", Kind: "div"}
+	b := &Node{ID: "b", Kind: "div"}
+	parent.Children = []*Node{a, b}
+
+	sink := newChangeSink()
+	sink.enable()
+	sink.setDiffer(func(p *Node, old, next []*Node, emit func(Change)) {
+		emit(Change{Kind: ChangeReplaceChildren, NodeID: p.ID})
+	})
+	sink.setDiffer(nil) // 恢复内建
+
+	diffChildren(sink, parent, parent.Children, []*Node{b, a})
+	changes := sink.take()
+	if countKind(changes, ChangeMoveChild) == 0 {
+		t.Fatalf("nil 应恢复内建 MoveChild: %v", changes)
+	}
+}
+
+// Instance.SetChildDiffer 作用于整棵共享 sink（含 For 列表项子实例）。
+func TestSetChildDifferOnInstanceCoversTree(t *testing.T) {
+	users := signal.New([]fgUser{{1, "Tom"}})
+	called := 0
+	f := NewFor(
+		func() []any {
+			out := []any{}
+			for _, u := range users() {
+				out = append(out, u)
+			}
+			return out
+		},
+		func(v any) any { return v.(fgUser).id },
+		func(v any) *Instance {
+			u := v.(fgUser)
+			return Render(fgItemTpl(), func() any { return u.name })
+		},
+	)
+	view := Render(fgForTpl(), func() any { return f })
+	view.BindReactive(signal.Effect)
+	view.EnableChanges()
+	view.SetChildDiffer(func(p *Node, old, next []*Node, emit func(Change)) {
+		called++
+	})
+	view.TakeChanges()
+
+	users([]fgUser{{1, "Tom"}, {2, "Jack"}}) // 列表新增
+	if called == 0 {
+		t.Fatal("注入到根实例的 diff 策略应覆盖 For 列表项")
+	}
+}

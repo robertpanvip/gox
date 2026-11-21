@@ -79,15 +79,34 @@ type Change struct {
 	Value    any
 }
 
+// ChildDiffer 是子节点 diff 策略：给定父节点与嫁接前/后的子节点切片，产出有序的
+// 逐节点变更指令（通过 emit 回调）。后端可注入自己的实现覆盖 host 内建算法——
+// 例如后端维护了自己的镜像树、已有更高效的 diff，就不必再跑 host 这一遍。
+//
+// 策略只负责"算出哪些子节点变了"，命中/布局/绘制仍 100% 归后端；产出的仍是
+// 协议定义的 Change，因此注入策略不改变协议面，老后端不注入则走内建、零改动。
+type ChildDiffer func(parent *Node, old, next []*Node, emit func(Change))
+
 // changeSink 是线程安全的变更缓冲区。根 Instance 创建，所有子实例共享——
 // 组件、条件分支、keyed 列表里发生的变更都汇入同一条有序流。
 type changeSink struct {
 	mu      sync.Mutex
 	enabled bool
 	changes []Change
+	differ  ChildDiffer // nil 表示使用 host 内建 LIS diff
 }
 
 func newChangeSink() *changeSink { return &changeSink{} }
+
+// setDiffer 注入/清除子节点 diff 策略（nil 恢复内建）。作用于整棵共享 sink。
+func (s *changeSink) setDiffer(d ChildDiffer) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.differ = d
+	s.mu.Unlock()
+}
 
 // enable 打开记录。默认关闭：不消费增量的后端完全不受影响（零分配、零开销）。
 func (s *changeSink) enable() {
@@ -138,6 +157,17 @@ func (s *changeSink) peek() []Change {
 func (i *Instance) EnableChanges() {
 	if i != nil {
 		i.changes.enable()
+	}
+}
+
+// SetChildDiffer 注入自定义子节点 diff 策略，覆盖 host 内建算法。
+// 传 nil 恢复内建。作用于整棵共享 sink（含组件/分支/列表项），可在任意时刻调用。
+//
+// 后端若已有自己的镜像树与更高效的 diff，可用它直接产出协议 Change，避免 host
+// 再跑一遍内建 LIS；不调用则行为不变。策略只算"哪些子节点变了"，不碰命中/布局/绘制。
+func (i *Instance) SetChildDiffer(d ChildDiffer) {
+	if i != nil {
+		i.changes.setDiffer(d)
 	}
 }
 
@@ -204,9 +234,26 @@ func nodeID(n *Node) string {
 
 // ---------------- 逐节点 children diff ----------------
 //
-// diffChildren 比较 parent 的旧子节点序列 old 与新序列 next，把"逐节点增删/移动"
-// 记录成有序指令流。它是被移除的 vdom Diff 里"哪些子节点变了"那部分的轻量回归，
-// 但**只作用于单个动态插槽的 children**，不重建整棵树、不产生 createElement 调用。
+// diffChildren 是策略分派入口：若后端通过 SetChildDiffer 注入了自己的 diff 算法，
+// 交由它产出指令；否则走 host 内建的 LIS diff。所有结构更新路径都经过这里。
+func diffChildren(sink *changeSink, parent *Node, old, next []*Node) {
+	if sink == nil || parent == nil {
+		return
+	}
+	sink.mu.Lock()
+	differ := sink.differ
+	sink.mu.Unlock()
+	if differ != nil {
+		differ(parent, old, next, func(c Change) { sink.add(c) })
+		return
+	}
+	builtinDiffChildren(sink, parent, old, next)
+}
+
+// builtinDiffChildren 是 host 内建的逐节点 diff：比较 parent 的旧子节点序列 old
+// 与新序列 next，把"逐节点增删/移动"记录成有序指令流。它是被移除的 vdom Diff 里
+// "哪些子节点变了"那部分的轻量回归，但**只作用于单个动态插槽的 children**，
+// 不重建整棵树、不产生 createElement 调用。
 //
 // 复用判定用 *Node 指针身份（不是仅用 ID）：常驻子树、keyed 列表项复用同一指针，
 // 标量/文本值变化会生成新 *Node——于是"同位置内容变了"会被正确识别为删+插，
@@ -218,7 +265,7 @@ func nodeID(n *Node) string {
 // BeforeID 始终是右侧已就位的节点——按序 apply 后即得 next 的顺序。
 //
 // 边界：host 只描述结构变化，不做命中/布局/绘制；后端可忽略这些指令继续全量 Draw。
-func diffChildren(sink *changeSink, parent *Node, old, next []*Node) {
+func builtinDiffChildren(sink *changeSink, parent *Node, old, next []*Node) {
 	if sink == nil || parent == nil {
 		return
 	}

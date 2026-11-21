@@ -165,6 +165,19 @@ for _, ch := range app.TakeChanges() { // 取走自上帧以来的有序变更
 - 这是 opcode 常驻树 + 细粒度 `Update()` 的自然产物——`Update` 本来就算出"哪些插槽变了"，这里只是暴露出来，**不像被移除的 vdom 后端那样每次重建整树**；细粒度 diff 只作用于单个动态插槽的 children，不产生 `createElement`、不重建整棵树。
 - 后端可忽略它、继续每次全量 `Draw(root)`（零改动），也可消费它做增量重绘。`ReplaceChildren` 作为兜底保留：后端即便只实现这一条、忽略其余细粒度指令，也能正确工作（只是退化为整块重读）。
 
+**diff 策略可替换**：host 内建的 LIS diff 只是默认实现。若后端已维护自己的镜像树、或有更契合自身渲染模型的高效 diff，可用 `SetChildDiffer` 注入自己的算法直接产出协议 `Change`，覆盖内建——host 不再跑那一遍 LIS：
+
+```go
+app.SetChildDiffer(func(parent *gxscene.Node, old, next []*gxscene.Node, emit func(gxscene.Change)) {
+    // 用后端自己的 diff 算出增删/移动，通过 emit 产出 Change
+    emit(gxscene.Change{Kind: gxscene.ChangeReplaceChildren, NodeID: parent.ID})
+})
+app.SetChildDiffer(nil) // 恢复 host 内建
+```
+
+- 策略作用于整棵共享 sink（组件/分支/列表项全覆盖），任意时刻可设；不设则行为不变。
+- 注入只替换"如何算 diff"，`Change` 协议与字段不变；策略只描述结构变化，命中/布局/绘制仍归后端。
+
 > 三样都不触碰命中/布局/绘制：ID 是身份、Layout 是空容器、Changes 是"什么变了"的数据描述。决策与实现仍 100% 归后端。
 
 ## 3. 拆成两个项目如何跑通
