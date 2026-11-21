@@ -210,3 +210,31 @@ func TestConcurrentCheckAndReconfigure(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+func TestCheckFilesMultiPackageDiagnosticFile(t *testing.T) {
+	// 两个包：main 依赖 util；util 内有类型错误。诊断的 File 应指向 util/math.go，
+	// CLI 据此回投到 util/math.gx。
+	c := New(8)
+	c.SetToolchain("go", "GOTOOLCHAIN=go1.27.3")
+	c.SetModulePath("example.com/proj")
+	files := []SourceFile{
+		{Name: "main.go", Source: "package main\n\nimport \"example.com/proj/util\"\nfunc main() { println(util.Add(1, 2)) }\n"},
+		{Name: "util/math.go", Source: "package util\n\nfunc Add(a, b int) int {\n    var s string = 123\n    return a + b + s\n}\n"},
+	}
+	diags, err := c.CheckFiles(context.Background(), files)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(diags) == 0 {
+		t.Fatal("util 包内类型错误应产生诊断")
+	}
+	foundUtil := false
+	for _, d := range diags {
+		if d.File == "util/math.go" && d.Line == 4 {
+			foundUtil = true
+		}
+	}
+	if !foundUtil {
+		t.Errorf("诊断 File 应指向 util/math.go:4，得到: %v", diags)
+	}
+}

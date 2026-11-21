@@ -57,7 +57,9 @@ pub func f(){ h.newRequest("GET","/",nil) }`, []string{"h.NewRequest"}, nil},
 
 		// ---- 集合链式与提升（4）----
 		{"切片提升", "package main\npub func f(){ xs := []int{1,2}; _ = xs }", []string{"list.List[int]"}, nil},
-		{"链式换型", "package main\npub func f(){ xs:=[]int{1}; ys:=xs.map(fn).filter(g) }\nfunc fn(x int)int{return x}\nfunc g(x int)bool{return true}", []string{"xs.Map(fn).Filter(g)"}, nil},
+		// 相邻 .map(f).filter(g) 由 fuseMapFilter 融合为单次遍历的 MapFilter
+		// （见 compiler_test.go TestMapFilterFusion 与 runtime/list.MapFilter）。
+		{"链式换型", "package main\npub func f(){ xs:=[]int{1}; ys:=xs.map(fn).filter(g) }\nfunc fn(x int)int{return x}\nfunc g(x int)bool{return true}", []string{"xs.MapFilter(fn, g)"}, []string{"xs.Map(fn)", ".Filter(g)"}},
 		{"reduce", "package main\npub func f(){ xs:=[]int{1}; _=xs.reduce(0,add) }\nfunc add(a,b int)int{return a+b}", []string{"xs.Reduce(0,add)"}, nil},
 		{"边界不误伤", "package main\npub func f(){ a:=[3]int{1,2,3}; x:=a[0]; s:=a[1:2]; m:=map[string]int{}; _,_,_,_=x,s,m,a }", nil, []string{"[3]list.List", "a[list.List"}},
 

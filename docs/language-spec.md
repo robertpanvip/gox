@@ -8,6 +8,8 @@ GoX（`.gx`）= Go 语法 + 十三项语法糖（pub / enum / JSX / 外部符号
 
 转译器对**小写形式**做机械还原（`upperFirst`），对**已大写的标识符原样保留**，全程不读取第三方包符号表、不做类型推导。因此用别人的 Go 代码时按真实拼写写即可（`http.NewRequest`、`r.URL`、`http.StatusOK`）；也兼容旧的小写写法（`newRequest`、`uRL`、`itoa`），由 `upperFirst` 还原。收益是零依赖、零歧义、行为完全可预测。
 
+**大小写还原按 import 来源分流**（见 §4.1）：外部 Go 包维持上面的 `upperFirst` 兼容规则；本地 GX 模块则严格查被导入方的 `pub` 导出表，不做猜测——写错大小写时，GX 检查器直接报出「符号/字段大小写错误，应为 X」的语义诊断（含正确拼写与源码坐标），无需等 `go build` 的 `undefined`/`unexported`。产物始终原样保留书写形式，严格不改赌。
+
 ## 1. pub 可见性
 
 - `pub` 作用于紧随的声明：`func` / `type` / `var` / `const` / `enum` / struct 字段 / interface 方法。
@@ -81,6 +83,25 @@ pub enum perm { read = 1 << iota, write, exec }  // 位标志 1,2,4
 
 作用域防误伤：转译器在 pub 转换后收集本文件所有小写声明符号（参数、局部变量、私有字段/方法）。selector 右侧若命中自己的 pub 符号用其导出名；命中私有符号保持小写；否则（外部字段/方法）`upperFirst`。裸标识符（内置函数等）一律不碰。
 
+### 4.1 import 来源与大小写还原
+
+`import` 的来源决定 selector 右侧与复合字面量字段如何还原大小写：
+
+| 来源 | 判定 | selector / 字段还原 |
+|---|---|---|
+| **外部 Go 包** | 路径不是本地 `.gx` 包（或 `-prefer go`） | 小写形式机械 `upperFirst`，兼容旧写法 |
+| **本地 GX 模块** | 路径命中项目内某组 `.gx`（模块路径 + 目录推导） | **严格查被导入方 `pub` 导出表**，不猜测 |
+
+GX 来源规则：
+
+- 顶层符号：`util.add(...)` → 查被导入方导出表 `add → Add` → `util.Add(...)`。
+- 已用导出名：`util.Add(...)` 命中「已用导出名」，原样保留（支持渐进迁移）。
+- **写错大小写**：`util.ADD(...)` 不在表中，但对导出表做大小写不敏感匹配能**唯一**定位到 `Add` → GX 检查器报 `import-case: 符号 "ADD" 大小写错误：包 … 导出的是 "Add"`（带源码坐标）。产物仍原样保留，不改赌。若存在多个大小写候选则不猜测、不诊断。
+- struct 字段：被导入方 `pub type box struct { pub value int }` 提供限定名导出 `box.value → Value`；导入方 `util.box{value: 9}` → `util.Box{Value: 9}`。字段写错大小写 `util.box{VALUE: 9}` 同样按限定名大小写不敏感唯一匹配，报 `import-field-case: 字段 "VALUE" 大小写错误：类型 box 导出的是 "Value"`。
+- 私有符号 / 真拼写错误：被导入方未 `pub` 或书写与任何导出名都不近似，不进大小写诊断，保持原样由 Go 可见性规则兜底。
+- **检查器可见**：大小写诊断进入 GX 语义层 `Analysis`，`gox check -root`、`gox build`（项目模式）与 LSP 都能直接报出，无需等 `go build`。
+- 歧义裁决：本地 `.gx` 与 Go 包同名时默认本地 GX 优先，`-prefer go` 切到 Go 来源（逃生开关）。
+
 ## 5. 集合链式调用
 
 所有切片类型 `[]T` **全局提升**为 `list.List[T]`，获得链式方法（Go 1.27 泛型方法，Map/Reduce 可换型）：
@@ -144,7 +165,36 @@ println(doubled)                                   // → println(doubled())，�
 
 - `.gx ↔ .go` 双向位置映射（最近邻），可 JSON 序列化。
 - LSP：initialize / didOpen / didChange / definition / hover / completion / documentSymbol / rename，诊断经 sourcemap 回投到 `.gx`。
-- 编译检查：真实 `go build`（可取消 context + LRU 缓存），诊断回投到 `.gx` 行号。支持注入 go.mod `replace` 以解析本地运行时。
+- 编译检查：真实 `go build`（可取消 context + LRU 缓存），诊断回投到 `.gx` 行号。支持注入 go.mod `replace` 以解析本地运行时；跨文件项目模式下，多份产物一起 `go build`，诊断按产物文件回投到**对应 `.gx`（含子目录包，如 `util/math.gx`）**的正确行列。
+
+## 13. 跨文件项目（GX 导入 GX）
+
+单文件转译是默认路径（零回归）。要导入另一份 `.gx`，用项目模式：
+
+```bash
+gox build main.gx -root <项目根> [-prefer gx|go] [-check]
+```
+
+- `-root` 指定项目根（含 `go.mod`），扫描其下所有 `.gx`，按 `package` 分组为 GX 包；包的逻辑 import 路径 = `go.mod` 的 module 路径 + 目录相对路径。
+- `-prefer` 裁决本地 `.gx` 与 Go 包同名冲突（`gx` 默认本地优先 / `go` 走 Go 来源）。
+- 依赖图按 import 建立，拓扑序决定转译顺序（被依赖方先转译，拿到导出表后再转译导入方）；循环依赖报出完整 `.gx` 路径链。
+- 每份 `.gx` 转译为同目录的 `.go`（如 `util/math.gx` → `util/math.go`），产物是标准 Go 包，交给 Go 工具链跨包类型检查与链接。
+- `-check` 对所有产物一起 `go build`，类型错误回投到正确的 `.gx` 文件与行。
+- **跨文件大小写错误由检查器直接报出**：`gox check main.gx -root <项目根>` 逐文件跑 GX 语义检查，符号/字段大小写错误报 `import-case` / `import-field-case`（含正确拼写与 `.gx` 坐标）；`gox build`（项目模式，无论是否带 `-check`）也会把这些诊断与生成结果一起输出。诊断不依赖 `go build`，产物严格保持书写原样。
+
+示例（`go.mod`: `module example.com/proj`）：
+
+```gx
+// util/math.gx
+package util
+pub func add(a, b int) int { return a + b }
+```
+```gx
+// main.gx
+package main
+import "example.com/proj/util"
+func main() { println(util.add(1, 2)) }   // → util.Add(1, 2)
+```
 
 ## 与 Go 的关系
 

@@ -12,21 +12,61 @@ import "strconv"
 //
 // Scope 在 pub 转换之后收集：pub 声明的名字此时已大写，不会被误收为私有名。
 
-type Scope struct {
-	imports       map[string]bool // import 包名 / 别名
-	private       map[string]bool // 本文件小写声明的名字（参数/局部变量/私有字段/私有方法/私有类型等）
-	privateFields map[string]bool // 仅 struct 字段与方法名——真正可能出现在 selector 右侧的私有符号（L-7）
+// ImportOrigin 标记一条 import 的来源。
+//   - ImportGo: 外部/运行时 Go 包，维持 upperFirst 兼容旧写法。
+//   - ImportGX: 本地 GX 模块，符号大小写严格由被导入方 pub 决定。
+type ImportOrigin uint8
+
+const (
+	ImportGo ImportOrigin = iota
+	ImportGX
+)
+
+// ImportInfo 是单条 import 的解析结果。
+//   - Pkg: 源码中 selector 左侧使用的包名/别名；
+//   - Path: import 路径（未加引号）；
+//   - Origin: Go / GX；
+//   - Exports: 仅 GX 来源有效——「书写方使用的名字 → 被导入方导出名」。
+//     由被导入方 pub 表严格给出，不做 upperFirst 猜测。
+type ImportInfo struct {
+	Pkg     string
+	Path    string
+	Origin  ImportOrigin
+	Exports map[string]string
 }
 
-func (s *Scope) HasImport(name string) bool      { return s.imports[name] }
+type Scope struct {
+	imports       map[string]ImportInfo // import 包名 / 别名 → 解析结果（升级自 map[string]bool）
+	private       map[string]bool       // 本文件小写声明的名字（参数/局部变量/私有字段/私有方法/私有类型等）
+	privateFields map[string]bool       // 仅 struct 字段与方法名——真正可能出现在 selector 右侧的私有符号（L-7）
+}
+
+func (s *Scope) HasImport(name string) bool { _, ok := s.imports[name]; return ok }
+
+// ImportOf 返回 import 的解析结果；第二个返回值表示是否存在该 import。
+func (s *Scope) ImportOf(name string) (ImportInfo, bool) {
+	info, ok := s.imports[name]
+	return info, ok
+}
 func (s *Scope) IsPrivate(name string) bool      { return s.private[name] }
 func (s *Scope) IsPrivateField(name string) bool { return s.privateFields[name] }
 
 // collectScope 在 pub 转换之后调用；此时 pub 名已大写，天然排除。
-func collectScope(toks []Token) *Scope {
-	s := &Scope{imports: map[string]bool{}, private: map[string]bool{}, privateFields: map[string]bool{}}
+// 单文件模式（无模块上下文）下所有 import 视为 Go 来源，行为与改造前一致。
+func collectScope(toks []Token) *Scope { return collectScopeWithImports(toks, nil) }
+
+// collectScopeWithImports 收集作用域，并按 imports（import 路径 → ImportInfo）为
+// 每条 import 打上来源标签。imports 为 nil 或某路径未命中时，默认按 Go 来源处理，
+// 保证单文件转译零回归。Pkg 一律以源码实际使用的包名/别名覆盖。
+func collectScopeWithImports(toks []Token, imports map[string]ImportInfo) *Scope {
+	s := &Scope{imports: map[string]ImportInfo{}, private: map[string]bool{}, privateFields: map[string]bool{}}
 	for _, sp := range collectImportSpecs(toks) {
-		s.imports[sp.pkg] = true
+		info, ok := imports[sp.path]
+		if !ok {
+			info = ImportInfo{Path: sp.path, Origin: ImportGo}
+		}
+		info.Pkg = sp.pkg
+		s.imports[sp.pkg] = info
 	}
 	s.collectPrivate(toks)
 	return s
@@ -101,6 +141,36 @@ func collectImportSpecs(toks []Token) []importSpec {
 		}
 	}
 	return specs
+}
+
+// ScanPackageName 返回源码的 package 声明名；找不到返回空串。
+// 供 pkg/module 按 package 分组 .gx 文件复用。
+func ScanPackageName(src string) string {
+	toks := New(src).AllTokens()
+	for i := 0; i < len(toks); i++ {
+		if !toks[i].is("package") {
+			continue
+		}
+		j := i + 1
+		for j < len(toks) && (toks[j].Kind == Space || toks[j].Kind == Newline || toks[j].Kind == Comment) {
+			j++
+		}
+		if j < len(toks) && toks[j].Kind == Ident {
+			return toks[j].Text
+		}
+	}
+	return ""
+}
+
+// ScanImports 返回源码中所有 import 路径（未加引号、已解析别名/去引号）。
+// 供 pkg/module 建立依赖图复用——import 语法的健壮解析只在本包维护一份。
+func ScanImports(src string) []string {
+	specs := collectImportSpecs(New(src).AllTokens())
+	out := make([]string, 0, len(specs))
+	for _, sp := range specs {
+		out = append(out, sp.path)
+	}
+	return out
 }
 
 // stringsTrim 是 strings.Trim 的小副本，避免为此再引入 strings 包（本文件只用这一处）。
