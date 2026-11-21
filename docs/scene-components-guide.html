@@ -191,7 +191,7 @@
     <span class="kw">signal</span> count = <span class="ty">0</span>
     <span class="kw">signal</span> visible = <span class="kw">true</span>
     <span class="kw">signal</span> users = []<span class="ty">user</span>{{<span class="ty">1</span>, <span class="st">"Tom"</span>}, {<span class="ty">2</span>, <span class="st">"Jack"</span>}}
-    doubled := Signal.<span class="fn">computed</span>(() =&gt; count() * <span class="ty">2</span>)
+    doubled := Signal.<span class="fn">computed</span>(() =&gt; count * <span class="ty">2</span>)
 
     <span class="cm">// 应用入口：open 只收配置（裸对象字面量）；render 收建树函数，内部建根 Owner + 接线</span>
     app, err := gxapp.<span class="fn">open</span>({ Title: title, Width: width, Height: cfg.height })
@@ -200,7 +200,7 @@
     app.<span class="fn">render</span>(() =&gt; &lt;<span class="jx">div</span> <span class="fn">id</span>=<span class="st">"app"</span>&gt;
         &lt;<span class="jx">h1</span>&gt;{title}&lt;/<span class="jx">h1</span>&gt;
         <span class="kw">if</span> visible {
-            &lt;<span class="jx">Stat</span> <span class="fn">label</span>=<span class="st">"count"</span> <span class="fn">value</span>={count()}/&gt;
+            &lt;<span class="jx">Stat</span> <span class="fn">label</span>=<span class="st">"count"</span> <span class="fn">value</span>={count}/&gt;
             &lt;<span class="jx">ul</span>&gt;&lt;<span class="jx">For</span> <span class="fn">each</span>={users} <span class="fn">key</span>={(u) =&gt; u.id}&gt;{(u) =&gt; &lt;<span class="jx">li</span>&gt;{u.name}&lt;/<span class="jx">li</span>&gt;}&lt;/<span class="jx">For</span>&gt;&lt;/<span class="jx">ul</span>&gt;
         } <span class="kw">else</span> {
             &lt;<span class="jx">b</span>&gt;Hidden&lt;/<span class="jx">b</span>&gt;
@@ -209,7 +209,7 @@
 
     <span class="cm">// 批处理：同一帧内 count→5、visible→false，只重绘一次（多语句用花括号 body）</span>
     <span class="fn">Signal</span>.<span class="fn">batch</span>(() =&gt; { count(<span class="ty">5</span>); visible(<span class="kw">false</span>) })
-    fmt.<span class="fn">println</span>(doubled())  <span class="cm">// 10</span>
+    fmt.<span class="fn">println</span>(doubled)  <span class="cm">// 10，signal 读裸写</span>
 }</pre>
 <div class="note"><b>实测输出要点：</b>初始渲染出 <code>"Tom"</code>/<code>"Jack"</code> 列表；<code>visible=false</code> 后条件分支切到 <code>Hidden</code>；<code>doubled()</code> 得到 <code>10</code>。<code>&lt;For&gt;</code> 的 render 参数 <code>(u)</code> 未写类型——编译器从 <code>each={users}</code> 的 <code>[]user</code> 自动推断出元素类型。</div>
 
@@ -262,7 +262,7 @@ app.<span class="fn">render</span>(() =&gt; &lt;<span class="jx">div</span>&gt;{
 <p>组件函数<b>只在建树时执行一次</b>——状态是组件「自己的」，写在组件内部而非 <code>main</code> 里，靠 signal + effect 保鲜。副作用用 <code>Signal.onMount</code> 启动、<code>Signal.onCleanup</code> 清理，二者归属 <code>app.render</code> 建立的根 Owner，<code>app.close</code> 时级联执行。完整可运行示例见 <code>examples/jsxapp-solid.gx</code>（组件内定时器自增，close 时打印 unmounted）。</p>
 <pre class="code"><span class="kw">pub func</span> <span class="fn">Counter</span>(props gxscene.<span class="ty">props</span>) *gxscene.<span class="ty">instance</span> {
     <span class="kw">signal</span> count = <span class="ty">0</span>   <span class="cm">// 组件局部状态</span>
-    <span class="kw">let</span> doubled = <span class="fn">Signal</span>.<span class="fn">computed</span>(() =&gt; count() * <span class="ty">2</span>)
+    <span class="kw">let</span> doubled = <span class="fn">Signal</span>.<span class="fn">computed</span>(() =&gt; count * <span class="ty">2</span>)
     <span class="fn">Signal</span>.<span class="fn">effect</span>(() =&gt; { fmt.<span class="fn">println</span>(<span class="st">"tick"</span>, count, doubled) })  <span class="cm">// 状态变化逻辑</span>
     stop := <span class="fn">make</span>(<span class="kw">chan</span> <span class="kw">struct</span>{})
     <span class="fn">Signal</span>.<span class="fn">onMount</span>(() =&gt; {

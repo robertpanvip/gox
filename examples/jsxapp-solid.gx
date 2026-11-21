@@ -19,9 +19,10 @@ import (
 pub func Counter(props gxscene.props) *gxscene.instance {
     name := gxscene.get[string](props, "name")
 
-    // 组件局部状态：源 signal + 派生 computed（不在 main 里）
+    // 组件局部状态：源 signal + 派生 computed（不在 main 里）。
+    // signal 读一律裸写（count * 2），编译器自动补 () 并建立依赖。
     signal count = 0
-    let doubled = Signal.computed(() => count() * 2)
+    let doubled = Signal.computed(() => count * 2)
 
     // 组件自己的副作用：count 变化即重跑，打印状态变化逻辑
     Signal.effect(() => {
@@ -37,7 +38,7 @@ pub func Counter(props gxscene.props) *gxscene.instance {
             for {
                 select {
                 case <-ticker.c:
-                    if count() >= 3 { return }
+                    if count >= 3 { return }
                     count += 1
                 case <-stop:
                     return

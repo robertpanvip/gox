@@ -731,18 +731,18 @@ import (
 )
 pub func Counter(props gxscene.props) *gxscene.instance {
 	signal count = 0
-	let doubled = Signal.computed(() => count() * 2)
-	let same = Signal.computed(() => count())
-	Signal.effect(func() { fmt.println("tick", count, doubled, same) })
+	let doubled = Signal.computed(() => count * 2)
+	let same = Signal.computed(() => count)
+	Signal.effect(() => { fmt.println("tick", count, doubled, same) })
 	stop := make(chan struct{})
-	Signal.onMount(func() {
+	Signal.onMount(() => {
 		go func() {
 			ticker := time.newTicker(10 * time.millisecond)
 			defer ticker.stop()
 			for {
 				select {
 				case <-ticker.c:
-					if count() >= 3 { return }
+					if count >= 3 { return }
 					count += 1
 				case <-stop:
 					return
@@ -750,7 +750,7 @@ pub func Counter(props gxscene.props) *gxscene.instance {
 			}
 		}()
 	})
-	Signal.onCleanup(func() { close(stop); fmt.println("cleanup", count) })
+	Signal.onCleanup(() => { close(stop); fmt.println("cleanup", count) })
 	return <div><b>{count}</b><i>{doubled}</i></div>
 }
 func main() {

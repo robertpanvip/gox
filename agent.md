@@ -36,7 +36,7 @@ Gox 是一个把 `.gx` 转译成标准 Go 的编译器。`.gx` = Go 语法 + 一
 3. **`pub` 组件名与 JSX 标签都大写开头**：组件声明写 `pub func Stat(...)`，调用写 `<Stat/>`。JSX 里首字母大写 = 组件、小写 = 原生 HTML 标签，这是硬编码判定，不能把组件写成小写标签。
 4. **本文件私有类型写小写**：`type cardProps struct{...}` 保持私有小写；`pub type` 才导出。
 5. **裸标识符不碰**：内置函数等裸标识符一律不改，不要给它们加大小写。
-6. **回调用箭头函数**：`Signal.computed` / `Signal.effect` / `batch` / `onMount` / `onCleanup` / 集合回调（`map`/`filter`）等一律写箭头——单语句 `() => expr` / `x => expr`，多语句 `() => { stmt; stmt }`（花括号 body，生成 `func(){...}`），贴近 SolidJS/JS 习惯，别写 `func() T { return ... }`。编译器从 body 反推参数与返回类型，包括 `computed(() => count())` 单点 signal getter（从 signal 声明类型反查，不降级 `any`）；带参数的 `createRoot((o *Signal.owner) => { ... })` 保留显式类型标注。只有极少数需要显式多返回值的场合才用 `func` 字面量。
+6. **回调用箭头函数**：`Signal.computed` / `Signal.effect` / `batch` / `onMount` / `onCleanup` / 集合回调（`map`/`filter`）等一律写箭头——单语句 `() => expr` / `x => expr`，多语句 `() => { stmt; stmt }`（花括号 body，生成 `func(){...}`），贴近 SolidJS/JS 习惯，别写 `func() T { return ... }`。编译器从 body 反推参数与返回类型，包括 `computed(() => count)` 单点 signal getter（裸写，从 signal 声明类型反查，不降级 `any`）；带参数的 `createRoot((o *Signal.owner) => { ... })` 保留显式类型标注。只有极少数需要显式多返回值的场合才用 `func` 字面量。
 
 ### 反面教材（本项目真实犯过的错，禁止重演）
 
@@ -125,7 +125,7 @@ Signal.batch(() => { count(5); visible(false) })
 ```gx
 pub func Counter(props gxscene.props) *gxscene.instance {
     signal count = 0
-    let doubled = Signal.computed(() => count() * 2)
+    let doubled = Signal.computed(() => count * 2)
     Signal.effect(() => { fmt.println("tick", count, doubled) })
     stop := make(chan struct{})
     Signal.onMount(() => {
@@ -141,7 +141,7 @@ func main() {
 }
 ```
 
-约束：组件名大写开头（`pub func Counter` + `<Counter/>`）；JSX 里 signal 读 `count` 自动补 `()`；`onCleanup/onMount` 必须写在组件函数体内（建树时注册到 Owner），不要在 effect 回调外提前调用。
+约束：组件名大写开头（`pub func Counter` + `<Counter/>`）；**signal 读一律裸写**（`count * 2`、`if count >= 3`、`{count}`），编译器自动补 `()` 并建立依赖，不要手写 `count()`；`onCleanup/onMount` 必须写在组件函数体内（建树时注册到 Owner），不要在 effect 回调外提前调用。
 
 约束：分支 selector 必须读 signal 才有响应式；`<For>` 必须提供 `key`；组件内 signal 要经 Props getter 传到叶子插槽才能在写入时更新；app 场景的响应式接线（叶子聚合 effect + 分支/列表结构重绘）全部封装在 `app.render` 内部，源码无需手写 bindReactive；外部包函数的配置参数（如 `gxapp.open({ ... })`）可直接写裸对象字面量——编译器从该包真实 Go 源码 AST 读取期望参数类型并补全（通用机制，见 `pkg/compiler/gosig.go`）。
 
