@@ -230,18 +230,18 @@ API：`CompileScene` / `CompileSceneWithModule`（对应默认的 `Compile` / `C
 
 `gxapp.open(cfg)` 先创建「窗口外壳」并返回 `App`；`app.render(() => <App/>)` 收一个**建树函数**，把 JSX 场景树挂进窗口——类比 SolidJS / React 的 `render(() => <App/>, root)`。建树函数在内部建立的**根 Owner** 下运行，组件里的 `Signal.effect` / `onMount` / `onCleanup` 都归属它，`app.close()` 时级联销毁。
 
-> **源码小写、生成大写**：遵循 GX 的「外部符号按小写书写、编译器还原真实大小写」约定（同 `gxvdom.render`），源码写 `gxapp.open` / `app.render` / `app.close`，生成的 Go 是 `gxapp.Open` / `App.Render` / `App.Close`。配置写**裸对象字面量** `{ ... }`，编译器从 `open` 的真实 Go 源码 AST 推断为 `gxapp.WindowConfig`（通用机制，非特判）。
+> **源码小写、生成大写**：遵循 GX 的「标识符一律小写书写、编译器还原真实大小写」约定（同 `gxvdom.render`），源码写 `gxapp.open` / `app.render` / `app.close`，生成的 Go 是 `gxapp.Open` / `App.Render` / `App.Close`。配置写**裸对象字面量**且字段也小写，如 `gxapp.open({ title: "Demo", width: 800 })`，编译器从 `open` 的真实 Go 源码 AST 推断为 `gxapp.WindowConfig` 并把字段还原成真实拼写（通用机制，非特判；大小写混写、省略可选字段也支持）。
 
 | 步骤 | 参数 / 返回 | 含义 |
 |---|---|---|
-| `gxapp.open(cfg)` | 参数：**窗口配置裸对象** `{ Title, Width, Height, ... }`；返回 `(*App, error)` | 只创建窗口外壳，不收 JSX、不绘制 |
+| `gxapp.open(cfg)` | 参数：**窗口配置裸对象** `{ title, width, height, ... }`（小写，编译器还原真实字段名）；返回 `(*App, error)` | 只创建窗口外壳，不收 JSX、不绘制 |
 | `app.render(build)` | 参数：**建树函数** `() => <App/>`（编译为 `func() any`，返回 `*gxscene.Instance`） | 在根 Owner 下建树、画首帧、完成响应式接线 |
 
 ```gx
 // gox build demo.gx -jsx=scene
 import gxapp "github.com/robertpanvip/gox/runtime/app"
 
-app, err := gxapp.open({ Title: "Demo", Width: 800, Height: 600 })
+app, err := gxapp.open({ title: "Demo", width: 800, height: 600 })
 if err != nil { panic(err) }
 defer app.close()
 app.render(() => <div id="app">hello</div>)
@@ -267,7 +267,7 @@ app.run()
 ```gx
 signal count = 0
 let doubled = Signal.computed(() => count * 2)
-app, _ := gxapp.open({ Title: "Demo", Width: 800, Height: 600 })
+app, _ := gxapp.open({ title: "Demo", width: 800, height: 600 })
 app.render(() => <div><span>{count}</span><b>{doubled}</b></div>)   // 根 Owner 下建树 + 接线
 count = 5                          // 自动更新 + 只画一帧：count=5、doubled=10 一致
 ```

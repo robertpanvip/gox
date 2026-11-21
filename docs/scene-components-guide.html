@@ -126,7 +126,7 @@
 <div class="note">
 <b>五条边界（踩过的坑）：</b>① <b>所有 signal API 用大写 <code>Signal.</code> 前缀</b>——<code>Signal.computed</code> / <code>Signal.effect</code> / <code>Signal.createRoot</code> / <code>Signal.batch</code> 等。<code>Signal</code> 是语法糖占位包名，既避免与 <code>signal</code> 声明关键字混淆，也保证还原；<b>不要</b>写裸 <code>computed(...)</code> 或小写 <code>signal.effect(...)</code>。
 ② <b>组件名大写开头</b>——<code>pub func Stat(...)</code> 配 <code>&lt;Stat/&gt;</code>。JSX 标签首字母大写 = 组件、小写 = 原生 HTML 标签，这是硬编码判定。
-③ <b>配置对象写裸字面量</b>——<code>gxapp.open({ Title: ..., Width: ... })</code>，编译器用 <code>go list</code> + <code>go/parser</code> 读取 <code>gxapp.open</code> 所在包的真实 Go 源码 AST，取出参数类型并补全为 <code>gxapp.WindowConfig</code>（通用机制，对任意外部包函数都有效；读不到时回退匿名 struct）。无需也不应手写 <code>gxapp.windowConfig{...}</code>。
+③ <b>配置对象写裸字面量、字段小写</b>——<code>gxapp.open({ title: ..., width: ... })</code>，字段写小写（大小写混写、省略可选字段也支持），编译器用 <code>go list</code> + <code>go/parser</code> 读取 <code>gxapp.open</code> 所在包的真实 Go 源码 AST，取出参数类型补全为 <code>gxapp.WindowConfig</code> 并把字段还原成真实拼写（通用机制，对任意外部包函数都有效；读不到时回退匿名 struct）。无需也不应手写 <code>gxapp.windowConfig{...}</code>。
 ④ <b>open 与 render 分工</b>——<code>gxapp.open(cfg)</code> 只创建窗口外壳并返回 <code>App</code>，<code>app.render(() =&gt; &lt;App/&gt;)</code> 收一个<b>建树函数</b>（SolidJS 风格）：内部建立根 Owner、画首帧、封装 <code>bindReactive</code>（signal 变化 → 更新 + 重绘，含分支/列表结构重绘），源码无需手写接线。组件内的 <code>Signal.effect</code> / <code>onMount</code> / <code>onCleanup</code> 归属该 Owner，<code>app.close</code> 时级联清理。
 ⑤ <b>回调用箭头函数</b>——<code>Signal.computed(() =&gt; expr)</code> / <code>Signal.effect(() =&gt; ...)</code> / <code>batch</code> / <code>onMount</code> / <code>onCleanup</code> 一律写箭头，贴近 SolidJS 习惯，别写 <code>func() T { return ... }</code>。单语句 <code>() =&gt; expr</code>，多语句 <code>() =&gt; { stmt; stmt }</code>（花括号 body 生成 <code>func(){...}</code>）；编译器从 body 反推类型，<code>() =&gt; count()</code> 单点 signal getter 会从声明类型反查（不降级 <code>any</code>），带参数的 <code>createRoot((o *Signal.owner) =&gt; {...})</code> 保留显式标注。
 </div>
@@ -194,7 +194,7 @@
     doubled := Signal.<span class="fn">computed</span>(() =&gt; count * <span class="ty">2</span>)
 
     <span class="cm">// 应用入口：open 只收配置（裸对象字面量）；render 收建树函数，内部建根 Owner + 接线</span>
-    app, err := gxapp.<span class="fn">open</span>({ Title: title, Width: width, Height: cfg.height })
+    app, err := gxapp.<span class="fn">open</span>({ title: title, width: width, height: cfg.height })
     <span class="kw">if</span> err != nil { <span class="fn">panic</span>(err) }
     <span class="kw">defer</span> app.<span class="fn">close</span>()
     app.<span class="fn">render</span>(() =&gt; &lt;<span class="jx">div</span> <span class="fn">id</span>=<span class="st">"app"</span>&gt;
@@ -252,7 +252,7 @@
 
 <h3>阶段 4 · GUI 调度与生命周期</h3>
 <p>应用入口把「叶子聚合 effect」与「结构插槽接线」封装进 <code>app.render</code>：<code>open(cfg)</code> 先建好窗口外壳，<code>render(() =&gt; &lt;App/&gt;)</code> 在<b>根 Owner</b> 下建树、画首帧并在内部接好响应式——分支/列表切换重建子树后自动画一帧；<code>Signal.batch</code> 合并同一轮多次写入为一次重绘；<code>app.close</code> 销毁根 Owner，级联清理组件 <code>onCleanup</code> 与所有订阅。</p>
-<pre class="code">app, err := gxapp.<span class="fn">open</span>({ Title: <span class="st">"Gox"</span>, Width: <span class="ty">800</span> })
+<pre class="code">app, err := gxapp.<span class="fn">open</span>({ title: <span class="st">"Gox"</span>, width: <span class="ty">800</span> })
 <span class="kw">if</span> err != nil { <span class="fn">panic</span>(err) }
 <span class="kw">defer</span> app.<span class="fn">close</span>()
 app.<span class="fn">render</span>(() =&gt; &lt;<span class="jx">div</span>&gt;{...}&lt;/<span class="jx">div</span>&gt;)  <span class="cm">// 根 Owner 下建树 + 内部响应式接线</span>

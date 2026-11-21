@@ -21,9 +21,9 @@ func main() {
 
     // 打开窗口：只传配置（裸对象字面量），返回 (*App, error)。
     app, err := gxapp.open({
-        Title:  "Gox Counter",
-        Width:  800,
-        Height: 600,
+        title:  "Gox Counter",
+        width:  800,
+        height: 600,
     })
     if err != nil {
         panic(err)

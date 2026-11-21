@@ -54,7 +54,7 @@ app.render(view)
 Signal.createRoot((o *Signal.owner) => { Signal.onCleanup(() => { ... }) })
 view.bindReactive(Signal.effect)
 pub func Stat(props gxscene.props) *gxscene.instance { ... }
-app, _ := gxapp.open({ Title: "Gox", Width: 800 })
+app, _ := gxapp.open({ title: "Gox", width: 800 })
 app.render(() => <div><Stat/></div>)
 ```
 
@@ -71,7 +71,7 @@ app.render(() => <div><Stat/></div>)
 | 模板字符串 | `` `hi ${name}` `` | 编译为字符串拼接 |
 | 参数默认值 | `func f(x int = 5)` | TS 语义，补尾部缺失参数 |
 | Lambda | `x => x+1` | 单表达式 body；类型可推断 |
-| 对象字面量 | `{ title: "Gox", n: 1 }` | 无期望类型→匿名 struct；有期望类型→补全具名类型并校验字段。作为外部包函数实参时（如 `gxapp.open({ Title: ... })`），编译器用 `go list` + `go/parser` 读该包真实 Go 源码 AST 取参数类型（通用机制，非特判；失败则回退匿名 struct） |
+| 对象字面量 | `{ title: "Gox", n: 1 }` | 无期望类型→匿名 struct；有期望类型→补全具名类型并校验字段。作为外部包函数实参时（如 `gxapp.open({ title: ... })`，字段也小写），编译器用 `go list` + `go/parser` 读该包真实 Go 源码 AST 取参数类型并还原字段真实拼写（通用机制，非特判；失败则回退匿名 struct） |
 | 对象解构 | `{ title, n } := cfg` | 纯标识符列表，逐字段生成赋值 |
 | is 守卫 | `if (v is int) { ... }` | 块内窄化为具体类型 |
 | 联合类型 | `v int \| string \| bool` | 擦除为 any + 入口守卫 |
@@ -111,7 +111,7 @@ view := <ul>
 
 // 阶段4：应用入口 open（只收配置）+ render（收建树函数，内部建根 Owner + 接线）
 // 配置用裸对象字面量，编译器从 gxapp.open 签名推断为 gxapp.WindowConfig
-app, err := gxapp.open({ Title: "Gox", Width: 800 })
+app, err := gxapp.open({ title: "Gox", width: 800 })
 if err != nil { panic(err) }
 defer app.close()
 app.render(() => <div>{...}</div>)     // 在根 Owner 下建树 + 响应式接线
@@ -135,7 +135,7 @@ pub func Counter(props gxscene.props) *gxscene.instance {
     return <div>{count} / {doubled}</div>
 }
 func main() {
-    app, _ := gxapp.open({ Title: "Solid", Width: 2, Height: 2 })
+    app, _ := gxapp.open({ title: "Solid", width: 2, height: 2 })
     app.render(() => <div><Counter/></div>)   // 根 Owner 在此建立
     app.close()                                // 级联执行 Counter 的 onCleanup
 }

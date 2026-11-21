@@ -57,7 +57,7 @@ pub func Counter(props gxscene.props) *gxscene.instance {
 }
 
 func main() {
-    app, err := gxapp.open({ Title: "Solid Counter", Width: 2, Height: 2 })
+    app, err := gxapp.open({ title: "Solid Counter", width: 2, height: 2 })
     if err != nil { panic(err) }
 
     // SolidJS 风格：render 收建树函数；根 Owner 在内部建立，组件的 effect/cleanup 归属它。

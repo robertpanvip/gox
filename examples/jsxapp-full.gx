@@ -45,9 +45,9 @@ func main() {
     // 应用入口：open 只传配置（裸对象字面量，编译器从签名推断为 WindowConfig），
     // 返回 App；render 才是渲染 JSX 的入口，内部自动接好响应式。
     app, err := gxapp.open({
-        Title:  "Gox Dashboard",
-        Width:  800,
-        Height: 600,
+        title:  "Gox Dashboard",
+        width:  800,
+        height: 600,
     })
     if err != nil { panic(err) }
     defer app.close()
