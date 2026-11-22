@@ -920,6 +920,34 @@ func Itoa(x int) string {
 	}
 }
 
+func TestIntegrationSignalFieldHandwrittenFieldToFieldLive(t *testing.T) {
+	// 第七轮 §4 端到端：手写字段间赋值 q.a = p.a 直通 getter，源 signal 变化后
+	// 经 p.a 读到新值（JSX 侧 TestIntegrationSignalFieldLiveProps 的手写对应版）。
+	src := `package main
+type P struct { signal a string }
+type Q struct { signal a string }
+func main() {
+	signal src = "x"
+	p := P{a: src}
+	q := Q{a: p.a}
+	println(q.a)
+	src("y")
+	println(q.a)
+}
+`
+	out := runGX(t, src)
+	lines := strings.Fields(strings.TrimSpace(out))
+	want := []string{"x", "y"}
+	if len(lines) < len(want) {
+		t.Fatalf("输出行数不足: %q", out)
+	}
+	for i, w := range want {
+		if lines[i] != w {
+			t.Errorf("第 %d 行应为 %q, got %q\n完整输出:\n%s", i+1, w, lines[i], out)
+		}
+	}
+}
+
 func TestIntegrationSignalFieldNestedStruct(t *testing.T) {
 	// signal 字段与复合写/自增的真实运行。
 	src := `package main

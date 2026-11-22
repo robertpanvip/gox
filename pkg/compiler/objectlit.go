@@ -845,13 +845,22 @@ func transformObjectLits(in []Token, an *Analysis, b *Bindings) ([]Token, error)
 			lit.expectTyp = resolveExpectType(out, &lit, an, structs, b)
 
 			var typeText string
+			// 指针期望类型（如组件参数 *CardProps）：剥 '*' 做字段校验，补全时生成
+			// &T{...}（*T{} 不是合法字面量语法）。否则指针 props 会回退匿名 struct，
+			// 与 *T 参数类型不匹配，编译失败（第七轮 §6a）。
+			ptrPrefix := ""
+			expectForValidate := lit.expectTyp
+			if strings.HasPrefix(expectForValidate, "*") {
+				expectForValidate = strings.TrimSpace(strings.TrimPrefix(expectForValidate, "*"))
+				ptrPrefix = "&"
+			}
 			if lit.expectTyp != "" {
-				info, err := validateObjectLit(&lit, lit.expectTyp, structs)
+				info, err := validateObjectLit(&lit, expectForValidate, structs)
 				if err != nil {
 					return nil, err
 				}
 				if info != nil {
-					typeText = lit.expectTyp // 本文件具名 struct：省略类型名，用期望类型补全
+					typeText = ptrPrefix + expectForValidate // 本文件具名 struct：省略类型名，用期望类型补全
 				} else if strings.Contains(lit.expectTyp, ".") {
 					// 外部包 selector 类型（如 gxapp.windowConfig）：本文件无 struct 定义、
 					// 无法做字段校验，但该期望类型来自已知 runtime 签名，是合法具名类型，

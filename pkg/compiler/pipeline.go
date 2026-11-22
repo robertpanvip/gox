@@ -125,11 +125,16 @@ func compileWithMode(file, src, module string, imports map[string]ImportInfo) (*
 		return nil, err
 	}
 	toks = transformTemplates(toks, bindings, templateAST)
-	// struct signal 字段：构造位置自动包 Signal.New，selector 读写自动调用化。
+	// struct signal 字段：selector 读写自动调用化 + 构造位置三档包装。
 	// 放在 signal 局部变量改写与模板展开之后（右侧表达式已处理），external 之前
 	// （字段名仍是小写，signalFieldTable 用原始类型名判定）。
-	toks = wrapSignalFieldLiterals(toks, bindings, signalFields)
+	//
+	// 顺序：rewriteSignalFieldRefs 必须先于 wrapSignalFieldLiterals——前者把 signal
+	// 字段读 p.a 改写成 p.a()，后者才能在构造位置识别 recv.field() 形态并直通裸
+	// getter（保鲜）。若反序，wrap 生成的直通 getter p.a 会被随后的 rewrite 改成
+	// p.a()（快照，静默冻结）。两者互不依赖对方的产物结构，顺序调换对其余场景无影响。
 	toks = rewriteSignalFieldRefs(toks, bindings, signalFields)
+	toks = wrapSignalFieldLiterals(toks, bindings, signalFields)
 	toks = runUnion(toks)
 	toks = transformTypeGuard(toks, analysis)
 	if err := checkStrandedIs(toks); err != nil {

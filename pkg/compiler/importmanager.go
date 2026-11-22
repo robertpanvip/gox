@@ -59,10 +59,21 @@ func newImportManager(toks []Token, module string) *ImportManager {
 	// 函数名、类型名等。运行时依赖若用同名占位别名会被局部变量遮蔽（H-5：
 	// `list := "hi"` 后生成 `list.List[int]` 指向字符串变量）。把这些名字登记为
 	// 已占用，resolve 就会给冲突的占位别名分配无冲突名（list2 等）。
+	//
+	// 例外（第七轮 §6b）：用户以 `Signal.xxx` 形式使用 Signal 占位包名（后跟 '.'）
+	// 说明他就是要这个包本身、只是没写 import。此时不登记为占用——让注入的 import
+	// 复用原名 Signal，用户手写与生成代码指向同一包，避免 `Signal2` 别名导致
+	// 用户手写 Signal.New 未定义。局部变量遮蔽（Signal := ...）不带 '.'，仍照常占用。
+	// 仅对 Signal 放宽：其余占位包（list/gxscene 等）保持原遮蔽保护，避免新风险。
 	for i := 0; i < len(toks); i++ {
 		t := toks[i]
 		if t.Kind != Ident || t.IsGen || isGoKeyword(t.Text) {
 			continue
+		}
+		if t.Text == "Signal" {
+			if j := nextSig(toks, i+1); j >= 0 && toks[j].Text == "." {
+				continue // 用户写 Signal.xxx：期望 Signal 作为包名，不占用
+			}
 		}
 		m.used[t.Text] = true
 	}

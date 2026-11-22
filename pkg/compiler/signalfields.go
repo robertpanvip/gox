@@ -183,12 +183,14 @@ func downgradeSignalFields(toks []Token, decls []signalFieldDecl) []Token {
 
 // recvTypeAt 返回 selector 左侧 receiver 在 recvPos 处的推断类型名。
 // receiver 可能是局部变量 / 函数参数 / 方法接收者，都由 Bindings 统一解析。
+// 指针 receiver（*CardProps，如指针 props 组件）剥去前导 '*' 返回基类型名——
+// signal 字段表按基类型名登记，解包 p.name → p.name() 对指针同样成立（第七轮 §6a）。
 func recvTypeAt(b *Bindings, recvName string, recvPos Pos) string {
 	if b == nil {
 		return ""
 	}
 	if bd := b.ResolveAt(recvName, recvPos); bd != nil {
-		return bd.Type
+		return strings.TrimSpace(strings.TrimPrefix(bd.Type, "*"))
 	}
 	return ""
 }
@@ -324,16 +326,44 @@ type signalPassthrough struct {
 // 会先把读取 src 改写成 src()；此时必须「剥离 ()、传 getter 本身」，否则
 // Signal.New(src()) 只是把当前值快照一遍，src 后续变化不再反映到字段。
 //
-// 识别三种形态：
+// 识别四种形态：
 //   - sigVar() 且 sigVar 是 signal/computed 绑定 → 直通 sigVar（剥离 ()）；
 //   - sigVar 裸标识符且是 signal/computed 绑定 → 直通 sigVar；
+//   - recv.field() 且 field 是 receiver 类型上的 signal 字段 → 直通 recv.field（剥离 ()）；
 //   - Signal.New(...) / Signal.Computed(...) 等 Signal.xxx 调用 → 整段原样直通。
-func signalExprPassthrough(toks []Token, from, to int, b *Bindings) (signalPassthrough, bool) {
+//
+// 前置：本函数须在 rewriteSignalFieldRefs 之后运行——此时 signal 字段读已被改写成
+// 调用式 p.a()，本函数剥离 () 还原 getter 本身；若在之前运行只会看到裸 p.a，
+// 直通后会被随后的 rewrite 改成 p.a()（快照，静默冻结，第六轮遗留缺陷）。
+func signalExprPassthrough(toks []Token, from, to int, b *Bindings, tbl signalFieldTable) (signalPassthrough, bool) {
 	first := nextSigIn(toks, from, to)
 	if first < 0 {
 		return signalPassthrough{}, false
 	}
 	t := toks[first]
+
+	// recv.field() → 剥离 () 直通 recv.field（signal 字段到字段透传，保鲜）。
+	// 形态：ident . field ( ) ，且 field 确为 receiver 推断类型上的 signal 字段。
+	// 与 JSX 侧 pureSignalRead 的 recv.field() 分支对齐；用 isSignalSelector 的类型
+	// 判定而非全表按名匹配，避免同名普通字段被误当 signal 透传。
+	if t.Kind == Ident && b != nil {
+		dot := nextSigIn(toks, first+1, to)
+		if dot >= 0 && toks[dot].Text == "." {
+			fieldIdx := nextSigIn(toks, dot+1, to)
+			if fieldIdx >= 0 && toks[fieldIdx].Kind == Ident {
+				lp := nextSigIn(toks, fieldIdx+1, to)
+				if lp >= 0 && toks[lp].Text == "(" {
+					rp := matchDelim(toks, lp, "(", ")")
+					if rp > lp && nextSigIn(toks, rp+1, to) < 0 {
+						recvType := recvTypeAt(b, t.Text, t.Pos)
+						if recvType != "" && tbl.has(recvType, toks[fieldIdx].Text) {
+							return signalPassthrough{from: first, to: lp}, true // 去掉 ()
+						}
+					}
+				}
+			}
+		}
+	}
 
 	// src() → 剥离 () 直通 src（保鲜的核心）
 	if t.Kind == Ident && b != nil {
@@ -424,129 +454,165 @@ type compositeLitInfo struct {
 	close    int
 }
 
-// detectNamedCompositeLits 扫描当前 token 流里的具名复合字面量 TypeName{...}。
-// 只识别顶层类型名是标识符 + '{' 的形态（排除 map[K]V{}/[]T{}/struct{}{}）。
-func detectNamedCompositeLits(toks []Token) []compositeLitInfo {
-	var out []compositeLitInfo
-	for i := 0; i < len(toks); i++ {
-		if toks[i].Kind != Ident || isGoKeyword(toks[i].Text) {
-			continue
-		}
-		// 跳过 `pkg.Type{...}`：类型名是 selector 右侧时，取 selector 整体也不影响
-		// （signal 字段是同包类型，直接写 TypeName{}）。这里仅处理裸类型名。
-		if p := prevSig(toks, i-1); p >= 0 && toks[p].Text == "." {
-			continue
-		}
-		open := nextSig(toks, i+1)
-		if open < 0 || toks[open].Text != "{" {
-			continue
-		}
-		close := matchDelimSkipSpace(toks, open, "{", "}")
-		if close <= open {
-			continue
-		}
-		out = append(out, compositeLitInfo{typeName: toks[i].Text, open: open, close: close})
-	}
-	return out
-}
-
-// wrapSignalFieldLiterals 对具名 struct 复合字面量里的 signal 字段值自动包装：
-//   - 值已是 signal（变量/调用）→ 原样；
-//   - 否则 → 包成 Signal.New(expr)。
+// wrapSignalFieldLiterals 对具名 struct 复合字面量里的 signal 字段值自动包装三档
+// （透传 getter / 字面量 Signal.New / 派生 Signal.Computed），只对命中字段动手。
 //
-// 用 signalFieldTable 判定「typeName.field 是否 signal 字段」，只对命中字段动手，
-// 普通字段与其它 struct 的同名字段都不受影响。
+// 递归下降实现（第七轮 §5）：早期版本用「收集全局替换 + 原始下标从后往前应用」，
+// 兄弟级替换没问题，但嵌套字面量时外层区间端点落在内层替换之后，内层改变长度后
+// 外层端点错位，吞掉 ','、'}' 生成非法 Go。改为一次扫描就地构造新 token 切片：
+// 每处理一个字段值先递归处理其内部嵌套字面量，得到 newVal 再据此生成载荷，
+// 全程用局部切片下标，不再有跨层的原始下标漂移。
 func wrapSignalFieldLiterals(toks []Token, b *Bindings, tbl signalFieldTable) []Token {
 	if !tbl.hasSignalFields() {
 		return toks
 	}
-	lits := detectNamedCompositeLits(toks)
-	if len(lits) == 0 {
+	out, changed := wrapLitsInRange(toks, 0, len(toks), b, tbl)
+	if !changed {
 		return toks
 	}
-	// 收集所有替换，从后往前应用避免下标漂移。
-	type repl struct {
-		from, to int
-		toks     []Token
-	}
-	var reps []repl
-	for _, lit := range lits {
-		if !tbl.hasSignalFieldsOf(lit.typeName) {
+	return out
+}
+
+// wrapLitsInRange 递归扫描 [from,to)，构造性地返回处理后的 token 切片。
+// changed 报告是否发生过任何包装（无变化则返回原切片，零分配）。
+func wrapLitsInRange(toks []Token, from, to int, b *Bindings, tbl signalFieldTable) ([]Token, bool) {
+	out := make([]Token, 0, to-from)
+	changed := false
+	i := from
+	for i < to {
+		// 定位下一个具名字面量起点 i..cursor（非字面量 token 原样搬运）。
+		lit, ok := namedLitAt(toks, i, to)
+		if !ok {
+			out = append(out, toks[i])
+			i++
 			continue
 		}
-		for _, seg := range splitTopLevelSegs(toks, lit.open+1, lit.close) {
-			colon := -1
-			depth := 0
-			for k := seg[0]; k < seg[1]; k++ {
-				switch toks[k].Text {
-				case "(", "[", "{":
-					depth++
-				case ")", "]", "}":
-					if depth > 0 {
-						depth--
-					}
-				case ":":
-					if depth == 0 {
-						colon = k
-					}
-				}
+		// 搬运 类型名 与 '{'（含两者之间的空白）。
+		for k := i; k <= lit.open; k++ {
+			out = append(out, toks[k])
+		}
+		// 递归处理 body，逐字段包装。
+		if tbl.hasSignalFieldsOf(lit.typeName) {
+			body, ch := wrapLitBody(toks, lit, b, tbl)
+			out = append(out, body...)
+			changed = changed || ch
+		} else {
+			// 本类型无 signal 字段：body 里仍可能有别的具名字面量，递归下探。
+			body, ch := wrapLitsInRange(toks, lit.open+1, lit.close, b, tbl)
+			out = append(out, body...)
+			changed = changed || ch
+		}
+		// 搬运 '}'。
+		out = append(out, toks[lit.close])
+		i = lit.close + 1
+	}
+	return out, changed
+}
+
+// wrapLitBody 处理一个已知含 signal 字段的具名字面量的 body（open+1 .. close），
+// 返回处理后的 token 切片。段间的 ','/空白 原样保留；每个字段段的值先递归处理
+// 嵌套字面量，再做三档判定（见 wrapLitSeg）。
+func wrapLitBody(toks []Token, lit compositeLitInfo, b *Bindings, tbl signalFieldTable) ([]Token, bool) {
+	out := make([]Token, 0, lit.close-lit.open-1)
+	changed := false
+	cursor := lit.open + 1
+	for _, seg := range splitTopLevelSegs(toks, lit.open+1, lit.close) {
+		// 段间分隔（前一段结束到本段起点，含顶层 ',' 与空白）原样搬运。
+		if seg[0] > cursor {
+			out = append(out, toks[cursor:seg[0]]...)
+		}
+		segToks, ch := wrapLitSeg(toks, lit.typeName, seg, b, tbl)
+		out = append(out, segToks...)
+		changed = changed || ch
+		cursor = seg[1]
+	}
+	// 末段到 '}' 之间的分隔 token 原样搬运。
+	if cursor < lit.close {
+		out = append(out, toks[cursor:lit.close]...)
+	}
+	return out, changed
+}
+
+// wrapLitSeg 处理单个字段段 [s,e)（`field : value`）：先递归处理 value 内部嵌套
+// 字面量得到 newVal，再按三档生成载荷；非 signal 字段只递归下探、原样搬运。
+func wrapLitSeg(toks []Token, typeName string, seg [2]int, b *Bindings, tbl signalFieldTable) ([]Token, bool) {
+	s, e := seg[0], seg[1]
+	// 段内找顶层 ':'（字段值可能是复合字面量，须按深度跳过内部 ':'）。
+	colon := -1
+	depth := 0
+	for k := s; k < e; k++ {
+		switch toks[k].Text {
+		case "(", "[", "{":
+			depth++
+		case ")", "]", "}":
+			if depth > 0 {
+				depth--
 			}
-			if colon < 0 {
-				continue
+		case ":":
+			if depth == 0 {
+				colon = k
 			}
-			nameIdx := nextSigIn(toks, seg[0], colon)
-			if nameIdx < 0 || toks[nameIdx].Kind != Ident {
-				continue
-			}
-			field := toks[nameIdx].Text
-			if !tbl.has(lit.typeName, field) {
-				continue
-			}
-			valFrom := nextSigIn(toks, colon+1, seg[1])
-			if valFrom < 0 || valFrom >= seg[1] {
-				continue
-			}
-			valTo := seg[1]
-			if pass, ok := signalExprPassthrough(toks, valFrom, valTo, b); ok {
-				// 已是 signal：直通到 pass.to 为止。src() 的 pass.to 落在 '(' 前，
-				// 从而剥离调用括号、传 getter 本身（保鲜关键）；Signal.New(...)
-				// 的 pass.to 落在末尾，整段原样直通。pass.to 之后的 token（如
-				// src() 的 "()"）被有意丢弃。
-				reps = append(reps, repl{from: valFrom, to: valTo, toks: append([]Token{}, toks[valFrom:pass.to]...)})
-				continue
-			}
-			// 剥掉值表达式首尾空白
-			vs := valFrom
-			ve := valTo
-			for vs < ve && (toks[vs].Kind == Space || toks[vs].Kind == Newline) {
-				vs++
-			}
-			for ve > vs && (toks[ve-1].Kind == Space || toks[ve-1].Kind == Newline) {
-				ve--
-			}
-			p := toks[nameIdx].Pos
-			// 派生档（第六轮 P2b）：值表达式含 signal 变量读取 → 包 Computed 保鲜，
-			// 与 JSX 侧 signalFieldPropTokens 语义一致。否则（字面量/普通常量表达式）
-			// 仍是 Signal.New 快照。signalExprPassthrough 已先处理单 signal 读直通。
-			if exprHasSignalRead(toks, vs, ve, b) {
-				T := tbl.fieldType(lit.typeName, field)
-				reps = append(reps, repl{from: valFrom, to: valTo, toks: signalComputedCall(T, p, toks[vs:ve])})
-				continue
-			}
-			var toks2 []Token
-			toks2 = append(toks2, signalPkgToken(p), tokOp(".", p), tokIdent("New", p), tokOp("(", p))
-			for k := vs; k < ve; k++ {
-				toks2 = append(toks2, toks[k])
-			}
-			toks2 = append(toks2, tokOp(")", p))
-			reps = append(reps, repl{from: valFrom, to: valTo, toks: toks2})
 		}
 	}
-	for k := len(reps) - 1; k >= 0; k-- {
-		r := reps[k]
-		toks = append(toks[:r.from], append(r.toks, toks[r.to:]...)...)
+	if colon < 0 {
+		return wrapLitsInRange(toks, s, e, b, tbl)
 	}
-	return toks
+	nameIdx := nextSigIn(toks, s, colon)
+	if nameIdx < 0 || toks[nameIdx].Kind != Ident || !tbl.has(typeName, toks[nameIdx].Text) {
+		return wrapLitsInRange(toks, s, e, b, tbl) // 非 signal 字段
+	}
+	field := toks[nameIdx].Text
+	p := toks[nameIdx].Pos
+
+	valFrom := nextSigIn(toks, colon+1, e)
+	if valFrom < 0 || valFrom >= e {
+		return toks[s:e], false
+	}
+	newVal, _ := wrapLitsInRange(toks, valFrom, e, b, tbl)
+	// 段前缀 `field :`（含空白）原样搬运；载荷基于 newVal 生成。
+	out := make([]Token, 0, len(newVal)+4)
+	out = append(out, toks[s:valFrom]...)
+
+	// 形态判定基于 newVal（递归已把内部嵌套字面量就地替换），下标 0..len。
+	if pass, ok := signalExprPassthrough(newVal, 0, len(newVal), b, tbl); ok {
+		out = append(out, newVal[:pass.to]...)
+		return out, true
+	}
+	vs, ve := 0, len(newVal)
+	for vs < ve && (newVal[vs].Kind == Space || newVal[vs].Kind == Newline) {
+		vs++
+	}
+	for ve > vs && (newVal[ve-1].Kind == Space || newVal[ve-1].Kind == Newline) {
+		ve--
+	}
+	if exprHasSignalRead(newVal, vs, ve, b) {
+		T := tbl.fieldType(typeName, field)
+		out = append(out, signalComputedCall(T, p, newVal[vs:ve])...)
+		return out, true
+	}
+	out = append(out, signalNewCall(newVal[vs:ve]...)...)
+	return out, true
+}
+
+// namedLitAt 判断位置 i 是否是一个具名复合字面量 TypeName{ 的起点，
+// 是则返回其 info（open/close 为 '{'/'}' 下标），否则 ok=false。
+// to 限定扫描边界，避免跨出当前递归区间。
+func namedLitAt(toks []Token, i, to int) (compositeLitInfo, bool) {
+	if i < 0 || i >= to || toks[i].Kind != Ident || isGoKeyword(toks[i].Text) {
+		return compositeLitInfo{}, false
+	}
+	if p := prevSig(toks, i-1); p >= 0 && toks[p].Text == "." {
+		return compositeLitInfo{}, false // pkg.Type{} 跳过
+	}
+	open := nextSigIn(toks, i+1, to)
+	if open < 0 || toks[open].Text != "{" {
+		return compositeLitInfo{}, false
+	}
+	close := matchDelimSkipSpace(toks, open, "{", "}")
+	if close <= open || close >= to {
+		return compositeLitInfo{}, false
+	}
+	return compositeLitInfo{typeName: toks[i].Text, open: open, close: close}, true
 }
 
 // hasSignalFieldsOf 判断某 typeName 是否有 signal 字段。

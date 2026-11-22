@@ -317,6 +317,75 @@ func main() {
 	}
 }
 
+// 第七轮 §6a 回归：指针 props 组件（func Card(p *CardProps)）必须可用——
+// 调用点生成 &CardProps{...}（而非匿名 struct），组件体内 signal 字段读补 ()。
+func TestPointerPropsComponent(t *testing.T) {
+	src := `package main
+import gxscene "github.com/robertpanvip/gox/runtime/scene"
+type CardProps struct { signal name string }
+func Card(p *CardProps) *gxscene.Instance { return <div>{p.name}</div> }
+func main() { _ = <Card name="x"/> }
+`
+	got := compileOK(t, "sfptr.gx", src)
+	containsAll(t, got,
+		`Card(&CardProps{name:Signal.New("x"),})`,
+		`return p.name()`,
+	)
+	if strings.Contains(got, `Card(struct{`) {
+		t.Errorf("指针 props 不应回退匿名 struct:\n%s", got)
+	}
+}
+
+// 第七轮 §5 回归：嵌套 signal 字段复合字面量必须生成合法 Go。
+// 早期「全局替换 + 原始下标从后往前应用」在嵌套时外层端点错位，吞掉 ','/'}' 生成
+// 非法代码。递归下降重写后，内层先就地处理，外层载荷基于已处理结果构造。
+func TestSignalFieldNestedCompositeLiteralValid(t *testing.T) {
+	src := `package main
+type Inner struct { signal v string }
+type Outer struct { signal inner Inner; signal other string }
+func main() {
+	signal n = "x"
+	p := Outer{inner: Inner{v: n}, other: n}
+	_ = p
+}
+`
+	// compileOK 内含 Validate()：产物语法非法会直接 fail。
+	got := compileOK(t, "sfhw_nested.gx", src)
+	containsAll(t, got, `p := Outer{inner: Signal.New(Inner{v: n}), other: n}`)
+}
+
+// 三层嵌套 + 混合字段，进一步压测递归下标的正确性。
+func TestSignalFieldDeepNestedCompositeLiteralValid(t *testing.T) {
+	src := `package main
+type L3 struct { signal v string; plain int }
+type L2 struct { signal inner L3; tag string }
+type L1 struct { signal child L2; signal title string }
+func main() {
+	signal n = "x"
+	p := L1{child: L2{inner: L3{v: n, plain: 1}, tag: "t"}, title: n}
+	_ = p
+}
+`
+	got := compileOK(t, "sfhw_deep.gx", src)
+	containsAll(t, got, `Signal.New(L2{inner: Signal.New(L3{v: n, plain: 1}), tag: "t"})`)
+}
+
+// 第七轮 §4 回归：手写字段间赋值 p.a → q.a 必须直通裸 getter（保鲜），
+// 不能包 Signal.New(p.a())（那会静默冻结，源 signal 后续变化不反映到字段）。
+// 与 JSX 侧 TestSignalFieldJSXFieldToFieldPassthrough 对齐。
+func TestSignalFieldHandwrittenFieldToFieldPassthrough(t *testing.T) {
+	src := `package main
+type P struct { signal a string }
+type Q struct { signal a string }
+func f(p P) Q { return Q{a: p.a} }
+`
+	got := compileOK(t, "sfhw_ff.gx", src)
+	containsAll(t, got, `return Q{a: p.a}`)
+	if strings.Contains(got, `Q{a: Signal.New(p.a())}`) || strings.Contains(got, `Q{a: p.a()}`) {
+		t.Errorf("字段间赋值应直通 getter 保鲜，不得快照或二次调用:\n%s", got)
+	}
+}
+
 // 字面量/普通常量表达式仍是 Signal.New 快照（与 JSX isPlainLiteralExpr 档一致）。
 func TestSignalFieldHandwrittenLiteralStaysNew(t *testing.T) {
 	src := `package main

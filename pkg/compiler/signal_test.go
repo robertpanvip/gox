@@ -386,3 +386,21 @@ func main() {
 		t.Errorf("JSX 组件名不应被误改写为 Card():\n%s", got)
 	}
 }
+
+// 第七轮 §6b 回归：文件里只有 signal 字段、没有 signal 变量声明时，用户手写
+// Signal.New(...) 不应触发 Signal2 别名——注入的 import 应复用 Signal，用户
+// 手写与生成代码指向同一包。
+func TestSignalImportNoSignal2Alias(t *testing.T) {
+	src := `package main
+type P struct { signal name string }
+func main() { s := Signal.New("x"); _ = P{name: s} }
+`
+	got := compileOK(t, "sigalias.gx", src)
+	containsAll(t, got,
+		`import Signal "github.com/robertpanvip/gox/runtime/signal"`,
+		`s := Signal.New("x")`,
+	)
+	if strings.Contains(got, "Signal2") {
+		t.Errorf("不应生成 Signal2 别名:\n%s", got)
+	}
+}
