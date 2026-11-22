@@ -1,0 +1,5 @@
+github.com/go-clang/clang-v15 v0.0.0-20230222085438-ee3102fa0c71/go.mod h1:mVo0vKBuX8TWkoMpROywGoG9IpIXCCoHp2VQ7IRsVT8=
+github.com/go-gl/gl v0.0.0-20231021071112-07e5d0ea2e71/go.mod h1:9YTyiznxEY1fVinfM7RvRcjRHbw2xLBJ3AAGIT0I4Nw=
+github.com/go-gl/glfw/v3.3/glfw v0.0.0-20250301202403-da16c1255728/go.mod h1:SyRD8YfuKk+ZXlDqYiqe1qMSqjNgtHzBTG810KUagMc=
+golang.org/x/sync v0.14.0/go.mod h1:1dzgHSNfp02xaA81J2MS99Qcpr2w7fw1gpm99rleRqA=
+muzzammil.xyz/jsonc v1.0.0/go.mod h1:rFv8tUUKe+QLh7v02BhfxXEf4ZHhYD7unR93HL/1Uvo=
