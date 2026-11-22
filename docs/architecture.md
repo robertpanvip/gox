@@ -116,6 +116,16 @@ emit               拼装 Go 源码，同时记录输出 token → 输入位置�
 
 诊断的 Go 坐标经 `sourcemap.GoToGx` 转成 `.gx` 坐标后输出（CLI `-check` 与 LSP 诊断共用此路径）。多文件场景用 `CheckFiles([]SourceFile)`：每份产物以相对路径（如 `util/math.go`）写入临时 module，`SetModulePath` 设项目 module 使本地包 import 可解析，诊断的 `File` 字段保留相对路径，CLI 据此选择对应 `.gx` 的 sourcemap 回投到正确文件与行。
 
+### signal 字段漏改诊断：规矩该立在哪
+
+signal 字段读若漏改写（`p.name` 未变 `p.name()`），生成代码会打印 `Signal` 函数地址而非值。这类漏改的诊断有两处落点，职责不同：
+
+- **源码侧（`pkg/compiler/signalfields.go`）**：`silentIndexedSignalField` 在索引链元素类型推不出时报 `signal-field-index-unknown`。判据必须校验「元素类型可推断且该类型确有此 signal 字段」，不能只比字段名——否则 `type Item struct{ signal title string }` 与 `type Row struct{ title string }` 并存时，`rows[0].title`（普通字段）会因撞名被误报、阻断构建（第十三轮 P1-A）。推不出就沉默，不猜。
+- **产物侧（`internal/check`）**：更彻底的规矩是「类型为 `Signal.Signal[T]` 的表达式出现在非调用位置即报错」，能一次覆盖 `x[i].f` / `fn()[i].f` / comma-ok / range map / 类型断言等所有形态，且天然不误报普通字段。**当前未落地**：`internal/check.exprType` 依赖 GX 语义层类型（signal 变量的逻辑类型是 `T` 而非物理类型 `Signal[T]`），拿不到该判据所需的物理类型；实现它需引入 `go/types` 对生成代码做 type-check（`buildcheck` 已有 `go build` 机制，但要拿每个表达式类型需额外 `types.Info`）并接 sourcemap 回投。属架构级改动，列为后续方向。
+- **多左值 comma-ok（第十三轮 P2-C）**：`inferMultiLHSTypes` 已补「`v, ok := m[k]` → 首值取元素类型、次值 bool」，使 `v.a` 这类 signal 字段读能沿类型链正确改写。其余形态（range map / 类型断言）暂由产物侧方案兜底（待落地）。
+
+诊断可见性：单文件 `gox build` 与项目模式（`gox build -root`）现已统一消费 `Analysis.Diagnostics()`——同一份 `.gx` 不再出现「换个构建方式结论不同」。
+
 ## 跨文件 GX 模块（`pkg/module`）
 
 把一组 `.gx` 组织成可互相导入的模块，保持 `compiler` 的纯转译职责：

@@ -196,6 +196,24 @@ func cmdBuild(args []string) error {
 	}
 	fmt.Printf("已生成 %s （%d 字节，%d 条映射）\n", f.out, len(res.GoSource), res.SourceMap.Len())
 
+	// 第十三轮 P2-B：单文件模式此前从不消费 Analysis 诊断，导致同一份 .gx
+	// 「单文件构建通过、项目模式阻断」的结论分叉。与 cmdBuildProject 对齐：
+	// 语义诊断（signal-field-index-unknown / for-not-list / 大小写等）统一打印，
+	// 非空即阻断。诊断已是 GX 坐标，直接复用项目模式的打印格式。
+	var gxDiags []gxFileDiagnostic
+	if res.Analysis != nil {
+		for _, d := range res.Analysis.Diagnostics() {
+			gxDiags = append(gxDiags, gxFileDiagnostic{
+				File: filepath.ToSlash(f.file), Line: d.Pos.Line, Col: d.Pos.Col,
+				Code: d.Code, Message: d.Message,
+			})
+		}
+	}
+	if len(gxDiags) > 0 {
+		printGxDiagnostics(gxDiags)
+		return fmt.Errorf("GX 语义检查未通过")
+	}
+
 	if f.check {
 		return runCheck(res.GoSource, res.SourceMap, f.replaces)
 	}

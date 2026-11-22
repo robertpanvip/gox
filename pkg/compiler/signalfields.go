@@ -822,16 +822,15 @@ func isSignalSelector(toks []Token, i int, b *Bindings, tbl signalFieldTable) (f
 	return sel.field, true, sel.fieldIdx
 }
 
-// silentIndexedSignalField 检测「类型推不出、但字段名唯一命中 signal 字段」的
-// 静默漏改场景（第十二轮 §4.5 立规矩）。只在极窄窗口报警，避免误伤普通字段：
+// silentIndexedSignalField 检测「索引元素的 signal 字段读未被改写」的静默漏改
+// 场景（第十二轮 §4.5 立规矩，第十三轮 P1-A 收窄判据）。只在极窄窗口报警：
 //   - 链首标识符后有索引 '['（x[i].f），且链能走到一个尾字段名 f；
-//   - f 在 signalFieldTable 中恰好是一个类型的 signal 字段（唯一匹配，
-//     与 resolveSignalSel 的退化判据同源，多类型同名则放弃）；
+//   - x 的容器元素类型可推断，且该元素类型确实声明了 signal 字段 f；
 //   - 正常类型路径没能把 f 识别为 signal 字段（调用方在 !ok 分支调用本函数）。
 //
 // 返回 (字段名, 是否命中)。命中即应报"无法推断索引元素类型"诊断，而非静默让
 // Go 打印 Signal 函数地址。
-func silentIndexedSignalField(toks []Token, i, limit int, tbl signalFieldTable) (string, bool) {
+func silentIndexedSignalField(toks []Token, i, limit int, tbl signalFieldTable, b *Bindings) (string, bool) {
 	if i < 0 || i >= len(toks) || toks[i].Kind != Ident {
 		return "", false
 	}
@@ -870,14 +869,24 @@ func silentIndexedSignalField(toks []Token, i, limit int, tbl signalFieldTable) 
 	if !hasIndex || lastField == "" {
 		return "", false
 	}
-	// 唯一匹配：恰好一个类型把 lastField 声明为 signal 字段。
-	owners := 0
-	for _, fields := range tbl.sig {
-		if _, ok := fields[lastField]; ok {
-			owners++
-		}
+	// 第十三轮 P1-A：元素类型必须可推断，且该类型确实把 lastField 声明为 signal
+	// 字段。旧判据只比「字段名唯一命中」不看类型，导致 Row.title（普通字段）与
+	// Item.title（signal 字段）撞名时误报、阻断构建。推不出就沉默，不猜。
+	et := ""
+	if b != nil {
+		et = containerElemTypeFromBinding(b, toks[i].Text, toks[i].Pos)
 	}
-	if owners != 1 {
+	if et == "" {
+		et = containerElemTypeFromDecl(toks, i, toks[i].Pos)
+	}
+	if et == "" {
+		return "", false
+	}
+	fields, ok := tbl.sig[bareFieldType(et)]
+	if !ok {
+		return "", false
+	}
+	if _, ok := fields[lastField]; !ok {
 		return "", false
 	}
 	return lastField, true
@@ -933,7 +942,7 @@ func rewriteSignalFieldRefs(toks []Token, b *Bindings, tbl signalFieldTable, dia
 			// signal 字段时，不能静默输出裸 selector（Go 会打印 Signal 函数地址），
 			// 报明确诊断让用户显式标注或改用切片变量。
 			if diags != nil {
-				if field, hit := silentIndexedSignalField(toks, i, 0, tbl); hit {
+				if field, hit := silentIndexedSignalField(toks, i, 0, tbl, b); hit {
 					*diags = append(*diags, GXDiagnostic{
 						Pos:     toks[i].Pos,
 						Code:    "signal-field-index-unknown",

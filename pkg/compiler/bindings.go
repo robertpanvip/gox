@@ -822,11 +822,54 @@ func (b *Bindings) bindLHS(toks []Token, op int, scope *BindScope, kind BindingK
 	}
 }
 
+// indexElemTypeAt 推断 toks[from:to] 是否为单索引表达式 `x[...]`，是则返回其
+// 元素类型（第十三轮 P2-C，供 comma-ok `v, ok := m[k]` 的第一左值）。
+// 只认「标识符 + 单个 [...] + 纯空白尾巴」的窄形态；x[i].f / x[i][j] /
+// 函数调用等一律返回空，避免误伤其它多左值场景。元素类型优先取 Binding.Type，
+// 回退到声明 token 反推；二者都推不出则沉默。
+func indexElemTypeAt(toks []Token, from, to int, b *Bindings) string {
+	// 收紧到语句尾，避免传入 len(toks) 时把后续的 `}` / EOF 当作索引尾巴。
+	to = exprEndOfLine(toks, from, to)
+	i := from
+	for i < to && toks[i].Kind == Space {
+		i++
+	}
+	if i >= to || toks[i].Kind != Ident || isGoKeyword(toks[i].Text) {
+		return ""
+	}
+	lb := nextSigIn(toks, i+1, to)
+	if lb < 0 || toks[lb].Text != "[" {
+		return ""
+	}
+	rb := matchDelim(toks, lb, "[", "]")
+	if rb < 0 || rb >= to {
+		return ""
+	}
+	// 索引闭合后到语句尾只能是空白/换行；有 '.' 或后续 '[' 说明不是单索引取值。
+	for k := rb + 1; k < to; k++ {
+		if toks[k].Kind != Space && toks[k].Kind != Newline {
+			return ""
+		}
+	}
+	name, pos := toks[i].Text, toks[i].Pos
+	if b != nil {
+		bd := b.ResolveAt(name, pos)
+		if bd != nil && bd.Type != "" {
+			if et := containerElemTypeOnce(bd.Type); et != "" {
+				return et
+			}
+		}
+	}
+	return containerElemTypeFromDecl(toks, i, pos)
+}
+
 // inferMultiLHSTypes 为多左值 `a, b := <rhs>` 按位置推断类型（第十二轮 P2-C）。
-// 覆盖两种形态：
+// 覆盖三种形态：
 //   - 单函数调用返回元组：`m, err := load()` → FuncResult 得 "(map[string]P, error)"，
 //     拆元组按位置分配 → ["map[string]P", "error"]；
-//   - 逗号分隔多表达式：`a, n := map[K]V{...}, 1` → 每段独立推断。
+//   - 逗号分隔多表达式：`a, n := map[K]V{...}, 1` → 每段独立推断；
+//   - comma-ok 索引取值：`v, ok := m[k]` → 第一左值取元素类型、第二为 bool
+//     （第十三轮 P2-C，避免 v 只拿到 key 类型导致 v.a 打印 Signal 函数地址）。
 //
 // 无法可靠分解时返回 nil，调用方沿用「首个结果套全部」的旧行为（保守）。
 func inferMultiLHSTypes(toks []Token, from, to int, b *Bindings, n int) []string {
@@ -837,6 +880,14 @@ func inferMultiLHSTypes(toks []Token, from, to int, b *Bindings, n int) []string
 	// 调用方传入的边界可能是 exprEndInStmt 的结果（在第一个逗号处停），
 	// 对 a, n := e1, e2 这种形态必须先扩回完整右侧才能分段。
 	to = exprEndOfLine(toks, from, to)
+	// 形态三（第十三轮 P2-C）：comma-ok 索引取值 `v, ok := m[k]` —— 第一左值
+	// 取容器元素类型，第二左值 bool。必须放在形态二前：单索引表达式不含顶层
+	// 逗号，形态二分段数为 1 ≠ n=2 不会命中；但显式前置更清晰、更稳。
+	if n == 2 {
+		if et := indexElemTypeAt(toks, from, to, b); et != "" {
+			return []string{et, "bool"}
+		}
+	}
 	// 形态一：单函数调用返回元组。
 	if toks[from].Kind == Ident && !isGoKeyword(toks[from].Text) {
 		lp := nextSigIn(toks, from+1, to)

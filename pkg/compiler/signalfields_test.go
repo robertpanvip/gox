@@ -1167,7 +1167,7 @@ func main() {
 	if mIdx < 0 {
 		t.Fatal("找不到 m 使用点")
 	}
-	field, hit := silentIndexedSignalField(toks, mIdx, 0, tbl)
+	field, hit := silentIndexedSignalField(toks, mIdx, 0, tbl, nil)
 	if !hit || field != "a" {
 		t.Errorf("m[\"k\"].a 应命中 signal 字段 a，got field=%q hit=%v", field, hit)
 	}
@@ -1189,8 +1189,81 @@ func main() {
 			if cnt2 == 2 { m2 = i; break }
 		}
 	}
-	_, hit2 := silentIndexedSignalField(toks2, m2, 0, tbl2)
+	_, hit2 := silentIndexedSignalField(toks2, m2, 0, tbl2, nil)
 	if hit2 {
 		t.Error("普通字段 b 不应命中 signal 字段检测")
+	}
+}
+
+// 第十三轮 P1-A：诊断按「元素类型确为 signal 字段的 owner」判定，不再按字段名
+// 唯一命中。普通字段与别处 signal 字段撞名不得误报（否则项目模式构建被阻断）；
+// 真阳性（map 元素类型的 signal 字段读未改写）仍须命中。
+func TestR13SilentIndexedFieldNoFalsePositive(t *testing.T) {
+	// 误报场景：Item.title 是 signal 字段，Row.title 是普通字段——撞名不应报错。
+	srcFalse := `package main
+type Item struct { signal title string }
+type Row  struct { title string }
+func main() {
+	rows := []Row{{title: "t"}}
+	_ = rows[0].title
+}
+`
+	res, err := Compile("r13_false.gx", srcFalse)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hasDiagCode(res.Analysis.Diagnostics(), "signal-field-index-unknown") {
+		t.Errorf("普通字段撞名不应误报 signal-field-index-unknown:\n%+v", res.Analysis.Diagnostics())
+	}
+	if !strings.Contains(res.GoSource, `rows[0].title`) {
+		t.Errorf("普通字段读应保持原样, got:\n%s", res.GoSource)
+	}
+
+	// 元素类型可推断时，正常路径应直接改写成 a()，不挂诊断（无需沉默兜底）。
+	srcOK := `package main
+type P struct { signal a string }
+func main() {
+	m := map[string]P{"k": {a: "x"}}
+	_ = m["k"].a
+}
+`
+	res2, err := Compile("r13_ok.gx", srcOK)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hasDiagCode(res2.Analysis.Diagnostics(), "signal-field-index-unknown") {
+		t.Errorf("类型可推断且已改写时不应挂诊断:\n%+v", res2.Analysis.Diagnostics())
+	}
+	if !strings.Contains(res2.GoSource, `m["k"].a()`) {
+		t.Errorf("map 元素 signal 字段应被正常改写为 a(), got:\n%s", res2.GoSource)
+	}
+}
+
+// 判据层：元素类型推不出时保持沉默（不猜测、不按字段名撞车误报）。
+func TestR13SilentIndexedFieldUnknownTypeStaysSilent(t *testing.T) {
+	// rows 声明为函数参数且无元素类型信息时，回退用不到声明、Binding.Type 也为空，
+	// silentIndexedSignalField 应返回 false（宁可沉默也不误报）。
+	src := `package main
+type P struct { signal x string }
+func main() {
+	rows := getRows()
+	_ = rows[0].x
+}
+func getRows() []any { return nil }
+`
+	toks := New(src).AllTokens()
+	tbl := buildSignalFieldTable(toks, collectSignalFieldDecls(toks))
+	// 找 rows[0].x 里的 rows（使用点，非声明点）。
+	idx := -1
+	cnt := 0
+	for i, tk := range toks {
+		if tk.Text == "rows" && tk.Kind == Ident {
+			cnt++
+			if cnt == 2 { idx = i; break }
+		}
+	}
+	if idx < 0 { t.Fatal("找不到 rows 使用点") }
+	if _, hit := silentIndexedSignalField(toks, idx, 0, tbl, nil); hit {
+		t.Error("元素类型推不出时应保持沉默，不得按字段名撞车命中")
 	}
 }

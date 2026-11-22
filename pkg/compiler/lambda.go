@@ -773,10 +773,21 @@ func transformLambdas(in []Token, an *Analysis, b *Bindings, sigTypes ...map[str
 		// 当且仅当换行后紧跟宿主调用闭合符号（`)` / `]` / `,`）时吞掉；后接标识符或
 		// `}`（函数体/语句块结束）说明是真正的语句结束换行，保留——否则会把 return
 		// 语句与函数闭合括到同一行、破坏 golden 形态。
-		if !l.blockBody && l.bodyTo > l.bodyFrom && in[l.bodyTo-1].Kind == JSX {
+		// 第十三轮 P3-D：lambdaBodyEnd 遇到 Comment 即截断，bodyTo 可能停在
+		// `</div> // 尾注` 的空格/注释处，而非紧邻 JSX。往前跳过排版空白/注释
+		// 确认 body 末尾确实是 JSX，再决定是否吞掉换行——否则带尾注的跨行形态
+		// 会把注释留在 `}` 与 `)` 之间，生成 `}// 尾注\n)` 报 missing ','。
+		lastBody := l.bodyTo - 1
+		for lastBody >= l.bodyFrom &&
+			(in[lastBody].Kind == Space || in[lastBody].Kind == Newline || in[lastBody].Kind == Comment) {
+			lastBody--
+		}
+		if !l.blockBody && l.bodyTo > l.bodyFrom && lastBody >= l.bodyFrom && in[lastBody].Kind == JSX {
 			j := l.bodyTo
 			hasNL := false
-			for j < len(in) && (in[j].Kind == Space || in[j].Kind == Newline) {
+			// 第十三轮 P3-D：JSX 后排版区可能夹行注释（`</div> // 尾注` 再换行接
+			// `)`）。Comment 一并吞掉，否则它会把随后的 `)` 注释掉、丢失闭合括号。
+			for j < len(in) && (in[j].Kind == Space || in[j].Kind == Newline || in[j].Kind == Comment) {
 				if in[j].Kind == Newline {
 					hasNL = true
 				}

@@ -632,14 +632,18 @@ func forTokens(n *jsxNode, ctx *jsxSceneCtx) []Token {
 		if rParams.typ != "" {
 			// 显式注解优先（保留原有行为）。
 			elemType = rParams.typ
-		} else if inferred := ctx.inferForElemType(eachExpr, ctx.jsxPos); inferred != "" {
-			// 无类型注解时，从 each 集合表达式推断元素类型。
-			elemType = inferred
 		} else {
-			// 第十二轮 P3-F：each 集合是 map 等非列表类型时给明确诊断，
-			// 不再让 sliceElemType 误把 map 当元素生成 []map[K]V 的误导产物。
-			if coll := ctx.forEachCollType(eachExpr); coll != "" && strings.HasPrefix(strings.TrimSpace(coll), "map[") {
+			// 第十三轮 P3-E：each 是 map / string 等非列表类型时先报明确诊断，
+			// 不让 sliceElemType 把 map 当元素生成 []map[K]V、把 string 当 rune 列表。
+			// 函数返回 map（load()）也覆盖：forEachCollType 已补查 FuncResult。
+			coll := ctx.forEachCollType(eachExpr)
+			collTrim := strings.TrimSpace(coll)
+			if collTrim != "" && (strings.HasPrefix(collTrim, "map[") || collTrim == "string") {
 				ctx.reportForNotList(n, coll)
+			}
+			if inferred := ctx.inferForElemType(eachExpr, ctx.jsxPos); inferred != "" {
+				// 无类型注解时，从 each 集合表达式推断元素类型。
+				elemType = inferred
 			}
 		}
 	}
@@ -822,7 +826,13 @@ func (ctx *jsxSceneCtx) forEachCollType(eachExpr string) string {
 		return ctx.sigTypes[root]
 	}
 	if ctx.bindings != nil {
-		return ctx.bindings.TypeAt(root, ctx.jsxPos)
+		t := ctx.bindings.TypeAt(root, ctx.jsxPos)
+		// 第十三轮 P3-E：each 是函数调用（load() / getItems()）时 TypeAt 拿不到，
+		// 补查函数返回值类型，使 map/string 等非列表形态也能命中 for-not-list。
+		if t == "" && strings.Contains(eachExpr, "(") {
+			t = ctx.bindings.FuncResult(root)
+		}
+		return t
 	}
 	return ""
 }
@@ -835,7 +845,7 @@ func (ctx *jsxSceneCtx) reportForNotList(n *jsxNode, collType string) {
 	*ctx.diags = append(*ctx.diags, GXDiagnostic{
 		Pos:     ctx.jsxPos,
 		Code:    "for-not-list",
-		Message: "<For> 需要列表，但 each 是 map 类型 " + collType + "；请先转成切片再用 <For> 渲染",
+		Message: "<For> 需要列表，但 each 的类型 " + collType + " 不是列表；请先转成切片再用 <For> 渲染",
 	})
 }
 
@@ -1039,7 +1049,10 @@ func transformJSXScene(in []Token, ctx *jsxSceneCtx) []Token {
 			// 保留——否则会把 return 语句与函数闭合挤到同一行。
 			j := i + 1
 			hasNL := false
-			for j < len(in) && (in[j].Kind == Space || in[j].Kind == Newline) {
+			// 第十三轮 P3-D：闭合标签后的排版区可能夹着行注释（`</div> // 尾注`
+			// 再换行接 `)`）。Comment 必须一并视作排版并吞掉——保留它会把随后的
+			// `)` 注释掉，生成代码丢闭合括号。
+			for j < len(in) && (in[j].Kind == Space || in[j].Kind == Newline || in[j].Kind == Comment) {
 				if in[j].Kind == Newline {
 					hasNL = true
 				}
@@ -1048,7 +1061,7 @@ func transformJSXScene(in []Token, ctx *jsxSceneCtx) []Token {
 			if hasNL && j < len(in) {
 				switch in[j].Text {
 				case ")", "]", ",":
-					i = j - 1 // 吞掉纯排版空白（Space/Newline）
+					i = j - 1 // 吞掉纯排版空白（Space/Newline/Comment）
 				}
 			}
 			continue

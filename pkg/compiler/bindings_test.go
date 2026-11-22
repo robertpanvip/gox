@@ -1,6 +1,7 @@
 package compiler
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -599,5 +600,72 @@ func main() {
 		if got := b.TypeAt("n", nPos); got != "int" {
 			t.Errorf("多表达式次值 n: TypeAt = %q, want %q", got, "int")
 		}
+	}
+}
+
+// 第十三轮 P2-C：comma-ok 索引取值 `v, ok := m[k]` 的第一左值应取元素类型，
+// 使 v 的 signal 字段读（v.a）被正确改写成 v.a()，而非打印 Signal 函数地址。
+// 同时守护其它 comma-ok 形态不受影响。
+func TestBindCommaOKIndexElemType(t *testing.T) {
+	src := `package main
+import gxscene "github.com/robertpanvip/gox/runtime/scene"
+type P struct { signal a string }
+func main() {
+	m := map[string]P{"k": {a: "x"}}
+	v, ok := m["k"]
+	_ = ok
+	_ = <div>{v.a}</div>
+}
+`
+	res, err := CompileScene("comma.gx", src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if verr := res.Validate(); verr != nil {
+		t.Fatalf("生成 Go 语法无效: %v", verr)
+	}
+	if !strings.Contains(res.GoSource, "v.a()") {
+		t.Errorf("comma-ok 首值的 signal 字段读应改写为 v.a():\n%s", res.GoSource)
+	}
+	if strings.Contains(res.GoSource, "v.a }") || strings.Contains(res.GoSource, "return v.a ") {
+		t.Errorf("comma-ok 首值 signal 字段读未改写, got:\n%s", res.GoSource)
+	}
+}
+
+// 判据守护：indexElemTypeAt 只认单索引表达式，其它 comma-ok 形态不进入。
+func TestIndexElemTypeAtNarrow(t *testing.T) {
+	cases := []struct {
+		name, expr string
+		want       string
+	}{
+		{"单索引", `m["k"]`, "P"},
+		{"多索引非单值", `m["k"][0]`, ""},
+		{"selector尾巴", `m["k"].a`, ""},
+		{"channel接收", `<-ch`, ""},
+		{"普通标识符", `v`, ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			src := "package main\ntype P struct{}\nfunc main(){\n m := map[string]P{}\n _ = " + c.expr + "\n}\n"
+			toks := New(src).AllTokens()
+			b := Bind(toks)
+			// 取 `_ = <expr>` 之后表达式的起点（最后一个 `=` 即 `_ =`）。
+			from := -1
+			for i := len(toks) - 1; i >= 0; i-- {
+				if toks[i].Text == "=" {
+					if n := nextSig(toks, i+1); n >= 0 {
+						from = n
+					}
+					break
+				}
+			}
+			if from < 0 {
+				t.Fatal("找不到表达式起点")
+			}
+			got := indexElemTypeAt(toks, from, len(toks), b)
+			if got != c.want {
+				t.Errorf("indexElemTypeAt(%s) = %q, want %q", c.expr, got, c.want)
+			}
+		})
 	}
 }

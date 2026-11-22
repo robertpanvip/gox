@@ -66,6 +66,18 @@ pub enum perm { read = 1 << iota, write, exec }  // 位标志 1,2,4
 | `<br/>` 空元素 | `gxscene.OpElem Arg:"br"` + `gxscene.OpClose` |
 | `<Foo/>` 组件 | `gxscene.OpComp` + `Foo(gxscene.Props{…})` |
 
+**JSX 可跨行**：闭合标签后的换行若属于排版缩进（换行后紧跟宿主调用的 `)` / `]` / `,`，中间可夹行注释），编译器会吞掉这段空白，避免 Go 在参数列表换行处要求 trailing comma。因此下面两种写法等价，无需为规避语法错误而把 JSX 挤成单行：
+
+```jsx
+app.render(() =>
+    <div>
+        <span>hi</span>
+    </div> // 尾注也会被一并吞掉
+)
+```
+
+> 只有紧邻调用闭合符号的排版换行会被吞；后接标识符或 `}`（函数体/语句结束）的换行是真正的语句分隔，保留——不会把 `return` 与函数闭合挤到同一行。
+
 运行时 `runtime/scene/`：`Template` / `Op` / `Render` / `Instance`。`Render` 缓存静态骨架、clone 出常驻场景树；`Instance.Update()` 只回写变化的插槽（可观测指标 `Writes`），不含调度。host 不定义绘制后端接口：GUI 后端实现 `gxapp.Window`，可用 `Node.ID` / `Node.Layout` / `Changes()` 做增量绘制；内置 `TextBackend` 只是文本工具。
 
 ### 3.1 `<For>` 列表
@@ -79,6 +91,8 @@ pub enum perm { read = 1 << iota, write, exec }  // 位标志 1,2,4
 | render 参数 `item` | 是元素值的 getter（`func() T`）：子树动态 getter 必须经它读值以登记依赖。`item` 逃逸到组件 props 等无法信号化的场景时，编译器回退值快照模式（同 key 值变化重建该项） |
 
 > 注意（第十轮 P1-1）：早期实现在 `key=nil` 时把 nil 包成"恒返回 nil 的闭包"，导致 `indexKey` 判定失效、所有元素 key 坍缩、列表塌成最后一项；叠加 `BindReactive` 会每帧重建而死循环。现已修复——省略 `key` 是可用的常规写法。
+
+> 已知限制（第十三轮 P3-E）：`each` 用**具名切片类型**（`type Rows []Row`，底层被提升为 `list.List[Row]`）时，元素类型推断会退成 `any`、each getter 的 `[]T` 返回类型与具名类型不兼容。绕过方式：用匿名切片 `[]Row`，或给 render 形参加显式类型注解。这是 each getter 返回类型生成的问题，非 keyed diff 语义问题，后续随类型系统一起处理。`each` 是 `map` / `string` 等非列表时会报 `for-not-list` 诊断（函数返回形态同样覆盖）。
 
 ## 4. 外部 Go 符号
 
@@ -225,6 +239,7 @@ func main() {
 - `.gx ↔ .go` 双向位置映射（最近邻），可 JSON 序列化。
 - LSP：initialize / didOpen / didChange / definition / hover / completion / documentSymbol / rename，诊断经 sourcemap 回投到 `.gx`。
 - 编译检查：真实 `go build`（可取消 context + LRU 缓存），诊断回投到 `.gx` 行号。支持注入 go.mod `replace` 以解析本地运行时；跨文件项目模式下，多份产物一起 `go build`，诊断按产物文件回投到**对应 `.gx`（含子目录包，如 `util/math.gx`）**的正确行列。
+- **产物落点**：单文件模式按 `-o <file.go>` 落盘（省略时默认 `<源文件>.go`，如 `app.gx` → `app.gx.go`）；项目模式（`-root`）把每份 `.gx` 落成**同目录同名 `.go`**（如 `util/math.gx` → `util/math.go`），不读 `-o`。两种模式的产物命名规则不同，脚本化时注意区分。
 
 ## 13. 跨文件项目（GX 导入 GX）
 

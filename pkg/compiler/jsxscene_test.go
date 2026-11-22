@@ -890,3 +890,102 @@ func main() {
 		t.Errorf("+= 复合赋值 RHS 的 other 应补 (), got:\n%s", out)
 	}
 }
+
+// 第十三轮 P3-D：跨行 JSX 闭合标签后夹行注释（`</div> // 尾注`）再接宿主 `)` 时，
+// 注释必须连同换行一并吞掉，否则生成 `}// 尾注\n)` 报 missing ','。覆盖两种路径：
+// JSX 直接作实参，与 JSX 作为 lambda body（app.render(() => <div/> // 尾注)）。
+func TestJSXMultilineTrailingCommentBeforeClose(t *testing.T) {
+	cases := []struct {
+		name string
+		src  string
+	}{
+		{
+			name: "JSX直接实参带尾注",
+			src: `package main
+func main() {
+	foo(
+		<div>
+			<span>x</span>
+		</div> // 尾注
+	)
+}
+func foo(any) {}
+`,
+		},
+		{
+			name: "lambda-body-JSX带尾注",
+			src: `package main
+import gxapp "github.com/robertpanvip/gox/runtime/app"
+func main() {
+	app, _ := gxapp.open(nil)
+	_ = app
+	app.render(() =>
+		<div id="app">
+			<span>hi</span>
+		</div> // 尾注
+	)
+}
+`,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			res, err := CompileScene("comment.gx", c.src)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if verr := res.Validate(); verr != nil {
+				t.Fatalf("生成 Go 语法无效: %v\n---\n%s", verr, res.GoSource)
+			}
+			// 注释不得残留在生成的闭括号前（残留会把 ')' 注释掉）。
+			if strings.Contains(res.GoSource, "// 尾注\n\t)") || strings.Contains(res.GoSource, "// 尾注\n)") {
+				t.Errorf("行注释未被吞掉，会注释掉闭括号:\n%s", res.GoSource)
+			}
+		})
+	}
+}
+
+// 第十三轮 P3-E：each 是 string 变量 / 函数返回 map 时也要产出 for-not-list
+// 诊断，不再静默编成 ForGetterOfSignal[rune] 或漏报。
+func TestJSXSceneForNotListStringAndFuncMap(t *testing.T) {
+	cases := []struct {
+		name string
+		src  string
+	}{
+		{
+			name: "string变量",
+			src: `package main
+func main() {
+	s := "abc"
+	_ = <For each={s}>{u => <span>{u}</span>}</For>
+}
+`,
+		},
+		{
+			name: "函数返回map",
+			src: `package main
+func getM() map[string]int { return nil }
+func main() {
+	_ = <For each={getM()}>{u => <span>{u}</span>}</For>
+}
+`,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			res, err := CompileScene("notlist.gx", c.src)
+			if err != nil {
+				t.Fatal(err)
+			}
+			found := false
+			for _, d := range res.Analysis.Diagnostics() {
+				if d.Code == "for-not-list" && strings.Contains(d.Message, "请先转成切片") {
+					found = true
+				}
+			}
+			if !found {
+				t.Errorf("each 非列表应产出 for-not-list 诊断, got:\n%v", res.Analysis.Diagnostics())
+			}
+		})
+	}
+}
