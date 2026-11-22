@@ -103,14 +103,8 @@ func compCallTokens(n *jsxNode, ctx *jsxSceneCtx) []Token {
 	return compCallProps(n, ctx)
 }
 
-// signalFieldPropTokens 为 props 的 signal 字段生成值 token，统一四档语义
-// （与手写 `CardProps{name: expr}` 经 wrapSignalFieldLiterals 的语义一致）：
-//
-//	signal 变量 / signal 字段 selector → 直通 getter（保鲜）；
-//	字面量（字符串/数字/bool）         → Signal.New(lit)；
-//	其余派生表达式（含 signal 读）     → Signal.Computed(func() T { return expr })。
-//
-// 判定基于原始 a.value 的词法形态，避开 JSX token 无法反查 Bindings 类型的问题。
+// signalFieldPropTokens 为 props 的 signal 字段生成值 token，档位表见 signalfields.go
+// 文件顶部（单一事实来源），手写构造与 JSX 两处共用 buildSignalFieldValue。
 // 返回 (tokens, true) 表示已处理；(nil, false) 表示非 signal 字段，走常规路径。
 func signalFieldPropTokens(a jsxAttr, ctx *jsxSceneCtx, propsType string) ([]Token, bool) {
 	if propsType == "" || a.name == "" || !ctx.signalFields.has(propsType, a.name) {
@@ -142,36 +136,31 @@ func signalFieldPropTokens(a jsxAttr, ctx *jsxSceneCtx, propsType string) ([]Tok
 		return leaf, true
 	}
 
-	// 派生档按表达式来源分（第八轮用户规则）：
-	//   - 含 signal 读 → Signal.Computed(func() T { return expr })，登记依赖并缓存；
-	//   - 纯普通变量/普通字段 → 裸 getter func(...T) T { return expr }，每次读重新求值。
-	// Computed 只在其依赖的 signal 变化时重算；若表达式读的是普通字段（如 q.title），
-	// 没有 signal 依赖可登记，Computed 会把首值永久缓存 → 普通字段后续改动冻结。
-	// 裸 getter 则每次读都拿到普通字段的最新值，兑现"用户不感知 signal 差异"。
-	hasSig := exprHasSignalRead(vt, 0, len(vt), ctx.bindings, ctx.signalFields, ctx.jsxPos)
-	// For item getter（u() 形式的 item signal）也属 signal 读：它在每次读取时
-	// 拿到当前 item 值，走 Computed 登记依赖、item 变化时自动重算。
-	// forItemParam 不是 BkSignal 绑定，exprHasSignalRead 认不出，这里补判。
-	if !hasSig && ctx.forItemParam != "" {
+	// For item getter（u() 形式的 item signal）是 signal 读，但 forItemParam 不是
+	// BkSignal 绑定，统一分档的 exprHasSignalRead 认不出——这里补判并强制走 Computed
+	// （档4），登记对 item signal 的依赖、item 变化时自动重算。
+	if ctx.forItemParam != "" {
 		for k := 0; k+2 < len(vt); k++ {
 			if vt[k].Kind == Ident && vt[k].Text == ctx.forItemParam &&
 				vt[k+1].Text == "(" && vt[k+2].Text == ")" {
-				hasSig = true
-				break
+				expr := make([]Token, 0, len(vt))
+				for _, t := range vt {
+					if t.Kind != EOF {
+						expr = append(expr, t)
+					}
+				}
+				return signalComputedCall(T, p, expr), true
 			}
 		}
 	}
-	// 去掉 EOF，得到纯表达式 token。
+	// 去掉 EOF，得到纯表达式 token，交统一分档入口。
 	expr := make([]Token, 0, len(vt))
 	for _, t := range vt {
 		if t.Kind != EOF {
 			expr = append(expr, t)
 		}
 	}
-	if hasSig {
-		return signalComputedCall(T, p, expr), true
-	}
-	return signalGetterCall(T, p, expr), true
+	return buildSignalFieldValue(T, p, expr, 0, len(expr), ctx.bindings, ctx.signalFields, ctx.jsxPos), true
 }
 
 // signalNewCall 生成 Signal.New(<lit>) token 序列。

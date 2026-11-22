@@ -84,12 +84,6 @@ func CompileSceneWithModule(file, src, module string) (*Result, error) {
 // imports 提供跨文件 import 来源表（nil 表示单文件、一律按 Go 来源处理）。
 func compileWithMode(file, src, module string, imports map[string]ImportInfo) (*Result, error) {
 	toks := New(src).AllTokens()
-	// 禁止用户手写底层 Signal 运行时 API（Signal.New/Computed/Effect/...）。
-	// 必须在任何 transform 之前：此时小写语法糖尚未被还原成大写、生成物尚不存在，
-	// `Signal.<大写标识符>` 只可能是用户手写的底层 API。详见 checkNoRawSignalAPI。
-	if err := checkNoRawSignalAPI(toks); err != nil {
-		return nil, err
-	}
 	// struct signal 字段语言特性：必须在 Bind 之前降级 `signal name TYPE`
 	// → `name Signal.Signal[TYPE]`，否则 `signal` 关键字会被局部 signal 逻辑
 	// 误判为 `signal name = expr`（旧行为生成非法 `var name any string`）。
@@ -113,6 +107,14 @@ func compileWithMode(file, src, module string, imports map[string]ImportInfo) (*
 	// 改写后初值被 Signal.New(...) 包裹，字面量类型无法直接推断，故必须在此处采集。
 	// 供 <For> 在 render 参数无类型注解时从 each 推断元素类型。
 	sigTypes := collectSignalTypes(toks)
+	// 禁止用户手写底层 Signal 运行时 API（Signal.New/Computed/Effect/...）。
+	// 放在 Bind 之后、transformSignals 之前：① Bindings 已建好，可按绑定放行用户的
+	// 同名变量（`Signal := Holder{New:"v"}` 的字段访问，P2-A）；② 此刻编译器尚未生成
+	// 任何 Signal.New/Computed（用户手写仍是 IsGen=false，编译器产物 IsGen=true 被跳过）；
+	// ③ 小写语法糖 computed/effect 尚未被 transformExternal 还原成大写，不会误判。
+	if err := checkNoRawSignalAPI(toks, bindings); err != nil {
+		return nil, err
+	}
 	// P1：传入 bindings，用 ResolveAt 做遮蔽判断（P1-1 根治）。
 	toks = transformSignals(toks, bindings)
 	analysis := Analyze(toks)    // desugar 之前的 GX 语义层（联合未擦除）

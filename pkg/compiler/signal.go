@@ -42,14 +42,23 @@ import (
 // 失去透明改写、占位包名被重命名触发 Signal2 未定义、被 signal 字段二次包装
 // 类型错等一系列问题——这些正是第六、七轮反复打补丁的根因。禁止手写即可归零。
 //
-// 判据：原始 token 流里 `Signal . <大写开头标识符>` 形态。
-//   - 必须在管线最开头（任何 transform 之前）调用：此时小写语法糖 computed/effect
-//     尚未被 transformExternal 还原成大写，编译器生成物也还不存在，判据最干净。
-//   - 首字母小写（computed/effect/createRoot/newWithEquals 等）是语法糖，放行。
-//   - 位置落在成员名 token 上，报错指向用户实际写的那个 API 名。
-func checkNoRawSignalAPI(toks []Token) error {
+// 判据：`Signal . <大写开头标识符>` 形态，且 Signal 是「包名引用」而非用户同名变量：
+//   - 只认用户手写的 token（IsGen==false）——编译器生成的 Signal.New/Computed/Signal[T]
+//     都带 IsGen，避免误报自身产物（第九轮 P2-A）；
+//   - 对命中的 Signal 用 Bindings.ResolveAt 查绑定：命中局部/参数/字段/类型等
+//     任何用户绑定（如 `Signal := Holder{New:"v"}`）→ 是合法的同名字段访问，放行；
+//     查不到绑定 → 是包名引用，用户手写底层 API，报错；
+//   - 首字母小写（computed/effect/createRoot 等）是语法糖，放行。
+//
+// 调用时机：必须在 transformSignals 之后（Bindings 可用）、transformExternal 之前
+// （小写语法糖尚未还原成大写）。详见 pipeline.go 调用点注释。
+func checkNoRawSignalAPI(toks []Token, b *Bindings) error {
 	for i := 0; i < len(toks); i++ {
-		if !toks[i].is("Signal") {
+		if !toks[i].is("Signal") || toks[i].IsGen {
+			continue // 编译器生成物放行
+		}
+		// 用户同名变量/字段/参数：按绑定放行（Signal := Holder{...}; Signal.New）。
+		if b != nil && b.ResolveAt("Signal", toks[i].Pos) != nil {
 			continue
 		}
 		dot := nextSig(toks, i+1)

@@ -30,6 +30,13 @@
 > 响应式 UI 的 Owner / Cleanup / 条件分支 / Keyed For / 结构变化重绘等机制，详见
 > [响应式 UI 路线图落地说明](docs/reactive-ui-roadmap.md)。
 
+> **语言状态与兼容性**：GX 目前是 v0，语法与 API 仍可能调整。近期一处源码级不兼容变更——
+> 底层运行时 API 不再允许手写：`Signal.New` / `Signal.Computed` / `Signal.Effect` 等大写构造器
+> 改为编译错误，统一走语法糖（`signal n = v` / `Signal.computed(...)` / `Signal.effect(...)`）；
+> 相应地 `view.BindReactive(signal.Effect)` 的手写调用改为小写 `Signal.effect` 函数值传递。
+> `Signal` 是保留标识符（占位包名语义优先），勿用作变量名。详见
+> [语言规范 §11](docs/language-spec.md#11-响应式-signal) 与 §11.1。
+
 ## 1. 可见性：`pub`
 
 Go 用首字母大小写决定导出；gx 用小写书写 + `pub` 显式声明公开。作用域感知保证：自己的 pub 符号在**声明处与引用处**都大写，局部变量与私有符号保持小写。

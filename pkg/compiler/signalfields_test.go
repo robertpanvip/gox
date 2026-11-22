@@ -351,11 +351,10 @@ func main() {
 }
 `
 	// compileOK 内含 Validate()：产物语法非法会直接 fail。
-	// 第八轮规则：复合字面量 Inner{v: n} 不是纯字面量，用裸 getter
-	// func(...Inner) Inner { return ... } 每次读重新构造（内部的 v 是活 getter），
-	// 而非 Signal.New 快照。此处仍验证嵌套下标不漂移、产物合法。
+	// 第九轮 P1-A：复合构造 Inner{v: n} 用 Signal.New 一次构造（可写、可响应），
+	// 不再包成「每次读重建」的裸 getter。此处验证嵌套下标不漂移、产物合法。
 	got := compileOK(t, "sfhw_nested.gx", src)
-	containsAll(t, got, `inner: func(...Inner) Inner { return Inner{v: n} }`, `other: n`)
+	containsAll(t, got, `inner: Signal.New(Inner{v: n})`, `other: n`)
 }
 
 // 三层嵌套 + 混合字段，进一步压测递归下标的正确性。
@@ -371,7 +370,7 @@ func main() {
 }
 `
 	got := compileOK(t, "sfhw_deep.gx", src)
-	containsAll(t, got, `child: func(...L2) L2 { return L2{inner: func(...L3) L3 { return L3{v: n, plain: 1} }, tag: "t"} }`)
+	containsAll(t, got, `child: Signal.New(L2{inner: Signal.New(L3{v: n, plain: 1}), tag: "t"})`)
 }
 
 // 第七轮 §4 回归：手写字段间赋值 p.a → q.a 必须直通裸 getter（保鲜），
@@ -457,9 +456,11 @@ func main() {
 }
 `
 	got := compileOK(t, "sf8_plain.gx", src)
-	containsAll(t, got,
-		`a: func(...string) string { return plain }`,
-		`b: func(...string) string { return q.title }`,
+	// 第九轮 P1-B：裸变量/selector 用「可写 getter」——读跟随最新值、写真正生效。
+	gotCompact := strings.Join(strings.Fields(got), "")
+	containsAll(t, gotCompact,
+		`a:func(arg...string)string{iflen(arg)>0{plain=arg[0]}returnplain}`,
+		`b:func(arg...string)string{iflen(arg)>0{q.title=arg[0]}returnq.title}`,
 	)
 	if strings.Contains(got, `Signal.New(plain)`) || strings.Contains(got, `Signal.New(q.title)`) {
 		t.Errorf("普通变量/字段不得用 Signal.New 快照：\n%s", got)
@@ -481,8 +482,9 @@ func main() {
 	containsAll(t, got,
 		`a: Signal.New("lit")`,
 		`b: Signal.Computed(func() string { return n() + "!" })`,
-		`c: func(...string) string { return plain }`,
 	)
+	gotCompact := strings.Join(strings.Fields(got), "")
+	containsAll(t, gotCompact, `c:func(arg...string)string{iflen(arg)>0{plain=arg[0]}returnplain}`)
 }
 
 // P2-1 邻居：&{...} 省略类型名 + 取址，指针 props 补全单个 &、signal 字段透传 getter。
@@ -700,4 +702,97 @@ func main() {
 	if strings.Contains(got, `func(arg ...string) string`) {
 		t.Errorf("派生表达式不得走读写 lambda:\n%s", got)
 	}
+}
+
+// ==================== 第十轮评审回归 ====================
+
+// P1-A：signal 字段值是结构体构造时必须 Signal.New（一次构造、可写），
+// 不能包成忽略参数的裸 getter（写入丢失、依赖链断、每次读重建）。
+func TestR10StructLitUsesNewNotBareGetter(t *testing.T) {
+	src := `package main
+type Leaf struct { signal v string }
+type Mid struct { signal leaf Leaf }
+func main() {
+	m := Mid{leaf: Leaf{v: "a"}}
+	_ = m
+}
+`
+	got := compileOK(t, "r10_structlit.gx", src)
+	containsAll(t, got, `leaf: Signal.New(Leaf{v: Signal.New("a")})`)
+	if strings.Contains(got, `func(...Leaf) Leaf`) {
+		t.Errorf("结构体构造不得包成裸 getter:\n%s", got)
+	}
+}
+
+// P1-B：普通变量构造的 signal 字段，写分支必须真正落回变量（不是静默丢参数）。
+func TestR10PlainVarGetterWritable(t *testing.T) {
+	src := `package main
+type P struct { signal a string }
+func main() {
+	v := "one"
+	p := P{a: v}
+	p.a = "two"
+	_ = p; _ = v
+}
+`
+	got := compileOK(t, "r10_writable.gx", src)
+	containsAll(t, got, `if len(arg) > 0`, `v = arg[0]`, `return v`)
+}
+
+// P2-A：局部同名变量 Signal 的字段访问按绑定放行，不算手写底层 API。
+func TestR10LocalSignalVarFieldAllowed(t *testing.T) {
+	src := `package main
+import "fmt"
+type Holder struct { New string }
+func main() {
+	Signal := Holder{New: "v"}
+	fmt.Println(Signal.New)
+}
+`
+	_ = compileOK(t, "r10_local.gx", src)
+}
+
+// P2-B：从 map/slice 索引取值后读 signal 字段必须补 ()。
+func TestR10IndexReceiverRead(t *testing.T) {
+	src := `package main
+import "fmt"
+type P struct { signal a string }
+func main() {
+	signal n = "x"
+	m := map[string]P{"k": {a: n}}
+	s := []P{{a: n}}
+	fmt.Println(m["k"].a, s[0].a)
+}
+`
+	got := compileOK(t, "r10_index.gx", src)
+	containsAll(t, got, `m["k"].a()`, `s[0].a()`)
+}
+
+// P2-C：嵌套容器 map[string][]P 的元素补全为具名 P，不退化匿名 struct。
+func TestR10NestedContainerElemType(t *testing.T) {
+	src := `package main
+type P struct { signal a string }
+func main() {
+	signal n = "x"
+	m := map[string][]P{"k": {{a: n}}}
+	_ = m
+}
+`
+	got := compileOK(t, "r10_nested_container.gx", src)
+	containsAll(t, got, `P{a: n}`)
+	if strings.Contains(got, `struct{`) {
+		t.Errorf("嵌套容器元素不得退化匿名 struct:\n%s", got)
+	}
+}
+
+// P2-D：&{...} 内层省略类型字面量补全为具名类型 + signal 字段包 New。
+func TestR10AddrLitNestedFieldType(t *testing.T) {
+	src := `package main
+type Inner struct { signal v string }
+type Out struct { inner Inner }
+func Card(p *Out) {}
+func main() { Card(&{inner: {v: "x"}}) }
+`
+	got := compileOK(t, "r10_addr_nested.gx", src)
+	containsAll(t, got, `&Out{inner: Inner{v: Signal.New("x")}}`)
 }

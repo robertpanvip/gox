@@ -159,6 +159,7 @@ println(doubled)                                   // → println(doubled())，�
 - **computed**：惰性求值 + 缓存，仅依赖变化时失效；链式派生正确传播。
 - **effect**：立即执行一次，依赖变化时重跑；每次重跑动态重建依赖集合（条件分支依赖可增删）。
 - **底层 API 禁止手写**：`Signal.New` / `Signal.Computed` / `Signal.Effect` / `Signal.NewWithEquals` 等首字母大写的运行时构造器是编译器内部实现细节，用户源码里直接调用会报编译错误。GX 只暴露语法糖：`signal n = v` 声明源信号、`Signal.computed(() => expr)` 派生、`Signal.effect(() => {...})` 副作用；迟早需要的自定义相等策略等仍由运行时保留，但不从语言层暴露。这样用户无需感知 signal 与普通变量的区别，也杜绝了手写值与编译器 binding 不一致引发的快照冻结 / 别名冲突 / 二次包装等一系列问题。小写语法糖（含作为函数值传递的 `Signal.effect`）由编译器在末尾还原成对应大写符号，是唯一合法入口。
+- **`Signal` 是保留标识符**：作为占位包名的语义优先，勿用作变量名/类型名/字段名。`Signal.New` 形式的底层 API 调用会被拦截；若确需同名局部变量（如 `Signal := Holder{...}`），对其字段的访问（`Signal.New`）会按绑定表放行——判据是「`Signal` 是否解析为包名绑定」，不是纯词法匹配。
 - **并发安全**：全局互斥锁保护观察者栈与依赖图，用户回调在锁外执行。
 - **读取性能**：依赖追踪只在 effect/computed 重算期间需要，而这类场景是少数；普通读取走**无锁快路径**——用原子计数器 `activeObservers` 判断当前无 observer 重算时，直接原子读取当前值，跳过抓栈（goroutine id 解析）与加锁。signal 值用原子指针存储避免撕裂。实测读取 ~2 ns（约为普通变量的 2 倍），相较抓栈方案（~2900 ns）提速约 1400×；computed 缓存命中读 ~14 ns。
 - **import**：`Signal` 占位包名由 ImportManager 统一解析为 `import Signal "<module>/runtime/signal"`；源码已用别名导入则复用。
@@ -186,12 +187,20 @@ func main() {
 
 - **声明**：`signal name T` → `name Signal.Signal[T]`（函数字段，无参读/带参写）。
 - **读**：`p.name` → `p.name()`；**写**：`p.name = v` → `p.name(v)`；复合写 `+=` 与 `++/--` 同样展开。
-- **构造（三档，手写与 JSX 一致）**：signal 字段的值按形态分三档处理——
-  - **透传**：`v` 本身是 signal（signal 变量读取 `src()`、裸 getter、signal 字段 selector、小写派生 `Signal.computed(...)`）→ 直通 getter 本身，保持与外部 signal 关联（保鲜）；
-  - **字面量**：纯字面量（数字/字符串/bool/nil）→ `Signal.New(v)`；
-  - **派生**：含 signal 读取的表达式（如 `fmt.Sprint(n())`、`"n=" + n()`）→ `Signal.Computed(func() T { return v })`，每次读重新求值（保鲜）。
+- **构造（六档，手写与 JSX 一致）**：signal 字段的值按来源分档处理。**档位表的单一事实来源是 `pkg/compiler/signalfields.go` 顶部注释**，此处仅摘要，改动以实现为准——
   
-  手写 `CardProps{name: v}` 与 JSX `<Card name={v}/>` 走同一套三档语义。派生档是惰性求值的（首次读字段时才计算）。
+  | 档 | 形态 | 产物 |
+  |---|---|---|
+  | 1 透传 | `v` 本身是 signal（signal 变量/字段/链读） | 直通 getter 本身，零开销；链中间含 signal 段时走读写合一 lambda 保鲜 |
+  | 2 字面量 | 纯常量（数字/字符串/bool/nil） | `Signal.New(v)` |
+  | 3 构造 | 复合字面量（如 `Leaf{v:"a"}`） | `Signal.New(v)`，一次构造、可写、可响应 |
+  | 4 派生 | 含 signal 读的表达式（如 `p.a + p.b`） | `Signal.Computed(func() T { return v })`，登记依赖、只读 |
+  | 5 裸变量 | 单个普通变量/字段（如 `v`、`q.title`） | 可写 getter `func(arg ...T) T { if len(arg)>0 { v = arg[0] }; return v }`，读跟随、写落回变量 |
+  | 6 其它 | 普通表达式（无 signal 读、非上述形态） | 可写 getter；无写目标时保守用 `Signal.New(v)` 快照 |
+  
+  **硬判据**：凡是生成出的 `func(...T) T` 忽略参数、不登记依赖的，都不是合法 signal。档 3 的复合字面量必须走 `Signal.New`（一次构造、可写），不能包成每次读重建的裸闭包——否则中间 signal 段变化时 UI 不刷新、写入静默丢失。档 5/6 的可写 getter 让「从普通变量构造」也能写回，读仍跟随变量最新值。
+  
+  手写 `CardProps{name: v}` 与 JSX `<Card name={v}/>` 共用 `buildSignalFieldValue`，走同一套六档语义。派生档（档 4）是惰性求值的（首次读字段时才计算）。
 - **类型安全**：只有 receiver 类型已知、且该字段确为某 struct 的 signal 字段时才解包；普通字段、同名但非 signal 的字段、外部包符号都不受影响。JSX 插值里的 selector 补 `()` 也按 receiver 断言类型判定，不会因同文件别处有同名字段而误伤普通字段读取。
 - **与局部 signal 共存**：两者独立，互不干扰；降级在绑定表构建之前完成，避免 `signal` 关键字被局部逻辑误判。
 

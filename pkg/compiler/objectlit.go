@@ -261,14 +261,21 @@ func inferValueType(toks []Token, from, to int, b *Bindings) string {
 			}
 		}
 	}
-	// 已是展开后的 struct 字面量 / 类型（嵌套对象被内层替换后的形态）。
-	// 必须先于 bool 扫描：内层 struct 的值里可能含 true/false，不能误判为 bool。
-	if firstSig >= 0 && toks[firstSig].is("struct") {
+	// 已是展开后的复合字面量（嵌套对象被内层替换后的形态）：
+	//   - struct{...}{...} → 返回完整匿名 struct 类型文本；
+	//   - Inner{...}       → 返回具名类型名 Inner（P2-D：内层补全后的形态）。
+	// 必须先于 bool/字符串扫描：值里可能含 true/false/字符串，不能误判为基础类型。
+	if firstSig >= 0 && toks[firstSig].Kind == Ident {
 		open := nextSigIn(toks, firstSig+1, to)
 		if open >= 0 && toks[open].Text == "{" {
 			close := matchDelimSkipSpace(toks, open, "{", "}")
 			if close > open && close <= to {
-				return exprText(toks, firstSig, close+1)
+				if toks[firstSig].is("struct") {
+					return exprText(toks, firstSig, close+1)
+				}
+				if !isGoKeyword(toks[firstSig].Text) {
+					return toks[firstSig].Text
+				}
 			}
 		}
 	}
@@ -366,49 +373,109 @@ func resolveExpectType(toks []Token, lit *objectLit, an *Analysis, structs map[s
 // 用于 map[string]P{"k": {a: n}} / []P{{a: n}} 这类内层字面量的期望类型下推（P2-2）。
 // 无法确定返回空串（调用方退化为匿名 struct）。
 func containerElemTypeBefore(toks []Token, open int) string {
-	// 1) 从 open-1 往前做括号平衡，找与内层字面量配对的父容器 '{'。
-	//    内层已闭合的 {...} / (...) 会增加深度，遇开括号时逐层回退。
-	depth := 0
-	parentBrace := -1
-	for i := open - 1; i >= 0; i-- {
-		switch toks[i].Text {
-		case "}", ")":
-			depth++
-		case "{", "(":
-			if depth > 0 {
-				depth--
-			} else if toks[i].Text == "{" {
-				parentBrace = i
+	// 逐层往外找「带类型前缀的容器 '{'」（如 map[K]V{ / []T{）。
+	// 省略类型名的容器字面量（map value 位的 '{'、嵌套容器元素 '{'）记为 skips，
+	// 每往外一层 skips++。找到带类型的容器后提取其完整类型，再剥 skips+1 次元素类型。
+	cur := open
+	skips := 0
+	for {
+		// 找 cur 前面 depth==0 的 '{'（跳过已闭合的内层字面量）。
+		depth := 0
+		parent := -1
+		for i := cur - 1; i >= 0; i-- {
+			switch toks[i].Text {
+			case "}", ")":
+				depth++
+			case "{", "(":
+				if depth > 0 {
+					depth--
+				} else if toks[i].Text == "{" {
+					parent = i
+				}
+			}
+			if parent >= 0 {
+				break
 			}
 		}
-		if parentBrace >= 0 {
-			break
+		if parent < 0 {
+			return ""
 		}
-	}
-	if parentBrace < 0 {
-		return ""
-	}
-	// 2) 父容器 '{' 前是元素类型，类型里必含 ']'（map[K]V / []T / [N]T）。
-	//    往前找最近的 ']'，其后的 token 即元素类型文本。
-	closeBracket := -1
-	for i := parentBrace - 1; i >= 0; i-- {
-		if toks[i].Text == "]" {
-			closeBracket = i
-			break
+		// 从 parent 往前找最近的 ']'（容器类型片段的结尾）。
+		cb := -1
+		for i := parent - 1; i >= 0; i-- {
+			if toks[i].Text == "]" {
+				cb = i
+				break
+			}
 		}
+		if cb < 0 {
+			return ""
+		}
+		// 若 cb 与 parent 之间夹着 '{' / '}' / ':' / 字符串，说明 parent 是
+		// map value 位的省略类型字面量（中间是 map key），继续往外找。
+		clean := true
+		for i := cb + 1; i < parent; i++ {
+			switch toks[i].Kind {
+			case String, Rune:
+				clean = false
+			}
+			if toks[i].Text == "{" || toks[i].Text == "}" || toks[i].Text == ":" {
+				clean = false
+			}
+		}
+		if !clean {
+			skips++
+			cur = parent
+			continue
+		}
+		// 从 ']' 往前括号平衡找匹配的 '['，再纳入 map / list.List 前缀。
+		typeStart := -1
+		d := 0
+		for i := cb; i >= 0; i-- {
+			switch toks[i].Text {
+			case "]":
+				d++
+			case "[":
+				d--
+				if d == 0 {
+					typeStart = i
+				}
+			}
+			if typeStart >= 0 {
+				break
+			}
+		}
+		if typeStart < 0 {
+			return ""
+		}
+		begin := typeStart
+		if pb := prevSig(toks, typeStart-1); pb >= 0 {
+			if toks[pb].Text == "map" {
+				begin = pb
+			} else if toks[pb].Text == "List" || toks[pb].Text == "list" {
+				begin = pb
+				if pp := prevSig(toks, pb-1); pp >= 0 && toks[pp].Text == "." {
+					begin = pp
+					if pq := prevSig(toks, pp-1); pq >= 0 && toks[pq].Kind == Ident {
+						begin = pq
+					}
+				}
+			}
+		}
+		typ := strings.TrimSpace(exprText(toks, begin, parent))
+		if typ == "" {
+			return ""
+		}
+		// 剥 skips+1 次：容器→元素（+ 每个省略层再剥一次）。
+		elem := typ
+		for k := 0; k <= skips; k++ {
+			elem = containerElemType(elem)
+			if elem == "" {
+				return ""
+			}
+		}
+		return elem
 	}
-	if closeBracket < 0 {
-		return ""
-	}
-	elemFrom := nextSig(toks, closeBracket+1)
-	if elemFrom < 0 || elemFrom >= parentBrace {
-		return ""
-	}
-	elem := strings.TrimSpace(exprText(toks, elemFrom, parentBrace))
-	if elem == "" || isGoKeyword(elem) {
-		return ""
-	}
-	return elem
 }
 
 // isAnyLikeType 判断类型文本是否为 any / interface{}（含带空格写法 interface { }）。
@@ -419,6 +486,72 @@ func isAnyLikeType(s string) bool {
 	}
 	// interface{} / interface { } 去掉所有空白后比较
 	return strings.Join(strings.Fields(s), "") == "interface{}"
+}
+
+// structFieldValueExpectType 处理 `field: {...}` 形态的对象字面量字段值（P2-D）：
+// 从字段名往外找最近的祖先对象字面量（如 &{...} / T{...}），递归求其期望类型 owner，
+// 再从 structs 表查 owner.field 的声明类型作为内层字面量的期望类型。
+// depth 防递归过深（对象嵌套层数有限，8 层足够）。
+func structFieldValueExpectType(toks []Token, open, colon int, an *Analysis, structs map[string]*structInfo, b *Bindings) string {
+	// 合法形态 `field: {` 中 colon 必在 open 之前；调用方已保证。
+	// 字段名：':' 前最近的标识符。
+	fieldIdx := prevSig(toks, colon-1)
+	if fieldIdx < 0 || toks[fieldIdx].Kind != Ident {
+		return ""
+	}
+	field := toks[fieldIdx].Text
+	// 从 colon 往前做括号平衡，找最近的祖先 '{'（其配对 '}' 包住 colon）。
+	depth := 0
+	ancestorOpen := -1
+	for i := colon - 1; i >= 0; i-- {
+		switch toks[i].Text {
+		case "}", ")":
+			depth++
+		case "{", "(":
+			if depth > 0 {
+				depth--
+			} else if toks[i].Text == "{" {
+				ancestorOpen = i
+			}
+		}
+		if ancestorOpen >= 0 {
+			break
+		}
+	}
+	if ancestorOpen < 0 {
+		return ""
+	}
+	// 求祖先类型：'{' 前若是显式类型名（Out{ / &Out{），直接用；
+	// 若是省略类型（&{ / {），递归求期望类型。
+	ownerType := ""
+	prev := prevSig(toks, ancestorOpen-1)
+	if prev >= 0 && toks[prev].Kind == Ident && !isGoKeyword(toks[prev].Text) {
+		ownerType = toks[prev].Text // Out{...}
+	} else if prev >= 0 && toks[prev].Text == "&" {
+		pp := prevSig(toks, prev-1)
+		if pp >= 0 && toks[pp].Kind == Ident && !isGoKeyword(toks[pp].Text) {
+			ownerType = toks[pp].Text // &Out{...}
+		} else {
+			// &{...}：递归求祖先期望类型。
+			owner := objectLit{open: ancestorOpen, close: matchDelimSkipSpace(toks, ancestorOpen, "{", "}"), pos: toks[ancestorOpen].Pos}
+			ownerType = resolveExpectTypeRaw(toks, &owner, an, structs, b)
+		}
+	} else {
+		owner := objectLit{open: ancestorOpen, close: matchDelimSkipSpace(toks, ancestorOpen, "{", "}"), pos: toks[ancestorOpen].Pos}
+		ownerType = resolveExpectTypeRaw(toks, &owner, an, structs, b)
+	}
+	if ownerType == "" {
+		return ""
+	}
+	ownerType = strings.TrimSpace(strings.TrimPrefix(ownerType, "*"))
+	if dot := strings.LastIndex(ownerType, "."); dot >= 0 {
+		ownerType = ownerType[dot+1:] // 包前缀
+	}
+	info := structs[ownerType]
+	if info == nil {
+		return ""
+	}
+	return info.fields[field]
 }
 
 func resolveExpectTypeRaw(toks []Token, lit *objectLit, an *Analysis, structs map[string]*structInfo, b *Bindings) string {
@@ -439,6 +572,13 @@ func resolveExpectTypeRaw(toks []Token, lit *objectLit, an *Analysis, structs ma
 	case ":", "{", ",":
 		if et := containerElemTypeBefore(toks, open); et != "" {
 			return et
+		}
+		// P2-D：struct 字段值字面量 `{v: "x"}` 处于 `field: {...}` 位置——
+		// 往外找祖先对象字面量（如 &{...}）的期望类型，查该字段的声明类型。
+		if toks[p].Text == ":" {
+			if et := structFieldValueExpectType(toks, open, p, an, structs, b); et != "" {
+				return et
+			}
 		}
 	}
 	// 1) var p point = {...}：'=' 前是类型名（var 声明带显式类型）

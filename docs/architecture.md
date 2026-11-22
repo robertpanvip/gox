@@ -35,7 +35,8 @@ downgradeSignalFields  struct 内 `signal name T` → `name Signal.Signal[T]`（
   ▼
 Bind / transformSignals / Analyze / ...对象字面量、模板等 desugar
   ▼
-wrapSignalFieldLiterals  构造位置 signal 字段值三档：透传 getter / 字面量 Signal.New / 派生 Signal.Computed
+buildSignalFieldValue  构造位置 signal 字段值六档（档位表单源见 signalfields.go 顶部注释）：
+  透传 getter / 字面量 Signal.New / 复合构造 Signal.New / 派生 Computed / 可写裸变量 getter / 其它
 rewriteSignalFieldRefs   selector 读写解包：p.name → p.name() / p.name = v → p.name(v)
   ▼
 transformEnum      enum → 具名类型 + const + String/Parse（注入 strconv import）
@@ -74,12 +75,15 @@ emit               拼装 Go 源码，同时记录输出 token → 输入位置�
 `pkg/compiler/signalfields.go` 实现 struct 字段级的响应式语言特性。核心是一张 `signalFieldTable`（`type 名 → signal 字段名集合`），三段协作：
 
 1. **降级（Bind 之前）**：`collectSignalFieldDecls` 扫 `type X struct{...}` 找 `signal name T`，`downgradeSignalFields` 改写为 `name Signal.Signal[T]`，Signal token 标记 `IsGen` 由 `ReconcileImports` 统一注入 import。放在 Bind 之前是关键——降级后所有下游都以标准 Go 处理该字段。
-2. **构造包装（三档）**：`wrapSignalFieldLiterals`（手写 `X{name: v}`）与 JSX 侧 `signalFieldPropTokens`（`<X name={v}/>`）共享同一套赋值语义：
-   - **透传档**：值本身已是 signal（`src()`／裸 getter／signal 字段 selector／小写派生 `Signal.computed(...)`）→ 直通 getter 本身，保鲜；
-   - **字面量档**：数字/字符串/bool/nil 等纯字面量 → `Signal.New(v)`，字段可独立初始化（值恒定，快照无副作用）；
-   - **派生档**：含 signal 变量读取的表达式（如 `fmt.Sprint(n())`、`"n=" + n()`）→ `Signal.Computed(func() T { return expr })`，每次读重新求值并登记依赖，保鲜。
+2. **构造包装（六档）**：手写 `X{name: v}`（`wrapLitSeg` → `buildSignalFieldValue`）与 JSX 侧 `signalFieldPropTokens`（`<X name={v}/>`）共用 `buildSignalFieldValue` 同一套赋值语义。**档位表的单一事实来源是 `pkg/compiler/signalfields.go` 顶部注释**，此处仅摘要：
+   - **档1 透传**：值本身已是 signal（signal 变量/字段/链读）→ 直通 getter 本身，保鲜；链中间含 signal 段时走 `signalChainGetter` 读写合一 lambda，中间段 receiver 变化也保鲜；
+   - **档2 字面量**：数字/字符串/bool/nil 等纯常量 → `Signal.New(v)`；
+   - **档3 构造**：复合字面量（如 `Leaf{v:"a"}`）→ `Signal.New(v)`，一次构造、可写、可响应（**不可**包成每次读重建的裸闭包，否则写入丢失、依赖链断裂、UI 不刷新）；
+   - **档4 派生**：含 signal 读的表达式（如 `p.a + p.b`）→ `Signal.Computed(func() T { return expr })`，登记依赖、只读；
+   - **档5 裸变量**：单个普通变量/字段（如 `v`、`q.title`）→ 可写 getter `func(arg ...T) T { if len(arg)>0 { v = arg[0] }; return v }`，读跟随最新值、写真正落回变量；
+   - **档6 其它**：普通表达式 → 可写 getter；无写目标时保守用 `Signal.New(v)` 快照。
    
-   手写侧派生档由 `exprHasSignalRead` 判定（transformSignals 已把裸信号读改写成 `n()`，据此识别）；判定只认 signal 变量，signal 字段 selector 走透传档的既有语义。集成测试 `TestIntegrationSignalFieldHandwrittenDerivedLive` 与编译测试 `TestSignalFieldHandwrittenDerivedUsesComputed` 固化了"手写构造派生表达式也保鲜"。
+   硬判据：生成出的 `func(...T) T` 若忽略参数、不登记依赖，就不是合法 signal。派生档由 `exprHasSignalRead` 判定（transformSignals 已把裸信号读改写成 `n()`，据此识别）。集成测试 `TestIntegrationSignalFieldHandwrittenDerivedLive`、`TestIntegrationChainRWGetterFreshReceiver` 与编译测试 `TestSignalFieldHandwrittenDerivedUsesComputed` 固化了「手写派生保鲜 / 链中间 signal 段变化保鲜」。
 3. **读写解包**：`rewriteSignalFieldRefs` 用 receiver 的推断类型（`Bindings.ResolveAt(...).Type`，已增强为识别具名复合字面量 `X{...}`）查表，只对命中的 selector 补 `()` / 改写为调用式。普通字段、同名非 signal 字段、外部包符号都不动。JSX 插值侧 `rewriteJSXSignalFieldSelectors` 同样按 receiver 类型判定（不再按字段名全表猜），兑现 `language-spec.md` §11.1 的类型安全承诺。
 
 保鲜语义的关键在构造直通：`p := X{name: src}` 必须生成 `name: src`（getter 本身），不能是 `Signal.New(src())`（快照当前值、断开后续更新）。集成测试 `TestIntegrationSignalFieldLiveProps` 固化了这一点（源 signal 更新后持有者读到新值）。

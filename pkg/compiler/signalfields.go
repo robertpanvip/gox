@@ -30,6 +30,29 @@ import "strings"
 // 关键字会被局部 signal 逻辑误判为 `signal name = expr` 声明（旧行为生成非法
 // 的 `var name any string`）。降级后所有下游（Bindings/scope/objectlit/pub/
 // external）看到的都是标准 Go 的 `Signal.Signal[T]` 字段，天然享受既有保护。
+//
+// ============================================================================
+// signal 字段构造值 / JSX signal prop 的档位表（本文件是单一事实来源）
+// ============================================================================
+// Signal[T] = func(...T) T，读写一体。生成物必须满足：读登记依赖、写真正生效。
+// 凡是「忽略参数的 func(...T) T」都不是合法 signal——这是分档的硬判据。
+// 值表达式 E（signal 字段的值 / signal prop 的值）按来源分档：
+//
+//  档1 透传  E 本身是 signal（变量/字段/链读）        → 传 getter 本身，零开销
+//           （链中间含 signal 段时走读写合一 lambda，见 signalChainGetter）；
+//  档2 字面量 E 是常量（数字/字符串/bool/nil）        → Signal.New(E)，可写、不缓存依赖；
+//  档3 构造  E 是复合字面量构造（如 Leaf{v:"a"}）     → Signal.New(E)，一次构造、可写、可响应；
+//  档4 派生  E 含 signal 读（如 p.a + p.b）           → Signal.Computed(func() T { return E })，
+//           登记依赖，只读（Computed 语义本就只读）；
+//  档5 裸变量 E 是单个普通变量/字段（如 v、q.title）  → 可写 getter
+//           func(arg ...T) T { if len(arg)>0 { E = arg[0] }; return E }，
+//           读跟随普通变量最新值，写真正落到变量；
+//  档6 其它  普通表达式（无 signal 读、非上述形态）    → 可写 getter（若能定位到可赋值
+//           的单个变量，走档5）；确无写目标的保守用 Signal.New(E) 快照，绝不生成
+//           忽略参数的假 signal。
+//
+// 实现入口：手写构造 wrapLitSeg → buildSignalFieldValue；JSX signalFieldPropTokens
+// 先判透传/字面量，其余交 buildSignalFieldValue。两处共用同一分档，杜绝判据分裂。
 
 // signalFieldTable 记录 struct 字段元数据，供所有「signal 字段读」判定共用
 // （第八轮主线：统一判据入口）。两张表：
@@ -382,9 +405,26 @@ func resolveSignalChainEx(toks []Token, i int, recvPos Pos, b *Bindings, tbl sig
 	if curType == "" {
 		return signalChain{}, false
 	}
+	// 索引 receiver（m["k"].a / s[0].a，第九轮 P2-B）：链首标识符后紧跟 '[...]'，
+	// 把 receiver 类型从容器推进到元素类型（map[K]V→V、[]T/list.List[T]→T），
+	// 并把游标移到 ']'，使下面的 '.' 查找能接上。推不出元素类型则保持原样（保守）。
+	// Bindings 对 map 变量的类型推断可能只到 key 类型（如 map[string]P 推断成 string），
+	// 故先试绑定类型，失败再从变量声明 token 反推容器类型。
+	cur := chainStart
+	if lb := nextSigIn(toks, i+1, limit); lb >= 0 && toks[lb].Text == "[" {
+		if rb := matchDelim(toks, lb, "[", "]"); rb > lb && rb < limit {
+			et := containerElemType(curType)
+			if et == "" {
+				et = containerElemTypeFromDecl(toks, i, recvPos)
+			}
+			if et != "" {
+				curType = et
+				cur = rb
+			}
+		}
+	}
 
 	chain := signalChain{chainStart: chainStart, callRecv: callRecv, recvIdx: i}
-	cur := chainStart
 	for {
 		dot := nextSigIn(toks, cur+1, limit)
 		if dot < 0 || toks[dot].Text != "." {
@@ -477,13 +517,15 @@ func receiverTypeBeforeTail(toks []Token, i, start int, callRecv bool, recvPos P
 func bareFieldType(ft string) string {
 	t := strings.TrimSpace(ft)
 	i := strings.Index(t, "[")
-	// Signal.Signal[T] → T
-	if strings.HasPrefix(t, "Signal.Signal[") || strings.HasPrefix(t, "signal.Signal[") {
+	// Signal.Signal[T] → T；list.List[T] → T（GX 把 []T 提升为 list.List[T]，
+	// 索引 receiver s[0].field 需剥出 T 才能沿链传播，第九轮 P2-B）。
+	if strings.HasPrefix(t, "Signal.Signal[") || strings.HasPrefix(t, "signal.Signal[") ||
+		strings.HasPrefix(t, "list.List[") || strings.HasPrefix(t, "List[") {
 		inner := t[i+1 : strings.LastIndex(t, "]")]
 		return bareFieldType(inner)
 	}
 	if i >= 0 {
-		return "" // 其它泛型（如 list.List[T]）不作为字段链 receiver
+		return "" // 其它泛型不作为字段链 receiver
 	}
 	t = strings.TrimSpace(strings.TrimPrefix(t, "*"))
 	if dot := strings.LastIndex(t, "."); dot >= 0 {
@@ -493,6 +535,109 @@ func bareFieldType(ft string) string {
 		return ""
 	}
 	return t
+}
+
+// containerElemTypeFromDecl 从标识符 useIdx 往前找同名变量的声明，提取其容器类型
+// （map[K]V / []T / [N]T），再交 containerElemType 剥出元素类型。
+// 用于 Bindings 对 map 变量类型推断不准时（如 map[string]P 只推断成 string）的回退。
+// 限定在同函数体内最近的 `name := <容器类型>{` / `name := <容器类型>(` / `var name <容器类型>`。
+func containerElemTypeFromDecl(toks []Token, useIdx int, recvPos Pos) string {
+	name := toks[useIdx].Text
+	// 从使用点往前找最近的同名标识符声明（:= 或 var）。
+	for j := useIdx - 1; j >= 0; j-- {
+		if toks[j].Text != name || toks[j].Kind != Ident {
+			continue
+		}
+		after := nextSig(toks, j+1)
+		if after < 0 {
+			continue
+		}
+		// m := map[K]V{...} / m := []T{...}
+		if toks[after].Text == ":=" || toks[after].Text == "=" {
+			typeIdx := nextSig(toks, after+1)
+			if typeIdx < 0 {
+				continue
+			}
+			te := typeRangeEnd(toks, typeIdx)
+			if te > typeIdx {
+				typ := exprText(toks, typeIdx, te)
+				if et := containerElemType(typ); et != "" {
+					return et
+				}
+			}
+		}
+		// var m map[K]V / var m []T（类型紧跟名字）
+		if looksContainerTypeStart(toks, after) {
+			te := typeRangeEnd(toks, after)
+			if te > after {
+				if et := containerElemType(exprText(toks, after, te)); et != "" {
+					return et
+				}
+			}
+		}
+	}
+	return ""
+}
+
+// looksContainerTypeStart 判断 token 是否可能是容器类型起点（map[...] / [...] / list.List[）。
+func looksContainerTypeStart(toks []Token, i int) bool {
+	if i < 0 || i >= len(toks) {
+		return false
+	}
+	if toks[i].Text == "map" {
+		return true
+	}
+	if toks[i].Text == "[" {
+		return true
+	}
+	return toks[i].Text == "list" || toks[i].Text == "List"
+}
+
+// containerElemType 从容器类型文本推出元素类型，供索引 receiver 沿链传播（P2-B）：
+//   - map[K]V            → V
+//   - []T / [N]T         → T
+//   - list.List[T]       → T（GX 把 []T 提升为 runtime/list.List[T]）
+//   - *T                 → 先剥指针再判断
+// 推不出（非容器、元素非具名类型）返回空串，调用方保守放弃。
+func containerElemType(typeText string) string {
+	t := strings.TrimSpace(typeText)
+	t = strings.TrimSpace(strings.TrimPrefix(t, "*"))
+	// map[K]V：找到匹配的 ']'，其后即 V。
+	if strings.HasPrefix(t, "map[") {
+		depth := 0
+		for i := 3; i < len(t); i++ { // 从 "map[" 的 '[' 起
+			switch t[i] {
+			case '[':
+				depth++
+			case ']':
+				depth--
+				if depth == 0 {
+					v := strings.TrimSpace(t[i+1:])
+					return bareFieldType(v)
+				}
+			}
+		}
+		return ""
+	}
+	// []T / [N]T：找到匹配的 ']'，其后即 T（GX 里通常是 list.List[T]）。
+	if strings.HasPrefix(t, "[") {
+		depth := 0
+		for i := 0; i < len(t); i++ {
+			switch t[i] {
+			case '[':
+				depth++
+			case ']':
+				depth--
+				if depth == 0 {
+					elem := strings.TrimSpace(t[i+1:])
+					return bareFieldType(elem)
+				}
+			}
+		}
+		return ""
+	}
+	// list.List[T]：剥出 T。
+	return bareFieldType(t)
 }
 
 // isBuiltinType 判断是否为内建标量类型（不能作为 struct 字段链 receiver）。
@@ -1158,23 +1303,10 @@ func wrapLitSeg(toks []Token, typeName string, seg [2]int, b *Bindings, tbl sign
 	for ve > vs && (newVal[ve-1].Kind == Space || newVal[ve-1].Kind == Newline) {
 		ve--
 	}
-	// 用户规则（第八轮）：signal 字段的值按来源分档——
-	//   1) signal（变量/字段读）→ 上面透传档，传 getter 本身；
-	//   2) 纯字面量（字符串/数字/bool/nil）→ Signal.New(lit)（常量不会变）；
-	//   3) 含 signal 读的派生表达式 → Signal.Computed(func() T { return expr })，
-	//      登记依赖，signal 变化时自动重算；
-	//   4) 纯普通变量/普通字段 → 裸 getter func(...T) T { return expr }，每次读
-	//      重新求值——否则 Signal.New(v) 快照后 v 再改就丢了，用户不应感知
-	//      signal 与普通变量的差别。
+	// signal 字段值统一分档（档位表见文件顶部，JSX / 手写两处共用同一入口）。
+	// 透传档已在上面认领；其余交 buildSignalFieldValue，杜绝忽略参数的假 signal。
 	T := tbl.fieldType(typeName, field)
-	switch {
-	case tokensArePlainLiteral(newVal[vs:ve]):
-		out = append(out, signalNewCall(newVal[vs:ve]...)...)
-	case exprHasSignalRead(newVal, vs, ve, b, tbl, Pos{}):
-		out = append(out, signalComputedCall(T, p, newVal[vs:ve])...)
-	default:
-		out = append(out, signalGetterCall(T, p, newVal[vs:ve])...)
-	}
+	out = append(out, buildSignalFieldValue(T, p, newVal, vs, ve, b, tbl, toks[valFrom].Pos)...)
 	return out, true
 }
 
@@ -1207,6 +1339,179 @@ func tokensArePlainLiteral(toks []Token) bool {
 		return t.Text == "true" || t.Text == "false" || t.Text == "nil"
 	}
 	return false
+}
+
+// sigValueTier 是 signal 字段构造值的语义档位（见文件顶部档位表）。
+// 单一事实来源：JSX 侧与手写侧共用 classifySigValue + buildSignalFieldValue。
+type sigValueTier int
+
+const (
+	sigValPassthrough sigValueTier = iota // 已是 signal，透传（调用方先判）
+	sigValLiteral                         // 纯字面量常量 → Signal.New
+	sigValComposite                       // 复合字面量构造 → Signal.New（一次构造）
+	sigValDerived                         // 含 signal 读 → Signal.Computed（只读）
+	sigValPlainVar                        // 单个可赋值变量/selector → 可写 getter
+	sigValSnapshot                        // 其它无写目标表达式 → Signal.New 快照（绝不假 signal）
+)
+
+// classifySigValue 对 [from,to) 的值表达式分档。调用方须先排除透传档
+// （signalExprPassthrough / pureSignalRead 已认领的「本身是 signal」形态）。
+//
+// 判定顺序（先具体后泛化）：
+//  1. 纯字面量常量 → 档2；
+//  2. 复合字面量构造（以 '}' 结尾）→ 档3；
+//  3. 含 signal 读 → 档4；
+//  4. 单个可赋值变量/selector → 档5；
+//  5. 其它 → 档6 快照。
+func classifySigValue(toks []Token, from, to int, b *Bindings, tbl signalFieldTable, pos Pos) sigValueTier {
+	if tokensArePlainLiteral(toks[from:to]) {
+		return sigValLiteral
+	}
+	if isCompositeLitExpr(toks, from, to) {
+		return sigValComposite
+	}
+	if exprHasSignalRead(toks, from, to, b, tbl, pos) {
+		return sigValDerived
+	}
+	if assignableRef(toks, from, to, b, pos) != nil {
+		return sigValPlainVar
+	}
+	return sigValSnapshot
+}
+
+// isCompositeLitExpr 判断 [from,to) 是否是一个复合字面量构造表达式：
+// T{...} / pkg.T{...} / &T{...} / []T{...} / map[K]V{...} / struct{...}{...}。
+// 特征：去空白后以 '}' 结尾，且存在与之匹配的 '{'。这类表达式应「构造一次」
+// （Signal.New），而非包成每次读都重建结构体的裸 getter（P1-A 根因）。
+func isCompositeLitExpr(toks []Token, from, to int) bool {
+	last := prevSigIn(toks, to-1, from)
+	if last < from || toks[last].Text != "}" {
+		return false
+	}
+	// 从末尾 '}' 往前找匹配的 '{'（跳过内层已闭合的括号）。
+	depth := 0
+	for i := last; i >= from; i-- {
+		switch toks[i].Text {
+		case "}", ")":
+			depth++
+		case "{", "(":
+			depth--
+			if depth == 0 {
+				// 匹配到最外层 '{'。它之前须有类型 token（标识符或 ']' 等），
+				// 否则可能是函数体等其它结构。
+				if i > from {
+					prev := prevSigIn(toks, i-1, from)
+					if prev >= from && (toks[prev].Kind == Ident || toks[prev].Text == "]" || toks[prev].Text == "}") {
+						return true
+					}
+				}
+				return false
+			}
+		}
+	}
+	return false
+}
+
+// assignableRef 判断 [from,to) 是否是「单个可赋值引用」（裸变量或 x.field 形态），
+// 返回可直接作为赋值左值的 token 区间（开区间下标，相对 toks），否则 nil。
+// 可赋值是「可写 getter」写分支生效的前提：func(arg ...T) T { if len(arg)>0 { <ref> = arg[0] }; return <ref> }。
+//
+// 限定形态：
+//   - 单个标识符（局部变量/参数），且不是 const/类型名；
+//   - 单级 selector x.field（x 为标识符），用于 q.title 这类普通字段。
+//
+// 更深的链、带下标/调用/运算的表达式不认——避免生成对临时值的非法赋值。
+func assignableRef(toks []Token, from, to int, b *Bindings, pos Pos) *[2]int {
+	sig := make([]int, 0, 4)
+	for i := from; i < to; i++ {
+		switch toks[i].Kind {
+		case Space, Newline, Comment, EOF:
+			continue
+		}
+		sig = append(sig, i)
+	}
+	if len(sig) == 0 || toks[sig[0]].Kind != Ident || isGoKeyword(toks[sig[0]].Text) {
+		return nil
+	}
+	// 单个标识符：确认非 const（const 不可写）。
+	if len(sig) == 1 {
+		if b != nil {
+			if bd := b.ResolveAt(toks[sig[0]].Text, pos); bd != nil && bd.Kind == BkConst {
+				return nil
+			}
+		}
+		return &[2]int{sig[0], sig[0] + 1}
+	}
+	// 单级 selector：x.field（3 个有效 token：ident '.' ident）。
+	if len(sig) == 3 && toks[sig[1]].Text == "." && toks[sig[2]].Kind == Ident {
+		return &[2]int{sig[0], sig[2] + 1}
+	}
+	return nil
+}
+
+// signalWritableGetterCall 生成「可写 getter」（档5）：
+//
+//	func(arg ...T) T {
+//	    if len(arg) > 0 {
+//	        <ref> = arg[0]
+//	    }
+//	    return <ref>
+//	}
+//
+// <ref> 是单个可赋值变量/selector（assignableRef 的结果）。读跟随普通变量最新值，
+// 写真正落到该变量——修复旧裸 getter `func(...T) T { return v }` 静默丢写（P1-B）。
+// 闭包捕获的变量须可寻址：局部变量/参数/字段均满足；const 已在 assignableRef 排除。
+func signalWritableGetterCall(T string, p Pos, ref []Token) []Token {
+	out := []Token{
+		tokIdent("func", p), tokOp("(", p), tokIdent("arg", p), tokSpace(" ", p), tokOp("...", p),
+	}
+	out = append(out, tokensForType(T, p)...)
+	out = append(out, tokOp(")", p), tokSpace(" ", p))
+	out = append(out, tokensForType(T, p)...)
+	out = append(out, tokSpace(" ", p), tokOp("{", p), tokSpace(" ", p))
+	// if len(arg) > 0 {
+	out = append(out,
+		tokIdent("if", p), tokSpace(" ", p), tokIdent("len", p), tokOp("(", p),
+		tokIdent("arg", p), tokOp(")", p), tokSpace(" ", p), tokOp(">", p),
+		tokSpace(" ", p), tokOp("0", p), tokSpace(" ", p), tokOp("{", p), tokSpace(" ", p))
+	// <ref> = arg[0]
+	out = append(out, ref...)
+	out = append(out, tokSpace(" ", p), tokOp("=", p), tokSpace(" ", p),
+		tokIdent("arg", p), tokOp("[", p), tokOp("0", p), tokOp("]", p))
+	out = append(out, tokSpace(" ", p), tokOp("}", p), tokNewline(p))
+	// return <ref>
+	out = append(out, tokIdent("return", p), tokSpace(" ", p))
+	out = append(out, ref...)
+	out = append(out, tokSpace(" ", p), tokOp("}", p))
+	return out
+}
+
+// buildSignalFieldValue 是 signal 字段构造值的统一生成入口（JSX / 手写共用）。
+// 调用方须先排除透传档（本身是 signal 的形态）。expr 是值表达式 token 区间
+// [from,to)，已去掉首尾空白；T 是字段元素类型；pos 是 Bindings 查询锚点。
+//
+// 按 classifySigValue 分档生成，杜绝「忽略参数的假 signal」。
+func buildSignalFieldValue(T string, p Pos, toks []Token, from, to int, b *Bindings, tbl signalFieldTable, pos Pos) []Token {
+	tier := classifySigValue(toks, from, to, b, tbl, pos)
+	expr := toks[from:to]
+	switch tier {
+	case sigValLiteral, sigValComposite:
+		// 档2/3：常量或复合构造——Signal.New 一次构造，可写、读登记依赖。
+		return signalNewCall(expr...)
+	case sigValDerived:
+		// 档4：含 signal 读——Computed 登记依赖，只读。
+		return signalComputedCall(T, p, expr)
+	case sigValPlainVar:
+		// 档5：单个可赋值引用——可写 getter，读跟随、写生效。
+		refRange := assignableRef(toks, from, to, b, pos)
+		ref := append([]Token{}, toks[refRange[0]:refRange[1]]...)
+		return signalWritableGetterCall(T, p, ref)
+	case sigValSnapshot:
+		fallthrough
+	default:
+		// 档6：确无写目标——Signal.New 快照。绝不生成忽略参数的假 signal。
+		return signalNewCall(expr...)
+	}
 }
 
 // namedLitAt 判断位置 i 是否是一个具名复合字面量 TypeName{ 的起点，
