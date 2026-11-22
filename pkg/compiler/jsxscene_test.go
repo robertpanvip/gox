@@ -844,3 +844,49 @@ func main() {}
 		t.Errorf("return JSX 后的函数闭合换行被误吞:\n%s", res.GoSource)
 	}
 }
+
+// Issue #2 回归：JSX 属性值内嵌 lambda 中的 signal 复合赋值/简单赋值，
+// RHS 的裸 signal 读必须与顶层闭包一致递归补 ()，否则生成 Signal[T] 与
+// 标量相加的类型错误（load(load + 1)）。
+func TestJSXSceneLambdaSignalCompoundRHS(t *testing.T) {
+	res, err := CompileScene("iss2.gx", `package main
+import gxscene "github.com/robertpanvip/gox/runtime/scene"
+signal load = 42
+signal other = 8
+func main() {
+	let inc = func() { load = load + 1 } // 顶层闭包对照
+	_ = <div>
+		<button onClick={gxscene.Handler(func(ctx gxscene.EventContext) {
+			load = load + 1
+			load = other
+			load += other
+		})}/>
+	</div>
+}
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := res.GoSource
+	if verr := res.Validate(); verr != nil {
+		t.Fatalf("生成 Go 语法无效: %v\n---\n%s", verr, out)
+	}
+	// 顶层闭包与 JSX lambda 的空白排版不同（前者-token 带空格），去空格后统一比对。
+	compact := strings.ReplaceAll(strings.ReplaceAll(out, " ", ""), "\t", "")
+	// JSX prop 内 lambda：三种赋值的 RHS 都必须递归补 ()，绝不能出现裸 signal 相加/赋值。
+	for _, bad := range []string{"load(load+1)", "load(other)", "load(load+other)"} {
+		if strings.Contains(compact, bad) {
+			t.Errorf("JSX lambda RHS 漏了读调用 %q, got:\n%s", bad, out)
+		}
+	}
+	// 两种正确形态都必须至少各出现一次（顶层闭包与 JSX lambda 各一处）。
+	if n := strings.Count(compact, "load(load()+1)"); n < 2 {
+		t.Errorf("复合赋值 RHS 读调用应至少出现在顶层闭包与 JSX lambda 两处, got %d:\n%s", n, out)
+	}
+	if !strings.Contains(compact, "load(other())") {
+		t.Errorf("简单赋值 RHS 的 other 应补 (), got:\n%s", out)
+	}
+	if !strings.Contains(compact, "load(load()+other())") {
+		t.Errorf("+= 复合赋值 RHS 的 other 应补 (), got:\n%s", out)
+	}
+}
