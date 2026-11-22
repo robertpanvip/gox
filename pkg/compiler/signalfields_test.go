@@ -796,3 +796,70 @@ func main() { Card(&{inner: {v: "x"}}) }
 	got := compileOK(t, "r10_addr_nested.gx", src)
 	containsAll(t, got, `&Out{inner: Inner{v: Signal.New("x")}}`)
 }
+
+// 第十一轮：中间 signal 段用户显式写调用括号（m.leaf().v）时，读写改写必须
+// 跳过该括号走到真正链尾，而不是在 '(' 处断链漏改写。与裸写 m.leaf.v 产物一致。
+func TestR11ExplicitParenMiddleSegment(t *testing.T) {
+	write := `package main
+type Leaf struct { signal v string }
+type Mid struct { signal leaf Leaf }
+func main() {
+	m := Mid{leaf: Leaf{v: "a"}}
+	m.leaf().v = "c"
+	_ = m
+}
+`
+	got := compileOK(t, "r11_write.gx", write)
+	containsAll(t, got, `m.leaf().v( "c")`)
+
+	bare := `package main
+type Leaf struct { signal v string }
+type Mid struct { signal leaf Leaf }
+func main() {
+	m := Mid{leaf: Leaf{v: "a"}}
+	m.leaf.v = "c"
+	_ = m
+}
+`
+	gotBare := compileOK(t, "r11_bare.gx", bare)
+	if !strings.Contains(gotBare, `m.leaf().v( "c")`) {
+		t.Errorf("裸写链尾写产物异常:\n%s", gotBare)
+	}
+
+	compound := `package main
+type Leaf struct { signal n int }
+type Mid struct { signal leaf Leaf }
+func main() {
+	m := Mid{leaf: Leaf{n: 1}}
+	m.leaf().n += 2
+	_ = m
+}
+`
+	gotC := compileOK(t, "r11_compound.gx", compound)
+	containsAll(t, gotC, `m.leaf().n(m.leaf().n() +  2)`)
+	if strings.Contains(gotC, `()()`) {
+		t.Errorf("复合写不得产生重复调用:\n%s", gotC)
+	}
+}
+
+// 第十一轮：JSX props / 插值里的显式括号中间段同样走到链尾。
+func TestR11JSXExplicitParenMiddleSegment(t *testing.T) {
+	src := `package main
+import gxscene "github.com/robertpanvip/gox/runtime/scene"
+type Leaf struct { signal v string }
+type Mid struct { signal leaf Leaf }
+type CardProps struct { signal title string }
+func Card(p CardProps) *gxscene.Instance { return <div>{p.title}</div> }
+func main() {
+	m := Mid{leaf: Leaf{v: "a"}}
+	_ = <Card title={m.leaf().v}/>
+	_ = <div>{m.leaf().v}</div>
+	_ = m
+}
+`
+	got := compileOK(t, "r11_jsx.gx", src)
+	containsAll(t, got,
+		`return m.leaf().v(arg...)`,
+		`return m.leaf().v()`,
+	)
+}

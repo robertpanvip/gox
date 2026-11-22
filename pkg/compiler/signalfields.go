@@ -369,15 +369,13 @@ type signalChain struct {
 // 类型沿链传播：每段 field 的声明类型从 tbl.all 取（signal 字段降级后是
 // Signal.Signal[T]），bareFieldType 剥出元素类型 T 作为下一段的 receiver 类型；
 // 任一段类型无法解析则停止传播（后续段不再判为 signal，保守不补）。
-func resolveSignalChain(toks []Token, i int, recvPos Pos, b *Bindings, tbl signalFieldTable, limit int) (signalChain, bool) {
-	return resolveSignalChainEx(toks, i, recvPos, b, tbl, limit, false)
-}
-
-// resolveSignalChainEx 是 resolveSignalChain 的可配置版本。
-// skipCalls=true 时，沿链解析会跳过每段后已补的 '()'（透传档处理的是
-// rewriteSignalFieldRefs 改写后的 token——signal 段已是 b() 形态，若不跳过
-// 就会在 '(' 处断链，把中间 signal 段误判为链尾）。现有读写改写路径传 false，
-// 行为不变。
+// resolveSignalChainEx 沿链解析 signal 字段链。
+// skipCalls=true 时，沿链解析会跳过每段后已有的 '()'——两种情形都需要：
+//   - 透传档处理的是改写后的 token（signal 段已是 b() 形态）；
+//   - 读写改写档处理用户源码，中间 signal 段可能已显式写成 b()（m.leaf().v）。
+//
+// 两者若不跳过都会在 '(' 处断链，把中间 signal 段误判为链尾、走不到真正的链尾。
+// 输出侧（emitChain / JSX selector）对"段后已有 ()"不重复补，故跳过安全。
 func resolveSignalChainEx(toks []Token, i int, recvPos Pos, b *Bindings, tbl signalFieldTable, limit int, skipCalls bool) (signalChain, bool) {
 	if !tbl.hasSignalFields() || i < 0 || i >= len(toks) || toks[i].Kind != Ident || isGoKeyword(toks[i].Text) {
 		return signalChain{}, false
@@ -703,7 +701,10 @@ func rewriteSignalFieldRefs(toks []Token, b *Bindings, tbl signalFieldTable) []T
 	}
 	for i := 0; i < len(toks); i++ {
 		t := toks[i]
-		chain, ok := resolveSignalChain(toks, i, toks[i].Pos, b, tbl, 0)
+		// skipCalls=true：中间 signal 段用户可能已显式写调用括号（m.leaf().v），
+		// 不跳过就会在 leaf() 的 '(' 处断链、走不到链尾 v，写操作漏改写。
+		// emitChain 对"段后已有 ()"不重复补，故跳过是安全的。
+		chain, ok := resolveSignalChainEx(toks, i, toks[i].Pos, b, tbl, 0, true)
 		if !ok || len(chain.segs) == 0 {
 			out = append(out, t)
 			continue
@@ -1571,7 +1572,9 @@ func rewriteJSXSignalFieldSelectors(toks []Token, b *Bindings, tbl signalFieldTa
 		if prev := prevSig(toks, i-1); prev >= 0 && toks[prev].Text == ")" {
 			continue
 		}
-		chain, ok := resolveSignalChain(toks, i, pos, b, tbl, 0)
+		// skipCalls=true：与手写改写路径一致，跳过中间 signal 段已有的 () 走到
+		// 真正链尾；输出仍逐 token 原样，已有 () 不重复补。
+		chain, ok := resolveSignalChainEx(toks, i, pos, b, tbl, 0, true)
 		if !ok || len(chain.segs) == 0 {
 			continue
 		}

@@ -1131,3 +1131,27 @@ func main() {
 		t.Errorf("可写 getter 写回/跟随失败, got:\n%s", out)
 	}
 }
+
+// 第十一轮：中间 signal 段显式写调用括号的链尾写必须真正生效（与裸写一致）。
+func TestIntegrationR11ExplicitParenMiddleWrite(t *testing.T) {
+	src := `package main
+import "fmt"
+type Leaf struct { signal v string }
+type Mid struct { signal leaf Leaf }
+func main() {
+	m := Mid{leaf: Leaf{v: "a"}}
+	fmt.Println("before", m.leaf().v)
+	m.leaf().v = "c"
+	fmt.Println("after", m.leaf().v)
+	m.leaf().v += "!"
+	fmt.Println("compound", m.leaf().v)
+}
+`
+	out := runGX(t, src)
+	want := []string{"before a", "after c", "compound c!"}
+	for _, w := range want {
+		if !strings.Contains(out, w) {
+			t.Errorf("显式括号中间段写后读失败, 期望 %q, got:\n%s", w, out)
+		}
+	}
+}
