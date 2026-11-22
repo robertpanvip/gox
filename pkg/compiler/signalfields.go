@@ -44,11 +44,11 @@ import "strings"
 //  档3 构造  E 是复合字面量构造（如 Leaf{v:"a"}）     → Signal.New(E)，一次构造、可写、可响应；
 //  档4 派生  E 含 signal 读（如 p.a + p.b）           → Signal.Computed(func() T { return E })，
 //           登记依赖，只读（Computed 语义本就只读）；
-//  档5 裸变量 E 是单个普通变量/字段（如 v、q.title）  → 可写 getter
-//           func(arg ...T) T { if len(arg)>0 { E = arg[0] }; return E }，
-//           读跟随普通变量最新值，写真正落到变量；
-//  档6 其它  普通表达式（无 signal 读、非上述形态）    → 可写 getter（若能定位到可赋值
-//           的单个变量，走档5）；确无写目标的保守用 Signal.New(E) 快照，绝不生成
+//  档5 裸变量 E 是单个普通变量/字段（如 v、q.title）  → Signal.LockedGetter(get,set)：
+//           get 读跟随 E 最新值、set 写落回 E；外层实例级互斥锁保护读写，消除无锁
+//           捕获变量的竞态（第十轮 P1-2）。跟随语义不变，仍需 source 变量在别处被
+//           直接写入时自行同步（编译器无法给用户裸变量读写加锁）。
+//  档6 其它  普通表达式（无 signal 读、非上述形态）    → Signal.New(E) 快照，绝不生成
 //           忽略参数的假 signal。
 //
 // 实现入口：手写构造 wrapLitSeg → buildSignalFieldValue；JSX signalFieldPropTokens
@@ -409,17 +409,37 @@ func resolveSignalChainEx(toks []Token, i int, recvPos Pos, b *Bindings, tbl sig
 	// Bindings 对 map 变量的类型推断可能只到 key 类型（如 map[string]P 推断成 string），
 	// 故先试绑定类型，失败再从变量声明 token 反推容器类型。
 	cur := chainStart
-	if lb := nextSigIn(toks, i+1, limit); lb >= 0 && toks[lb].Text == "[" {
-		if rb := matchDelim(toks, lb, "[", "]"); rb > lb && rb < limit {
-			et := containerElemType(curType)
+	// 第十轮 P1-4：连续多层索引 m["k"][0][0].a。用循环逐层推进 receiver 类型，
+	// 每层把 curType 从容器推进到元素（map[K]V→V、[]T/list.List[T]→T）。
+	// 第一层允许从变量声明反推容器类型（Bindings 常把 map 推断成 key 类型）；
+	// 后续层直接基于上一层推出的 curType 继续剥即可。
+	searchFrom := i + 1
+	for {
+		lb := nextSigIn(toks, searchFrom, limit)
+		if lb < 0 || toks[lb].Text != "[" {
+			break
+		}
+		rb := matchDelim(toks, lb, "[", "]")
+		if rb <= lb || rb >= limit {
+			break
+		}
+		// 每层只剥一层容器（containerElemTypeOnce），逐层推进，游标与类型同步。
+		et := containerElemTypeOnce(curType)
+		if et == "" && searchFrom == i+1 {
+			// 仅第一层反推容器类型（Bindings 常把 map 推断成 key 类型）。
+			// 先在当前 token 流找声明（手写路径），再从 Bindings 原始流反推（JSX 路径，
+			// 其属性表达式是独立 lex 的流，当前流里没有声明——第十轮 P1-5）。
+			et = containerElemTypeFromDecl(toks, i, recvPos)
 			if et == "" {
-				et = containerElemTypeFromDecl(toks, i, recvPos)
-			}
-			if et != "" {
-				curType = et
-				cur = rb
+				et = containerElemTypeFromBinding(b, toks[i].Text, recvPos)
 			}
 		}
+		if et == "" {
+			break // 推不出元素类型：保守停止，避免类型漂移
+		}
+		curType = et
+		cur = rb
+		searchFrom = rb + 1
 	}
 
 	chain := signalChain{chainStart: chainStart, callRecv: callRecv, recvIdx: i}
@@ -535,8 +555,65 @@ func bareFieldType(ft string) string {
 	return t
 }
 
+// containerElemTypeFromBinding 从 Bindings 找到 name 的声明，在原始 token 流里反推
+// 容器元素类型。供 JSX 场景用：JSX 属性表达式是独立 lex 的 token 流，其中找不到
+// `m := map[K]V{...}` 声明，必须从 b.toks 原始流按 DeclPos 定位（第十轮 P1-5）。
+func containerElemTypeFromBinding(b *Bindings, name string, pos Pos) string {
+	if b == nil {
+		return ""
+	}
+	bd := b.ResolveAt(name, pos)
+	if bd == nil || len(b.toks) == 0 {
+		return ""
+	}
+	// 找声明下标：b.toks 是 Bind 时的原始流，DeclPos 在其中稳定命中。
+	declIdx := -1
+	for i, t := range b.toks {
+		if t.Pos.Offset == bd.DeclPos.Offset && t.Text == name {
+			declIdx = i
+			break
+		}
+	}
+	if declIdx < 0 {
+		return ""
+	}
+	// declIdx 是声明标识符本身；从其后读类型（`name := <type>{` / `var name <type>`）。
+	return containerElemTypeFromDeclAt(b.toks, declIdx)
+}
+
+// containerElemTypeFromDeclAt 从 toks[declIdx]（变量名标识符）之后读取容器类型并剥一层。
+// 与 containerElemTypeFromDecl 的读取逻辑一致，但直接给定声明下标（供 Binding 反推用）。
+func containerElemTypeFromDeclAt(toks []Token, declIdx int) string {
+	after := nextSig(toks, declIdx+1)
+	if after < 0 {
+		return ""
+	}
+	if toks[after].Text == ":=" || toks[after].Text == "=" {
+		typeIdx := nextSig(toks, after+1)
+		if typeIdx < 0 {
+			return ""
+		}
+		te := typeRangeEnd(toks, typeIdx)
+		if te > typeIdx {
+			if et := containerElemTypeOnce(exprText(toks, typeIdx, te)); et != "" {
+				return et
+			}
+		}
+	}
+	if looksContainerTypeStart(toks, after) {
+		te := typeRangeEnd(toks, after)
+		if te > after {
+			if et := containerElemTypeOnce(exprText(toks, after, te)); et != "" {
+				return et
+			}
+		}
+	}
+	return ""
+}
+
 // containerElemTypeFromDecl 从标识符 useIdx 往前找同名变量的声明，提取其容器类型
-// （map[K]V / []T / [N]T），再交 containerElemType 剥出元素类型。
+// （map[K]V / []T / [N]T），再交 containerElemTypeOnce 只剥一层元素类型——
+// 供多层索引 m["k"][0][0].a 逐层推进（第十轮 P1-4）。
 // 用于 Bindings 对 map 变量类型推断不准时（如 map[string]P 只推断成 string）的回退。
 // 限定在同函数体内最近的 `name := <容器类型>{` / `name := <容器类型>(` / `var name <容器类型>`。
 func containerElemTypeFromDecl(toks []Token, useIdx int, recvPos Pos) string {
@@ -546,32 +623,8 @@ func containerElemTypeFromDecl(toks []Token, useIdx int, recvPos Pos) string {
 		if toks[j].Text != name || toks[j].Kind != Ident {
 			continue
 		}
-		after := nextSig(toks, j+1)
-		if after < 0 {
-			continue
-		}
-		// m := map[K]V{...} / m := []T{...}
-		if toks[after].Text == ":=" || toks[after].Text == "=" {
-			typeIdx := nextSig(toks, after+1)
-			if typeIdx < 0 {
-				continue
-			}
-			te := typeRangeEnd(toks, typeIdx)
-			if te > typeIdx {
-				typ := exprText(toks, typeIdx, te)
-				if et := containerElemType(typ); et != "" {
-					return et
-				}
-			}
-		}
-		// var m map[K]V / var m []T（类型紧跟名字）
-		if looksContainerTypeStart(toks, after) {
-			te := typeRangeEnd(toks, after)
-			if te > after {
-				if et := containerElemType(exprText(toks, after, te)); et != "" {
-					return et
-				}
-			}
+		if et := containerElemTypeFromDeclAt(toks, j); et != "" {
+			return et
 		}
 	}
 	return ""
@@ -589,6 +642,53 @@ func looksContainerTypeStart(toks []Token, i int) bool {
 		return true
 	}
 	return toks[i].Text == "list" || toks[i].Text == "List"
+}
+
+// containerElemTypeOnce 把容器类型推进到元素类型，但只剥一层（与 containerElemType
+// 递归剥到裸类型不同）。供多层索引链 m["k"][0][0].a 逐层推进：第一层
+// map[string]list.List[list.List[P]] → list.List[list.List[P]]，第二层 → list.List[P]，
+// 第三层 → P。每层索引消费一层容器，游标与类型推进同步（第十轮 P1-4）。
+func containerElemTypeOnce(typeText string) string {
+	t := strings.TrimSpace(typeText)
+	t = strings.TrimSpace(strings.TrimPrefix(t, "*"))
+	// map[K]V → V（原样返回 V，不递归剥）。
+	if strings.HasPrefix(t, "map[") {
+		depth := 0
+		for i := 3; i < len(t); i++ {
+			switch t[i] {
+			case '[':
+				depth++
+			case ']':
+				depth--
+				if depth == 0 {
+					return strings.TrimSpace(t[i+1:])
+				}
+			}
+		}
+		return ""
+	}
+	// list.List[T] / Signal.Signal[T] → 内层 T（原样，不递归剥）。
+	for _, pfx := range []string{"list.List[", "List[", "Signal.Signal[", "signal.Signal["} {
+		if strings.HasPrefix(t, pfx) && strings.HasSuffix(t, "]") {
+			return strings.TrimSpace(t[len(pfx) : len(t)-1])
+		}
+	}
+	// []T / [N]T → T（原样）。
+	if strings.HasPrefix(t, "[") {
+		depth := 0
+		for i := 0; i < len(t); i++ {
+			switch t[i] {
+			case '[':
+				depth++
+			case ']':
+				depth--
+				if depth == 0 {
+					return strings.TrimSpace(t[i+1:])
+				}
+			}
+		}
+	}
+	return ""
 }
 
 // containerElemType 从容器类型文本推出元素类型，供索引 receiver 沿链传播（P2-B）：
@@ -1078,8 +1178,34 @@ func isWholeSignalChain(toks []Token, from, to int, chain signalChain) bool {
 		return false
 	}
 	// 逐 token 走：期望 ident，然后 (. ident [( )])* 反复，记录最后字段名下标。
+	// 第十轮 P1-5：链首/字段名后可跟零个或多个索引 [...]，跳过其内部任意表达式
+	// （m["k"].v / s[0][0].a 都要接受）；索引只在链中间，链尾仍是字段名。
 	i := 1 // sig[0] 是链首 ident（调用方已确认）
 	lastFieldIdx := -1
+	// skipIndex 跳过 sig[i] 起始的 [...]（按有效 token 计嵌套的 '['/']'）。
+	skipIndex := func() bool {
+		if i >= len(sig) || toks[sig[i]].Text != "[" {
+			return false // 没有索引
+		}
+		depth := 0
+		for i < len(sig) {
+			switch toks[sig[i]].Text {
+			case "[":
+				depth++
+			case "]":
+				depth--
+				if depth == 0 {
+					i++
+					return true
+				}
+			}
+			i++
+		}
+		return false // 括号不闭合
+	}
+	// 链首 ident 后可有索引（m["k"]）。
+	for skipIndex() {
+	}
 	for i < len(sig) {
 		if toks[sig[i]].Text != "." {
 			return false
@@ -1093,6 +1219,9 @@ func isWholeSignalChain(toks []Token, from, to int, chain signalChain) bool {
 		// 字段名后可选一对空调用括号 ()。
 		if i+1 < len(sig) && toks[sig[i]].Text == "(" && toks[sig[i+1]].Text == ")" {
 			i += 2
+		}
+		// 字段名/调用后也可有索引（下一层的 receiver），直到遇到 '.' 或结束。
+		for skipIndex() {
 		}
 	}
 	// 扫描必须恰好走完所有有效 token，且最后字段名与类型解析的链尾一致。
@@ -1351,8 +1480,8 @@ const (
 	sigValLiteral                         // 纯字面量常量 → Signal.New
 	sigValComposite                       // 复合字面量构造 → Signal.New（一次构造）
 	sigValDerived                         // 含 signal 读 → Signal.Computed（只读）
-	sigValPlainVar                        // 单个可赋值变量/selector → 可写 getter
-	sigValSnapshot                        // 其它无写目标表达式 → Signal.New 快照（绝不假 signal）
+	sigValPlainVar                        // 单个普通变量/selector → Signal.LockedGetter（跟随+加锁）
+	sigValSnapshot                        // 其它表达式 → Signal.New 快照（绝不假 signal）
 )
 
 // classifySigValue 对 [from,to) 的值表达式分档。调用方须先排除透传档
@@ -1450,40 +1579,34 @@ func assignableRef(toks []Token, from, to int, b *Bindings, pos Pos) *[2]int {
 	return nil
 }
 
-// signalWritableGetterCall 生成「可写 getter」（档5）：
+// signalLockedGetterCall 生成「带锁跟随 getter」（档5，第十轮 P1-2）：
 //
-//	func(arg ...T) T {
-//	    if len(arg) > 0 {
-//	        <ref> = arg[0]
-//	    }
-//	    return <ref>
-//	}
+//	Signal.LockedGetter(
+//	    func() T { return <ref> },
+//	    func(__v T) { <ref> = __v },
+//	)
 //
-// <ref> 是单个可赋值变量/selector（assignableRef 的结果）。读跟随普通变量最新值，
-// 写真正落到该变量——修复旧裸 getter `func(...T) T { return v }` 静默丢写（P1-B）。
-// 闭包捕获的变量须可寻址：局部变量/参数/字段均满足；const 已在 assignableRef 排除。
-func signalWritableGetterCall(T string, p Pos, ref []Token) []Token {
-	out := []Token{
-		tokIdent("func", p), tokOp("(", p), tokIdent("arg", p), tokSpace(" ", p), tokOp("...", p),
-	}
+// 读跟随普通变量最新值、写落回变量（保留用户要的跟随语义），外层由 LockedGetter
+// 的实例级互斥锁保护读写，消除裸闭包 v=arg[0]/return v 的数据竞争。
+// <ref> 是单个可赋值变量/selector（assignableRef 的结果，const 已排除）。
+func signalLockedGetterCall(T string, p Pos, ref []Token) []Token {
+	// Signal.LockedGetter(
+	out := []Token{signalPkgToken(p), tokOp(".", p), tokIdent("LockedGetter", p), tokOp("(", p)}
+	// func() T { return <ref> }
+	out = append(out, tokIdent("func", p), tokOp("(", p), tokOp(")", p), tokSpace(" ", p))
 	out = append(out, tokensForType(T, p)...)
-	out = append(out, tokOp(")", p), tokSpace(" ", p))
+	out = append(out, tokSpace(" ", p), tokOp("{", p), tokSpace(" ", p),
+		tokIdent("return", p), tokSpace(" ", p))
+	out = append(out, ref...)
+	out = append(out, tokSpace(" ", p), tokOp("}", p), tokOp(",", p), tokNewline(p))
+	// func(__v T) { <ref> = __v }
+	out = append(out, tokIdent("func", p), tokOp("(", p), tokIdent("__v", p), tokSpace(" ", p))
 	out = append(out, tokensForType(T, p)...)
-	out = append(out, tokSpace(" ", p), tokOp("{", p), tokSpace(" ", p))
-	// if len(arg) > 0 {
-	out = append(out,
-		tokIdent("if", p), tokSpace(" ", p), tokIdent("len", p), tokOp("(", p),
-		tokIdent("arg", p), tokOp(")", p), tokSpace(" ", p), tokOp(">", p),
-		tokSpace(" ", p), tokOp("0", p), tokSpace(" ", p), tokOp("{", p), tokSpace(" ", p))
-	// <ref> = arg[0]
+	out = append(out, tokOp(")", p), tokSpace(" ", p), tokOp("{", p), tokSpace(" ", p))
 	out = append(out, ref...)
-	out = append(out, tokSpace(" ", p), tokOp("=", p), tokSpace(" ", p),
-		tokIdent("arg", p), tokOp("[", p), tokOp("0", p), tokOp("]", p))
-	out = append(out, tokSpace(" ", p), tokOp("}", p), tokNewline(p))
-	// return <ref>
-	out = append(out, tokIdent("return", p), tokSpace(" ", p))
-	out = append(out, ref...)
-	out = append(out, tokSpace(" ", p), tokOp("}", p))
+	out = append(out, tokSpace(" ", p), tokOp("=", p), tokSpace(" ", p), tokIdent("__v", p))
+	out = append(out, tokSpace(" ", p), tokOp("}", p), tokOp(",", p), tokNewline(p))
+	out = append(out, tokOp(")", p))
 	return out
 }
 
@@ -1496,17 +1619,26 @@ func buildSignalFieldValue(T string, p Pos, toks []Token, from, to int, b *Bindi
 	tier := classifySigValue(toks, from, to, b, tbl, pos)
 	expr := toks[from:to]
 	switch tier {
-	case sigValLiteral, sigValComposite:
-		// 档2/3：常量或复合构造——Signal.New 一次构造，可写、读登记依赖。
+	case sigValLiteral:
+		// 档2：常量——Signal.New 一次构造，可写、读登记依赖。
 		return signalNewCall(expr...)
+	case sigValComposite:
+		// 档3：复合构造——Signal.New 一次构造。先递归包装 expr 内部的 signal 字段
+		// 字面量（第十轮 P2-2）：JSX props 里的复合字面量是 transformJSXScene 产物，
+		// 晚于全局 wrapSignalFieldLiterals pass，内层 signal 字段（如 Leaf{v:"a"} 的
+		// v）不会被外层包到——这里补一次递归包装，手写路径内层已包过则不会重复包。
+		wrapped, _ := wrapLitsInRange(toks, from, to, b, tbl)
+		return signalNewCall(wrapped...)
 	case sigValDerived:
 		// 档4：含 signal 读——Computed 登记依赖，只读。
 		return signalComputedCall(T, p, expr)
 	case sigValPlainVar:
-		// 档5：单个可赋值引用——可写 getter，读跟随、写生效。
+		// 档5：单个普通变量/selector——Signal.LockedGetter，跟随语义不变。
+		// 第十轮 P1-2：保留读跟随/写落回变量，但用实例级互斥锁包住 get/set，
+		// 消除裸闭包 v=arg[0]/return v 的数据竞争。
 		refRange := assignableRef(toks, from, to, b, pos)
 		ref := append([]Token{}, toks[refRange[0]:refRange[1]]...)
-		return signalWritableGetterCall(T, p, ref)
+		return signalLockedGetterCall(T, p, ref)
 	case sigValSnapshot:
 		fallthrough
 	default:

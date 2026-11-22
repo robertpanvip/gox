@@ -84,6 +84,15 @@ func CompileSceneWithModule(file, src, module string) (*Result, error) {
 // imports 提供跨文件 import 来源表（nil 表示单文件、一律按 Go 来源处理）。
 func compileWithMode(file, src, module string, imports map[string]ImportInfo) (*Result, error) {
 	toks := New(src).AllTokens()
+	// 第十轮 P3：GX/Go 都不支持三元 `?:` 与 `?` 运算符。若放行会生成含 '?' 的
+	// 非法 Go（invalid character U+003F），且错误定位困难——在管线入口显式报错。
+	// 只查 Operator token（字符串/注释/JSX 文本里的 '?' 是别的 Kind，不受影响）。
+	for _, t := range toks {
+		if t.Kind == Operator && t.Text == "?" {
+			return nil, fmt.Errorf("%s:%d:%d: 不支持三元运算符 ?:，请用 if/else 改写（GX 与 Go 均无三元语法）",
+				file, t.Pos.Line, t.Pos.Col)
+		}
+	}
 	// struct signal 字段语言特性：必须在 Bind 之前降级 `signal name TYPE`
 	// → `name Signal.Signal[TYPE]`，否则 `signal` 关键字会被局部 signal 逻辑
 	// 误判为 `signal name = expr`（旧行为生成非法 `var name any string`）。

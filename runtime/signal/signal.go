@@ -247,6 +247,30 @@ func NewWithEquals[T any](v T, equals func(a, b T) bool) Signal[T] {
 	}
 }
 
+// LockedGetter 把一个「读跟随变量、写落回变量」的 getter 包装成并发安全的 Signal[T]。
+//
+// 场景（第十轮 P1-2）：struct 的 signal 字段由普通变量构造时，编译器生成
+// func(arg ...T) T { if len(arg)>0 { v = arg[0] }; return v }——读跟随 v 的最新值、
+// 写真正落回 v。但 v=arg[0] / return v 是对捕获裸变量的无锁访问，两个 goroutine
+// 并发读写同一字段会触发数据竞争。LockedGetter 用一把实例级互斥锁把 get/set 包住，
+// 使经由该 getter 的所有读写串行化，消除竞态；读写仍落在原变量，故"跟随"语义不变。
+//
+// 注意：并发安全仅覆盖经由本 getter 的访问。若用户代码在别处直接读写同一变量，
+// 需自行同步——编译器无法给用户的裸变量读写加锁。这是"跟随普通变量"语义的固有边界；
+// 需要完整响应式（写通知依赖）请改用 New/Computed 创建的真 signal 源。
+func LockedGetter[T any](get func() T, set func(T)) Signal[T] {
+	var mu sync.Mutex
+	return func(args ...T) T {
+		mu.Lock()
+		if len(args) > 0 {
+			set(args[0])
+		}
+		v := get()
+		mu.Unlock()
+		return v
+	}
+}
+
 // Computed 创建一个派生 signal：f 的结果被缓存，仅在依赖变化时惰性重算。
 // 派生 signal 是只读的（带参调用写入被忽略）。
 func Computed[T any](f func() T) Signal[T] {
@@ -338,7 +362,9 @@ func ComputedWithHandle[T any](f func() T) (Signal[T], Computation) {
 	st.n.run = recompute
 	sig := func(args ...T) T {
 		if len(args) > 0 {
-			return st.value.Load().v // 只读：忽略写入
+			// 第十轮 P2-3：Computed 只读，写入不再静默丢弃——显式 panic 让误写在
+			// 开发期立刻暴露。静默忽略比 panic 更难查（读回仍是旧值，无任何线索）。
+			panic("signal.Computed: computed 值是只读的，不能写入")
 		}
 		recompute()
 		if activeObservers.Load() == 0 {

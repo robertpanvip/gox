@@ -14,7 +14,10 @@ package compiler
 // P0 阶段：纯新增，不改动任何现有 transform；先用单元测试对拍解析正确性，
 // 后续阶段（P1 signal / P2 pub / P3 类型查询 / P4 external）再逐个把消费者切到本 API。
 
-import "sort"
+import (
+	"sort"
+	"strings"
+)
 
 // BindingKind 是一个名字被声明的语义类别。
 // 它取代各 transform 里零散的「这是不是 signal / 参数 / pub」判断。
@@ -153,6 +156,10 @@ func Bind(toks []Token) *Bindings {
 	}
 	root := b.newScope(SkGlobal, nil, Pos{Offset: 0, Line: 1, Col: 1}, maxTokenEnd(toks))
 	b.root = root
+	// 预扫函数签名：让 `p := makeP()` 这类工厂调用在建绑定时就能用 FuncResult
+	// 回填左值类型（第十轮 P1-3）。单遍扫描时若 makeP 定义在 main 之后会拿不到，
+	// 故先独立走一遍只收 funcSigs（collectFuncSig 有去重保护，主扫描再填不冲突）。
+	b.prescanFuncSigs(toks)
 	b.scan(toks, 0, len(toks), root)
 
 	// 同名声明按声明位置排序，ResolveAt 取最近一个。
@@ -437,6 +444,52 @@ func (b *Bindings) scanFunc(toks []Token, fi, end int, parent *BindScope) int {
 	return bodyEnd
 }
 
+// calledFuncResult 识别 [from,to) 是否以 `ident(...)` 函数调用开头，返回其首个返回类型。
+// 用于 `p := makeP()` 的工厂返回类型回填（第十轮 P1-3）。指针返回剥 '*'。
+// 保守：只认表达式起始就是函数调用；多值/方法链/运算表达式不认，交回调用方降级。
+func calledFuncResult(toks []Token, from, to int, b *Bindings) string {
+	if b == nil || from < 0 || from >= to || toks[from].Kind != Ident || isGoKeyword(toks[from].Text) {
+		return ""
+	}
+	lp := nextSigIn(toks, from+1, to)
+	if lp < 0 || toks[lp].Text != "(" {
+		return ""
+	}
+	if rp := matchDelim(toks, lp, "(", ")"); rp < 0 || rp >= to {
+		return ""
+	}
+	rt := b.FuncResult(toks[from].Text)
+	if rt == "" {
+		return ""
+	}
+	return strings.TrimSpace(strings.TrimPrefix(rt, "*"))
+}
+
+// prescanFuncSigs 在建绑定前独立走一遍，只收集具名函数的文本签名到 funcSigs。
+// 目的：`p := makeP()` 的 bindLHS 在建绑定时即可用 FuncResult("makeP") 回填 p 的
+// 类型，无需 makeP 定义在调用点之前（第十轮 P1-3）。不建任何 scope/binding。
+// collectFuncSig 对同名声明有去重保护，主 scan 阶段重复收集不会覆盖。
+func (b *Bindings) prescanFuncSigs(toks []Token) {
+	for i := 0; i < len(toks); i++ {
+		if !toks[i].is("func") {
+			continue
+		}
+		open, close, ok := funcParamParens(toks, i)
+		if !ok {
+			continue
+		}
+		brace := findFuncBodyBrace(toks, close)
+		if brace < 0 {
+			continue // 函数类型 / 接口方法签名，无函数体
+		}
+		ni := funcNameAt(toks, i)
+		if ni < 0 {
+			continue
+		}
+		b.collectFuncSig(toks, i, ni, open, close, brace)
+	}
+}
+
 // collectFuncSig 为一个具名函数记录原始文本签名。
 // 参数类型按位置存（共享类型 / 无名参数留空），返回类型取首个。
 func (b *Bindings) collectFuncSig(toks []Token, fi, nameIdx, open, close, brace int) {
@@ -718,6 +771,14 @@ func (b *Bindings) bindLHS(toks []Token, op int, scope *BindScope, kind BindingK
 	if exprFrom >= 0 {
 		exprTo := exprEndInStmt(toks, exprFrom, len(toks))
 		typ = inferExprLitType(toks, exprFrom, exprTo)
+		// 工厂/构造函数返回：`p := makeP("x")` 的字面量扫描会误命中参数里的字符串，
+		// 推断成 string；函数调用形态的类型应以 FuncResult 为准（第十轮 P1-3），
+		// 优先级高于字面量扫描。指针返回剥 '*'，与 signalfields 调用链类型传播一致。
+		if !isRange {
+			if ft := calledFuncResult(toks, exprFrom, exprTo, b); ft != "" {
+				typ = ft
+			}
+		}
 		if !isRange {
 			if exprTo > exprFrom && exprTo <= len(toks) {
 				visibleFrom = toks[exprTo-1].Pos // 表达式最后一个 token 处生效

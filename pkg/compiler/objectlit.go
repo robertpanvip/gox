@@ -551,7 +551,14 @@ func structFieldValueExpectType(toks []Token, open, colon int, an *Analysis, str
 	if info == nil {
 		return ""
 	}
-	return info.fields[field]
+	ft := info.fields[field]
+	// 第十轮 P2-1：signal 字段的 info.fields 是降级后的 Signal.Signal[T]；
+	// 省略类型字面量 `inner: {v:"x"}` 要补全为 T{...}，须先剥掉 Signal[...] 包装，
+	// 否则生成非法的 Signal.Signal[Inner]{V:"x"}。
+	if inner := bareFieldType(ft); strings.Contains(ft, "Signal") && inner != "" {
+		return inner
+	}
+	return ft
 }
 
 func resolveExpectTypeRaw(toks []Token, lit *objectLit, an *Analysis, structs map[string]*structInfo, b *Bindings) string {

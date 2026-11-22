@@ -68,6 +68,18 @@ pub enum perm { read = 1 << iota, write, exec }  // 位标志 1,2,4
 
 运行时 `runtime/scene/`：`Template` / `Op` / `Render` / `Instance`。`Render` 缓存静态骨架、clone 出常驻场景树；`Instance.Update()` 只回写变化的插槽（可观测指标 `Writes`），不含调度。host 不定义绘制后端接口：GUI 后端实现 `gxapp.Window`，可用 `Node.ID` / `Node.Layout` / `Changes()` 做增量绘制；内置 `TextBackend` 只是文本工具。
 
+### 3.1 `<For>` 列表
+
+`<For each={xs} key={(item) => ...}>{(item) => ...}</For>` 是 keyed 列表控制器（对齐 SolidJS `<For>`）。`each` 在读 signal 的响应式上下文求值，列表变化时做 keyed diff：同 key 节点复用（移动不重建），删除项销毁其 Owner（级联停止内部 effect / cleanup），重排只调顺序。
+
+| 写法 | 语义 |
+|---|---|
+| `key={(item) => item.id}` | 用稳定键 diff：同 key 值变化只写 item signal，精确重跑依赖它的叶子，不重建子树、ID 稳定 |
+| **省略 `key`** | `key = nil` → **用元素下标作 key**（仅适合纯追加 / 尾部删除；中间插入/删除会导致后续项按新下标重建）。这是最自然的写法，运行时以 `indexKey` 模式处理，不会出现"塌成一项"或死循环 |
+| render 参数 `item` | 是元素值的 getter（`func() T`）：子树动态 getter 必须经它读值以登记依赖。`item` 逃逸到组件 props 等无法信号化的场景时，编译器回退值快照模式（同 key 值变化重建该项） |
+
+> 注意（第十轮 P1-1）：早期实现在 `key=nil` 时把 nil 包成"恒返回 nil 的闭包"，导致 `indexKey` 判定失效、所有元素 key 坍缩、列表塌成最后一项；叠加 `BindReactive` 会每帧重建而死循环。现已修复——省略 `key` 是可用的常规写法。
+
 ## 4. 外部 Go 符号
 
 按 Go 真实拼写书写即可：全大写标识符原样保留，小写形式由 selector 右侧的机械 `upperFirst` 还原。
@@ -194,11 +206,11 @@ func main() {
   | 1 透传 | `v` 本身是 signal（signal 变量/字段/链读） | 直通 getter 本身，零开销；链中间含 signal 段时走读写合一 lambda 保鲜 |
   | 2 字面量 | 纯常量（数字/字符串/bool/nil） | `Signal.New(v)` |
   | 3 构造 | 复合字面量（如 `Leaf{v:"a"}`） | `Signal.New(v)`，一次构造、可写、可响应 |
-  | 4 派生 | 含 signal 读的表达式（如 `p.a + p.b`） | `Signal.Computed(func() T { return v })`，登记依赖、只读 |
-  | 5 裸变量 | 单个普通变量/字段（如 `v`、`q.title`） | 可写 getter `func(arg ...T) T { if len(arg)>0 { v = arg[0] }; return v }`，读跟随、写落回变量 |
-  | 6 其它 | 普通表达式（无 signal 读、非上述形态） | 可写 getter；无写目标时保守用 `Signal.New(v)` 快照 |
+  | 4 派生 | 含 signal 读的表达式（如 `p.a + p.b`） | `Signal.Computed(func() T { return v })`，登记依赖、只读（带参写入显式 panic，不再静默丢弃） |
+  | 5 裸变量 | 单个普通变量/字段（如 `v`、`q.title`） | `Signal.LockedGetter(func() T { return v }, func(x T) { v = x })`，读跟随、写落回变量，外层实例级互斥锁防竞态 |
+  | 6 其它 | 普通表达式（无 signal 读、非上述形态） | `Signal.New(v)` 快照 |
   
-  **硬判据**：凡是生成出的 `func(...T) T` 忽略参数、不登记依赖的，都不是合法 signal。档 3 的复合字面量必须走 `Signal.New`（一次构造、可写），不能包成每次读重建的裸闭包——否则中间 signal 段变化时 UI 不刷新、写入静默丢失。档 5/6 的可写 getter 让「从普通变量构造」也能写回，读仍跟随变量最新值。
+  **硬判据**：凡是生成出的 `func(...T) T` 忽略参数、不登记依赖的，都不是合法 signal。档 3 的复合字面量必须走 `Signal.New`（一次构造、可写），不能包成每次读重建的裸闭包——否则中间 signal 段变化时 UI 不刷新、写入静默丢失。档 5 用 `Signal.LockedGetter` 保留"读跟随、写落回变量"：早期版本是裸闭包 `v=arg[0]`/`return v`，无锁读写捕获变量会造成数据竞争（并发读写同一字段 `-race` 实证）；加锁后经由该字段的读写安全。**边界**：并发安全只覆盖经由 getter 的访问——若代码在别处直接读写同一变量 `v`（与字段并发），需自行同步（编译器无法给用户的裸变量读写加锁）。需要写自动通知依赖的完整响应式，请用 `signal` 源（档 1 透传）或 `Signal.New`（档 2/3）。
   
   手写 `CardProps{name: v}` 与 JSX `<Card name={v}/>` 共用 `buildSignalFieldValue`，走同一套六档语义。派生档（档 4）是惰性求值的（首次读字段时才计算）。
 - **类型安全**：只有 receiver 类型已知、且该字段确为某 struct 的 signal 字段时才解包；普通字段、同名但非 signal 的字段、外部包符号都不受影响。JSX 插值里的 selector 补 `()` 也按 receiver 断言类型判定，不会因同文件别处有同名字段而误伤普通字段读取。

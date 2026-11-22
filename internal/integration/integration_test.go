@@ -1111,7 +1111,8 @@ func main() {
 	}
 }
 
-// 第十轮 P1-B：普通变量构造的 signal 字段，写分支必须真正落回被捕获的变量。
+// 第十轮 P1-2：普通变量构造的 signal 字段用 Signal.LockedGetter——
+// 读跟随、写落回变量（跟随语义不变）。
 func TestIntegrationR10PlainVarGetterWritable(t *testing.T) {
 	src := `package main
 import "fmt"
@@ -1126,9 +1127,9 @@ func main() {
 }
 `
 	out := runGX(t, src)
-	// p.a = "two" 应写回 v：field 与 var 都是 two；之后 v="three" 读跟随。
+	// p.a="two" 写回 v；之后 v="three" 读跟随。
 	if !strings.Contains(out, "field two") || !strings.Contains(out, "var two") || !strings.Contains(out, "follow three") {
-		t.Errorf("可写 getter 写回/跟随失败, got:\n%s", out)
+		t.Errorf("LockedGetter 写回/跟随失败, got:\n%s", out)
 	}
 }
 
@@ -1153,5 +1154,28 @@ func main() {
 		if !strings.Contains(out, w) {
 			t.Errorf("显式括号中间段写后读失败, 期望 %q, got:\n%s", w, out)
 		}
+	}
+}
+
+// 第十轮 P1-3：工厂函数返回 struct 的 signal 字段，读写必须正确改写并能运行。
+// p := makeP() 若类型回填失败，p.a 会打印函数地址或写时编译失败。
+func TestIntegrationR11FactoryResultField(t *testing.T) {
+	src := `package main
+import "fmt"
+type P struct { signal a string }
+func makeP(v string) P { return P{a: v} }
+func makeP2(v string) *P { return &P{a: v} }
+func main() {
+	p := makeP("x")
+	q := makeP2("y")
+	fmt.Println("read", p.a(), q.a())
+	p.a = "z"
+	q.a = "w"
+	fmt.Println("write", p.a(), q.a())
+}
+`
+	out := runGX(t, src)
+	if !strings.Contains(out, "read x y") || !strings.Contains(out, "write z w") {
+		t.Errorf("工厂返回字段读写失败, got:\n%s", out)
 	}
 }

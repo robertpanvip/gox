@@ -500,3 +500,48 @@ func TestFastPathValueAtomicUnderWrites(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+// 第十轮 P1-2：LockedGetter 使"读跟随/写落回变量"的 getter 并发安全。
+// 旧裸闭包 v=arg[0]/return v 无锁，两个 goroutine 并发读写同一字段会 data race；
+// LockedGetter 用实例级互斥锁包住 get/set，消除竞态，且跟随语义不变。
+func TestLockedGetterConcurrentReadWrite(t *testing.T) {
+	v := "init"
+	g := LockedGetter(
+		func() string { return v },
+		func(x string) { v = x },
+	)
+	var wg sync.WaitGroup
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func(n int) {
+			defer wg.Done()
+			for j := 0; j < 200; j++ {
+				if n == 0 {
+					g("written")
+				} else {
+					_ = g()
+				}
+			}
+		}(i)
+	}
+	wg.Wait()
+	// 跟随语义：写落回变量，最终 v 是某个写入值而非空。
+	if v == "" {
+		t.Fatal("写应落回被捕获变量")
+	}
+}
+
+// 第十轮 P2-3：Computed 是只读的，带参写入应显式 panic 而非静默丢弃。
+func TestComputedWritePanics(t *testing.T) {
+	src := New(1)
+	d := Computed(func() int { return src() * 2 })
+	if got := d(); got != 2 {
+		t.Fatalf("initial = %d, want 2", got)
+	}
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("Computed 带参写入应 panic，而不是静默丢弃")
+		}
+	}()
+	d(99) // 应 panic
+}

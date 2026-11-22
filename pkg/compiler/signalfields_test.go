@@ -442,8 +442,8 @@ func main() {
 	}
 }
 
-// 用户核心规则：普通变量 / 普通字段作为 signal 字段的值 → 裸 getter func(...T) T，
-// 每次读重新求值；Signal.New 快照会在变量后续改动时冻结（错误）。
+// 第十轮 P1-2：普通变量 / 普通字段作为 signal 字段的值 → Signal.LockedGetter，
+// 读跟随、写落回变量（跟随语义不变），外层实例级互斥锁消除裸变量访问竞态。
 func TestSignalFieldPlainVarUsesGetter(t *testing.T) {
 	src := `package main
 type Q struct { title string }
@@ -456,18 +456,20 @@ func main() {
 }
 `
 	got := compileOK(t, "sf8_plain.gx", src)
-	// 第九轮 P1-B：裸变量/selector 用「可写 getter」——读跟随最新值、写真正生效。
+	containsAll(t, got, `Signal.LockedGetter(`)
 	gotCompact := strings.Join(strings.Fields(got), "")
 	containsAll(t, gotCompact,
-		`a:func(arg...string)string{iflen(arg)>0{plain=arg[0]}returnplain}`,
-		`b:func(arg...string)string{iflen(arg)>0{q.title=arg[0]}returnq.title}`,
+		`func()string{returnplain}`,
+		`func(__vstring){plain=__v}`,
+		`func()string{returnq.title}`,
+		`func(__vstring){q.title=__v}`,
 	)
 	if strings.Contains(got, `Signal.New(plain)`) || strings.Contains(got, `Signal.New(q.title)`) {
-		t.Errorf("普通变量/字段不得用 Signal.New 快照：\n%s", got)
+		t.Errorf("普通变量/字段应保持跟随语义，不得用 Signal.New 快照：\n%s", got)
 	}
 }
 
-// 普通变量 vs signal 读分档：字面量仍 New、signal 派生仍 Computed、普通变量裸 getter。
+// 普通变量 vs signal 读分档：字面量 New、signal 派生 Computed、普通变量 LockedGetter。
 func TestSignalFieldThreeTiersCoexist(t *testing.T) {
 	src := `package main
 type P struct { signal a string; signal b string; signal c string }
@@ -483,8 +485,11 @@ func main() {
 		`a: Signal.New("lit")`,
 		`b: Signal.Computed(func() string { return n() + "!" })`,
 	)
-	gotCompact := strings.Join(strings.Fields(got), "")
-	containsAll(t, gotCompact, `c:func(arg...string)string{iflen(arg)>0{plain=arg[0]}returnplain}`)
+	containsAll(t, strings.Join(strings.Fields(got), ""),
+		`c:Signal.LockedGetter(`,
+		`func()string{returnplain}`,
+		`func(__vstring){plain=__v}`,
+	)
 }
 
 // P2-1 邻居：&{...} 省略类型名 + 取址，指针 props 补全单个 &、signal 字段透传 getter。
@@ -724,7 +729,8 @@ func main() {
 	}
 }
 
-// P1-B：普通变量构造的 signal 字段，写分支必须真正落回变量（不是静默丢参数）。
+// 第十轮 P1-2：普通变量构造的 signal 字段用 Signal.LockedGetter——跟随+写落回变量，
+// 外层实例级互斥锁消除裸变量读写竞态。
 func TestR10PlainVarGetterWritable(t *testing.T) {
 	src := `package main
 type P struct { signal a string }
@@ -736,7 +742,11 @@ func main() {
 }
 `
 	got := compileOK(t, "r10_writable.gx", src)
-	containsAll(t, got, `if len(arg) > 0`, `v = arg[0]`, `return v`)
+	containsAll(t, got,
+		`a: Signal.LockedGetter(`,
+		`func() string { return v }`,
+		`func(__v string) { v = __v }`,
+	)
 }
 
 // P2-A：局部同名变量 Signal 的字段访问按绑定放行，不算手写底层 API。
@@ -862,4 +872,139 @@ func main() {
 		`return m.leaf().v(arg...)`,
 		`return m.leaf().v()`,
 	)
+}
+
+// 第十轮 P1-3：工厂函数返回的 struct，其 signal 字段读写必须正确改写。
+// p := makeP() 时 Bindings 用 FuncResult 回填 p 的类型为 P，p.a 才能识别为 signal 字段。
+func TestR11FactoryResultTypeBackfill(t *testing.T) {
+	src := `package main
+import "fmt"
+type P struct { signal a string }
+func makeP(v string) P { return P{a: v} }
+func makeP2(v string) *P { return &P{a: v} }
+func main() {
+	p := makeP("x")
+	q := makeP2("y")
+	fmt.Println(p.a, q.a)
+	p.a = "z"
+}
+`
+	got := compileOK(t, "r11_factory.gx", src)
+	containsAll(t, got, `p.a()`, `q.a()`)
+	compact := strings.Join(strings.Fields(got), "")
+	containsAll(t, compact, `p.a("z")`)
+}
+
+// 第十轮 P1-4：多层索引 m["k"][0][0].a / s[0][0].a 必须逐层推进元素类型并补 ()。
+func TestR11MultiLevelIndexChain(t *testing.T) {
+	src := `package main
+import "fmt"
+type P struct { signal a string }
+func main() {
+	signal n = "x"
+	m := map[string][][]P{"k": {{{a: n}}}}
+	s := [][]P{{{a: n}}}
+	fmt.Println(m["k"][0][0].a, s[0][0].a)
+}
+`
+	got := compileOK(t, "r11_multi_index.gx", src)
+	containsAll(t, got, `m["k"][0][0].a()`, `s[0][0].a()`)
+}
+
+// 第十轮 P1-5：JSX props 里索引 receiver m["k"].v 必须作为 signal 透传（不双重包装）。
+func TestR11JSXIndexReceiver(t *testing.T) {
+	src := `package main
+import gxscene "github.com/robertpanvip/gox/runtime/scene"
+type P struct { signal v string }
+type CardProps struct { signal v string }
+func Card(props CardProps) *gxscene.Instance { return nil }
+func main() {
+	m := map[string]P{"k": P{v: "x"}}
+	_ = <div><Card v={m["k"].v}/></div>
+}
+`
+	res, err := CompileScene("r11_jsx_index.gx", src)
+	if err != nil { t.Fatal(err) }
+	out := res.GoSource
+	// 透传档：m["k"].v 本身是 signal，应作为 getter 透传，不得双重包 Signal.New。
+	if strings.Contains(out, `Signal.New(m["k"].v)`) {
+		t.Errorf("索引 receiver 被双重包装：\n%s", out)
+	}
+	containsAll(t, out, `m["k"].v`)
+}
+
+// 第十轮 P1-4+P1-5：JSX props 里多层索引 receiver 也应正确透传。
+func TestR11JSXMultiLevelIndexReceiver(t *testing.T) {
+	src := `package main
+import gxscene "github.com/robertpanvip/gox/runtime/scene"
+type P struct { signal v string }
+type CardProps struct { signal v string }
+func Card(props CardProps) *gxscene.Instance { return nil }
+func main() {
+	m := map[string][][]P{"k": {{{v: "x"}}}}
+	_ = <div><Card v={m["k"][0][0].v}/></div>
+}
+`
+	res, err := CompileScene("r11_jsx_multi_index.gx", src)
+	if err != nil { t.Fatal(err) }
+	out := res.GoSource
+	if strings.Contains(out, `Signal.New(m["k"]`) {
+		t.Errorf("多层索引 receiver 被双重包装：\n%s", out)
+	}
+	containsAll(t, out, `m["k"][0][0].v`)
+}
+
+// 第十轮 P2-1：signal 字段值是省略类型的复合字面量，须剥 Signal[...] 取元素类型补全。
+func TestR11SignalFieldOmittedInnerType(t *testing.T) {
+	src := `package main
+type Inner struct { signal v string }
+type Out struct { signal inner Inner }
+func main() {
+	o := Out{inner: {v: "x"}}
+	_ = o
+}
+`
+	got := compileOK(t, "r11_sig_inner.gx", src)
+	// 不得生成 Signal.Signal[Inner]{V:"x"} 这种非法复合字面量。
+	if strings.Contains(got, `Signal.Signal[Inner]{`) || strings.Contains(got, `Signal[Inner]{`) {
+		t.Errorf("signal 字段内层省略类型未剥包装：\n%s", got)
+	}
+	containsAll(t, got, `Signal.New(Inner{v: Signal.New("x")})`)
+}
+
+// 第十轮 P2-2：JSX props 传复合字面量，内层 signal 字段必须递归包装。
+func TestR11JSXCompositePropInnerWrap(t *testing.T) {
+	src := `package main
+import gxscene "github.com/robertpanvip/gox/runtime/scene"
+type Leaf struct { signal v string }
+type CardProps struct { signal label Leaf }
+func Card(props CardProps) *gxscene.Instance { return nil }
+func main() {
+	_ = <div><Card label={Leaf{v: "a"}}/></div>
+}
+`
+	res, err := CompileScene("r11_jsx_comp_inner.gx", src)
+	if err != nil { t.Fatal(err) }
+	out := res.GoSource
+	// 内层 v 应被包 Signal.New("a")；不得是裸 Leaf{v:"a"} 进 Signal.New 后内层没包。
+	containsAll(t, out, `Signal.New(Leaf{v: Signal.New("a")})`)
+}
+
+// 第十轮 P3：三元 ?: 不支持，应在编译期报清晰诊断而非生成非法 Go。
+func TestR11TernaryRejected(t *testing.T) {
+	src := `package main
+type P struct { signal a string }
+func main() {
+	flag := true
+	p := P{a: flag ? "y" : "n"}
+	_ = p
+}
+`
+	_, err := Compile("r11_ternary.gx", src)
+	if err == nil {
+		t.Fatal("三元表达式应报编译错误")
+	}
+	if !strings.Contains(err.Error(), "不支持三元") {
+		t.Errorf("应给出三元不支持的诊断，got: %v", err)
+	}
 }

@@ -3,6 +3,7 @@ package gxscene_test
 import (
 	"strings"
 	"testing"
+	"time"
 
 	gxscene "github.com/robertpanvip/gox/runtime/scene"
 	"github.com/robertpanvip/gox/runtime/signal"
@@ -348,4 +349,62 @@ func assertSetTextValue(t *testing.T, changes []gxscene.Change, want, msg string
 		}
 	}
 	t.Fatalf("%s, got %v", msg, changes)
+}
+
+// 第十轮 P1-1 回归：<For> 不写 key（key=nil）时，泛型工厂必须保持 nil 让
+// indexKey 生效。旧实现把 nil 包成恒返回 nil 的闭包，导致所有元素 key 坍缩成
+// nil，列表塌成一项（全渲染最后一个）；配合 BindReactive 时每帧全量重建 → 死循环。
+func TestForGetterOfSignalNilKeyUsesIndex(t *testing.T) {
+	done := make(chan string, 1)
+	go func() {
+		get := gxscene.ForGetterOfSignal[int](
+			func() []int { return []int{10, 20, 30} },
+			nil, // key 省略：应退化为下标 key
+			func(item func() int) *gxscene.Instance {
+				return gxscene.Render(gxscene.Template{Ops: []gxscene.Op{
+					{Code: gxscene.OpElem, Arg: "i"},
+					{Code: gxscene.OpDynChild, Slot: 0},
+					{Code: gxscene.OpClose},
+				}, N: 1}, func() any { return item() })
+			},
+		)
+		view := gxscene.Render(forTpl(), get)
+		view.BindReactive(signal.Effect)
+		done <- view.String()
+	}()
+
+	var out string
+	select {
+	case out = <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("key 省略 + BindReactive 死循环（超时未返回）")
+	}
+	for _, want := range []string{"10", "20", "30"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("key 省略时应渲染全部三项，缺 %s:\n%s", want, out)
+		}
+	}
+}
+
+// 值快照工厂 ForGetterOf 同样必须保持 nil key。
+func TestForGetterOfNilKeyUsesIndex(t *testing.T) {
+	get := gxscene.ForGetterOf[int](
+		func() []int { return []int{1, 2, 3} },
+		nil,
+		func(v int) *gxscene.Instance {
+			return gxscene.Render(gxscene.Template{Ops: []gxscene.Op{
+				{Code: gxscene.OpElem, Arg: "i"},
+				{Code: gxscene.OpDynChild, Slot: 0},
+				{Code: gxscene.OpClose},
+			}, N: 1}, func() any { return v })
+		},
+	)
+	view := gxscene.Render(forTpl(), get)
+	view.BindReactive(signal.Effect)
+	out := view.String()
+	for _, want := range []string{"1", "2", "3"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("ForGetterOf key 省略应渲染全部三项，缺 %s:\n%s", want, out)
+		}
+	}
 }

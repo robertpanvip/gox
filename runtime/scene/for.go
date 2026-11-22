@@ -100,6 +100,24 @@ func ForGetterSignal(each func() []any, key func(any) any, render func(func() an
 	return func() any { return f }
 }
 
+// keyAny 把强类型 key func(T) any 适配成 For 需要的 func(any) any。
+// 关键：key == nil（省略 key）时必须返回 nil 而不是一个恒返回 nil 的闭包——后者
+// 非 nil，会让 NewFor / NewForSignal 的 indexKey 判定失效，导致所有元素 key 坍缩
+// 成 nil，列表塌成一项；配合 BindReactive 时每次 Resolve 的短路比对永远失败 →
+// 每帧全量重建 → effect 重跑 → 死循环（第十轮 P1-1）。保持 nil 才能让下标 key 生效。
+func keyAny[T any](key func(T) any) func(any) any {
+	if key == nil {
+		return nil
+	}
+	return func(v any) any {
+		t, ok := v.(T)
+		if !ok {
+			return nil
+		}
+		return key(t)
+	}
+}
+
 // ForGetterOfSignal 是带显式元素类型的信号化工广，供编译器生成的带类型 lambda 使用。
 // render 的签名是 func(func(T) *Instance)：参数是元素值的 getter，子树 getter 经它读值。
 // 泛型在编译期保留 T 的类型安全，内部擦除成 any 复用同一套 keyed 机制。
@@ -113,16 +131,7 @@ func ForGetterOfSignal[T any](each func() []T, key func(T) any, render func(func
 			}
 			return out
 		},
-		func(v any) any {
-			if key == nil {
-				return nil
-			}
-			t, ok := v.(T)
-			if !ok {
-				return nil
-			}
-			return key(t)
-		},
+		keyAny(key),
 		func(get func() any) *Instance {
 			return render(func() T {
 				v := get()
@@ -166,16 +175,7 @@ func ForGetterOf[T any](each func() []T, key func(T) any, render func(T) *Instan
 			}
 			return out
 		},
-		func(v any) any {
-			if key == nil {
-				return nil
-			}
-			t, ok := v.(T)
-			if !ok {
-				return nil
-			}
-			return key(t)
-		},
+		keyAny(key),
 		func(v any) *Instance {
 			t, ok := v.(T)
 			if !ok {
