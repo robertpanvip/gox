@@ -73,6 +73,37 @@ func TestSerializeDeltaStructuralNoFallback(t *testing.T) {
 	}
 }
 
+// 回归守护：issue #1 在 host 端根治后，移除了"结构动作 >4 退化 GRX1"的阈值。
+// 合法的大批量结构变化（如 <For> 一次增删多项）应全部编码为 GRX2 delta，
+// 不再被误降级为全量快照——否则后端每帧都得重建整棵镜像树，失去增量意义。
+func TestSerializeDeltaManyStructuralOpsStayDelta(t *testing.T) {
+	root := &gxscene.Node{
+		Type: gxscene.NodeDiv, ID: "r",
+		Children: []*gxscene.Node{leaf("a", "A"), leaf("b", "B"), leaf("c", "C")},
+	}
+	// 8 个结构动作（远超旧阈值 4）：6 次删除 + 2 次插入。
+	changes := []gxscene.Change{
+		{Kind: gxscene.ChangeRemoveChild, NodeID: "r", ChildID: "a"},
+		{Kind: gxscene.ChangeRemoveChild, NodeID: "r", ChildID: "b"},
+		{Kind: gxscene.ChangeRemoveChild, NodeID: "r", ChildID: "c"},
+		{Kind: gxscene.ChangeInsertBefore, NodeID: "r", ChildID: "d", Value: leaf("d", "D")},
+		{Kind: gxscene.ChangeInsertBefore, NodeID: "r", ChildID: "e", Value: leaf("e", "E")},
+		{Kind: gxscene.ChangeRemoveChild, NodeID: "r", ChildID: "d"},
+		{Kind: gxscene.ChangeRemoveChild, NodeID: "r", ChildID: "e"},
+		{Kind: gxscene.ChangeInsertBefore, NodeID: "r", ChildID: "f", Value: leaf("f", "F")},
+	}
+	buf, ok := serializeDelta(changes, root, 100, 100)
+	if !ok {
+		t.Fatal("大批量结构动作不应回退全量（阈值已移除）")
+	}
+	if binary.LittleEndian.Uint32(buf[0:4]) != deltaMagic {
+		t.Fatal("应为 GRX2 帧")
+	}
+	if got := binary.LittleEndian.Uint32(buf[8:12]); got != uint32(len(changes)) {
+		t.Fatalf("action_count=%d want %d", got, len(changes))
+	}
+}
+
 func TestSerializeDeltaReplaceChildrenNilRootFallbacks(t *testing.T) {
 	// ReplaceChildren 且 root 中查不到 → 应回退全量（无法构造子树）
 	changes := []gxscene.Change{{Kind: gxscene.ChangeReplaceChildren, NodeID: "missing"}}

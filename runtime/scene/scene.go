@@ -172,6 +172,26 @@ type slot struct {
 	owner *Instance         // 所属实例，供挂载子实例时共享变更 sink
 }
 
+// stableChildComp 返回该插槽当前作为「稳定组件子树」承载的实例，没有则返回 nil。
+//
+// slotComp（OpComp 组件插槽）恒为稳定子树；slotChild（OpDynChild / children 插槽）
+// 在 getter 首次产出 *Instance 后也升级为稳定子树。原因：children getter 每次求值
+// 都会 Render 出一个新 *Instance（编译器产物形如 `func() any { return Render(...MyInput...) }`），
+// 若每次 Update/SetPart 都重新求值并 embedValue 整棵替换，子树内的组件会被反复重建、
+// identity 与局部状态（输入框焦点 token、展开态等）全部丢失（Issue #1）。
+//
+// 统一为「实例常驻、递归 Update、不重建」语义，与 slotComp 一致，即 SolidJS「组件不重建、
+// 结构未变时实例保稳」。slotBranch 虽然也用 child 字段，但生命周期由 ctrl 管理，不在此列。
+func (s *slot) stableChildComp() *Instance {
+	if s.child == nil {
+		return nil
+	}
+	if s.kind == slotComp || s.kind == slotChild {
+		return s.child
+	}
+	return nil
+}
+
 // compiledTemplate 是解析 opcode 一次得到的静态骨架（只解析一次，全局缓存）。
 type compiledTemplate struct {
 	root  *Node   // 静态骨架；动态位置留空
@@ -621,14 +641,13 @@ func (i *Instance) Update() int {
 	i.Updates++
 	written := 0
 	for _, s := range i.slots {
-		// 复合组件：getter 只在首次渲染调用一次（组件实例常驻），
-		// 之后递归驱动子组件自身的细粒度更新；不重新 mount、不重建子树。
-		if s.kind == slotComp {
-			if s.child != nil {
-				w := s.child.Update()
-				written += w
-				i.Writes += w
-			}
+		// 稳定组件子树：slotComp 组件插槽，或 slotChild（children 插槽）首次求值产出
+		// 的 *Instance。getter 只在首次渲染调用一次，之后递归驱动子组件自身的细粒度
+		// 更新；不重新求值 getter、不重建子树——组件实例与局部状态保稳（Issue #1）。
+		if ch := s.stableChildComp(); ch != nil {
+			w := ch.Update()
+			written += w
+			i.Writes += w
 			continue
 		}
 		// 条件分支：切换由 BindReactive 建立的独立 Effect 驱动（读 selector 登记
@@ -825,12 +844,14 @@ func (i *Instance) BindReactive(effect func(func()) Computation) {
 		return
 	}
 	for s, sl := range i.slots {
+		// 稳定组件子树：slotComp 或承载 *Instance 的 slotChild。组件实例常驻，
+		// 递归进子树接线（叶子 + 内部的结构插槽都接）；不为它建 SetPart(getter())
+		// effect——getter 每次产出新 *Instance，重求值会重建子树、丢失局部状态（Issue #1）。
+		if ch := sl.stableChildComp(); ch != nil {
+			ch.BindReactive(effect)
+			continue
+		}
 		switch sl.kind {
-		case slotComp:
-			// 组件实例常驻：递归进子组件（叶子 + 其内部的结构插槽都要接）。
-			if sl.child != nil {
-				sl.child.BindReactive(effect)
-			}
 		case slotBranch:
 			// 纯 scene 场景下 BindReactive 是唯一入口，For/Branch 靠这里的 effect
 			// 调 Resolve 驱动增删/切换。app 场景走 BindStructural——两条路径互斥，
@@ -867,10 +888,10 @@ func (i *Instance) bindLeaves(effect func(func()) Computation) {
 		return
 	}
 	for s, sl := range i.slots {
-		if sl.kind == slotComp {
-			if sl.child != nil {
-				sl.child.bindLeaves(effect)
-			}
+		// 稳定组件子树（slotComp / 承载 *Instance 的 slotChild）：递归进子树接叶子，
+		// 不为其建 SetPart(getter()) effect（getter 重求值会重建子树，Issue #1）。
+		if ch := sl.stableChildComp(); ch != nil {
+			ch.bindLeaves(effect)
 			continue
 		}
 		if sl.kind == slotBranch || sl.get == nil {
@@ -943,12 +964,13 @@ func (i *Instance) bindStructure(ctx *bindCtx) {
 	i.bctx = ctx
 	for s, sl := range i.slots {
 		slot := s
+		// 稳定组件子树（slotComp / 承载 *Instance 的 slotChild）：递归进子树接上
+		// 内部的条件分支/列表，保证组件内结构插槽也登记依赖（Issue #1 保稳子树同步）。
+		if ch := sl.stableChildComp(); ch != nil {
+			ch.bindStructure(ctx)
+			continue
+		}
 		switch sl.kind {
-		case slotComp:
-			// 组件实例常驻：递归进子组件，接上组件内部的条件分支/列表。
-			if sl.child != nil {
-				sl.child.bindStructure(ctx)
-			}
 		case slotBranch:
 			if sl.ctrl != nil {
 				// ctx 交给控制器，供其后续 Resolve 构建的新子树递归接线。
@@ -987,8 +1009,8 @@ func (i *Instance) Dispose() {
 	}
 	i.comps = nil
 	for _, sl := range i.slots {
-		if sl.kind == slotComp && sl.child != nil {
-			sl.child.Dispose()
+		if ch := sl.stableChildComp(); ch != nil {
+			ch.Dispose()
 		}
 		if sl.kind == slotBranch && sl.ctrl != nil {
 			sl.ctrl.Dispose()
