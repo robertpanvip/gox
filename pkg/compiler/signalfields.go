@@ -31,14 +31,16 @@ import "strings"
 // 的 `var name any string`）。降级后所有下游（Bindings/scope/objectlit/pub/
 // external）看到的都是标准 Go 的 `Signal.Signal[T]` 字段，天然享受既有保护。
 
-// signalFieldTable 记录每个具名 struct 的 signal 字段名集合。
-// 值只需「字段名 → 是否存在」，用 map[string]bool。
-type signalFieldTable map[string]map[string]bool
+// signalFieldTable 记录每个具名 struct 的 signal 字段名 → 字段类型文本。
+// 类型文本（如 "string"）供 JSX props 生成 Signal.Computed(func() T {...}) 使用。
+// 值非空即表示该字段是 signal 字段；空串不应出现（signal 字段必有类型）。
+type signalFieldTable map[string]map[string]string
 
 // signalFieldDecl 描述一处 `signal name TYPE` 字段声明在 token 流中的位置。
 type signalFieldDecl struct {
 	typeName string // struct 类型名
 	field    string // 字段名
+	typeText string // 字段类型文本（如 "string"），JSX Computed 包装需要
 	sigIdx   int    // `signal` token 下标
 	nameIdx  int    // 字段名 token 下标
 	typeFrom int    // 类型起始下标
@@ -93,6 +95,7 @@ func collectSignalFieldDecls(toks []Token) []signalFieldDecl {
 			out = append(out, signalFieldDecl{
 				typeName: typeName,
 				field:    toks[nameIdx].Text,
+				typeText: exprText(toks, typeFrom, typeTo),
 				sigIdx:   first,
 				nameIdx:  nameIdx,
 				typeFrom: typeFrom,
@@ -118,9 +121,9 @@ func buildSignalFieldTable(decls []signalFieldDecl) signalFieldTable {
 	tbl := signalFieldTable{}
 	for _, d := range decls {
 		if tbl[d.typeName] == nil {
-			tbl[d.typeName] = map[string]bool{}
+			tbl[d.typeName] = map[string]string{}
 		}
-		tbl[d.typeName][d.field] = true
+		tbl[d.typeName][d.field] = d.typeText
 	}
 	return tbl
 }
@@ -130,13 +133,19 @@ func (t signalFieldTable) hasSignalFields() bool { return len(t) > 0 }
 
 // has 判断 typeName 的 field 是否是 signal 字段。
 func (t signalFieldTable) has(typeName, field string) bool {
+	_, ok := t[typeName][field]
+	return ok
+}
+
+// fieldType 返回 typeName.field 的字段类型文本；非 signal 字段返回空串。
+func (t signalFieldTable) fieldType(typeName, field string) string {
 	return t[typeName][field]
 }
 
 // hasField 判断任意 struct 是否声明了名为 field 的 signal 字段（宽松兜底）。
 func (t signalFieldTable) hasField(field string) bool {
 	for _, fields := range t {
-		if fields[field] {
+		if _, ok := fields[field]; ok {
 			return true
 		}
 	}
@@ -490,4 +499,51 @@ func wrapSignalFieldLiterals(toks []Token, b *Bindings, tbl signalFieldTable) []
 // hasSignalFieldsOf 判断某 typeName 是否有 signal 字段。
 func (t signalFieldTable) hasSignalFieldsOf(typeName string) bool {
 	return len(t[typeName]) > 0
+}
+
+// rewriteJSXSignalFieldSelectors 在 JSX 插值 token 里给「signal 字段 selector 读」
+// 补上调用括号：p.name → p.name()。JSX 生成的 token 是 transform 新产物，没经过
+// rewriteSignalFieldRefs，故需在此补——否则 {p.name} 会把 Signal 函数当值插入界面。
+//
+// 识别 X.field：field 是已知 signal 字段名、field 后不是 '('、且 receiver X 不是
+// 紧邻 ')' 的调用结果（排除 For item getter `u().name` 这类普通字段读取）。
+func rewriteJSXSignalFieldSelectors(toks []Token, tbl signalFieldTable) []Token {
+	if !tbl.hasSignalFields() {
+		return toks
+	}
+	out := make([]Token, 0, len(toks)+4)
+	for i := 0; i < len(toks); i++ {
+		t := toks[i]
+		out = append(out, t)
+		if t.Kind != Ident {
+			continue
+		}
+		dot := nextSig(toks, i+1)
+		if dot < 0 || toks[dot].Text != "." {
+			continue
+		}
+		fieldIdx := nextSig(toks, dot+1)
+		if fieldIdx < 0 || toks[fieldIdx].Kind != Ident || !tbl.hasField(toks[fieldIdx].Text) {
+			continue
+		}
+		// field 后已是 '('（调用/字段写）→ 不补。
+		if n := nextSig(toks, fieldIdx+1); n >= 0 && toks[n].Text == "(" {
+			continue
+		}
+		// field 后是 ':'（对象字面量 key）→ 不补。
+		if n := nextSig(toks, fieldIdx+1); n >= 0 && toks[n].Text == ":" {
+			continue
+		}
+		// receiver 是紧邻 ')' 的调用结果（如 For item getter u()）→ 普通字段，不补。
+		if prev := prevSig(toks, i-1); prev >= 0 && toks[prev].Text == ")" {
+			continue
+		}
+		// 把 .field 原样搬运，再补 ()。
+		for k := dot; k <= fieldIdx; k++ {
+			out = append(out, toks[k])
+		}
+		out = append(out, tokOp("(", t.Pos), tokOp(")", t.Pos))
+		i = fieldIdx
+	}
+	return out
 }

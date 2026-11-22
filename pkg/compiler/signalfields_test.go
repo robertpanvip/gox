@@ -168,3 +168,90 @@ func main() { p := CardProps{name: Signal.New("x")}; println(p.name) }
 		t.Errorf("构造字面量后被吞入多余的 '}':\n%s", got)
 	}
 }
+
+// ===== 第五轮：signal 字段 + JSX 统一语义回归 =====
+
+// 2.1：组件体内 JSX 插值读 signal 字段 p.name 必须补 ()，
+// 否则把 Signal 函数当值插入界面（编译通过但显示函数地址）。
+func TestSignalFieldJSXSelectorReadAddsCall(t *testing.T) {
+	src := `package main
+import gxscene "github.com/robertpanvip/gox/runtime/scene"
+type CardProps struct { signal name string }
+func Card(p CardProps) *gxscene.Instance { return <div>{p.name}</div> }
+func main() {
+	signal s = "x"
+	_ = <div><Card name={s}/></div>
+}
+`
+	got := compileOK(t, "sfjsx_sel.gx", src)
+	containsAll(t, got, `return p.name()`, `Card(CardProps{name:s,})`)
+}
+
+// 2.2：signal 变量传给 signal 字段 → 直通 getter（保鲜），不再生成 title() 非法 Go。
+func TestSignalFieldJSXPropPassthrough(t *testing.T) {
+	src := `package main
+import gxscene "github.com/robertpanvip/gox/runtime/scene"
+type CardProps struct { signal name string }
+func Card(p CardProps) *gxscene.Instance { return nil }
+func main() {
+	signal title = "hello"
+	_ = <div><Card name={title}/></div>
+}
+`
+	got := compileOK(t, "sfjsx_pass.gx", src)
+	containsAll(t, got, `Card(CardProps{name:title,})`)
+	if strings.Contains(got, "name:title()") {
+		t.Errorf("signal 应透传 getter 而非求值:\n%s", got)
+	}
+}
+
+// 2.3：字面量传给 signal 字段 → 自动包 Signal.New，不再编译期类型错。
+func TestSignalFieldJSXPropLiteralWrapped(t *testing.T) {
+	src := `package main
+import gxscene "github.com/robertpanvip/gox/runtime/scene"
+type CardProps struct { signal name string }
+func Card(p CardProps) *gxscene.Instance { return nil }
+func main() { _ = <div><Card name="lit"/></div> }
+`
+	got := compileOK(t, "sfjsx_lit.gx", src)
+	containsAll(t, got, `Card(CardProps{name:Signal.New("lit"),})`)
+}
+
+// 2.5/2.6：<For> item 派生态传给 signal 字段 → 包 Signal.Computed(func() T {...})
+// 保鲜，且该 For 仍走 ForGetterOfSignal 零重建（逃逸豁免语义成立）。
+func TestSignalFieldJSXForItemDerivedComputed(t *testing.T) {
+	src := `package main
+import gxscene "github.com/robertpanvip/gox/runtime/scene"
+type User struct { id int; name string }
+type CardProps struct { signal name string }
+func Card(p CardProps) *gxscene.Instance { return nil }
+func main() {
+	signal users = []User{{1,"Tom"}}
+	_ = <ul><For each={users} key={(u) => u.id}>{(u User) => <li><Card name={u.name}/></li>}</For></ul>
+}
+`
+	got := compileOK(t, "sfjsx_for.gx", src)
+	containsAll(t, got,
+		`ForGetterOfSignal[User]`,
+		`Signal.Computed(func() string { return u().name })`,
+	)
+}
+
+// signal 字段之间透传：一个 signal 字段传给另一个组件的 signal 字段 →
+// 直通 getter（不 New、不 Computed），与手写结构体赋值语义一致（用户要求）。
+func TestSignalFieldJSXFieldToFieldPassthrough(t *testing.T) {
+	src := `package main
+import gxscene "github.com/robertpanvip/gox/runtime/scene"
+type CardProps struct { signal name string }
+type WrapProps struct { signal inner string }
+func Card(p CardProps) *gxscene.Instance { return <div>{p.name}</div> }
+func Wrap(p WrapProps) *gxscene.Instance { return <div><Card name={p.inner}/></div> }
+func main() { _ = <Wrap inner="hello"/> }
+`
+	got := compileOK(t, "sfjsx_ff.gx", src)
+	containsAll(t, got,
+		`Card(CardProps{name:p.inner,})`,
+		`Wrap(WrapProps{inner:Signal.New("hello"),})`,
+		`return p.name()`,
+	)
+}

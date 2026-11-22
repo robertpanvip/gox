@@ -103,22 +103,182 @@ func compCallTokens(n *jsxNode, ctx *jsxSceneCtx) []Token {
 	return compCallProps(n, ctx)
 }
 
+// signalFieldPropTokens 为 props 的 signal 字段生成值 token，统一四档语义
+// （与手写 `CardProps{name: expr}` 经 wrapSignalFieldLiterals 的语义一致）：
+//
+//	signal 变量 / signal 字段 selector → 直通 getter（保鲜）；
+//	字面量（字符串/数字/bool）         → Signal.New(lit)；
+//	其余派生表达式（含 signal 读）     → Signal.Computed(func() T { return expr })。
+//
+// 判定基于原始 a.value 的词法形态，避开 JSX token 无法反查 Bindings 类型的问题。
+// 返回 (tokens, true) 表示已处理；(nil, false) 表示非 signal 字段，走常规路径。
+func signalFieldPropTokens(a jsxAttr, ctx *jsxSceneCtx, propsType string) ([]Token, bool) {
+	if propsType == "" || a.name == "" || !ctx.signalFields.has(propsType, a.name) {
+		return nil, false
+	}
+	p := a.pos
+	T := ctx.signalFields.fieldType(propsType, a.name)
+
+	// 字面量档：attrString / attrBool 直接 New；attrExpr 里的纯数字/字符串同样 New。
+	switch a.kind {
+	case attrString:
+		return signalNewCall(tokString(normalizeStringLit(a.value), p)), true
+	case attrBool:
+		return signalNewCall(tokIdent(a.value, p)), true
+	case attrExpr:
+		if isPlainLiteralExpr(a.value) {
+			return signalNewCall(lexExprScene(a.value, a.pos, ctx)...), true
+		}
+	}
+
+	// 改写后的表达式 token（signal→title()、item getter→u().name）。
+	vt := lexExprScene(a.value, a.pos, ctx)
+
+	// 透传档：表达式恰好是单个 signal 读。两种形态：
+	//   title()        —— signal 变量读，剥离 () 传 getter 本身；
+	//   title          —— 已是 getter（forItemParam），无调用括号；
+	//   other.name()   —— 别的 signal 字段读（selector），整体直通。
+	if leaf, ok := pureSignalRead(a.value, vt, ctx); ok {
+		return leaf, true
+	}
+
+	// 派生档：包 Signal.Computed(func() T { return <改写后表达式> })，
+	// 每次读重新求值并登记依赖，实现 item signal / 外部 signal 的保鲜。
+	var out []Token
+	out = append(out, signalPkgToken(p), tokOp(".", p), tokIdent("Computed", p), tokOp("(", p))
+	out = append(out, tokIdent("func", p), tokOp("(", p), tokOp(")", p), tokSpace(" ", p))
+	out = append(out, tokensForType(T, p)...)
+	out = append(out, tokSpace(" ", p))
+	out = append(out, tokOp("{", p), tokSpace(" ", p), tokIdent("return", p), tokSpace(" ", p))
+	for _, t := range vt {
+		if t.Kind == EOF {
+			continue
+		}
+		out = append(out, t)
+	}
+	out = append(out, tokSpace(" ", p), tokOp("}", p), tokOp(")", p))
+	return out, true
+}
+
+// signalNewCall 生成 Signal.New(<lit>) token 序列。
+func signalNewCall(lit ...Token) []Token {
+	if len(lit) == 0 {
+		return nil
+	}
+	p := lit[0].Pos
+	out := []Token{signalPkgToken(p), tokOp(".", p), tokIdent("New", p), tokOp("(", p)}
+	out = append(out, lit...)
+	out = append(out, tokOp(")", p))
+	return out
+}
+
+// tokensForType 把一个类型文本（如 "string"、"[]int"、"*User"）词法化为 token。
+func tokensForType(T string, p Pos) []Token {
+	if strings.TrimSpace(T) == "" {
+		return []Token{tokIdent("any", p)}
+	}
+	toks := New(strings.TrimSpace(T)).AllTokens()
+	var out []Token
+	for _, t := range toks {
+		if t.Kind == EOF {
+			continue
+		}
+		t.Pos = p
+		t.IsGen = true
+		out = append(out, t)
+	}
+	return out
+}
+
+// isPlainLiteralExpr 判断表达式原文是否为纯字面量（数字/字符串/bool/nil）。
+func isPlainLiteralExpr(expr string) bool {
+	e := strings.TrimSpace(expr)
+	if e == "" {
+		return false
+	}
+	toks := New(e).AllTokens()
+	var sig []Token
+	for _, t := range toks {
+		if t.Kind != Space && t.Kind != Newline && t.Kind != EOF {
+			sig = append(sig, t)
+		}
+	}
+	if len(sig) != 1 {
+		return false
+	}
+	switch sig[0].Kind {
+	case Number, String, Rune:
+		return true
+	case Ident:
+		return sig[0].Text == "true" || sig[0].Text == "false" || sig[0].Text == "nil"
+	}
+	return false
+}
+
+// pureSignalRead 判断改写后的表达式是否为「单个 signal 读」，是则返回可透传的
+// getter token。识别形态（vt 为 lexExprScene 改写后的 token）：
+//   - <sig>()        全局 signal/computed 读 → 剥离 () 传 getter（保鲜）；
+//   - <itemGetter>   For item getter（无调用括号，forItemParam）→ 直通其本身；
+//   - recv.field()   signal 字段 selector 读 → 整体直通（字段本身是 signal）。
+func pureSignalRead(expr string, vt []Token, ctx *jsxSceneCtx) ([]Token, bool) {
+	// 收集非空白 token
+	var s []Token
+	for _, t := range vt {
+		if t.Kind != Space && t.Kind != Newline && t.Kind != EOF {
+			s = append(s, t)
+		}
+	}
+	if len(s) == 0 {
+		return nil, false
+	}
+
+	// 形态：<ident>() —— signal 变量读，剥离括号。
+	if len(s) == 3 && s[0].Kind == Ident && s[1].Text == "(" && s[2].Text == ")" {
+		if ctx.sigs[s[0].Text] {
+			return []Token{tokIdent(s[0].Text, s[0].Pos)}, true
+		}
+	}
+	// 形态：<ident> —— 已是 getter（For item getter param），直通。
+	if len(s) == 1 && s[0].Kind == Ident && ctx.forItemParam == s[0].Text {
+		return []Token{tokIdent(s[0].Text, s[0].Pos)}, true
+	}
+	// 形态：recv.field() —— signal 字段 selector 读，整体直通（剥末尾 ()）。
+	if len(s) >= 3 {
+		n := len(s)
+		if s[n-1].Text == ")" && n >= 4 && s[n-2].Text == "(" &&
+			s[n-3].Kind == Ident && s[n-4].Text == "." && ctx.signalFields.hasField(s[n-3].Text) {
+			return append([]Token{}, s[:n-2]...), true
+		}
+	}
+	return nil, false
+}
+
 // compCallTyped 生成强类型契约组件调用：Card({ title: expr, ... })。
-// 属性值直传快照表达式，children 直接是子 Render 表达式（快照子树）。
+// 例外：props 的 signal 字段走 signalFieldPropTokens 统一生成——signal 透传、
+// 字面量包 Signal.New、派生表达式包 Signal.Computed，语义与手写结构体赋值一致。
 func compCallTyped(n *jsxNode, ctx *jsxSceneCtx) []Token {
 	p := n.pos
+	compName := n.name
+	if idx := strings.LastIndex(compName, "."); idx >= 0 {
+		compName = compName[idx+1:]
+	}
+	propsType := ctx.comps[compName]
 	out := componentNameTokens(n, p)
 	out = append(out, tokOp("(", p), tokOp("{", p))
 
 	for _, a := range n.attrs {
 		out = append(out, tokIdent(a.name, a.pos), tokOp(":", p))
-		switch a.kind {
-		case attrBool:
-			out = append(out, tokIdent("true", a.pos))
-		case attrString:
-			out = append(out, tokString(normalizeStringLit(a.value), a.pos))
-		case attrExpr:
-			out = append(out, lexExprScene(a.value, a.pos, ctx)...)
+		if val, ok := signalFieldPropTokens(a, ctx, propsType); ok {
+			out = append(out, val...)
+		} else {
+			switch a.kind {
+			case attrBool:
+				out = append(out, tokIdent("true", a.pos))
+			case attrString:
+				out = append(out, tokString(normalizeStringLit(a.value), a.pos))
+			case attrExpr:
+				out = append(out, lexExprScene(a.value, a.pos, ctx)...)
+			}
 		}
 		out = append(out, tokOp(",", p))
 	}
@@ -693,6 +853,9 @@ func lexExprScene(expr string, base Pos, ctx *jsxSceneCtx) []Token {
 		}
 		toks = rewriteJSXInterpSignals(toks, effective)
 	}
+	// signal 字段 selector 读补 ()（如组件内 {p.name} → p.name()）。
+	// 与 rewriteJSXInterpSignals 独立：后者只认全局 signal 名，不管 signal 字段。
+	toks = rewriteJSXSignalFieldSelectors(toks, ctx.signalFields)
 	// 对象字面量自动推断：{ { name: "x", age: 1 } } → struct{ name string; age int }{...}。
 	// 插值片段无期望类型上下文，走匿名 struct 推断路径。
 	if converted, err := transformObjectLitExpr(toks); err == nil {

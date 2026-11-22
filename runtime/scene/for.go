@@ -201,11 +201,40 @@ func (f *For) Resolve() *Instance {
 	items := f.each()
 	f.mu.Unlock()
 
-	// 计算新 keys 与 values。
 	type kv struct {
 		key   any
 		value any
 	}
+
+	// 短路：先比长度，再直接遍历 items 比对 key 顺序与每项值，全程不构造 newList。
+	// 常见场景是"别的 signal 变了触发 each 重算，但列表本身没变"——命中即复用
+	// 上次 root，省掉 make([]kv)、order/children 重建与 root Instance 分配。
+	// 只有检测失败（列表确实变了）才构造 newList 走完整 diff 路径。
+	if f.lastRoot != nil && len(items) == len(f.order) {
+		unchanged := true
+		for i, item := range items {
+			k := item
+			if f.indexKey {
+				k = i
+			} else if f.key != nil {
+				k = f.key(item)
+			}
+			if !equalValue(f.order[i], k) {
+				unchanged = false
+				break
+			}
+			entry, ok := f.entries[k]
+			if !ok || !equalValue(entry.value, item) {
+				unchanged = false
+				break
+			}
+		}
+		if unchanged {
+			return f.lastRoot
+		}
+	}
+
+	// 计算新 keys 与 values（短路未命中才需要）。
 	newList := make([]kv, len(items))
 	for i, item := range items {
 		k := item
@@ -215,28 +244,6 @@ func (f *For) Resolve() *Instance {
 			k = f.key(item)
 		}
 		newList[i] = kv{key: k, value: item}
-	}
-
-	// 短路：列表长度、key 顺序、每个 key 的值都未变时，直接复用上次的 root。
-	// 常见场景是"别的 signal 变了触发 each 重算，但列表本身没变"——此时无需
-	// 重建 order/children 切片与 root Instance，也避免 diffChildren 空跑。
-	// 注意：equalValue 的调用与下方逐项检测等价，短路只省掉分配与组装。
-	if f.lastRoot != nil && len(newList) == len(f.order) {
-		unchanged := true
-		for i, e := range newList {
-			if !equalValue(f.order[i], e.key) {
-				unchanged = false
-				break
-			}
-			entry, ok := f.entries[e.key]
-			if !ok || !equalValue(entry.value, e.value) {
-				unchanged = false
-				break
-			}
-		}
-		if unchanged {
-			return f.lastRoot
-		}
 	}
 
 	// 标记新 keys 集合。

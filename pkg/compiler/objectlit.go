@@ -685,6 +685,14 @@ func validateObjectLit(lit *objectLit, expect string, structs map[string]*struct
 			return nil, &objectLitError{pos: f.pos, msg: fmt.Sprintf("未知字段 %q（类型 %s 的字段有: %s）", f.name, expect, strings.Join(info.order, ", "))}
 		}
 		seen[f.name] = true
+		// signal 字段（降级为 Signal.Signal[T]）的值形态由生成侧
+		// （wrapSignalFieldLiterals / signalFieldPropTokens）统一保证：
+		// signal 直通、字面量包 Signal.New、派生包 Signal.Computed。
+		// inferValueType 无法识别这些包装调用，会误判为底层类型，故此处跳过
+		// 类型校验；最终类型正确性由 Go 编译器兜底。
+		if isSignalFieldType(ftype) {
+			continue
+		}
 		// 值类型兼容性：无类型常量按类型族放宽；具类型值精确匹配
 		vt := f.valType
 		if vt != "" && vt != "any" && !typeCompatible(ftype, vt) {
@@ -698,6 +706,16 @@ func validateObjectLit(lit *objectLit, expect string, structs map[string]*struct
 		}
 	}
 	return info, nil
+}
+
+// isSignalFieldType 判断字段类型是否为 struct signal 字段降级后的 Signal.Signal[T]。
+// 兼容带包别名（signal.Signal[T]）与注入占位名（Signal.Signal[T]）两种形态。
+func isSignalFieldType(ftype string) bool {
+	s := strings.TrimSpace(ftype)
+	if i := strings.LastIndex(s, "."); i >= 0 {
+		s = s[i+1:]
+	}
+	return strings.HasPrefix(s, "Signal[")
 }
 
 // typeCompatible 判断值类型 vt 能否赋给字段类型 target。

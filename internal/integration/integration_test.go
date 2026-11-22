@@ -903,3 +903,46 @@ func main() {
 		t.Errorf("复合写+自增结果应为 4, got:\n%s", out)
 	}
 }
+
+func TestIntegrationSignalFieldJSXItemPropLive(t *testing.T) {
+	// 第五轮根治端到端：signal 字段 props + For item 派生态。
+	// <Card text={u.name}/> 中 text 是 signal 字段 → 生成 Signal.Computed(func() string{return u().name})，
+	// item 值变化时 Computed 重新求值，组件内 {p.text()} 读到新值，无需整项重建。
+	src := `package main
+import (
+	gxscene "github.com/robertpanvip/gox/runtime/scene"
+	"fmt"
+)
+type User struct { id int; name string }
+type CardProps struct { signal text string }
+func Card(props CardProps) *gxscene.Instance {
+	return <b>{props.text}</b>
+}
+func main() {
+	signal users = []User{{1,"Tom"},{2,"Jack"}}
+	view := <ul>
+		<For each={users} key={(u) => u.id}>
+			{(u User) => <li><Card text={u.name}/></li>}
+		</For>
+	</ul>
+	view.BindReactive(Signal.Effect)
+	users = []User{{1,"Thomas"},{2,"Jack"}}
+	fmt.Print("UPD:", view)
+}
+`
+	out := runGXScene(t, src)
+	idx := strings.LastIndex(out, "UPD:")
+	if idx < 0 {
+		t.Fatalf("应有 UPD 输出, got:\n%s", out)
+	}
+	seg := out[idx:]
+	if !strings.Contains(seg, `"Thomas"`) {
+		t.Errorf("signal 字段 props 应随 item 刷新为 Thomas, got:\n%s", seg)
+	}
+	if strings.Contains(seg, `"Tom"`) {
+		t.Errorf("不应残留旧值 Tom, got:\n%s", seg)
+	}
+	if !strings.Contains(seg, `"Jack"`) {
+		t.Errorf("未变更项应保持 Jack, got:\n%s", seg)
+	}
+}
