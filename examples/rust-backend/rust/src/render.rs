@@ -106,102 +106,199 @@ impl DisplayList {
     fn new() -> Self {
         DisplayList { shapes: vec![], texts: vec![], hitboxes: vec![], inputs: vec![] }
     }
+    /// 把镜像场景树编译成绘制指令。
+    /// 布局交给 Taffy 0.5（完整 Flexbox 引擎）——
+    /// 支持完整的 justify-content / align-items / gap / flex-wrap，
+    /// 组件包装层（Fragment）摊平为透明节点，文本节点用 measure 回调测宽。
+    /// 根节点的 size 设为窗口尺寸，因此 align-items:center 有确定参照。
+    fn from_scene(root: &crate::scene::SceneNode, avail_w: f32, avail_h: f32) -> Self {
+        use taffy::prelude::*;
 
-    /// 把镜像场景树编译成绘制指令（主轴排布，fragment 透明透传）。
-    fn from_scene(root: &crate::scene::SceneNode) -> Self {
         let mut dl = DisplayList::new();
-        // 估算文本占用尺寸：CJK/全角按 1em，ASCII 按 0.56em，行高 1.35em。
-        // 布局引擎（Taffy 精简版）本应返回精确 measure，这里给零深度文本一个近似值，
-        // 保证父节点主轴能推进，避免所有文本堆叠在同一坐标。
-        fn text_size(text: &str, size: f32) -> (f32, f32) {
-            let w = text.chars().map(|c| {
-                if c.is_ascii() { 0.56 } else { 1.0 }
-            }).sum::<f32>() * size;
-            (w, size * 1.35)
+        let mut taffy: TaffyTree<TextMeasure> = TaffyTree::new();
+
+        // 文本测量上下文：继承后的字号 + 文本内容。Taffy 在布局期回调测宽。
+        #[derive(Clone)]
+        struct TextMeasure { text: String, size: f32 }
+
+        fn measure_text(
+            known: taffy::geometry::Size<Option<f32>>,
+            _avail: taffy::geometry::Size<taffy::style::AvailableSpace>,
+            ctx: Option<&mut TextMeasure>,
+        ) -> taffy::geometry::Size<f32> {
+            if let taffy::geometry::Size { width: Some(w), height: Some(h) } = known {
+                return taffy::geometry::Size { width: w, height: h };
+            }
+            let Some(c) = ctx else { return taffy::geometry::Size::ZERO; };
+            // CJK/全角按 1em，ASCII 按 0.56em，行高 1.35em。
+            let w = c.text.chars()
+                .map(|ch| if ch.is_ascii() { 0.56 } else { 1.0 })
+                .sum::<f32>() * c.size;
+            taffy::geometry::Size { width: w, height: c.size * 1.35 }
         }
 
-        // 返回节点实际占用尺寸 (w, h)，供父节点沿主轴推进游标。
-        // 难点：包装型 Div（卡片内的 label/value 容器）没有显式宽高，其尺寸应由
-        // 子树内容回流得到，否则父级主轴不推进 → 文本全部堆叠在同一坐标。
-        fn walk(node: &crate::scene::SceneNode, ox: f32, oy: f32, dl: &mut DisplayList) -> (f32, f32) {
-            let prop = |k: &str| node.props.get(k).map(|s| s.as_str());
-            let exp_w = prop("width").and_then(parse_px).unwrap_or(0.0);
-            let exp_h = prop("height").and_then(parse_px).unwrap_or(0.0);
-            let pad = prop("padding").and_then(parse_px).unwrap_or(0.0);
-            let dir = prop("flex-direction").unwrap_or("column");
-            let gap = prop("gap")
-                .or_else(|| if dir.starts_with("row") { prop("column-gap") } else { prop("row-gap") })
-                .and_then(parse_px).unwrap_or(0.0);
-            let is_row = dir == "row" || dir == "row-reverse";
+        fn dir_of(s: &str) -> FlexDirection {
+            match s {
+                "row" => FlexDirection::Row,
+                "row-reverse" => FlexDirection::RowReverse,
+                "column-reverse" => FlexDirection::ColumnReverse,
+                _ => FlexDirection::Column,
+            }
+        }
+        fn align_of(s: Option<&str>) -> Option<AlignItems> {
+            match s.unwrap_or("") {
+                "center" => Some(AlignItems::Center),
+                "flex-end" | "end" => Some(AlignItems::FlexEnd),
+                "flex-start" | "start" => Some(AlignItems::FlexStart),
+                "stretch" => Some(AlignItems::Stretch),
+                _ => None,
+            }
+        }
+        fn justify_of(s: Option<&str>) -> Option<JustifyContent> {
+            match s.unwrap_or("") {
+                "center" => Some(JustifyContent::Center),
+                "flex-end" | "end" => Some(JustifyContent::FlexEnd),
+                "space-between" => Some(JustifyContent::SpaceBetween),
+                "space-around" => Some(JustifyContent::SpaceAround),
+                "space-evenly" => Some(JustifyContent::SpaceEvenly),
+                "flex-start" | "start" => Some(JustifyContent::FlexStart),
+                _ => None,
+            }
+        }
 
-            let size = prop("font-size").and_then(parse_px).unwrap_or(16.0);
-            let color = prop("color").map(parse_color).unwrap_or((226, 232, 240));
+        // 把可见子节点摊平（Fragment 透明），记录 (Taffy 节点, 原 SceneNode 引用)。
+        // 同时收集节点的绘制属性，布局算完后统一生成 DisplayList。
+        struct BuildCtx {
+            taffy: TaffyTree<TextMeasure>,
+        }
 
-            // 文本叶子：直接绘制并返回估算尺寸。
+        fn build(
+            ctx: &mut BuildCtx,
+            node: &crate::scene::SceneNode,
+            is_root: bool,
+            inherited_color: (u8, u8, u8),
+            inherited_size: f32,
+            avail_w: f32, avail_h: f32,
+        ) -> taffy::NodeId {
+            let p = |k: &str| node.props.get(k).map(|s| s.as_str());
+            let color = p("color").map(parse_color).unwrap_or(inherited_color);
+            let size = p("font-size").and_then(parse_px).unwrap_or(inherited_size);
+
             if node.typ == NodeType::Text {
-                dl.texts.push(TextDraw {
-                    text: node.text.clone(), x: ox, y: oy + size * 0.2, size, color,
-                });
-                return text_size(&node.text, size);
+                return ctx.taffy.new_leaf_with_context(
+                    Style::default(),
+                    TextMeasure { text: node.text.clone(), size },
+                ).expect("taffy text leaf");
             }
 
-            // 容器：先占位 push 自身 shape（保持"父先子后"绘制顺序，父背景才不会盖住子），
-            // 再递归子树收集内容尺寸，最后回填自身宽高。
-            let shape_idx = if node.typ == NodeType::Div {
-                let bg = prop("bg").or_else(|| prop("background")).map(parse_color);
-                let radius = prop("border-radius").and_then(parse_px).unwrap_or(0.0);
-                let border = prop("border").map(|c| {
-                    let bw = prop("border-width").and_then(parse_px).unwrap_or(1.0);
+            let pad = p("padding").and_then(parse_px).unwrap_or(0.0);
+            let gap = p("gap").or_else(|| p("column-gap")).and_then(parse_px).unwrap_or(0.0);
+            let mut style = Style {
+                flex_direction: dir_of(p("flex-direction").unwrap_or("column")),
+                padding: Rect {
+                    left: length(pad), right: length(pad),
+                    top: length(pad), bottom: length(pad),
+                },
+                gap: Size { width: length(gap), height: length(gap) },
+                align_items: align_of(p("align-items")),
+                justify_content: justify_of(p("justify-content")),
+                ..Default::default()
+            };
+            // 显式宽高；根节点即使未声明也填满窗口。
+            let exp_w = p("width").and_then(parse_px);
+            let exp_h = p("height").and_then(parse_px);
+            let w = exp_w.or(if is_root { Some(avail_w) } else { None });
+            let h = exp_h.or(if is_root { Some(avail_h) } else { None });
+            if let Some(v) = w { style.size.width = length(v); }
+            if let Some(v) = h { style.size.height = length(v); }
+
+            // 摊平 Fragment：透明包装不引入布局节点，其 children 直接挂到当前父节点。
+            let mut kids: Vec<&crate::scene::SceneNode> = Vec::new();
+            fn flatten<'a>(n: &'a crate::scene::SceneNode, out: &mut Vec<&'a crate::scene::SceneNode>) {
+                for c in &n.children {
+                    if c.typ == NodeType::Fragment { flatten(c, out); } else { out.push(c); }
+                }
+            }
+            flatten(node, &mut kids);
+            let child_nodes: Vec<taffy::NodeId> = kids.iter()
+                .map(|c| build(ctx, c, false, color, size, avail_w, avail_h))
+                .collect();
+
+            ctx.taffy.new_with_children(style, &child_nodes).expect("taffy container")
+        }
+
+        let mut ctx = BuildCtx { taffy };
+        let root_node = build(&mut ctx, root, true, (226, 232, 240), 16.0, avail_w, avail_h);
+        ctx.taffy.compute_layout_with_measure(
+            root_node,
+            Size { width: AvailableSpace::Definite(avail_w), height: AvailableSpace::Definite(avail_h) },
+            |known, avail, _id, mctx, _style| measure_text(known, avail, mctx),
+        ).expect("taffy compute_layout");
+
+        // 第二遍：按同样的摊平顺序遍历，把布局结果转成绘制指令（父先子后）。
+        fn emit(
+            node: &crate::scene::SceneNode,
+            tnode: taffy::NodeId,
+            ctx: &BuildCtx,
+            dl: &mut DisplayList,
+            inherited_color: (u8, u8, u8),
+            inherited_size: f32,
+            ox: f32, oy: f32,
+        ) {
+            let p = |k: &str| node.props.get(k).map(|s| s.as_str());
+            let color = p("color").map(parse_color).unwrap_or(inherited_color);
+            let size = p("font-size").and_then(parse_px).unwrap_or(inherited_size);
+            let lay = ctx.taffy.layout(tnode).expect("taffy layout");
+            // Taffy location 相对父节点；递归累加得到绝对坐标。
+            let x = ox + lay.location.x;
+            let y = oy + lay.location.y;
+            let w = lay.size.width;
+            let h = lay.size.height;
+
+            if node.typ == NodeType::Text {
+                // y 是 Taffy 算出的文本行盒顶部；glyphon 会用 Buffer 的 Metrics
+                // (font_size, line_height=1.35×size) 自行处理行盒内基线，故这里不加
+                // 任何 size 比例的魔法偏移——否则紧凑容器（如 Input 高 20px）里文字会偏下。
+                dl.texts.push(TextDraw {
+                    text: node.text.clone(), x, y, size, color,
+                });
+                return;
+            }
+
+            if node.typ == NodeType::Div {
+                let bg = p("bg").or_else(|| p("background")).map(parse_color);
+                let radius = p("border-radius").and_then(parse_px).unwrap_or(0.0);
+                let border = p("border").map(|c| {
+                    let bw = p("border-width").and_then(parse_px).unwrap_or(1.0);
                     (parse_color(c), bw)
                 });
-                let idx = dl.shapes.len();
                 dl.shapes.push(ShapeDraw {
-                    x: ox, y: oy, w: 0.0, h: 0.0, // 占位，递归后回填
-                    bg: bg.unwrap_or((0, 0, 0)),
-                    bg_present: bg.is_some(),
-                    radius, border,
+                    x, y, w, h,
+                    bg: bg.unwrap_or((0, 0, 0)), bg_present: bg.is_some(), radius, border,
                 });
-                Some(idx)
-            } else {
-                None
-            };
-
-            let mut cx = ox + pad;
-            let mut cy = oy + pad;
-            let mut content_w = 0.0f32;
-            let mut content_h = 0.0f32;
-            for child in &node.children {
-                let (cw, ch) = walk(child, cx, cy, dl);
-                if is_row {
-                    cx += cw + gap;
-                    content_w = cx - ox - pad;
-                    content_h = content_h.max(ch);
-                } else {
-                    cy += ch + gap;
-                    content_h = cy - oy - pad;
-                    content_w = content_w.max(cw);
-                }
-            }
-            if !node.children.is_empty() {
-                if is_row { content_w -= gap; } else { content_h -= gap; }
-            }
-            // 显式宽高优先；否则用内容尺寸 + 内边距。
-            let used_w = if exp_w > 0.0 { exp_w } else { content_w + pad * 2.0 };
-            let used_h = if exp_h > 0.0 { exp_h } else { content_h + pad * 2.0 };
-
-            if let Some(idx) = shape_idx {
-                dl.shapes[idx].w = used_w;
-                dl.shapes[idx].h = used_h;
                 if let Some(ev) = node.events.iter().find(|e| e.starts_with("on")) {
-                    dl.hitboxes.push((ox, oy, used_w, used_h, node.id.clone(), ev.clone()));
+                    dl.hitboxes.push((x, y, w, h, node.id.clone(), ev.clone()));
                 }
                 if node.props.contains_key("gx-input-id") {
-                    dl.inputs.push((ox, oy, used_w, used_h, node.id.clone()));
+                    dl.inputs.push((x, y, w, h, node.id.clone()));
                 }
             }
-            (used_w, used_h)
+
+            // 与 build 完全一致的摊平顺序，保证 layout 节点索引对齐。
+            let mut kids: Vec<&crate::scene::SceneNode> = Vec::new();
+            fn flatten<'a>(n: &'a crate::scene::SceneNode, out: &mut Vec<&'a crate::scene::SceneNode>) {
+                for c in &n.children {
+                    if c.typ == NodeType::Fragment { flatten(c, out); } else { out.push(c); }
+                }
+            }
+            flatten(node, &mut kids);
+            for (i, c) in kids.iter().enumerate() {
+                let child_tnode = ctx.taffy.child_at_index(tnode, i).expect("taffy child");
+                emit(c, child_tnode, ctx, dl, color, size, x, y);
+            }
         }
-        walk(root, 0.0, 0.0, &mut dl);
+
+        emit(root, root_node, &ctx, &mut dl, (226, 232, 240), 16.0, 0.0, 0.0);
         dl
     }
 
@@ -474,7 +571,7 @@ struct VSOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f };
 
     pub fn render(&mut self) {
         let Some(scene) = self.scene.as_ref() else { return; };
-        let dl = DisplayList::from_scene(scene);
+        let dl = DisplayList::from_scene(scene, self.width as f32, self.height as f32);
         let bg = self.bg;
         self.display = dl.clone();
         self.paint_shapes(&dl, bg);
@@ -568,4 +665,29 @@ struct VSOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f };
     pub fn window(&self) -> &Window {
         &self.window
     }
+}
+
+// ---------- 纯 CPU 基准（供 Go benchmark 通过 C ABI 驱动） ----------
+
+/// 纯 CPU 管线基准：重复 iters 次「GRX1 解析 → 建镜像树 → Taffy 布局 → 生成绘制指令」。
+/// 不创建 wgpu device / surface / 字体系统，不含任何 GPU 或窗口工作，返回耗时纳秒。
+/// 用于与 Go/Skia 后端的 CPU 管线做公平对比。
+pub fn bench_frame(buf: &[u8], width: f32, height: f32, iters: u32) -> Option<u64> {
+    use crate::binprotocol::FrameView;
+    use crate::scene::SceneNode;
+    // 先解析一次建基线树（与真实后端首帧一致）。
+    let view = FrameView::parse(buf)?;
+    let root = SceneNode::from_frame(&view)?;
+    let start = std::time::Instant::now();
+    let mut sink = 0usize;
+    for _ in 0..iters {
+        // 每次克隆镜像树模拟"增量打补丁后的树"，再布局。克隆纳入计时以对齐真实帧成本。
+        let tree = root.clone();
+        let dl = DisplayList::from_scene(&tree, width, height);
+        sink = sink.wrapping_add(dl.shapes.len() + dl.texts.len());
+    }
+    let ns = start.elapsed().as_nanos() as u64;
+    // 防止编译器优化掉结果。
+    std::hint::black_box(sink);
+    Some(ns)
 }

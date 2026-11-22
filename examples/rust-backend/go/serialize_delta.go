@@ -71,6 +71,11 @@ func serializeDelta(changes []gxscene.Change, root *gxscene.Node, width, height 
 	pool := newStrPool()
 	var acts []deltaAction
 	var blobs []byte
+	// 结构动作阈值：host 的组件实例身份不稳定（见 issue #1）时，一次 signal 翻转会把
+	// 多个组件子树整棵 Remove+Insert。这类批量结构重建的基线易与镜像树错配，宁可
+	// 退化全量快照（几十个节点仅几 KB）也不冒镜像树膨胀的风险。
+	structOps := 0
+	const maxStructOps = 4
 
 	addBlob := func(sub *gxscene.Node) (off, length uint32, ok bool) {
 		if sub == nil {
@@ -103,6 +108,7 @@ func serializeDelta(changes []gxscene.Change, root *gxscene.Node, width, height 
 				kind: actSetHandle, nodeID: pool.add(c.NodeID), key: pool.add(c.Key),
 			})
 		case gxscene.ChangeInsertBefore:
+			structOps++; if structOps > maxStructOps { return nil, false }
 			// Value 是完整子树；BeforeID 为空表示追加末尾。
 			// 注意：insert 后子树是新对象，root 中已包含它，故 Value=nil 时可按 ChildID 查。
 			off, n, ok := addBlob(subtreeOf(c, root))
@@ -114,6 +120,7 @@ func serializeDelta(changes []gxscene.Change, root *gxscene.Node, width, height 
 				childID: off, beforeID: pool.add(c.BeforeID), val: n,
 			})
 		case gxscene.ChangeReplaceChildren:
+			structOps++; if structOps > maxStructOps { return nil, false }
 			// host 通常传 nil（"后端按 NodeID 重读 children"）；从最新 root 取该节点整棵子树。
 			sub := findNodeByID(root, c.NodeID)
 			off, n, ok := addBlob(sub)
@@ -125,11 +132,13 @@ func serializeDelta(changes []gxscene.Change, root *gxscene.Node, width, height 
 				childID: off, val: n,
 			})
 		case gxscene.ChangeRemoveChild:
+			structOps++; if structOps > maxStructOps { return nil, false }
 			acts = append(acts, deltaAction{
 				kind: actRemoveChild, nodeID: pool.add(c.NodeID),
 				childID: pool.add(c.ChildID),
 			})
 		case gxscene.ChangeMoveChild:
+			structOps++; if structOps > maxStructOps { return nil, false }
 			acts = append(acts, deltaAction{
 				kind: actMoveChild, nodeID: pool.add(c.NodeID),
 				childID: pool.add(c.ChildID), beforeID: pool.add(c.BeforeID),

@@ -86,6 +86,10 @@ pub extern "C" fn gx_window_run(handle: *mut c_void) -> c_int {
     }
     let backend = unsafe { &*(handle as *const Backend) };
     let (w, h) = (backend.width, backend.height);
+    // 启动时间探针：仅当 GX_STARTUP_PROBE 设置时开启，默认零开销。
+    // 首帧渲染完成时经事件回调回传 kind="startup_first_frame" 及其 text 内的分阶段耗时。
+    let probe = std::env::var_os("GX_STARTUP_PROBE").is_some();
+    let t_run_start = if probe { Some(std::time::Instant::now()) } else { None };
     let result = std::panic::catch_unwind(|| {
         let el = new_event_loop();
         let mut state: Option<Renderer> = None;
@@ -96,6 +100,10 @@ pub extern "C" fn gx_window_run(handle: *mut c_void) -> c_int {
             frame: backend.frame.clone(),
             cb: backend.cb.clone(),
             cb_ctx: backend.cb_ctx.clone(),
+            probe,
+            t_run_start,
+            t_resumed_done: None,
+            first_frame_done: false,
         })
         .expect("run_app");
     });
@@ -129,6 +137,11 @@ struct WinitApp<'a> {
     frame: Arc<Mutex<Option<Vec<u8>>>>,
     cb: Arc<Mutex<EventCallback>>,
     cb_ctx: Arc<Mutex<*mut c_void>>,
+    // 启动探针状态（GX_STARTUP_PROBE 门控，默认 false/None）
+    probe: bool,
+    t_run_start: Option<std::time::Instant>,
+    t_resumed_done: Option<std::time::Instant>,
+    first_frame_done: bool,
 }
 
 impl winit::application::ApplicationHandler for WinitApp<'_> {
@@ -143,6 +156,9 @@ impl winit::application::ApplicationHandler for WinitApp<'_> {
         let window = Arc::new(el.create_window(attrs).expect("create window"));
         window.set_ime_allowed(true);
         *self.state = Some(pollster::block_on(Renderer::new(window)));
+        if self.probe {
+            self.t_resumed_done = Some(std::time::Instant::now());
+        }
     }
 
     fn window_event(
@@ -162,7 +178,32 @@ impl winit::application::ApplicationHandler for WinitApp<'_> {
                 if let Some(buf) = newest {
                     renderer.apply_frame(&buf);
                 }
+                let t_pre_render = if self.probe { Some(std::time::Instant::now()) } else { None };
                 renderer.render();
+                if self.probe && !self.first_frame_done {
+                    self.first_frame_done = true;
+                    let t_first = std::time::Instant::now();
+                    let ms = |a: std::time::Instant, b: std::time::Instant| -> f64 {
+                        b.duration_since(a).as_secs_f64() * 1000.0
+                    };
+                    let run_start = self.t_run_start.unwrap_or(t_first);
+                    let resumed = self.t_resumed_done.unwrap_or(t_first);
+                    let new_ms = ms(run_start, resumed); // event loop + wgpu 设备 + 字体系统初始化
+                    let frame_ms = t_pre_render.map(|t| ms(t, t_first)).unwrap_or(0.0); // 首帧布局+光栅化
+                    let text = format!(
+                        "init_ms={:.3};first_frame_ms={:.3}",
+                        new_ms, frame_ms
+                    );
+                    let ev = protocol::InputEvent {
+                        kind: "startup_first_frame".into(),
+                        node_id: String::new(),
+                        event: String::new(),
+                        text,
+                        x: 0.0,
+                        y: 0.0,
+                    };
+                    fire(&self.cb, &self.cb_ctx, &ev.to_json());
+                }
                 renderer.window().request_redraw();
             }
             WindowEvent::CloseRequested => el.exit(),
@@ -245,4 +286,17 @@ pub extern "C" fn gx_window_close(handle: *mut c_void) {
 #[no_mangle]
 pub extern "C" fn gx_window_version() -> *const c_char {
     b"gxbackend-rust 0.2.0 (binary protocol)\0".as_ptr() as *const c_char
+}
+
+/// 纯 CPU 管线基准：buf 是 GRX1 帧，重复 iters 次「解析→建树→Taffy 布局→指令生成」。
+/// 返回累计纳秒；解析失败返回 0。不含任何 GPU/窗口工作，供 cross-backend benchmark 调用。
+#[no_mangle]
+pub extern "C" fn gx_bench_frame(
+    buf: *const c_uchar, len: c_int, width: f32, height: f32, iters: c_int,
+) -> u64 {
+    if buf.is_null() || len <= 0 || iters <= 0 {
+        return 0;
+    }
+    let slice = unsafe { std::slice::from_raw_parts(buf, len as usize) };
+    render::bench_frame(slice, width, height, iters as u32).unwrap_or(0)
 }

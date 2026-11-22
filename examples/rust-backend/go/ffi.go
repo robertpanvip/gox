@@ -14,6 +14,7 @@ extern void        gx_window_set_event_cb(void* handle, gx_event_cb cb, void* ct
 extern int         gx_window_run(void* handle);
 extern void        gx_window_close(void* handle);
 extern const char* gx_window_version();
+extern uint64_t    gx_bench_frame(const uint8_t* buf, int len, float width, float height, int iters);
 
 // 定义在 bridge.c：把 Go 导出回调注册给 Rust。
 extern void install_event_cb(void* handle, void* ctx);
@@ -72,4 +73,15 @@ func cWindowClose(handle unsafe.Pointer) {
 
 func cVersion() string {
 	return C.GoString(C.gx_window_version())
+}
+
+// cBenchFrame 调 Rust 纯 CPU 管线基准，返回 iters 次累计纳秒。
+func cBenchFrame(buf []byte, width, height float32, iters int) uint64 {
+	if len(buf) == 0 {
+		return 0
+	}
+	return uint64(C.gx_bench_frame(
+		(*C.uint8_t)(unsafe.Pointer(&buf[0])), C.int(len(buf)),
+		C.float(width), C.float(height), C.int(iters),
+	))
 }
