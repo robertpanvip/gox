@@ -689,3 +689,158 @@ func main() {
 		t.Errorf("不应生成误导的 []map/[]rune, got:\n%s", res.GoSource)
 	}
 }
+
+// 跨行缩进的 JSX 元素不得让生成代码多出/残留换行，导致宿主参数列表语法错误。
+// 复现自 examples/jsxapp-full.gx：根视图原来必须写紧凑单行，
+// 写成 app.render(() => <div>\n...\n</div>\n) 会报
+// "missing ',' before newline in argument list"。
+func TestJSXMultilineNoStrayNewlineBeforeClose(t *testing.T) {
+	cases := []struct {
+		name string
+		src  string
+	}{
+		{
+			name: "箭头后换行+JSX跨行+闭括号独立行",
+			src: `package main
+import gxapp "github.com/robertpanvip/gox/runtime/app"
+func main() {
+	app, _ := gxapp.open(nil); _ = app
+	app.render(() =>
+		<div id="app">
+			<span>hello</span>
+		</div>
+	)
+}
+`,
+		},
+		{
+			name: "JSX跨行+闭括号独立行",
+			src: `package main
+func main() {
+	f := () => <div id="app">
+		<span>hello</span>
+		<b>world</b>
+	</div>
+	_ = f
+}
+`,
+		},
+		{
+			name: "JSX作为多参数之一跨行",
+			src: `package main
+func main() {
+	foo(
+		<div>
+			<span>x</span>
+		</div>,
+		other,
+	)
+}
+`,
+		},
+		{
+			name: "JSX作最后参数带尾逗号",
+			src: `package main
+func main() {
+	foo(a,
+		<div>
+			<span>x</span>
+		</div>,
+	)
+}
+`,
+		},
+		{
+			name: "JSX直接作实参跨行(无lambda包装)",
+			src: `package main
+func main() {
+	foo(
+		<div>
+			<span>x</span>
+		</div>
+	)
+}
+`,
+		},
+		{
+			name: "JSX作slice元素跨行",
+			src: `package main
+func main() {
+	x := []any{
+		<div>
+			<span>x</span>
+		</div>,
+	}
+	_ = x
+}
+`,
+		},
+		{
+			name: "JSX作map值跨行",
+			src: `package main
+func main() {
+	x := map[string]any{"k": <div>
+		<span>x</span>
+	</div>}
+	_ = x
+}
+`,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			res, err := CompileScene("multiline.gx", c.src)
+			if err != nil {
+				t.Fatalf("编译失败: %v", err)
+			}
+			if verr := res.Validate(); verr != nil {
+				t.Errorf("生成 Go 语法无效: %v\n---\n%s", verr, res.GoSource)
+			}
+		})
+	}
+}
+
+// 真正的语句结束换行必须保留——JSX 后跟标识符（另一条语句）时不能把两行粘一起。
+func TestJSXMultilineKeepsStatementBreak(t *testing.T) {
+	res, err := CompileScene("stmtbreak.gx", `package main
+func main() {
+	x := <div>
+		<span>x</span>
+	</div>
+	_ = x
+}
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if verr := res.Validate(); verr != nil {
+		t.Fatalf("生成 Go 语法无效: %v\n---\n%s", verr, res.GoSource)
+	}
+	// 两条语句必须各占一行：保留 JSX 后的语句分隔换行。
+	if !strings.Contains(res.GoSource, "\n\t_ = x") {
+		t.Errorf("JSX 后的语句换行被误吞，两条语句粘在一起:\n%s", res.GoSource)
+	}
+}
+
+// return JSX 后跟 `}`（函数体结束）的换行必须保留：不能把 return 语句与函数闭合
+// 挤到同一行（曾因把 `}` 误列为"吞换行触发符"导致 golden 回归）。
+func TestJSXMultilineKeepsReturnFuncClose(t *testing.T) {
+	res, err := CompileScene("returnclose.gx", `package main
+func Card() any {
+	return <div>
+		<span>x</span>
+	</div>
+}
+func main() {}
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if verr := res.Validate(); verr != nil {
+		t.Fatalf("生成 Go 语法无效: %v", verr)
+	}
+	// 函数闭合 `}` 必须独占一行，不能出现 `...)}` 挤在一起。
+	if !strings.Contains(res.GoSource, "\n}\n") {
+		t.Errorf("return JSX 后的函数闭合换行被误吞:\n%s", res.GoSource)
+	}
+}

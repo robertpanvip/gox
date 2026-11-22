@@ -1022,13 +1022,35 @@ func transformJSXScene(in []Token, ctx *jsxSceneCtx) []Token {
 		return in
 	}
 	var out []Token
-	for _, t := range in {
+	for i := 0; i < len(in); i++ {
+		t := in[i]
 		if t.Kind == JSX {
 			// 记录根 JSX token 的绝对位置，供内部节点（如嵌套 <For>）查询绑定表。
 			ctx.jsxPos = t.Pos
 			parser := newJSXParser(t.Text, t.Pos)
 			node := parser.parseElement()
 			out = append(out, genSceneExpr(node, ctx)...)
+
+			// JSX 跨行缩进的排版换行（JSX 直接作为实参、未经 lambda 包装时）：
+			// 闭合标签 `</div>` 后的换行再接宿主调用闭合符号 `)` / `]` / `,`，JSX 被替换
+			// 成表达式后该换行夹在表达式与闭括号之间，Go 要求 trailing comma，否则报
+			// "missing ',' before newline in argument list"。仅当换行后紧跟这些符号时
+			// 吞掉（纯排版空白）；后接标识符或 `}`（函数体/语句块结束）则是语句结束换行，
+			// 保留——否则会把 return 语句与函数闭合挤到同一行。
+			j := i + 1
+			hasNL := false
+			for j < len(in) && (in[j].Kind == Space || in[j].Kind == Newline) {
+				if in[j].Kind == Newline {
+					hasNL = true
+				}
+				j++
+			}
+			if hasNL && j < len(in) {
+				switch in[j].Text {
+				case ")", "]", ",":
+					i = j - 1 // 吞掉纯排版空白（Space/Newline）
+				}
+			}
 			continue
 		}
 		out = append(out, t)

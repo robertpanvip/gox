@@ -765,7 +765,31 @@ func transformLambdas(in []Token, an *Analysis, b *Bindings, sigTypes ...map[str
 		out := make([]Token, 0, len(in)+len(parts))
 		out = append(out, in[:l.paramOpen]...)
 		out = append(out, parts...)
-		out = append(out, in[l.bodyTo:]...)
+		rest := l.bodyTo
+		// JSX 跨行缩进的排版换行：当 lambda body 末尾是 JSX（如 `() => <div>\n...\n</div>`），
+		// lambdaBodyEnd 在 JSX 后的换行处停止，该换行落在生成的 `}` 与宿主闭括号之间，
+		// 形成 `f(func() any {...}\n)`——Go 要求参数列表换行前有 trailing comma，否则报
+		// "missing ',' before newline in argument list"。这段空白只是 JSX 的视觉缩进：
+		// 当且仅当换行后紧跟宿主调用闭合符号（`)` / `]` / `,`）时吞掉；后接标识符或
+		// `}`（函数体/语句块结束）说明是真正的语句结束换行，保留——否则会把 return
+		// 语句与函数闭合括到同一行、破坏 golden 形态。
+		if !l.blockBody && l.bodyTo > l.bodyFrom && in[l.bodyTo-1].Kind == JSX {
+			j := l.bodyTo
+			hasNL := false
+			for j < len(in) && (in[j].Kind == Space || in[j].Kind == Newline) {
+				if in[j].Kind == Newline {
+					hasNL = true
+				}
+				j++
+			}
+			if hasNL && j < len(in) {
+				switch in[j].Text {
+				case ")", "]", ",":
+					rest = j
+				}
+			}
+		}
+		out = append(out, in[rest:]...)
 		in = out
 	}
 }
