@@ -353,7 +353,9 @@ func (f *For) buildEntry(entry *forEntry) {
 			entry.inst.idBase = oldBase
 		}
 		if f.sink != nil {
-			entry.inst.changes = f.sink // 共享所属实例树的变更缓冲
+			// 递归共享所属实例树的变更缓冲：子树 Render 时内部组件/嵌套控制器
+			// 已 adopt 到创建期临时 sink，这里必须下探覆盖，否则项内组件变更丢失。
+			adoptSinkDeep(entry.inst, f.sink)
 		}
 		// 叶子与结构接线互斥，避免项内 slotBranch 被双订阅（selector 调用两次）：
 		// 有统一 ctx（app 场景）时，叶子用 bindLeaves、结构用 bindRec 继承 ctx；
@@ -395,6 +397,21 @@ func rebaseTreeIDs(n *Node, from, to string) {
 
 // adoptSink 实现 subtreeController：记录所属实例树的变更缓冲，传给各列表项子实例。
 func (f *For) adoptSink(s *changeSink) { f.sink = s }
+
+// adoptSinkDeep 实现 deepSinkAdopter：换 sink 时递归覆盖所有已建列表项子树
+// （含项内组件与嵌套控制器），保证整棵实时树的变更汇入同一 sink。
+func (f *For) adoptSinkDeep(s *changeSink) {
+	if f == nil {
+		return
+	}
+	f.mu.Lock()
+	f.sink = s
+	entries := f.entries
+	f.mu.Unlock()
+	for _, e := range entries {
+		adoptSinkDeep(e.inst, s)
+	}
+}
 
 // adoptBind 实现 subtreeController：记录统一接线上下文，供 Resolve 构建新列表项时递归接线。
 func (f *For) adoptBind(ctx *bindCtx) { f.bctx = ctx }

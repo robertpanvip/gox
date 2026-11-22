@@ -887,6 +887,39 @@ func main() {
 	}
 }
 
+func TestIntegrationSignalFieldHandwrittenDerivedLive(t *testing.T) {
+	// 第六轮 P2b 端到端：手写构造的派生表达式（含 signal 读）经 Computed 保鲜，
+	// 源 signal 变化后读字段得到新值，而非构造时的快照。
+	src := `package main
+type CardProps struct { signal label string }
+func show(p CardProps) string { return p.label }
+func main() {
+	signal n = 1
+	p := CardProps{label: "n=" + Itoa(n())}
+	println(show(p))
+	n(2)
+	println(show(p))
+}
+func Itoa(x int) string {
+	if x == 0 { return "0" }
+	digits := ""
+	for x > 0 { digits = string(rune('0' + x%10)) + digits; x = x / 10 }
+	return digits
+}
+`
+	out := runGX(t, src)
+	lines := strings.Fields(strings.TrimSpace(out))
+	want := []string{"n=1", "n=2"}
+	if len(lines) < len(want) {
+		t.Fatalf("输出行数不足: %q", out)
+	}
+	for i, w := range want {
+		if lines[i] != w {
+			t.Errorf("第 %d 行应为 %q, got %q\n完整输出:\n%s", i+1, w, lines[i], out)
+		}
+	}
+}
+
 func TestIntegrationSignalFieldNestedStruct(t *testing.T) {
 	// signal 字段与复合写/自增的真实运行。
 	src := `package main

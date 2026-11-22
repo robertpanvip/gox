@@ -185,6 +185,46 @@ func (i *Instance) adoptSink(child *Instance) {
 	child.changes = i.changes
 }
 
+// adoptSinkDeep 把 sink 递归注入一棵「已建成」的实例子树。
+//
+// 与 adoptSink（只改单个子实例）不同，它还覆盖子树里 slotComp 挂载的组件、
+// slotBranch 控制器及其当前子树，并让控制器继续覆盖它内部已建的分支/列表项。
+// 用于 For.buildEntry / Branch.Resolve 这类「先建子树、建完才知道所属 sink」的
+// 场景：子树在 Render 的 applyAll 阶段就把内部组件 adopt 到了创建期的临时 sink，
+// 顶层 inst 随后换成共享 sink 时若不递归，内部组件的变更会写进孤立 sink 而丢失
+// （第六轮评审 P1：<li><Card/></li> 内文本变化 TakeChanges 为空，补丁后端界面停住）。
+//
+// 递归经 deepSinkAdopter 局部接口下探控制器内部——避免改动 subtreeController 接口，
+// 对未实现该可选方法的第三方控制器退化为普通 adoptSink。
+func adoptSinkDeep(inst *Instance, s *changeSink) {
+	if inst == nil || s == nil {
+		return
+	}
+	inst.changes = s
+	for _, sl := range inst.slots {
+		if sl == nil {
+			continue
+		}
+		switch sl.kind {
+		case slotComp:
+			adoptSinkDeep(sl.child, s)
+		case slotBranch:
+			if d, ok := sl.ctrl.(deepSinkAdopter); ok {
+				d.adoptSinkDeep(s)
+			} else if sl.ctrl != nil {
+				sl.ctrl.adoptSink(s)
+			}
+			adoptSinkDeep(sl.child, s)
+		}
+	}
+}
+
+// deepSinkAdopter 是可选接口：subtreeController 若实现它，adoptSinkDeep 会递归
+// 覆盖其内部已建的分支/列表项子树，而不只是控制器自身的 sink。
+type deepSinkAdopter interface {
+	adoptSinkDeep(*changeSink)
+}
+
 // Changes 返回自上次 TakeChanges 以来的所有变更（副本，不清空）。
 // 由于整棵实例树共享同一 sink，这里一次拿到全部（含组件/分支/列表项内的变更）。
 func (i *Instance) Changes() []Change {

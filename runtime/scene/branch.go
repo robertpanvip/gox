@@ -100,7 +100,9 @@ func (b *Branch) Resolve() *Instance {
 			cur = b.builders[sel]()
 			if cur != nil {
 				if b.sink != nil {
-					cur.changes = b.sink // 共享所属实例树的变更缓冲
+					// 递归共享：分支子树 Render 时内部组件已 adopt 到临时 sink，
+					// 建完后必须下探覆盖，否则分支内组件变更丢失（第六轮 P1）。
+					adoptSinkDeep(cur, b.sink)
 				}
 				// 用所属实例树的统一接线上下文递归接线（含 onDirty 重绘回调）。
 				// 这替代了原先的裸 BindReactive——后者让嵌套分支切换后树变了却不重绘。
@@ -133,6 +135,19 @@ func (b *Branch) Resolve() *Instance {
 
 // adoptSink 实现 subtreeController：记录所属实例树的变更缓冲，传给各分支子实例。
 func (b *Branch) adoptSink(s *changeSink) { b.sink = s }
+
+// adoptSinkDeep 实现 deepSinkAdopter：换 sink 时递归覆盖当前命中分支子树
+// （含其内组件与嵌套控制器），保证分支内变更汇入同一 sink。
+func (b *Branch) adoptSinkDeep(s *changeSink) {
+	if b == nil {
+		return
+	}
+	b.mu.Lock()
+	b.sink = s
+	cur := b.cur
+	b.mu.Unlock()
+	adoptSinkDeep(cur, s)
+}
 
 // adoptBind 实现 subtreeController：记录统一接线上下文，供 Resolve 构建新分支时递归接线。
 func (b *Branch) adoptBind(ctx *bindCtx) { b.bctx = ctx }

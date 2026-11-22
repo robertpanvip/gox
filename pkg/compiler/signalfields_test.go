@@ -255,3 +255,77 @@ func main() { _ = <Wrap inner="hello"/> }
 		`return p.name()`,
 	)
 }
+
+// 第六轮 P2 回归：JSX selector 补 () 必须按 receiver 推断类型判定，不能全文件
+// 按字段名猜。同文件里 CardProps 有 signal name、User 有普通 name 时，
+// {u.name} 不得被补成 u.name()（那是硬编译错误：string is not a function）。
+func TestJSXSelectorNotTouchSameNamePlainField(t *testing.T) {
+	src := `package main
+import gxscene "github.com/robertpanvip/gox/runtime/scene"
+type CardProps struct { signal name string }
+type User struct { id int; name string }
+func main() {
+	u := User{1, "plain"}
+	_ = <div>{u.name}</div>
+}
+`
+	got := compileOK(t, "sfjsx_plain.gx", src)
+	if strings.Contains(got, `u.name()`) {
+		t.Errorf("User.name 是普通字段，不应补调用括号:\n%s", got)
+	}
+	containsAll(t, got, `return u.name`)
+}
+
+// 二级 selector 同样按 receiver 类型判定：signal 字段结构体嵌套的普通结构体
+// 同名字段不得误补；而真正的 signal 字段 selector 仍要补 ()。
+func TestJSXSelectorNestedFieldByReceiverType(t *testing.T) {
+	src := `package main
+import gxscene "github.com/robertpanvip/gox/runtime/scene"
+type Addr struct { city string }
+type User struct { addr Addr }
+type CardProps struct { signal name string }
+func Card(p CardProps) *gxscene.Instance { return <div>{p.name}</div> }
+func main() {
+	u := User{Addr{"SZ"}}
+	_ = <div>{u.addr.city}</div>
+}
+`
+	got := compileOK(t, "sfjsx_nested.gx", src)
+	if strings.Contains(got, `u.addr.city()`) {
+		t.Errorf("User.addr.city 是普通字段，不应补调用括号:\n%s", got)
+	}
+	containsAll(t, got, `return p.name()`)
+}
+
+// 第六轮 P2b 回归：手写结构体构造里的派生表达式（含 signal 变量读取）必须包
+// Signal.Computed 保鲜，与 JSX 侧 signalFieldPropTokens 语义一致。旧产物是
+// Signal.New(fmt.Sprint(n()))（快照，n 后续变化不反映到字段）。
+func TestSignalFieldHandwrittenDerivedUsesComputed(t *testing.T) {
+	src := `package main
+import "fmt"
+type CardProps struct { signal name string }
+func main() {
+	signal n = 1
+	p := CardProps{name: fmt.Sprint(n())}
+	_ = p
+}
+`
+	got := compileOK(t, "sfhw_derived.gx", src)
+	containsAll(t, got, `Signal.Computed(func() string { return fmt.Sprint(n()) })`)
+	if strings.Contains(got, `Signal.New(fmt.Sprint(n()))`) {
+		t.Errorf("派生表达式不应退化为快照:\n%s", got)
+	}
+}
+
+// 字面量/普通常量表达式仍是 Signal.New 快照（与 JSX isPlainLiteralExpr 档一致）。
+func TestSignalFieldHandwrittenLiteralStaysNew(t *testing.T) {
+	src := `package main
+type CardProps struct { signal name string }
+func main() {
+	p := CardProps{name: "lit"}
+	_ = p
+}
+`
+	got := compileOK(t, "sfhw_lit.gx", src)
+	containsAll(t, got, `name: Signal.New("lit")`)
+}

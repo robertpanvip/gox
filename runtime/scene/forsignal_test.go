@@ -226,3 +226,126 @@ func TestForResolveShortCircuitWhenUnchanged(t *testing.T) {
 		t.Fatalf("顺序变化后 Resolve 不应复用旧 root")
 	}
 }
+
+// P1 回归：For 列表项内嵌组件（<li><Card/></li>）时，组件子树内的变更
+// 必须汇入根 sink。第六轮评审发现：buildEntry 在子树建完后才把顶层 inst
+// 的 changes 换成 f.sink，但项内已 mount 的组件早已 adopt 了临时 sink，
+// 导致 TakeChanges 为空——按补丁更新的后端会界面停住。
+func TestChangesWithComponentInsideForItem(t *testing.T) {
+	text := signal.New("old")
+	childTpl := gxscene.Template{Ops: []gxscene.Op{
+		{Code: gxscene.OpElem, Arg: "span"},
+		{Code: gxscene.OpDynChild, Slot: 0},
+		{Code: gxscene.OpClose},
+	}, N: 1}
+	itemTplWithComp := gxscene.Template{Ops: []gxscene.Op{
+		{Code: gxscene.OpElem, Arg: "li"},
+		{Code: gxscene.OpComp, Arg: "Child", Slot: 0},
+		{Code: gxscene.OpClose},
+	}, N: 1}
+	f := gxscene.NewFor(
+		func() []any { return []any{1} },
+		func(v any) any { return v },
+		func(v any) *gxscene.Instance {
+			child := gxscene.Render(childTpl, func() any { return text() })
+			return gxscene.Render(itemTplWithComp, func() any { return child })
+		},
+	)
+	root := gxscene.Render(forTpl(), func() any { return f })
+	root.BindReactive(signal.Effect)
+	if out := root.String(); !strings.Contains(out, "old") {
+		t.Fatalf("初始渲染应含 old:\n%s", out)
+	}
+	root.EnableChanges()
+	root.TakeChanges() // 清掉接线期
+
+	text("new")
+	if out := root.String(); !strings.Contains(out, "new") {
+		t.Fatalf("界面应刷新为 new:\n%s", out)
+	}
+	changes := root.TakeChanges()
+	found := false
+	for _, c := range changes {
+		if c.Kind == gxscene.ChangeSetText && c.Value == "new" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("For 项内组件的变更应汇入根 sink, got %v", changes)
+	}
+}
+
+// 更深结构：For > Branch > Component 三层内变更，以及分支切换后新建分支内组件
+// 的变更，都必须汇入根 sink。验证 adoptSinkDeep 递归下探控制器内部已建子树。
+func TestChangesWithNestedBranchComponentInForItem(t *testing.T) {
+	text := signal.New("old")
+	show := signal.New(true)
+
+	leafTpl := gxscene.Template{Ops: []gxscene.Op{
+		{Code: gxscene.OpElem, Arg: "span"},
+		{Code: gxscene.OpDynChild, Slot: 0},
+		{Code: gxscene.OpClose},
+	}, N: 1}
+	branchTpl := gxscene.Template{Ops: []gxscene.Op{
+		{Code: gxscene.OpElem, Arg: "div"},
+		{Code: gxscene.OpComp, Arg: "Leaf", Slot: 0},
+		{Code: gxscene.OpClose},
+	}, N: 1}
+	build := func() *gxscene.Instance {
+		return gxscene.Render(branchTpl, func() any {
+			return gxscene.Render(leafTpl, func() any { return text() })
+		})
+	}
+	br := gxscene.NewBranch(
+		func() int {
+			if show() {
+				return 0
+			}
+			return 1
+		},
+		build, build,
+	)
+	itemTplWithBranch := gxscene.Template{Ops: []gxscene.Op{
+		{Code: gxscene.OpElem, Arg: "li"},
+		{Code: gxscene.OpBranch, Slot: 0},
+		{Code: gxscene.OpClose},
+	}, N: 1}
+	f := gxscene.NewFor(
+		func() []any { return []any{1} },
+		func(v any) any { return v },
+		func(v any) *gxscene.Instance {
+			return gxscene.Render(itemTplWithBranch, func() any { return br })
+		},
+	)
+	root := gxscene.Render(forTpl(), func() any { return f })
+	root.BindReactive(signal.Effect)
+	if out := root.String(); !strings.Contains(out, "old") {
+		t.Fatalf("初始渲染应含 old:\n%s", out)
+	}
+	root.EnableChanges()
+	root.TakeChanges()
+
+	text("new")
+	changes := root.TakeChanges()
+	assertSetTextValue(t, changes, "new", "For>Branch>Component 三层内变更应汇入根 sink")
+
+	// 分支切换后新建的分支内组件也要接回 sink。
+	show(false)
+	if out := root.String(); !strings.Contains(out, "new") {
+		t.Fatalf("切分支后应仍显示 new:\n%s", out)
+	}
+	root.TakeChanges()
+	text("newer")
+	changes = root.TakeChanges()
+	assertSetTextValue(t, changes, "newer", "分支切换后新建组件变更也应汇入根 sink")
+}
+
+func assertSetTextValue(t *testing.T, changes []gxscene.Change, want, msg string) {
+	t.Helper()
+	for _, c := range changes {
+		if c.Kind == gxscene.ChangeSetText && c.Value == want {
+			return
+		}
+	}
+	t.Fatalf("%s, got %v", msg, changes)
+}

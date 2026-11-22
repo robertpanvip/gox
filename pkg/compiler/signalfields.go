@@ -372,6 +372,51 @@ func signalExprPassthrough(toks []Token, from, to int, b *Bindings) (signalPasst
 	return signalPassthrough{}, false
 }
 
+// exprHasSignalRead 判断 [from,to) 内是否含「signal 变量读取」——即形如 ident()
+// 且 ident 经 bindings 解析为 signal/computed 绑定。transformSignals 在前置阶段已把
+// 裸 signal 读改写成调用式，故这是判定「派生表达式」的可靠依据。
+//
+// 只认 signal 变量，不认 signal 字段 selector（w.inner()）：后者属字段到字段透传
+// 的既有语义范畴，不在手写派生档内。
+func exprHasSignalRead(toks []Token, from, to int, b *Bindings) bool {
+	if b == nil {
+		return false
+	}
+	for i := from; i < to; i++ {
+		if toks[i].Kind != Ident {
+			continue
+		}
+		lp := nextSigIn(toks, i+1, to)
+		if lp < 0 || toks[lp].Text != "(" {
+			continue
+		}
+		if bd := b.ResolveAt(toks[i].Text, toks[i].Pos); bd != nil &&
+			(bd.Kind == BkSignal || bd.Kind == BkComputed) {
+			return true
+		}
+	}
+	return false
+}
+
+// signalComputedCall 生成 Signal.Computed(func() T { return <expr> }) token 序列，
+// 用于手写构造的派生档（与 JSX signalFieldPropTokens 的派生档语义一致：保鲜）。
+func signalComputedCall(T string, p Pos, expr []Token) []Token {
+	out := []Token{
+		signalPkgToken(p), tokOp(".", p), tokIdent("Computed", p), tokOp("(", p),
+		tokIdent("func", p), tokOp("(", p), tokOp(")", p), tokSpace(" ", p),
+	}
+	out = append(out, tokensForType(T, p)...)
+	out = append(out, tokSpace(" ", p), tokOp("{", p), tokSpace(" ", p), tokIdent("return", p), tokSpace(" ", p))
+	for _, t := range expr {
+		if t.Kind == EOF {
+			continue
+		}
+		out = append(out, t)
+	}
+	out = append(out, tokSpace(" ", p), tokOp("}", p), tokOp(")", p))
+	return out
+}
+
 // compositeLitInfo 描述一处 `TypeName{ ... }` 具名复合字面量。
 type compositeLitInfo struct {
 	typeName string
@@ -470,7 +515,7 @@ func wrapSignalFieldLiterals(toks []Token, b *Bindings, tbl signalFieldTable) []
 				reps = append(reps, repl{from: valFrom, to: valTo, toks: append([]Token{}, toks[valFrom:pass.to]...)})
 				continue
 			}
-			// 剥掉值表达式首尾空白，包装 Signal.New(expr)
+			// 剥掉值表达式首尾空白
 			vs := valFrom
 			ve := valTo
 			for vs < ve && (toks[vs].Kind == Space || toks[vs].Kind == Newline) {
@@ -480,6 +525,14 @@ func wrapSignalFieldLiterals(toks []Token, b *Bindings, tbl signalFieldTable) []
 				ve--
 			}
 			p := toks[nameIdx].Pos
+			// 派生档（第六轮 P2b）：值表达式含 signal 变量读取 → 包 Computed 保鲜，
+			// 与 JSX 侧 signalFieldPropTokens 语义一致。否则（字面量/普通常量表达式）
+			// 仍是 Signal.New 快照。signalExprPassthrough 已先处理单 signal 读直通。
+			if exprHasSignalRead(toks, vs, ve, b) {
+				T := tbl.fieldType(lit.typeName, field)
+				reps = append(reps, repl{from: valFrom, to: valTo, toks: signalComputedCall(T, p, toks[vs:ve])})
+				continue
+			}
 			var toks2 []Token
 			toks2 = append(toks2, signalPkgToken(p), tokOp(".", p), tokIdent("New", p), tokOp("(", p))
 			for k := vs; k < ve; k++ {
@@ -505,9 +558,18 @@ func (t signalFieldTable) hasSignalFieldsOf(typeName string) bool {
 // 补上调用括号：p.name → p.name()。JSX 生成的 token 是 transform 新产物，没经过
 // rewriteSignalFieldRefs，故需在此补——否则 {p.name} 会把 Signal 函数当值插入界面。
 //
-// 识别 X.field：field 是已知 signal 字段名、field 后不是 '('、且 receiver X 不是
-// 紧邻 ')' 的调用结果（排除 For item getter `u().name` 这类普通字段读取）。
-func rewriteJSXSignalFieldSelectors(toks []Token, tbl signalFieldTable) []Token {
+// 识别 X.field：field 是 receiver 推断类型上的 signal 字段、field 后不是 '('、
+// 且 receiver X 不是紧邻 ')' 的调用结果（排除 For item getter `u().name` 这类普通字段读取）。
+//
+// 第六轮 P2 修复：早期版本用 tbl.hasField(field) 全文件按字段名猜测，导致同文件
+// 里任意 struct 只要声明过 `signal name`，普通 `User.name` 也会被补成 u.name()
+// （硬编译错误：string is not a function）。现改为 receiver 类型限定——只有 receiver
+// 的推断类型确为某 struct、且该字段在该类型上是 signal 字段时才补 ()，兑现
+// language-spec §11.1「同名但非 signal 的字段不受影响」的承诺。
+//
+// pos 是 JSX 在原始源码中的绝对位置：插值 token 的 Pos 是相对表达式的偏移，
+// 不能用于 bindings 查询；以 JSX 根位置为锚点解析 receiver 绑定与 isSignalRefAt 一致。
+func rewriteJSXSignalFieldSelectors(toks []Token, b *Bindings, tbl signalFieldTable, pos Pos) []Token {
 	if !tbl.hasSignalFields() {
 		return toks
 	}
@@ -523,7 +585,14 @@ func rewriteJSXSignalFieldSelectors(toks []Token, tbl signalFieldTable) []Token 
 			continue
 		}
 		fieldIdx := nextSig(toks, dot+1)
-		if fieldIdx < 0 || toks[fieldIdx].Kind != Ident || !tbl.hasField(toks[fieldIdx].Text) {
+		if fieldIdx < 0 || toks[fieldIdx].Kind != Ident {
+			continue
+		}
+		field := toks[fieldIdx].Text
+		// receiver 类型限定：推断 receiver 的静态类型，只有该类型上的 signal 字段才补 ()。
+		// 类型未知（推断失败）时保守不补——宁可少补让 Go 编译器暴露，也不误伤普通字段。
+		recvType := recvTypeAt(b, t.Text, pos)
+		if recvType == "" || !tbl.has(recvType, field) {
 			continue
 		}
 		// field 后已是 '('（调用/字段写）→ 不补。

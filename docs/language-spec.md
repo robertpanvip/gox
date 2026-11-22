@@ -185,9 +185,16 @@ func main() {
 
 - **声明**：`signal name T` → `name Signal.Signal[T]`（函数字段，无参读/带参写）。
 - **读**：`p.name` → `p.name()`；**写**：`p.name = v` → `p.name(v)`；复合写 `+=` 与 `++/--` 同样展开。
-- **构造**：`CardProps{name: v}` 中 signal 字段的普通值自动包 `Signal.New(v)`；若 `v` 本身是 signal（变量读取 `src()` / `Signal.New(...)` 等），则直通 getter 本身（剥离 `()`），保持与外部 signal 的关联。
-- **类型安全**：只有 receiver 类型已知、且该字段确为某 struct 的 signal 字段时才解包；普通字段、同名但非 signal 的字段、外部包符号都不受影响。
+- **构造（三档，手写与 JSX 一致）**：signal 字段的值按形态分三档处理——
+  - **透传**：`v` 本身是 signal（变量读取 `src()`、裸 getter、`Signal.New(...)`、别的 signal 字段读）→ 直通 getter 本身，保持与外部 signal 关联（保鲜）；
+  - **字面量**：纯字面量（数字/字符串/bool/nil）→ `Signal.New(v)`；
+  - **派生**：含 signal 读取的表达式（如 `fmt.Sprint(n())`、`"n=" + n()`）→ `Signal.Computed(func() T { return v })`，每次读重新求值（保鲜）。
+  
+  手写 `CardProps{name: v}` 与 JSX `<Card name={v}/>` 走同一套三档语义。派生档是惰性求值的（首次读字段时才计算）。
+- **类型安全**：只有 receiver 类型已知、且该字段确为某 struct 的 signal 字段时才解包；普通字段、同名但非 signal 的字段、外部包符号都不受影响。JSX 插值里的 selector 补 `()` 也按 receiver 断言类型判定，不会因同文件别处有同名字段而误伤普通字段读取。
 - **与局部 signal 共存**：两者独立，互不干扰；降级在绑定表构建之前完成，避免 `signal` 关键字被局部逻辑误判。
+
+> Go 版本说明：需要 Go 1.27+ 只为 `runtime/list` 的泛型方法（集合链式特性）。不使用集合的 `.gx` 项目在更低版本的 Go 工具链上通常也能编译；工具链要求以官方发布为准。
 
 ## 12. sourcemap / LSP / 编译检查
 

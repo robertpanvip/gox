@@ -164,7 +164,7 @@ for _, ch := range app.TakeChanges() { // 取走自上帧以来的有序变更
 
 **逐节点增删/移动是真实的，不是占位符**：`For` 的 keyed diff 在增删/重排时会精确发出 `InsertBefore`/`RemoveChild`/`MoveChild`；动态 children 变化会先对旧/新子节点做基于 `*Node` 指针身份的 diff，只发变化的部分。为把移动次数降到最少，复用节点按旧索引求最长递增子序列（LIS），LIS 上的节点保持原位，其余发 `MoveChild`；指令从右往左生成、`BeforeID` 始终指向右侧已就位的节点，后端顺序 apply 即得目标顺序。
 
-- 变更用 `Node.ID` 定位（`ChildID`/`BeforeID` 同为跨帧稳定 ID）；整棵实例树（组件/分支/列表项）共享同一 sink，一次 `TakeChanges` 取全。
+- 变更用 `Node.ID` 定位（`ChildID`/`BeforeID` 同为跨帧稳定 ID）；整棵实例树（组件/分支/列表项）共享同一 sink，一次 `TakeChanges` 取全。**嵌套场景同样覆盖**：组件嵌在 For 列表项或 Branch 分支内时（`For.buildEntry` / `Branch.Resolve` 先建子树后接 sink），运行时用 `adoptSinkDeep` 递归把项内/分支内已挂载的组件与更深层控制器改指到共享 sink，因此 `<li><Card text={u.name}/></li>` 这类写法里组件子树的 `SetText` 也会出现在根 `TakeChanges()` 中（曾遗漏，第六轮修复）。
 - 这是 opcode 常驻树 + 细粒度 `Update()` 的自然产物——`Update` 本来就算出"哪些插槽变了"，这里只是暴露出来，**不像被移除的 vdom 后端那样每次重建整树**；细粒度 diff 只作用于单个动态插槽的 children，不产生 `createElement`、不重建整棵树。
 - 后端要么**完全不消费**增量、每次全量 `Draw(root)`（零改动），要么**完整消费**上面全部指令做增量重绘。二者择一即可；**不能只实现其中一条**：例如新增列表项只发 `InsertBefore`、不发 `ReplaceChildren`，只实现后者的后端会永远不显示新增项。`ReplaceChildren` 只是少数场景（文本↔容器互转、旧值快照模式的同 key 重建）的兜底指令，不是"一条通用替代"。
 - **For 同 key 值变化**：编译器生成的 `<For>` 通常走 item signal（`ForGetterOfSignal`），值变化只写 item signal → 依赖它的叶子精确重跑 → 发 `SetText/SetAttr`，**不发** `ReplaceChildren`、项内 ID 不变。两类例外仍走销毁重建并发 `ReplaceChildren`：手写的旧 `NewFor`（值快照），以及编译器把 item 传入组件 props 时自动回退的 `ForGetterOf`（值快照，见 reactive-ui-roadmap 的组件边界限制）。后端两种都支持即可。

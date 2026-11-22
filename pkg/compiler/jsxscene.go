@@ -855,7 +855,7 @@ func lexExprScene(expr string, base Pos, ctx *jsxSceneCtx) []Token {
 	}
 	// signal 字段 selector 读补 ()（如组件内 {p.name} → p.name()）。
 	// 与 rewriteJSXInterpSignals 独立：后者只认全局 signal 名，不管 signal 字段。
-	toks = rewriteJSXSignalFieldSelectors(toks, ctx.signalFields)
+	toks = rewriteJSXSignalFieldSelectors(toks, ctx.bindings, ctx.signalFields, ctx.jsxPos)
 	// 对象字面量自动推断：{ { name: "x", age: 1 } } → struct{ name string; age int }{...}。
 	// 插值片段无期望类型上下文，走匿名 struct 推断路径。
 	if converted, err := transformObjectLitExpr(toks); err == nil {
