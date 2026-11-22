@@ -16,15 +16,94 @@ import (
 //	font-size     字号（像素整数或 "20px"），缺省 16
 //	padding       内边距（像素整数或 "8px"），缺省 4
 //	weight         字重："bold" 用粗体，其余常规
+//	border-radius  圆角半径（像素整数或 "12px"），缺省 0（直角）
+//	border         描边颜色，形如颜色值（需配合 border-width）
+//	border-width   描边宽度（像素整数或 "1px"），缺省 0（无描边）
+//
+// 以下为 flexbox 属性（由 Yoga 3.x 引擎解释，语义与 CSS 一致）：
+//
+//	flex-direction  "row" / "row-reverse" / "column" / "column-reverse"（缺省 column）
+//	flex-wrap       "nowrap" / "wrap" / "wrap-reverse"（缺省 nowrap）
+//	justify-content "flex-start" / "center" / "flex-end" / "space-between" / "space-around" / "space-evenly"（缺省 flex-start）
+//	align-items     "flex-start" / "center" / "flex-end" / "stretch" / "baseline"（缺省 stretch）
+//	align-content   "flex-start" / "center" / "flex-end" / "space-between" / "space-around" / "stretch"（缺省 stretch）
+//	gap             主轴/交叉轴统一间距（像素整数或 "12px"），缺省 0
+//	row-gap         行间距，覆盖 gap 的交叉轴分量
+//	column-gap      列间距，覆盖 gap 的主轴分量
 const (
-	propColor    = "color"
-	propBg       = "bg"
-	propBgAlt    = "background"
-	propWidth    = "width"
-	propHeight   = "height"
-	propFontSize = "font-size"
-	propPadding  = "padding"
-	propWeight   = "weight"
+	propColor        = "color"
+	propBg           = "bg"
+	propBgAlt        = "background"
+	propWidth        = "width"
+	propHeight       = "height"
+	propFontSize     = "font-size"
+	propPadding      = "padding"
+	propWeight       = "weight"
+	propRadius       = "border-radius"
+	propBorder       = "border"
+	propBorderWidth  = "border-width"
+	propDirection    = "flex-direction"
+	propWrap         = "flex-wrap"
+	propJustify      = "justify-content"
+	propAlign        = "align-items"
+	propAlignContent = "align-content"
+	propGap          = "gap"
+	propRowGap       = "row-gap"
+	propColumnGap    = "column-gap"
+)
+
+// flexDirection 是 flex 主轴方向。零值 column 兼容原有纵向布局。
+type flexDirection int
+
+const (
+	directionColumn flexDirection = iota
+	directionRow
+	directionRowReverse
+	directionColumnReverse
+)
+
+// flexWrap 是换行方式。
+type flexWrap int
+
+const (
+	wrapNoWrap flexWrap = iota
+	wrapWrap
+	wrapReverse
+)
+
+// justifyContent 是主轴对齐方式。
+type justifyContent int
+
+const (
+	justifyStart justifyContent = iota
+	justifyCenter
+	justifyEnd
+	justifySpaceBetween
+	justifySpaceAround
+	justifySpaceEvenly
+)
+
+// alignItems 是交叉轴对齐方式。零值 stretch 兼容原有"子元素撑满宽度"。
+type alignItems int
+
+const (
+	alignStretch alignItems = iota
+	alignFlexStart
+	alignFlexEnd
+	alignCenter
+	alignBaseline
+)
+
+// alignContent 是多行容器在交叉轴的对齐方式。
+type alignContent int
+
+const (
+	contentStretch alignContent = iota
+	contentFlexStart
+	contentFlexEnd
+	contentCenter
+	contentSpaceBetween
+	contentSpaceAround
 )
 
 // style 是一帧里从 Props 解析出的已解析样式值。
@@ -38,9 +117,26 @@ type style struct {
 	fontSize int
 	padding  float32
 	bold     bool
+
+	// 视觉修饰：圆角与描边
+	radius      float32
+	border      uint32 // ARGB
+	hasBorder   bool
+	borderWidth float32
+
+	// flex 布局字段：零值组合即原有纵向流式布局（column + nowrap + start + stretch + gap 0）。
+	direction    flexDirection
+	wrap         flexWrap
+	justify      justifyContent
+	align        alignItems
+	alignContent alignContent
+	gap          float32
+	rowGap       float32
+	columnGap    float32
 }
 
-// 默认样式：黑字、无背景、字号 16、padding 4、尺寸 0（表示弹性）。
+// 默认样式：黑字、无背景、字号 16、padding 4、尺寸 0（表示弹性），
+// flex 走 column + flex-start + stretch + gap 0，与历史行为一致。
 func defaultStyle() style {
 	return style{color: argb(255, 0, 0, 0), fontSize: 16, padding: 4}
 }
@@ -79,6 +175,94 @@ func parseStyle(props map[string]any) style {
 	}
 	if v, ok := propString(props[propWeight]); ok {
 		s.bold = strings.EqualFold(v, "bold") || v == "700"
+	}
+	if v, ok := propNum(props[propRadius]); ok && v >= 0 {
+		s.radius = float32(v)
+	}
+	if v, ok := propNum(props[propBorderWidth]); ok && v > 0 {
+		s.borderWidth = float32(v)
+	}
+	if v, ok := propString(props[propBorder]); ok {
+		if c, ok := parseColor(v); ok {
+			s.border, s.hasBorder = c, true
+		}
+	}
+	if v, ok := propString(props[propDirection]); ok {
+		switch strings.ToLower(strings.TrimSpace(v)) {
+		case "row":
+			s.direction = directionRow
+		case "row-reverse":
+			s.direction = directionRowReverse
+		case "column-reverse":
+			s.direction = directionColumnReverse
+		default:
+			s.direction = directionColumn
+		}
+	}
+	if v, ok := propString(props[propWrap]); ok {
+		switch strings.ToLower(strings.TrimSpace(v)) {
+		case "wrap":
+			s.wrap = wrapWrap
+		case "wrap-reverse":
+			s.wrap = wrapReverse
+		default:
+			s.wrap = wrapNoWrap
+		}
+	}
+	if v, ok := propString(props[propJustify]); ok {
+		switch strings.ToLower(strings.TrimSpace(v)) {
+		case "center":
+			s.justify = justifyCenter
+		case "flex-end", "end", "right":
+			s.justify = justifyEnd
+		case "space-between":
+			s.justify = justifySpaceBetween
+		case "space-around":
+			s.justify = justifySpaceAround
+		case "space-evenly":
+			s.justify = justifySpaceEvenly
+		default:
+			s.justify = justifyStart
+		}
+	}
+	if v, ok := propString(props[propAlign]); ok {
+		switch strings.ToLower(strings.TrimSpace(v)) {
+		case "flex-start", "start", "left", "top":
+			s.align = alignFlexStart
+		case "flex-end", "end", "right", "bottom":
+			s.align = alignFlexEnd
+		case "center":
+			s.align = alignCenter
+		case "baseline":
+			s.align = alignBaseline
+		default:
+			s.align = alignStretch
+		}
+	}
+	if v, ok := propString(props[propAlignContent]); ok {
+		switch strings.ToLower(strings.TrimSpace(v)) {
+		case "flex-start", "start":
+			s.alignContent = contentFlexStart
+		case "flex-end", "end":
+			s.alignContent = contentFlexEnd
+		case "center":
+			s.alignContent = contentCenter
+		case "space-between":
+			s.alignContent = contentSpaceBetween
+		case "space-around":
+			s.alignContent = contentSpaceAround
+		default:
+			s.alignContent = contentStretch
+		}
+	}
+	if v, ok := propNum(props[propGap]); ok && v >= 0 {
+		s.gap = float32(v)
+	}
+	if v, ok := propNum(props[propRowGap]); ok && v >= 0 {
+		s.rowGap = float32(v)
+	}
+	if v, ok := propNum(props[propColumnGap]); ok && v >= 0 {
+		s.columnGap = float32(v)
 	}
 	return s
 }

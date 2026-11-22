@@ -34,6 +34,8 @@ type Window struct {
 
 	// log 记录最近一帧的绘制指令，供测试/调试断言（可选观测面，不属于 host 协议）。
 	log DrawLog
+	// hits 记录最近一帧每个节点的屏幕矩形，供真实窗口后端命中测试。
+	hits []HitBox
 }
 
 var _ gxapp.Window = (*Window)(nil) // 编译期断言：满足 host 后端契约
@@ -83,6 +85,7 @@ func (w *Window) Draw(root *gxscene.Node) error {
 		return fmt.Errorf("skia: 未 Open，无法 Draw")
 	}
 	w.log = nil
+	w.hits = nil
 	if root == nil {
 		return nil
 	}
@@ -93,9 +96,10 @@ func (w *Window) Draw(root *gxscene.Node) error {
 		height: float32(w.height),
 		fonts:  w.fonts,
 		log:    &w.log,
+		hits:   &w.hits,
 	}
 	w.canvas.Clear(sk.ColorSetARGB(255, 255, 255, 255))
-	p.paintTree(root, 0, 0, float32(w.width), float32(w.height))
+	p.paintFrame(root, float32(w.width), float32(w.height))
 	w.frames++
 	return nil
 }
@@ -143,4 +147,39 @@ func (w *Window) DrawLog() DrawLog {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return append(DrawLog(nil), w.log...)
+}
+
+// Hits 返回最近一帧的命中矩形副本（观测面，非 host 协议）。
+// 真实窗口后端据此把鼠标坐标映射到场景节点，再调用 Node.Dispatch 分发事件。
+func (w *Window) Hits() []HitBox {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return append([]HitBox(nil), w.hits...)
+}
+
+// HitTest 返回覆盖屏幕点 (x, y) 的最上层节点（后绘制者优先）。
+// 命中矩形由最近一帧 Draw 记录；无命中返回 nil。
+func (w *Window) HitTest(x, y float32) *gxscene.Node {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	for i := len(w.hits) - 1; i >= 0; i-- {
+		if w.hits[i].Contains(x, y) {
+			return w.hits[i].Node
+		}
+	}
+	return nil
+}
+
+// PaintTo 用本后端一致的 painter 把场景树画到任意 Skia canvas（供真实窗口复用布局/绘制协议）。
+// width/height 为像素尺寸；返回本帧命中矩形。fonts 由调用方长期持有以复用字体缓存。
+func PaintTo(canvas sk.Canvas, width, height float32, root *gxscene.Node, fonts map[int]sk.Font) (DrawLog, []HitBox) {
+	var log DrawLog
+	var hits []HitBox
+	if canvas.IsNil() || root == nil {
+		return log, hits
+	}
+	p := &painter{canvas: canvas, width: width, height: height, fonts: fonts, log: &log, hits: &hits}
+	canvas.Clear(sk.ColorSetARGB(255, 255, 255, 255))
+	p.paintFrame(root, width, height)
+	return log, hits
 }

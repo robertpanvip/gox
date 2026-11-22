@@ -285,6 +285,11 @@ app.close()   // 级联执行 Counter 的 onCleanup
 ```
 
 > **接入真实 GUI**：实现 `Window` 接口的 `Open/Draw/Run/Close/Config`，用 `OpenWith` 注入即可——Skia / wgpu / GLFW 后端无需改动 `gxapp` 或编译器。当前 Headless 后端让整条链路在无 GUI 环境端到端可验证。最小示例见 [`examples/jsxapp.gx`](examples/jsxapp.gx)；**复合组件 + signal 响应式**见 [`examples/jsxapp-full.gx`](examples/jsxapp-full.gx)；**SolidJS 风格有状态组件**（组件内局部状态 + 定时器自增 + onMount/onCleanup 生命周期）见 [`examples/jsxapp-solid.gx`](examples/jsxapp-solid.gx)，运行时见 [`runtime/app/`](runtime/app/)。
+>
+> **后端预制控件库**：`backend/skia/widgets` 提供 `widgets.button` / `input` / `card` /
+> `badge` / `progress` / `row` / `col` 等预制组件，外观全部沉淀在后端，业务 JSX 只写语义；
+> 其中 `input` 支持真实键盘输入（signal 双向绑定 + 焦点 + 光标闪烁）。完整可运行示例见
+> [`examples/desktop-demo`](examples/desktop-demo)（GX → Skia 真实窗口 → 可输入看板）。
 
 ## 4. 外部 Go 符号：按真实拼写书写
 
