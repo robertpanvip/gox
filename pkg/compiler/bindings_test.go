@@ -539,3 +539,65 @@ func scopeKindOf(bd *Binding) string {
 	}
 	return "?"
 }
+
+// 第十二轮 P2-B：map[K]V{...} 字面量的 TypeAt 必须给出完整 map 类型，
+// 不能再落到「含字符串 → string」兜底推成 key 类型。
+func TestBindTypeAtMapLiteral(t *testing.T) {
+	src := `package main
+func main() {
+    m := map[string]P{"k": {a: "x"}}
+    println(m)
+}
+`
+	toks := New(src).AllTokens()
+	b := Bind(toks)
+	usePos := posAtNthIdent(t, toks, "m", 2) // 第 1 个是声明，第 2 个是 println 使用点
+	if got := b.TypeAt("m", usePos); got != "map[string]P" {
+		t.Errorf("TypeAt(m) = %q, want %q", got, "map[string]P")
+	}
+}
+
+// 第十二轮 P2-C：多左值 := 必须按位置分别推断，不能把首个结果套给所有左值。
+func TestBindMultiLHSByPosition(t *testing.T) {
+	// 形态一：函数调用返回元组。
+	src1 := `package main
+type P struct { a string }
+func load() (map[string]P, error) { return nil, nil }
+func main() {
+    m, err := load()
+    println(m, err)
+}
+`
+	{
+		toks := New(src1).AllTokens()
+		b := Bind(toks)
+		mPos := posAtNthIdent(t, toks, "m", 2)   // 声明 + println 使用
+		errPos := posAtNthIdent(t, toks, "err", 2)
+		if got := b.TypeAt("m", mPos); got != "map[string]P" {
+			t.Errorf("元组首值 m: TypeAt = %q, want %q", got, "map[string]P")
+		}
+		if got := b.TypeAt("err", errPos); got != "error" {
+			t.Errorf("元组次值 err: TypeAt = %q, want %q", got, "error")
+		}
+	}
+	// 形态二：逗号分隔多表达式。
+	src2 := `package main
+type P struct { a string }
+func main() {
+    a, n := map[string]P{"k": {a: "x"}}, 1
+    println(a, n)
+}
+`
+	{
+		toks := New(src2).AllTokens()
+		b := Bind(toks)
+		aPos := posAtNthIdent(t, toks, "a", 2)
+		nPos := posAtNthIdent(t, toks, "n", 2)
+		if got := b.TypeAt("a", aPos); got != "map[string]P" {
+			t.Errorf("多表达式首值 a: TypeAt = %q, want %q", got, "map[string]P")
+		}
+		if got := b.TypeAt("n", nPos); got != "int" {
+			t.Errorf("多表达式次值 n: TypeAt = %q, want %q", got, "int")
+		}
+	}
+}

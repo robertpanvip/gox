@@ -253,11 +253,20 @@ func inferExprLitType(toks []Token, from, to int) string {
 	return ""
 }
 
-// compositeLitType 从切片/数组复合字面量 `[]T{...}` / `[N]T{...}` 提取完整集合
-// 类型文本（`[]T` / `[N]T`）。用 Go parser 校验，确保只返回合法切片类型；
-// 非复合字面量或无法判定返回 ""。调用方可再经 sliceElemType 取元素类型。
+// compositeLitType 从复合字面量 `[]T{...}` / `[N]T{...}` / `map[K]V{...}` 提取
+// 完整集合类型文本。用 Go parser 校验，确保只返回合法切片/map 类型；
+// 非复合字面量或无法判定返回 ""。调用方可再经 sliceElemType/containerElemTypeOnce
+// 取元素类型。
+//
+// 第十二轮 P2-B：原实现只认 `[]`/`[N]` 切片，map[K]V{...} 落到「含字符串字面量
+// → string」兜底，把 m := map[string]P{...} 的 TypeAt 推成 key 类型 string，
+// 逼得索引链家族靠 150 行文本回扫擦屁股。这里补 map 分支，让类型从源头正确。
 func compositeLitType(toks []Token, from, to int) string {
-	if from >= to || toks[from].Text != "[" {
+	if from >= to {
+		return ""
+	}
+	isMap := toks[from].is("map")
+	if !isMap && toks[from].Text != "[" {
 		return ""
 	}
 	// 找顶层第一个 `{`（值序列起点），其左侧即类型片段 `[]T` / `[N]T`。
@@ -284,6 +293,14 @@ func compositeLitType(toks []Token, from, to int) string {
 		return ""
 	}
 	text := exprText(toks, from, brace)
+	if isMap {
+		// map[K]V：必须是合法 Go 类型且以 map[ 开头。
+
+		if strings.HasPrefix(text, "map[") && isValidGoTypeExpr(text) {
+			return text
+		}
+		return ""
+	}
 	if !isSliceGoTypeExpr(text) {
 		return ""
 	}
@@ -296,6 +313,12 @@ func sliceElemType(typeText string) string {
 	t := strings.TrimSpace(typeText)
 	if t == "string" {
 		return "rune" // range string 得到 rune/byte；保守用 rune（由 Go 决定具体）
+	}
+	// 第十二轮 P3-F：非切片且非 string 的类型（如 map[K]V）不是列表，
+	// 旧实现直接 return t 会把 map 当元素类型，生成 []map[K]V 的误导产物。
+	// For 需要列表，这类类型应由调用方给出明确诊断。
+	if !strings.HasPrefix(t, "[") {
+		return ""
 	}
 	for strings.HasPrefix(t, "[") {
 		close := -1

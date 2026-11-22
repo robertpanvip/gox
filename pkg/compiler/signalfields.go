@@ -474,7 +474,10 @@ func resolveSignalChainEx(toks []Token, i int, recvPos Pos, b *Bindings, tbl sig
 		if ft == "" && isSig {
 			ft = tbl.fieldType(curType, field)
 		}
-		curType = bareFieldType(ft)
+		// 第十二轮 P2-D：普通字段若是容器（s.m map[string]P / s.ps []P），
+		// 保留完整容器类型供随后的 [...] 推进；不能像 signal 字段那样 bare 掉
+		// （bareFieldType 对 map[...] 返回空，会让链断裂、s.m["k"].a 静默漏改）。
+		curType = chainFieldType(ft)
 		if curType == "" {
 			// 类型链断裂（如末尾是 int/string）：后面即使还有 '.' 也无法判定，
 			// 保守停止、不按名猜测。
@@ -489,6 +492,25 @@ func resolveSignalChainEx(toks []Token, i int, recvPos Pos, b *Bindings, tbl sig
 					cur = rp
 				}
 			}
+		}
+		// 第十二轮 P2-D：字段段后紧跟的 [...]（s.m["k"] / s.ps[0]）在此推进
+		// receiver 类型到元素类型，并把游标移到 ']'，使下一个 '.' 能接上。
+		// 与链首直接索引（上面的循环）共用同一套 containerElemTypeOnce 逻辑。
+		for {
+			lb := nextSigIn(toks, cur+1, limit)
+			if lb < 0 || toks[lb].Text != "[" {
+				break
+			}
+			rb := matchDelim(toks, lb, "[", "]")
+			if rb <= lb || rb >= limit {
+				break
+			}
+			et := containerElemTypeOnce(curType)
+			if et == "" {
+				break
+			}
+			curType = et
+			cur = rb
 		}
 	}
 	if chain.fieldCount == 0 {
@@ -537,6 +559,23 @@ func receiverTypeBeforeTail(toks []Token, i, start int, callRecv bool, recvPos P
 //   - *T → T；去掉可能的包前缀（pkg.T → T，具名类型在 signalFieldTable 按基名登记）
 //
 // 无法归一（如 int/string 等内建类型、匿名 struct）返回空串。
+// chainFieldType 供 selector 链传播字段类型（第十二轮 P2-D）：
+//   - 容器类型（map[K]V / []T / [N]T / list.List[T]）原样保留，供随后 [...] 推进；
+//   - 其它字段沿用 bareFieldType（signal/list 剥元素、指针/包名剥前缀）。
+//
+// 不这样做的话，bareFieldType("map[string]P") 返回空（"其它泛型不作为 receiver"），
+// 使 s.m["k"].a 的类型链在 .m 处断裂、链尾 a 的 signal 字段读被静默漏改。
+func chainFieldType(ft string) string {
+	t := strings.TrimSpace(ft)
+	if strings.HasPrefix(t, "map[") || strings.HasPrefix(t, "list.List[") || strings.HasPrefix(t, "List[") {
+		return t
+	}
+	if strings.HasPrefix(t, "[") && strings.Contains(t, "]") {
+		return t // []T / [N]T
+	}
+	return bareFieldType(ft)
+}
+
 func bareFieldType(ft string) string {
 	t := strings.TrimSpace(ft)
 	i := strings.Index(t, "[")
@@ -568,7 +607,19 @@ func containerElemTypeFromBinding(b *Bindings, name string, pos Pos) string {
 		return ""
 	}
 	bd := b.ResolveAt(name, pos)
-	if bd == nil || len(b.toks) == 0 {
+	if bd == nil {
+		return ""
+	}
+	// 第十二轮 P3-E：优先用 Binding.Type——参数/指针/render 返回/:=map 字面量
+	// 的容器类型都已被 Bind 准确推断（P2-B 修好 map 字面量后尤甚），而文本回扫
+	// 只认 `var`/`:=`，对函数参数 `func f(rows map[K][]V)` 永远返回空。
+	// 这里剥一层元素类型，与下方文本反推的返回值语义一致（map[K]V→V）。
+	if bd.Type != "" {
+		if et := containerElemTypeOnce(bd.Type); et != "" {
+			return et
+		}
+	}
+	if len(b.toks) == 0 {
 		return ""
 	}
 	// 找声明下标：b.toks 是 Bind 时的原始流，DeclPos 在其中稳定命中。
@@ -771,6 +822,67 @@ func isSignalSelector(toks []Token, i int, b *Bindings, tbl signalFieldTable) (f
 	return sel.field, true, sel.fieldIdx
 }
 
+// silentIndexedSignalField 检测「类型推不出、但字段名唯一命中 signal 字段」的
+// 静默漏改场景（第十二轮 §4.5 立规矩）。只在极窄窗口报警，避免误伤普通字段：
+//   - 链首标识符后有索引 '['（x[i].f），且链能走到一个尾字段名 f；
+//   - f 在 signalFieldTable 中恰好是一个类型的 signal 字段（唯一匹配，
+//     与 resolveSignalSel 的退化判据同源，多类型同名则放弃）；
+//   - 正常类型路径没能把 f 识别为 signal 字段（调用方在 !ok 分支调用本函数）。
+//
+// 返回 (字段名, 是否命中)。命中即应报"无法推断索引元素类型"诊断，而非静默让
+// Go 打印 Signal 函数地址。
+func silentIndexedSignalField(toks []Token, i, limit int, tbl signalFieldTable) (string, bool) {
+	if i < 0 || i >= len(toks) || toks[i].Kind != Ident {
+		return "", false
+	}
+	if limit <= 0 || limit > len(toks) {
+		limit = len(toks)
+	}
+	// 链首后是否紧跟索引（跳过空白），再沿 '.'/索引走到尾字段名。
+	hasIndex := false
+	lastField := ""
+	cur := i
+	for {
+		n := nextSigIn(toks, cur+1, limit)
+		if n < 0 {
+			break
+		}
+		if toks[n].Text == "[" {
+			rb := matchDelim(toks, n, "[", "]")
+			if rb <= n || rb >= limit {
+				break
+			}
+			hasIndex = true
+			cur = rb
+			continue
+		}
+		if toks[n].Text == "." {
+			k := nextSigIn(toks, n+1, limit)
+			if k < 0 || toks[k].Kind != Ident || isGoKeyword(toks[k].Text) {
+				break
+			}
+			lastField = toks[k].Text
+			cur = k
+			continue
+		}
+		break
+	}
+	if !hasIndex || lastField == "" {
+		return "", false
+	}
+	// 唯一匹配：恰好一个类型把 lastField 声明为 signal 字段。
+	owners := 0
+	for _, fields := range tbl.sig {
+		if _, ok := fields[lastField]; ok {
+			owners++
+		}
+	}
+	if owners != 1 {
+		return "", false
+	}
+	return lastField, true
+}
+
 // rewriteSignalFieldRefs 对持有 signal 字段 struct 的 selector 做读写解包：
 //   - 读 `p.name` → `p.name()`
 //   - 写 `p.name = expr` → `p.name(expr)`
@@ -780,7 +892,7 @@ func isSignalSelector(toks []Token, i int, b *Bindings, tbl signalFieldTable) (f
 // 判定基于 receiver 的推断类型 + signalFieldTable；普通字段、外部包符号、
 // 已是调用 `p.name(...)` 都不改。this transform 在 transformSignals 之后、
 // external 之前运行——此时字段仍是小写、类型已是 Signal.Signal[T]。
-func rewriteSignalFieldRefs(toks []Token, b *Bindings, tbl signalFieldTable) []Token {
+func rewriteSignalFieldRefs(toks []Token, b *Bindings, tbl signalFieldTable, diags *[]GXDiagnostic) []Token {
 	if !tbl.hasSignalFields() {
 		return toks
 	}
@@ -817,6 +929,18 @@ func rewriteSignalFieldRefs(toks []Token, b *Bindings, tbl signalFieldTable) []T
 		// emitChain 对"段后已有 ()"不重复补，故跳过是安全的。
 		chain, ok := resolveSignalChainEx(toks, i, toks[i].Pos, b, tbl, 0, true)
 		if !ok || len(chain.segs) == 0 {
+			// 第十二轮 §4.5 立规矩：索引链元素类型推不出、链尾字段名唯一命中
+			// signal 字段时，不能静默输出裸 selector（Go 会打印 Signal 函数地址），
+			// 报明确诊断让用户显式标注或改用切片变量。
+			if diags != nil {
+				if field, hit := silentIndexedSignalField(toks, i, 0, tbl); hit {
+					*diags = append(*diags, GXDiagnostic{
+						Pos:     toks[i].Pos,
+						Code:    "signal-field-index-unknown",
+						Message: "无法推断索引元素的类型，字段 " + field + " 是 signal 字段但读未被改写；请显式标注元素类型或改用切片变量",
+					})
+				}
+			}
 			out = append(out, t)
 			continue
 		}
@@ -1590,11 +1714,17 @@ func assignableRef(toks []Token, from, to int, b *Bindings, pos Pos) *[2]int {
 	return nil
 }
 
-// signalLockKey 为「跟随同一变量」的档5 getter 生成稳定的共享锁 key（第十一轮 N-3）。
-// 取 ref 根标识符的声明位置（DeclPos.Offset）作身份：同一变量被多个字段引用、
-// 或在多个实例里构造时，ResolveAt 都解析到同一 Binding → 同一 key → 运行时复用
-// 同一把锁，修复"同变量多字段/多实例各持一把锁、彼此不互斥"的数据竞争。
+// signalLockKey 为「跟随同一变量」的档5 getter 生成稳定的共享锁 key（第十一轮 N-3，
+// 第十二轮 P3-G 增强）。身份 = 根标识符名 + 声明位置（DeclPos.Offset）：
+// 同一变量被多个字段引用、或在多个实例里构造时，ResolveAt 都解析到同一 Binding
+// → 同一 key → 运行时复用同一把锁，修复"同变量多字段/多实例各持一把锁、彼此不互斥"
+// 的数据竞争。带上变量名后，跨编译单元「同 offset 但不同名」的变量不再误共用锁。
 // 解析不到 Binding 时退化为 ref 文本，仍保证同名访问共享（保守但正确）。
+//
+// 边界：key 是进程级的（运行时 sync.Map 按 key 共享），极端情况下两个不同编译单元的
+// 同名变量恰好落在同一 Offset 仍会共用一把锁——正确性无碍（只是串行化），
+// 不引入文件身份是为了保持编译管线零签名侵入；LSP 多文件并发若在意该串行化，
+// 可在调用方为不同文件使用不同进程/命名空间。
 func signalLockKey(ref []Token, b *Bindings, pos Pos) string {
 	name := ""
 	for _, t := range ref {
@@ -1606,7 +1736,7 @@ func signalLockKey(ref []Token, b *Bindings, pos Pos) string {
 	text := exprText(ref, 0, len(ref))
 	if name != "" && b != nil {
 		if bd := b.ResolveAt(name, pos); bd != nil && bd.DeclPos.valid() {
-			return "sf:" + strconv.Itoa(bd.DeclPos.Offset)
+			return "sf:" + name + ":" + strconv.Itoa(bd.DeclPos.Offset)
 		}
 	}
 	return "sf#" + text

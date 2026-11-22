@@ -765,11 +765,12 @@ func (b *Bindings) scanEnum(toks []Token, ei, end int, scope *BindScope) {
 // `range` 迭代变量例外——它们在循环体里立即生效，保持默认 DeclPos 即可。
 func (b *Bindings) bindLHS(toks []Token, op int, scope *BindScope, kind BindingKind) {
 	exprFrom := nextSig(toks, op+1)
+	exprTo := -1
 	typ := ""
 	visibleFrom := NoPos
 	isRange := exprFrom >= 0 && toks[exprFrom].Text == "range"
 	if exprFrom >= 0 {
-		exprTo := exprEndInStmt(toks, exprFrom, len(toks))
+		exprTo = exprEndInStmt(toks, exprFrom, len(toks))
 		typ = inferExprLitType(toks, exprFrom, exprTo)
 		// 工厂/构造函数返回：`p := makeP("x")` 的字面量扫描会误命中参数里的字符串，
 		// 推断成 string；函数调用形态的类型应以 FuncResult 为准（第十轮 P1-3），
@@ -787,11 +788,12 @@ func (b *Bindings) bindLHS(toks []Token, op int, scope *BindScope, kind BindingK
 			}
 		}
 	}
-	p := prevSig(toks, op-1)
-	for p >= 0 {
+	// 第十二轮 P2-C：多左值时按位置分别推断，不再把首个结果套给所有左值。
+	// 先按源码从左到右收集左侧标识符下标。
+	var lhsIdx []int
+	for p := prevSig(toks, op-1); p >= 0; {
 		if toks[p].Kind == Ident && !isGoKeyword(toks[p].Text) {
-			bd := b.addBinding(toks[p], kind, scope, typ)
-			bd.setVisibleFrom(visibleFrom)
+			lhsIdx = append(lhsIdx, p)
 		}
 		q := prevSig(toks, p-1)
 		if q >= 0 && toks[q].Text == "," {
@@ -800,6 +802,128 @@ func (b *Bindings) bindLHS(toks []Token, op int, scope *BindScope, kind BindingK
 		}
 		break
 	}
+	// lhsIdx 是逆序（从右往左），翻转为源码顺序。
+	for i, j := 0, len(lhsIdx)-1; i < j; i, j = i+1, j-1 {
+		lhsIdx[i], lhsIdx[j] = lhsIdx[j], lhsIdx[i]
+	}
+	// 逐位置推断类型（仅多左值且非 range 时启用；单左值沿用上面的 typ）。
+	types := make([]string, len(lhsIdx))
+	for i := range types {
+		types[i] = typ
+	}
+	if len(lhsIdx) > 1 && exprFrom >= 0 && !isRange {
+		if inferred := inferMultiLHSTypes(toks, exprFrom, len(toks), b, len(lhsIdx)); inferred != nil {
+			types = inferred
+		}
+	}
+	for i, p := range lhsIdx {
+		bd := b.addBinding(toks[p], kind, scope, types[i])
+		bd.setVisibleFrom(visibleFrom)
+	}
+}
+
+// inferMultiLHSTypes 为多左值 `a, b := <rhs>` 按位置推断类型（第十二轮 P2-C）。
+// 覆盖两种形态：
+//   - 单函数调用返回元组：`m, err := load()` → FuncResult 得 "(map[string]P, error)"，
+//     拆元组按位置分配 → ["map[string]P", "error"]；
+//   - 逗号分隔多表达式：`a, n := map[K]V{...}, 1` → 每段独立推断。
+//
+// 无法可靠分解时返回 nil，调用方沿用「首个结果套全部」的旧行为（保守）。
+func inferMultiLHSTypes(toks []Token, from, to int, b *Bindings, n int) []string {
+	if from < 0 || from >= to || n < 2 {
+		return nil
+	}
+	// 收紧到语句结尾（只认换行/分号，不在顶层逗号处截断）——
+	// 调用方传入的边界可能是 exprEndInStmt 的结果（在第一个逗号处停），
+	// 对 a, n := e1, e2 这种形态必须先扩回完整右侧才能分段。
+	to = exprEndOfLine(toks, from, to)
+	// 形态一：单函数调用返回元组。
+	if toks[from].Kind == Ident && !isGoKeyword(toks[from].Text) {
+		lp := nextSigIn(toks, from+1, to)
+		if lp >= 0 && toks[lp].Text == "(" {
+			if rp := matchDelim(toks, lp, "(", ")"); rp >= 0 && funcCallEndsExpr(toks, rp+1, to) {
+				if rt := b.FuncResult(toks[from].Text); strings.HasPrefix(strings.TrimSpace(rt), "(") {
+					parts := splitTypeTuple(rt)
+					if len(parts) == n {
+						return parts
+					}
+				}
+			}
+		}
+	}
+	// 形态二：逗号分隔多表达式，段数须与左值数一致。
+	segs := splitTopLevelSegs(toks, from, to)
+	if len(segs) == n {
+		out := make([]string, n)
+		for i, seg := range segs {
+			out[i] = inferExprLitType(toks, seg[0], seg[1])
+			if out[i] == "" {
+				if ft := calledFuncResult(toks, seg[0], seg[1], b); ft != "" {
+					out[i] = ft
+				}
+			}
+		}
+		return out
+	}
+	return nil
+}
+
+// exprEndOfLine 返回 [from,limit) 内到换行或分号为止的下标，不在顶层逗号截断。
+// 供多左值 := 推断使用——右侧 a, n := e1, e2 的逗号是表达式分隔符而非语句结尾。
+func exprEndOfLine(toks []Token, from, limit int) int {
+	depth := 0
+	for i := from; i < limit; i++ {
+		t := toks[i]
+		switch t.Text {
+		case "(", "[", "{":
+			depth++
+		case ")", "]", "}":
+			if depth > 0 {
+				depth--
+			}
+		case ";":
+			if depth == 0 {
+				return i
+			}
+		}
+		if t.Kind == Newline && depth == 0 {
+			return i
+		}
+	}
+	return limit
+}
+
+// funcCallEndsExpr 判断 rp+1..to 是否只有空白/换行（即调用是完整右侧表达式）。
+func funcCallEndsExpr(toks []Token, from, to int) bool {
+	for i := from; i < to; i++ {
+		switch toks[i].Kind {
+		case Space, Newline, Comment:
+			continue
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// splitTypeTuple 把 "(T1, T2, ...)" 类型元组文本拆成各元素类型。
+// 用 lexer 重新分词 + splitTopLevelSegs，保留嵌套类型（map[K]V / []T / func(...)）。
+func splitTypeTuple(text string) []string {
+	t := strings.TrimSpace(text)
+	if !strings.HasPrefix(t, "(") || !strings.HasSuffix(t, ")") {
+		return nil
+	}
+	inner := t[1 : len(t)-1]
+	toks := New(inner).AllTokens()
+	segs := splitTopLevelSegs(toks, 0, len(toks))
+	out := make([]string, 0, len(segs))
+	for _, seg := range segs {
+		s := exprText(toks, seg[0], seg[1])
+		if s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 // upgradeRangeVars 把 range 之前的 `:=` 左侧从 BkLocal 升级为 BkRangeVar。

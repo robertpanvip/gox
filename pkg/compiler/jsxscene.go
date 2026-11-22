@@ -50,6 +50,9 @@ type jsxSceneCtx struct {
 	// signalFields: struct signal 字段表（类型名 → signal 字段名集合）。
 	// item 逃逸检测用它区分：props 字段是 signal 字段时本身保鲜，无需回退值快照。
 	signalFields signalFieldTable
+	// diags: GX 语义诊断回投口（第十一轮 P3-F）。each 集合是 map 等非列表类型时
+	// 追加明确诊断，避免生成 []map[...]/[]rune 这类误导性错误信息。nil 表示不收集。
+	diags *[]GXDiagnostic
 }
 
 // sceneOp 是一条待发射的 opcode 描述（编译期中间结构）。
@@ -632,6 +635,12 @@ func forTokens(n *jsxNode, ctx *jsxSceneCtx) []Token {
 		} else if inferred := ctx.inferForElemType(eachExpr, ctx.jsxPos); inferred != "" {
 			// 无类型注解时，从 each 集合表达式推断元素类型。
 			elemType = inferred
+		} else {
+			// 第十二轮 P3-F：each 集合是 map 等非列表类型时给明确诊断，
+			// 不再让 sliceElemType 误把 map 当元素生成 []map[K]V 的误导产物。
+			if coll := ctx.forEachCollType(eachExpr); coll != "" && strings.HasPrefix(strings.TrimSpace(coll), "map[") {
+				ctx.reportForNotList(n, coll)
+			}
 		}
 	}
 
@@ -766,10 +775,13 @@ func (ctx *jsxSceneCtx) inferForElemType(eachExpr string, pos Pos) string {
 	if root == "" {
 		return ""
 	}
-	// N-2（既有）：each 含索引时（rows["k"] / grouped[g]），根标识符是 map，
+	// N-2（既有）：each 根标识符被索引时（rows["k"] / grouped[g]），根是 map，
 	// TypeAt 常把 map 推断成 key 类型（string），sliceElemType 进而得到 rune，
 	// 错误信息与真实元素类型毫无关联。改为按声明反推容器类型并逐层剥索引。
-	if n := strings.Count(eachExpr, "["); n > 0 && ctx.bindings != nil {
+	// 第十二轮 P1-A：判据必须是「根标识符本身被索引」，不能用「表达式里有 [」——
+	// 后者会把 filter(rows["k"])（方括号在实参里、根是 filter）也抢走推断权，
+	// 且落空后 return "" 掐断下面的 FuncResult 兜底，导致退化成 any 编译失败。
+	if n := strings.Count(eachExpr, "["); n > 0 && ctx.bindings != nil && indexedRoot(eachExpr) {
 		et := containerElemTypeFromBinding(ctx.bindings, root, pos)
 		for k := 1; k < n && et != ""; k++ {
 			et = containerElemTypeOnce(et)
@@ -777,7 +789,10 @@ func (ctx *jsxSceneCtx) inferForElemType(eachExpr string, pos Pos) string {
 		if s := sliceElemType(et); s != "" {
 			return s
 		}
-		return et
+		if et != "" {
+			return et
+		}
+		// 落空 → 落到下面的旧路径（函数返回值兜底），不要 return ""。
 	}
 	collType := ""
 	if ctx.sigTypes != nil {
@@ -794,6 +809,48 @@ func (ctx *jsxSceneCtx) inferForElemType(eachExpr string, pos Pos) string {
 		return ""
 	}
 	return sliceElemType(collType)
+}
+
+// forEachCollType 返回 each 表达式根标识符的集合类型文本（第十二轮 P3-F），
+// 用于区分「非列表」与「列表但元素类型推不出」。查不到返回空。
+func (ctx *jsxSceneCtx) forEachCollType(eachExpr string) string {
+	root := rootIdentOfExpr(eachExpr)
+	if root == "" {
+		return ""
+	}
+	if ctx.sigTypes != nil && ctx.sigTypes[root] != "" {
+		return ctx.sigTypes[root]
+	}
+	if ctx.bindings != nil {
+		return ctx.bindings.TypeAt(root, ctx.jsxPos)
+	}
+	return ""
+}
+
+// reportForNotList 对 each 是 map 等非列表类型追加 GX 诊断（第十二轮 P3-F）。
+func (ctx *jsxSceneCtx) reportForNotList(n *jsxNode, collType string) {
+	if ctx == nil || ctx.diags == nil {
+		return
+	}
+	*ctx.diags = append(*ctx.diags, GXDiagnostic{
+		Pos:     ctx.jsxPos,
+		Code:    "for-not-list",
+		Message: "<For> 需要列表，但 each 是 map 类型 " + collType + "；请先转成切片再用 <For> 渲染",
+	})
+}
+
+// indexedRoot 判断 each 表达式是否是「根标识符本身被索引」的形态（第十二轮 P1-A）。
+// 判据：表达式里第一个 '[' 必须早于第一个 '('——
+//
+//	rows["k"]        → 第一个特殊字符是 '[' → true（根被索引）
+//	groups[g][i]     → '[' → true
+//	filter(rows["k"]) → 第一个特殊字符是 '(' → false（方括号在实参里，根是 filter）
+//	getRows()[0]     → '(' → false
+//
+// 只有根被索引时才能按根标识符反推容器类型；否则应走函数返回值等旧路径。
+func indexedRoot(expr string) bool {
+	i := strings.IndexAny(expr, "[(")
+	return i >= 0 && expr[i] == '['
 }
 
 // rootIdentOfExpr 取表达式的根标识符（跳过空白，取第一个标识符）。

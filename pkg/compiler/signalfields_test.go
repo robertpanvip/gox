@@ -1,6 +1,7 @@
 package compiler
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -1065,16 +1066,8 @@ func main() {
 }
 `
 	got := compileOK(t, "r12_share_key.gx", src)
-	// 提取所有 LockedGetterShared("key"...) 的 key，应全部相同（都是 v 的声明）。
-	var keys []string
-	for _, line := range strings.Split(got, "\n") {
-		if i := strings.Index(line, "LockedGetterShared(\""); i >= 0 {
-			rest := line[i+len("LockedGetterShared(\""):]
-			if j := strings.Index(rest, "\""); j >= 0 {
-				keys = append(keys, rest[:j])
-			}
-		}
-	}
+	// 用正则跨行提取所有 LockedGetterShared("key"...) 的 key，不依赖产物排版。
+	keys := extractLockKeys(t, got)
 	if len(keys) != 4 {
 		t.Fatalf("期望 4 个档5 getter（p1.a/p1.b/p2.a/p2.b），实际 %d:\n%s", len(keys), got)
 	}
@@ -1097,18 +1090,107 @@ func main() {
 }
 `
 	got := compileOK(t, "r12_distinct_key.gx", src)
-	compact := strings.Join(strings.Fields(got), "")
-	if strings.Count(compact, "LockedGetterShared(") != 2 {
-		t.Fatalf("期望 2 个档5 getter:\n%s", got)
+	keys := extractLockKeys(t, got)
+	if len(keys) != 2 {
+		t.Fatalf("期望 2 个档5 getter，实际 %d:\n%s", len(keys), got)
 	}
 	// 两个 key 必须不同：v 与 w 是不同声明。
-	i1 := strings.Index(compact, "LockedGetterShared(\"")
-	r1 := compact[i1+len("LockedGetterShared(\""):]
-	k1 := r1[:strings.Index(r1, "\"")]
-	i2 := strings.Index(compact[i1+1:], "LockedGetterShared(\"") + i1 + 1
-	r2 := compact[i2+len("LockedGetterShared(\""):]
-	k2 := r2[:strings.Index(r2, "\"")]
-	if k1 == k2 {
-		t.Errorf("不同变量 v/w 不应共享 key，都是 %q:\n%s", k1, got)
+	if keys[0] == keys[1] {
+		t.Errorf("不同变量 v/w 不应共享 key，都是 %q:\n%s", keys[0], got)
+	}
+}
+
+// extractLockKeys 用正则从生成 Go 中提取所有 LockedGetterShared 的 key 字面量，
+// 跨行匹配、不依赖产物排版（第十二轮测试质量修正）。
+func extractLockKeys(t *testing.T, goSrc string) []string {
+	t.Helper()
+	re := regexp.MustCompile(`LockedGetterShared\("([^"]*)"`)
+	matches := re.FindAllStringSubmatch(goSrc, -1)
+	keys := make([]string, 0, len(matches))
+	for _, m := range matches {
+		keys = append(keys, m[1])
+	}
+	return keys
+}
+
+// 第十二轮 P2-D：结构体字段容器 s.m["k"] / s.ps[0] 的 signal 字段读必须改写。
+// 旧实现在 .m 段用 bareFieldType("map[string]P") 得空串，类型链断裂，链尾 a 漏改。
+func TestR12StructFieldContainerIndex(t *testing.T) {
+	src := `package main
+import "fmt"
+type P struct { signal a string }
+type S struct { m map[string]P; ps []P }
+func main() {
+	s := S{m: map[string]P{"k": {a: "x"}}, ps: []P{{a: "p"}}}
+	fmt.Println(s.m["k"].a, s.ps[0].a)
+	s.m["k"].a = "y"
+	fmt.Println(s.m["k"].a)
+}
+`
+	got := compileOK(t, "r12_struct_container.gx", src)
+	containsAll(t, got,
+		`s.m["k"].a()`,
+		`s.ps[0].a()`,
+	)
+	compact := strings.Join(strings.Fields(got), "")
+	containsAll(t, compact, `s.m["k"].a("y")`)
+}
+
+// 第十二轮 §4.5 立规矩：silentIndexedSignalField 的判据正确性——
+// 含索引 + 链尾字段名唯一命中 signal 字段 → 报；普通字段名/多类型同名 → 不报。
+func TestR12SilentIndexedSignalFieldDetect(t *testing.T) {
+	src := `package main
+type P struct { signal a string; b int }
+type Q struct { a int }
+func main() {
+	m := map[string]P{"k": {a: "x", b: 1}}
+	_ = m["k"].a
+	_ = m["k"].b
+}
+`
+	toks := New(src).AllTokens()
+	decls := collectSignalFieldDecls(toks)
+	tbl := buildSignalFieldTable(toks, decls)
+
+	// 找 m["k"].a 的 m 下标（第 2 个 m：声明后第一次使用）。
+	mIdx := -1
+	cnt := 0
+	for i, tk := range toks {
+		if tk.Text == "m" && tk.Kind == Ident {
+			cnt++
+			if cnt == 2 {
+				mIdx = i
+				break
+			}
+		}
+	}
+	if mIdx < 0 {
+		t.Fatal("找不到 m 使用点")
+	}
+	field, hit := silentIndexedSignalField(toks, mIdx, 0, tbl)
+	if !hit || field != "a" {
+		t.Errorf("m[\"k\"].a 应命中 signal 字段 a，got field=%q hit=%v", field, hit)
+	}
+	// 用独立源码验证普通字段 b 不触发（b 不是任何类型的 signal 字段）。
+	src2 := `package main
+type P struct { signal a string; b int }
+func main() {
+	m := map[string]P{"k": {b: 1}}
+	_ = m["k"].b
+}
+`
+	toks2 := New(src2).AllTokens()
+	tbl2 := buildSignalFieldTable(toks2, collectSignalFieldDecls(toks2))
+	m2 := -1
+	cnt2 := 0
+	for i, tk := range toks2 {
+		if tk.Text == "m" && tk.Kind == Ident {
+			cnt2++
+			if cnt2 == 2 { m2 = i; break }
+		}
+	}
+	_, hit2 := silentIndexedSignalField(toks2, m2, 0, tbl2)
+	if hit2 {
+		t.Error("普通字段 b 不应命中 signal 字段检测")
 	}
 }

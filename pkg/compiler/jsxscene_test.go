@@ -596,22 +596,96 @@ func main() {
 		t.Fatal(err)
 	}
 	out := res.GoSource
+	// 直接断言元素类型 Row 与 item getter 形态，不再自我打折地只查一个子串。
 	for _, want := range []string{
 		"gxscene.ForGetterOfSignal[Row]",
-		"func(u func() Row) *gxscene.Instance",
+		"func() Row) *gxscene.Instance",
 	} {
-		// 产物里 render 参数名可能是 r，放宽为含 func() Row 的 getter 形态。
-		if strings.Contains(want, "func(u func()") {
-			if !strings.Contains(out, "func() Row) *gxscene.Instance") {
-				t.Errorf("each 索引应推断为 Row getter, 期望 %q, got:\n%s", want, out)
-			}
-			continue
-		}
 		if !strings.Contains(out, want) {
 			t.Errorf("each 索引应推断为 Row，期望 %q, got:\n%s", want, out)
 		}
 	}
 	if strings.Contains(out, "ForGetterOfSignal[rune]") || strings.Contains(out, "[]rune") {
 		t.Errorf("不应退化为 rune, got:\n%s", out)
+	}
+}
+
+// 第十二轮 P1-A（本轮回归）：each 是函数调用、实参含索引时，不能因为表达式里
+// 出现 '[' 就抢走推断权——根是 filter，方括号在实参 rows["k"] 里。
+// 旧实现 strings.Count("[")>0 命中索引路径，推断落空 return "" 掐断 FuncResult
+// 兜底，退化成 ForGetterOfSignal[any] 编译失败。
+func TestJSXSceneForInferCallWithIndexedArg(t *testing.T) {
+	res, err := CompileScene("for_call_idx.gx", `package main
+import gxscene "github.com/robertpanvip/gox/runtime/scene"
+type Row struct { id int; name string }
+func filter(xs []Row) []Row { return xs }
+func main() {
+	rows := map[string][]Row{"k": {{1, "a"}}}
+	_ = <ul><For each={filter(rows["k"])} key={(r) => r.id}>{(r) => <li>{r.name}</li>}</For></ul>
+}
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := res.GoSource
+	if !strings.Contains(out, "gxscene.ForGetterOfSignal[Row]") {
+		t.Errorf("函数调用实参含索引仍应推断为 Row，got:\n%s", out)
+	}
+	if strings.Contains(out, "ForGetterOfSignal[any]") || strings.Contains(out, "[]rune") {
+		t.Errorf("不应退化为 any/rune, got:\n%s", out)
+	}
+	// 生成代码必须通过 Go 语法校验（防止 any 版本残留非法调用形态）。
+	if err := res.Validate(); err != nil {
+		t.Errorf("生成 Go 应语法有效: %v\n---\n%s", err, out)
+	}
+}
+
+// 第十二轮 P3-E：each 索引集合是函数参数时也能推断元素类型（Binding.Type 优先于文本回扫）。
+func TestJSXSceneForInferFromIndexedParam(t *testing.T) {
+	res, err := CompileScene("for_param.gx", `package main
+import gxscene "github.com/robertpanvip/gox/runtime/scene"
+type Row struct { id int; name string }
+func render(rows map[string][]Row) any {
+	return <ul><For each={rows["k"]} key={(r) => r.id}>{(r) => <li>{r.name}</li>}</For></ul>
+}
+func main(){}
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := res.GoSource
+	if !strings.Contains(out, "gxscene.ForGetterOfSignal[Row]") {
+		t.Errorf("函数参数索引应推断为 Row，got:\n%s", out)
+	}
+	if strings.Contains(out, "ForGetterOfSignal[map[string]") || strings.Contains(out, "[any]") {
+		t.Errorf("不应退化为 map/any, got:\n%s", out)
+	}
+}
+
+// 第十二轮 P3-F：each 是 map（非列表）时产出 for-not-list 诊断，不再误导成 []map[...] 编译错误。
+func TestJSXSceneForMapDiagnostic(t *testing.T) {
+	res, err := CompileScene("for_map.gx", `package main
+import gxscene "github.com/robertpanvip/gox/runtime/scene"
+type Row struct { id int; name string }
+func main() {
+	m := map[string]Row{"k": {1, "a"}}
+	_ = <ul><For each={m}>{(r) => <li>x</li>}</For></ul>
+}
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, d := range res.Analysis.Diagnostics() {
+		if d.Code == "for-not-list" && strings.Contains(d.Message, "请先转成切片") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("each=map 应产出 for-not-list 诊断, got:\n%v", res.Analysis.Diagnostics())
+	}
+	// 生成代码不再含 []map[...] / []rune 的误导类型。
+	if strings.Contains(res.GoSource, "[]map[") || strings.Contains(res.GoSource, "[]rune") {
+		t.Errorf("不应生成误导的 []map/[]rune, got:\n%s", res.GoSource)
 	}
 }
