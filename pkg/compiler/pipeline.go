@@ -84,6 +84,12 @@ func CompileSceneWithModule(file, src, module string) (*Result, error) {
 // imports 提供跨文件 import 来源表（nil 表示单文件、一律按 Go 来源处理）。
 func compileWithMode(file, src, module string, imports map[string]ImportInfo) (*Result, error) {
 	toks := New(src).AllTokens()
+	// 禁止用户手写底层 Signal 运行时 API（Signal.New/Computed/Effect/...）。
+	// 必须在任何 transform 之前：此时小写语法糖尚未被还原成大写、生成物尚不存在，
+	// `Signal.<大写标识符>` 只可能是用户手写的底层 API。详见 checkNoRawSignalAPI。
+	if err := checkNoRawSignalAPI(toks); err != nil {
+		return nil, err
+	}
 	// struct signal 字段语言特性：必须在 Bind 之前降级 `signal name TYPE`
 	// → `name Signal.Signal[TYPE]`，否则 `signal` 关键字会被局部 signal 逻辑
 	// 误判为 `signal name = expr`（旧行为生成非法 `var name any string`）。

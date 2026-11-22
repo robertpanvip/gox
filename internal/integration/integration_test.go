@@ -554,7 +554,7 @@ func main() {
 			<b>Hidden</b>
 		}
 	</div>
-	view.BindReactive(Signal.Effect)
+	view.BindReactive(Signal.effect)
 	fmt.Print("INIT:", view)
 	// 分支内 signal 更新：只改叶子，不切分支。
 	count = 20
@@ -597,7 +597,7 @@ func main() {
 			{(u User) => <li>{u.name}</li>}
 		</For>
 	</ul>
-	view.BindReactive(Signal.Effect)
+	view.BindReactive(Signal.effect)
 	fmt.Print("INIT:", view)
 	users = []User{{2,"Jack"},{1,"Tom"},{3,"Ann"}}
 	fmt.Print("ADD:", view)
@@ -641,7 +641,7 @@ func main() {
 			{(u User) => <li>{u.name}</li>}
 		</For>
 	</ul>
-	view.BindReactive(Signal.Effect)
+	view.BindReactive(Signal.effect)
 	users = []User{{1,"Thomas"},{2,"Jack"}}
 	fmt.Print("UPD:", view)
 }
@@ -683,7 +683,7 @@ func main() {
 			{(u User) => <li><Card text={u.name}/></li>}
 		</For>
 	</ul>
-	view.BindReactive(Signal.Effect)
+	view.BindReactive(Signal.effect)
 	users = []User{{1,"Thomas"}}
 	fmt.Print("UPD:", view)
 }
@@ -718,7 +718,7 @@ func main() {
 			{(u) => <li>{u.name}</li>}
 		</For>
 	</ul>
-	view.BindReactive(Signal.Effect)
+	view.BindReactive(Signal.effect)
 	fmt.Print("INIT:", view)
 	users = []User{{2,"Jack"},{1,"Tom"},{3,"Ann"}}
 	fmt.Print("ADD:", view)
@@ -986,7 +986,7 @@ func main() {
 			{(u User) => <li><Card text={u.name}/></li>}
 		</For>
 	</ul>
-	view.BindReactive(Signal.Effect)
+	view.BindReactive(Signal.effect)
 	users = []User{{1,"Thomas"},{2,"Jack"}}
 	fmt.Print("UPD:", view)
 }

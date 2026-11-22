@@ -158,6 +158,7 @@ println(doubled)                                   // → println(doubled())，�
 - **作用域排除**：selector `obj.n`、复合字段键 `{n: ...}`、struct 字段、函数参数、已显式调用 `n()` 均不改写（注：struct 里显式声明的 `signal name T` 字段是另一项特性，见 §11.1）。
 - **computed**：惰性求值 + 缓存，仅依赖变化时失效；链式派生正确传播。
 - **effect**：立即执行一次，依赖变化时重跑；每次重跑动态重建依赖集合（条件分支依赖可增删）。
+- **底层 API 禁止手写**：`Signal.New` / `Signal.Computed` / `Signal.Effect` / `Signal.NewWithEquals` 等首字母大写的运行时构造器是编译器内部实现细节，用户源码里直接调用会报编译错误。GX 只暴露语法糖：`signal n = v` 声明源信号、`Signal.computed(() => expr)` 派生、`Signal.effect(() => {...})` 副作用；迟早需要的自定义相等策略等仍由运行时保留，但不从语言层暴露。这样用户无需感知 signal 与普通变量的区别，也杜绝了手写值与编译器 binding 不一致引发的快照冻结 / 别名冲突 / 二次包装等一系列问题。小写语法糖（含作为函数值传递的 `Signal.effect`）由编译器在末尾还原成对应大写符号，是唯一合法入口。
 - **并发安全**：全局互斥锁保护观察者栈与依赖图，用户回调在锁外执行。
 - **读取性能**：依赖追踪只在 effect/computed 重算期间需要，而这类场景是少数；普通读取走**无锁快路径**——用原子计数器 `activeObservers` 判断当前无 observer 重算时，直接原子读取当前值，跳过抓栈（goroutine id 解析）与加锁。signal 值用原子指针存储避免撕裂。实测读取 ~2 ns（约为普通变量的 2 倍），相较抓栈方案（~2900 ns）提速约 1400×；computed 缓存命中读 ~14 ns。
 - **import**：`Signal` 占位包名由 ImportManager 统一解析为 `import Signal "<module>/runtime/signal"`；源码已用别名导入则复用。
@@ -186,7 +187,7 @@ func main() {
 - **声明**：`signal name T` → `name Signal.Signal[T]`（函数字段，无参读/带参写）。
 - **读**：`p.name` → `p.name()`；**写**：`p.name = v` → `p.name(v)`；复合写 `+=` 与 `++/--` 同样展开。
 - **构造（三档，手写与 JSX 一致）**：signal 字段的值按形态分三档处理——
-  - **透传**：`v` 本身是 signal（变量读取 `src()`、裸 getter、`Signal.New(...)`、别的 signal 字段读）→ 直通 getter 本身，保持与外部 signal 关联（保鲜）；
+  - **透传**：`v` 本身是 signal（signal 变量读取 `src()`、裸 getter、signal 字段 selector、小写派生 `Signal.computed(...)`）→ 直通 getter 本身，保持与外部 signal 关联（保鲜）；
   - **字面量**：纯字面量（数字/字符串/bool/nil）→ `Signal.New(v)`；
   - **派生**：含 signal 读取的表达式（如 `fmt.Sprint(n())`、`"n=" + n()`）→ `Signal.Computed(func() T { return v })`，每次读重新求值（保鲜）。
   

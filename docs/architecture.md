@@ -75,7 +75,7 @@ emit               拼装 Go 源码，同时记录输出 token → 输入位置�
 
 1. **降级（Bind 之前）**：`collectSignalFieldDecls` 扫 `type X struct{...}` 找 `signal name T`，`downgradeSignalFields` 改写为 `name Signal.Signal[T]`，Signal token 标记 `IsGen` 由 `ReconcileImports` 统一注入 import。放在 Bind 之前是关键——降级后所有下游都以标准 Go 处理该字段。
 2. **构造包装（三档）**：`wrapSignalFieldLiterals`（手写 `X{name: v}`）与 JSX 侧 `signalFieldPropTokens`（`<X name={v}/>`）共享同一套赋值语义：
-   - **透传档**：值本身已是 signal（`src()`／裸 getter／`Signal.New(...)`／signal 字段 selector）→ 直通 getter 本身，保鲜；
+   - **透传档**：值本身已是 signal（`src()`／裸 getter／signal 字段 selector／小写派生 `Signal.computed(...)`）→ 直通 getter 本身，保鲜；
    - **字面量档**：数字/字符串/bool/nil 等纯字面量 → `Signal.New(v)`，字段可独立初始化（值恒定，快照无副作用）；
    - **派生档**：含 signal 变量读取的表达式（如 `fmt.Sprint(n())`、`"n=" + n()`）→ `Signal.Computed(func() T { return expr })`，每次读重新求值并登记依赖，保鲜。
    

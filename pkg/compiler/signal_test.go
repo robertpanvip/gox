@@ -387,20 +387,99 @@ func main() {
 	}
 }
 
-// 第七轮 §6b 回归：文件里只有 signal 字段、没有 signal 变量声明时，用户手写
-// Signal.New(...) 不应触发 Signal2 别名——注入的 import 应复用 Signal，用户
-// 手写与生成代码指向同一包。
+// §6b 回归（禁用底层 API 后重写）：文件里只有 signal 字段、没有 signal 变量
+// 声明时，小写语法糖 Signal.computed(...) 不应触发 Signal2 别名——注入的 import
+// 应复用 Signal，使小写还原后的 Signal.Computed 与生成代码指向同一包。
+// 底层 Signal.New 已禁止手写，故用小写语法糖覆盖同一条别名路径。
 func TestSignalImportNoSignal2Alias(t *testing.T) {
 	src := `package main
 type P struct { signal name string }
-func main() { s := Signal.New("x"); _ = P{name: s} }
+func main() {
+	signal s = "x"
+	c := Signal.computed(() => s)
+	_ = P{name: c}
+}
 `
 	got := compileOK(t, "sigalias.gx", src)
 	containsAll(t, got,
 		`import Signal "github.com/robertpanvip/gox/runtime/signal"`,
-		`s := Signal.New("x")`,
+		`c := Signal.Computed(func() string {return s()})`,
 	)
 	if strings.Contains(got, "Signal2") {
 		t.Errorf("不应生成 Signal2 别名:\n%s", got)
 	}
+}
+
+// 底层 Signal API 禁用：首字母大写的运行时构造器是编译器内部 API，
+// 用户源码直接调用必须报编译错误（源信号/派生/副作用只能走语法糖）。
+func TestNoRawSignalAPIForbidden(t *testing.T) {
+	cases := []struct {
+		name, src, wantName string
+	}{
+		{"New", "package main\nfunc main() { n := Signal.New(1); _ = n() }", "Signal.New"},
+		{"Computed", "package main\nfunc main() { c := Signal.Computed(func() int { return 1 }); _ = c() }", "Signal.Computed"},
+		{"Effect", "package main\nfunc main() { Signal.Effect(func() {}) }", "Signal.Effect"},
+		{"NewWithEquals", "package main\nfunc main() { n := Signal.NewWithEquals(1, nil); _ = n() }", "Signal.NewWithEquals"},
+		{"CreateRoot", "package main\nfunc main() { Signal.CreateRoot(func() {}) }", "Signal.CreateRoot"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			_, err := Compile("rawapi.gx", c.src)
+			if err == nil {
+				t.Fatalf("手写 %s 应被禁止", c.wantName)
+			}
+			if !strings.Contains(err.Error(), "不允许直接调用底层 API "+c.wantName) {
+				t.Errorf("错误信息应点名 %s，got: %v", c.wantName, err)
+			}
+			// 诊断应指向用户写的成员名所在行列（第 2 行），而非 0 或残缺坐标。
+			if !strings.HasPrefix(err.Error(), "2:") {
+				t.Errorf("诊断应带源码坐标（第 2 行），got: %v", err)
+			}
+		})
+	}
+}
+
+// 小写语法糖放行：computed/effect 调用与函数值传递、signal 声明、字符串内容
+// 都不应触发禁用检查。小写由 transformExternal 在末尾还原成大写符号。
+func TestNoRawSignalAPILowercaseAllowed(t *testing.T) {
+	cases := []struct {
+		name, src string
+	}{
+		{"computed", "package main\nfunc main() { signal n = 1; c := Signal.computed(() => n); _ = c }"},
+		{"effect-call", "package main\nfunc main() { signal n = 1; Signal.effect(() => println(n)) }"},
+		{"effect-as-value", "package main\nfunc main() { v := struct{}{}; _ = v; f := Signal.effect; _ = f }"},
+		{"string-content", "package main\nfunc main() { s := \"Signal.New(1)\"; _ = s }"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := compileOK(t, "lower.gx", c.src)
+			// 小写调用形态应还原为大写符号；字符串内容原样保留。
+			if c.name == "computed" && !strings.Contains(got, "Signal.Computed(") {
+				t.Errorf("小写 computed 应还原为 Signal.Computed:\n%s", got)
+			}
+		})
+	}
+}
+
+// 禁用检查不得误伤编译器内部生成的 Signal.New / Signal.Computed。
+// signal 声明降级、signal 字段三档包装都在检查之后发生，仍应正常生成。
+func TestNoRawSignalAPIGeneratedStillWorks(t *testing.T) {
+	src := `package main
+type CardProps struct { signal name string; age int }
+func main() {
+	signal src = "x"
+	p := CardProps{name: src, age: 3}
+	c := Signal.computed(() => src)
+	_ = p.name
+	_ = c
+}
+`
+	got := compileOK(t, "gen.gx", src)
+	containsAll(t, got,
+		`var src = Signal.New("x")`,
+		`name: src`, // 透传档：裸 getter，不二次包装
+		`age: 3`,
+		`Signal.Computed(func() string {return src()})`, // 小写派生还原
+		`import Signal "github.com/robertpanvip/gox/runtime/signal"`,
+	)
 }

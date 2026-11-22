@@ -31,7 +31,7 @@ func TestSignalFieldReadRewrite(t *testing.T) {
 	// 读 p.name → p.name()
 	src := `package main
 type CardProps struct { signal name string }
-func main() { p := CardProps{name: Signal.New("x")}; println(p.name) }
+func main() { p := CardProps{name: "x"}; println(p.name) }
 `
 	got := compileOK(t, "sf2.gx", src)
 	containsAll(t, got, `println(p.name())`)
@@ -154,12 +154,13 @@ func main() {
 	}
 }
 
-func TestSignalFieldConstructWithExplicitSignalNew(t *testing.T) {
-	// 字段值直接写 Signal.New(...)：整段直通，不得把复合字面量的 '}' 吞进值区间
-	// （曾因 prevSigIn 边界越界导致产物多一个 '}'）。
+func TestSignalFieldConstructLiteralNoSwallowedBrace(t *testing.T) {
+	// 字段值走字面量档（生成 Signal.New("x")）：不得把复合字面量的 '}' 吞进值区间
+	// （曾因 prevSigIn 边界越界导致产物多一个 '}'）。底层 API 已禁止手写，故用
+	// 字面量触发同一生成形态，继续守住这条边界。
 	src := `package main
 type CardProps struct { signal name string }
-func main() { p := CardProps{name: Signal.New("x")}; println(p.name) }
+func main() { p := CardProps{name: "x"}; println(p.name) }
 `
 	got := compileOK(t, "sf11.gx", src)
 	containsAll(t, got, `name: Signal.New("x")`, `println(p.name())`)

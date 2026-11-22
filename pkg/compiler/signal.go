@@ -1,6 +1,10 @@
 package compiler
 
-import "strings"
+import (
+	"fmt"
+	"strings"
+	"unicode"
+)
 
 // signal.go — GX 响应式 Signal 语法糖降级。
 //
@@ -29,6 +33,47 @@ import "strings"
 // 方法名大小写（computed→Computed、effect→Effect）交给既有 transformExternal
 // 的「selector 右侧小写首字母还原」处理；Signal 包名 token 标记 IsGen，由
 // ReconcileImports 统一注入 import 并解析别名。
+
+// checkNoRawSignalAPI 禁止用户直接书写底层 Signal 运行时构造器（大写 API）。
+//
+// GX 只暴露语法糖：源信号用 `signal n = v`、派生用 `Signal.computed(...)`、
+// 副作用用 `Signal.effect(...)`。底层 `Signal.New/Computed/Effect/...`（首字母
+// 大写）是编译器内部实现细节，用户手写会绕过编译器导致：binding 认成普通变量
+// 失去透明改写、占位包名被重命名触发 Signal2 未定义、被 signal 字段二次包装
+// 类型错等一系列问题——这些正是第六、七轮反复打补丁的根因。禁止手写即可归零。
+//
+// 判据：原始 token 流里 `Signal . <大写开头标识符>` 形态。
+//   - 必须在管线最开头（任何 transform 之前）调用：此时小写语法糖 computed/effect
+//     尚未被 transformExternal 还原成大写，编译器生成物也还不存在，判据最干净。
+//   - 首字母小写（computed/effect/createRoot/newWithEquals 等）是语法糖，放行。
+//   - 位置落在成员名 token 上，报错指向用户实际写的那个 API 名。
+func checkNoRawSignalAPI(toks []Token) error {
+	for i := 0; i < len(toks); i++ {
+		if !toks[i].is("Signal") {
+			continue
+		}
+		dot := nextSig(toks, i+1)
+		if dot < 0 || toks[dot].Text != "." {
+			continue
+		}
+		name := nextSig(toks, dot+1)
+		if name < 0 || toks[name].Kind != Ident || !startsUpper(toks[name].Text) {
+			continue
+		}
+		return fmt.Errorf("%d:%d: 不允许直接调用底层 API Signal.%s；源信号请用 `signal n = v`，派生用 `Signal.computed(() => expr)`，副作用用 `Signal.effect(() => {...})`",
+			toks[name].Pos.Line, toks[name].Pos.Col, toks[name].Text)
+	}
+	return nil
+}
+
+// startsUpper 判断标识符是否以大写字母开头，用于区分底层 API（New/Computed/...）
+// 与小写语法糖（computed/effect/...）。非 ASCII 或空串按非大写处理（放行）。
+func startsUpper(s string) bool {
+	for _, r := range s {
+		return unicode.IsUpper(r)
+	}
+	return false
+}
 
 // transformSignals 执行 signal 语法糖降级，返回改写后的 token 流。
 // 放在 Analyze 之前：Analyze 看到的是标准 Go（signal/let 已消除、读写已是调用式）。
