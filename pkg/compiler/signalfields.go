@@ -1,6 +1,9 @@
 package compiler
 
-import "strings"
+import (
+	"strconv"
+	"strings"
+)
 
 // signalfields.go — struct signal 字段（语言特性）。
 //
@@ -44,10 +47,12 @@ import "strings"
 //  档3 构造  E 是复合字面量构造（如 Leaf{v:"a"}）     → Signal.New(E)，一次构造、可写、可响应；
 //  档4 派生  E 含 signal 读（如 p.a + p.b）           → Signal.Computed(func() T { return E })，
 //           登记依赖，只读（Computed 语义本就只读）；
-//  档5 裸变量 E 是单个普通变量/字段（如 v、q.title）  → Signal.LockedGetter(get,set)：
-//           get 读跟随 E 最新值、set 写落回 E；外层实例级互斥锁保护读写，消除无锁
-//           捕获变量的竞态（第十轮 P1-2）。跟随语义不变，仍需 source 变量在别处被
-//           直接写入时自行同步（编译器无法给用户裸变量读写加锁）。
+//  档5 裸变量 E 是单个普通变量/字段（如 v、q.title）  → Signal.LockedGetterShared(key,get,set)：
+//           get 读跟随 E 最新值、set 写落回 E；按 E 根标识符的声明位置生成 key，
+//           同一变量的所有 getter 在运行时共享一把互斥锁，既消除无锁捕获变量的
+//           竞态（第十轮 P1-2），也消除多字段/多实例各持一把锁彼此不互斥的竞态
+//           （第十一轮 N-3）。跟随语义不变，不登记依赖、UI 不自动刷新；source
+//           变量在别处被直接写入时仍需用户自行同步。
 //  档6 其它  普通表达式（无 signal 读、非上述形态）    → Signal.New(E) 快照，绝不生成
 //           忽略参数的假 signal。
 //
@@ -601,6 +606,12 @@ func containerElemTypeFromDeclAt(toks []Token, declIdx int) string {
 		}
 	}
 	if looksContainerTypeStart(toks, after) {
+		// N-1：`m["k"]` 的 '[' 是索引而非 []T 类型起点，第二次访问同名 token 时
+		// 会被本分支误判。只有 `var m map[K]V` / `var m []T` 才是声明——
+		// 短声明 `m := map...` 走上面的 := 分支，不会出现在这里。
+		if p := prevSig(toks, declIdx-1); p < 0 || !toks[p].is("var") {
+			return ""
+		}
 		te := typeRangeEnd(toks, after)
 		if te > after {
 			if et := containerElemTypeOnce(exprText(toks, after, te)); et != "" {
@@ -1579,19 +1590,46 @@ func assignableRef(toks []Token, from, to int, b *Bindings, pos Pos) *[2]int {
 	return nil
 }
 
-// signalLockedGetterCall 生成「带锁跟随 getter」（档5，第十轮 P1-2）：
+// signalLockKey 为「跟随同一变量」的档5 getter 生成稳定的共享锁 key（第十一轮 N-3）。
+// 取 ref 根标识符的声明位置（DeclPos.Offset）作身份：同一变量被多个字段引用、
+// 或在多个实例里构造时，ResolveAt 都解析到同一 Binding → 同一 key → 运行时复用
+// 同一把锁，修复"同变量多字段/多实例各持一把锁、彼此不互斥"的数据竞争。
+// 解析不到 Binding 时退化为 ref 文本，仍保证同名访问共享（保守但正确）。
+func signalLockKey(ref []Token, b *Bindings, pos Pos) string {
+	name := ""
+	for _, t := range ref {
+		if t.Kind == Ident {
+			name = t.Text
+			break
+		}
+	}
+	text := exprText(ref, 0, len(ref))
+	if name != "" && b != nil {
+		if bd := b.ResolveAt(name, pos); bd != nil && bd.DeclPos.valid() {
+			return "sf:" + strconv.Itoa(bd.DeclPos.Offset)
+		}
+	}
+	return "sf#" + text
+}
+
+// signalLockedGetterCall 生成「带锁跟随 getter」（档5，第十轮 P1-2 / 第十一轮 N-3）：
 //
-//	Signal.LockedGetter(
+//	Signal.LockedGetterShared(
+//	    "<key>",
 //	    func() T { return <ref> },
 //	    func(__v T) { <ref> = __v },
 //	)
 //
-// 读跟随普通变量最新值、写落回变量（保留用户要的跟随语义），外层由 LockedGetter
-// 的实例级互斥锁保护读写，消除裸闭包 v=arg[0]/return v 的数据竞争。
+// 读跟随普通变量最新值、写落回变量（保留用户要的跟随语义）。<key> 标识被跟随的
+// 变量，运行时按 key 共享互斥锁——同一变量的所有 getter 用同一把锁串行化，
+// 消除裸闭包 v=arg[0]/return v 的数据竞争，也消除"多字段各自一把锁"的 race。
 // <ref> 是单个可赋值变量/selector（assignableRef 的结果，const 已排除）。
-func signalLockedGetterCall(T string, p Pos, ref []Token) []Token {
-	// Signal.LockedGetter(
-	out := []Token{signalPkgToken(p), tokOp(".", p), tokIdent("LockedGetter", p), tokOp("(", p)}
+func signalLockedGetterCall(T string, p Pos, key string, ref []Token) []Token {
+	// Signal.LockedGetterShared(
+	out := []Token{
+		signalPkgToken(p), tokOp(".", p), tokIdent("LockedGetterShared", p), tokOp("(", p),
+		tokString(strconv.Quote(key), p), tokOp(",", p),
+	}
 	// func() T { return <ref> }
 	out = append(out, tokIdent("func", p), tokOp("(", p), tokOp(")", p), tokSpace(" ", p))
 	out = append(out, tokensForType(T, p)...)
@@ -1633,12 +1671,14 @@ func buildSignalFieldValue(T string, p Pos, toks []Token, from, to int, b *Bindi
 		// 档4：含 signal 读——Computed 登记依赖，只读。
 		return signalComputedCall(T, p, expr)
 	case sigValPlainVar:
-		// 档5：单个普通变量/selector——Signal.LockedGetter，跟随语义不变。
-		// 第十轮 P1-2：保留读跟随/写落回变量，但用实例级互斥锁包住 get/set，
-		// 消除裸闭包 v=arg[0]/return v 的数据竞争。
+		// 档5：单个普通变量/selector——Signal.LockedGetterShared，跟随语义不变。
+		// 第十轮 P1-2：用互斥锁包住 get/set 消除裸闭包数据竞争；
+		// 第十一轮 N-3：锁按被跟随变量共享（同一声明位置 → 同一 key → 同一把锁），
+		// 修复同实例多字段、跨实例共享同一变量时各持一把锁仍 race 的问题。
 		refRange := assignableRef(toks, from, to, b, pos)
 		ref := append([]Token{}, toks[refRange[0]:refRange[1]]...)
-		return signalLockedGetterCall(T, p, ref)
+		key := signalLockKey(ref, b, pos)
+		return signalLockedGetterCall(T, p, key, ref)
 	case sigValSnapshot:
 		fallthrough
 	default:

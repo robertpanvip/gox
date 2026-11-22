@@ -1179,3 +1179,28 @@ func main() {
 		t.Errorf("工厂返回字段读写失败, got:\n%s", out)
 	}
 }
+
+// 第十一轮 N-3：档5 跟随普通变量的字段改用按变量共享锁的 LockedGetterShared，
+// 端到端验证生成代码可真实编译运行、写落回变量、读跟随最新值（跟随语义不变）。
+func TestIntegrationR12SharedLockPlainVarField(t *testing.T) {
+	src := `package main
+import "fmt"
+type P struct { signal a string; signal b string }
+func main() {
+	v := "x"
+	p := P{a: v, b: v}
+	fmt.Println("init", p.a(), p.b())
+	p.a = "y"
+	fmt.Println("write-a", p.a(), p.b(), v)
+	v = "z"
+	fmt.Println("follow", p.a(), p.b())
+}
+`
+	out := runGX(t, src)
+	want := []string{"init x x", "write-a y y y", "follow z z"}
+	for _, w := range want {
+		if !strings.Contains(out, w) {
+			t.Errorf("共享锁跟随语义失败, 期望 %q, got:\n%s", w, out)
+		}
+	}
+}

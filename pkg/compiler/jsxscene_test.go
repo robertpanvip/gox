@@ -580,3 +580,38 @@ func main() {
 		t.Errorf("once/only 应编成普通 OpAttr, got:\n%s", out)
 	}
 }
+
+// 第十一轮 N-2（既有）：each 是索引表达式 rows["k"] 时，元素类型不能退化为 rune。
+// 根标识符 rows 是 map[string][]Row，TypeAt 只给出 key 类型 string → 旧逻辑推成 rune。
+func TestJSXSceneForInferFromIndexedMap(t *testing.T) {
+	res, err := CompileScene("for_indexed.gx", `package main
+import gxscene "github.com/robertpanvip/gox/runtime/scene"
+type Row struct { id int; name string }
+func main() {
+	rows := map[string][]Row{"k": {{1, "a"}}}
+	_ = <ul><For each={rows["k"]} key={(r) => r.id}>{(r) => <li>{r.name}</li>}</For></ul>
+}
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := res.GoSource
+	for _, want := range []string{
+		"gxscene.ForGetterOfSignal[Row]",
+		"func(u func() Row) *gxscene.Instance",
+	} {
+		// 产物里 render 参数名可能是 r，放宽为含 func() Row 的 getter 形态。
+		if strings.Contains(want, "func(u func()") {
+			if !strings.Contains(out, "func() Row) *gxscene.Instance") {
+				t.Errorf("each 索引应推断为 Row getter, 期望 %q, got:\n%s", want, out)
+			}
+			continue
+		}
+		if !strings.Contains(out, want) {
+			t.Errorf("each 索引应推断为 Row，期望 %q, got:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "ForGetterOfSignal[rune]") || strings.Contains(out, "[]rune") {
+		t.Errorf("不应退化为 rune, got:\n%s", out)
+	}
+}

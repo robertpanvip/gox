@@ -262,12 +262,36 @@ func LockedGetter[T any](get func() T, set func(T)) Signal[T] {
 	var mu sync.Mutex
 	return func(args ...T) T {
 		mu.Lock()
+		defer mu.Unlock() // N-5：get/set 若 panic，锁必须释放，避免永久死锁。
 		if len(args) > 0 {
 			set(args[0])
 		}
-		v := get()
-		mu.Unlock()
-		return v
+		return get()
+	}
+}
+
+// lockedMuRegistry 让"跟随同一变量"的多个 getter 复用同一把互斥锁（第十一轮 N-3）。
+//
+// 背景：档5 的每个 getter 若各自 new 一把锁，则同一变量 v 被两个字段引用时
+// （P{a: v, b: v}），写 a 与读 b 各持一把锁、彼此不互斥，仍会 data race。
+// 编译器为同一被跟随变量生成稳定 key（根标识符的声明位置 + ref 文本），
+// 同 key 的 getter 在此注册表取到同一把 *sync.Mutex，从而覆盖同实例多字段、
+// 跨实例共享同一变量两类场景。用户代码在别处直接读写该变量仍属固有边界。
+var lockedMuRegistry sync.Map // map[string]*sync.Mutex
+
+// LockedGetterShared 与 LockedGetter 语义相同，但按 key 共享互斥锁：同一 key
+// 的所有 getter 用同一把锁串行化对同一被跟随变量的读写。key 由编译器按变量的
+// 声明位置生成，保证同实例多字段/跨实例对同一变量的访问互斥。
+func LockedGetterShared[T any](key string, get func() T, set func(T)) Signal[T] {
+	muAny, _ := lockedMuRegistry.LoadOrStore(key, new(sync.Mutex))
+	mu := muAny.(*sync.Mutex)
+	return func(args ...T) T {
+		mu.Lock()
+		defer mu.Unlock()
+		if len(args) > 0 {
+			set(args[0])
+		}
+		return get()
 	}
 }
 

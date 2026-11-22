@@ -766,6 +766,19 @@ func (ctx *jsxSceneCtx) inferForElemType(eachExpr string, pos Pos) string {
 	if root == "" {
 		return ""
 	}
+	// N-2（既有）：each 含索引时（rows["k"] / grouped[g]），根标识符是 map，
+	// TypeAt 常把 map 推断成 key 类型（string），sliceElemType 进而得到 rune，
+	// 错误信息与真实元素类型毫无关联。改为按声明反推容器类型并逐层剥索引。
+	if n := strings.Count(eachExpr, "["); n > 0 && ctx.bindings != nil {
+		et := containerElemTypeFromBinding(ctx.bindings, root, pos)
+		for k := 1; k < n && et != ""; k++ {
+			et = containerElemTypeOnce(et)
+		}
+		if s := sliceElemType(et); s != "" {
+			return s
+		}
+		return et
+	}
 	collType := ""
 	if ctx.sigTypes != nil {
 		collType = ctx.sigTypes[root]

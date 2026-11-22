@@ -80,10 +80,10 @@ emit               拼装 Go 源码，同时记录输出 token → 输入位置�
    - **档2 字面量**：数字/字符串/bool/nil 等纯常量 → `Signal.New(v)`；
    - **档3 构造**：复合字面量（如 `Leaf{v:"a"}`）→ `Signal.New(v)`，一次构造、可写、可响应（**不可**包成每次读重建的裸闭包，否则写入丢失、依赖链断裂、UI 不刷新）；
    - **档4 派生**：含 signal 读的表达式（如 `p.a + p.b`）→ `Signal.Computed(func() T { return expr })`，登记依赖、只读（带参写入显式 panic，不再静默丢弃）；
-   - **档5 裸变量**：单个普通变量/字段（如 `v`、`q.title`）→ `Signal.LockedGetter(func() T { return v }, func(x T) { v = x })`，读跟随最新值、写落回变量，外层实例级互斥锁防竞态（第十轮 P1-2：早期裸闭包 `v=arg[0]` 无锁，并发读写同一字段会 data race）；
+   - **档5 裸变量**：单个普通变量/字段（如 `v`、`q.title`）→ 可写跟随 getter（内部 `LockedGetterShared`，按变量声明位置生成 key 共享一把互斥锁），读跟随最新值、写落回变量；**不登记依赖，UI 不自动刷新**（第十轮 P1-2：早期裸闭包 `v=arg[0]` 无锁会 data race；第十一轮 N-3：早期每 getter 各持一把锁，同实例多字段/跨实例共享同一变量仍 race，改为按变量 key 共享锁）；
    - **档6 其它**：普通表达式 → `Signal.New(v)` 快照。
   
-   硬判据：生成出的 `func(...T) T` 若忽略参数、不登记依赖，就不是合法 signal。派生档由 `exprHasSignalRead` 判定（transformSignals 已把裸信号读改写成 `n()`，据此识别）。集成测试 `TestIntegrationSignalFieldHandwrittenDerivedLive`、`TestIntegrationChainRWGetterFreshReceiver` 与编译测试 `TestSignalFieldHandwrittenDerivedUsesComputed` 固化了「手写派生保鲜 / 链中间 signal 段变化保鲜」。档 5 的并发边界：`LockedGetter` 只保护经由该字段的读写；用户代码在别处直接读写同一变量需自行同步。
+   硬判据：生成出的 `func(...T) T` 若忽略参数、不登记依赖，就不是合法 signal。派生档由 `exprHasSignalRead` 判定（transformSignals 已把裸信号读改写成 `n()`，据此识别）。集成测试 `TestIntegrationSignalFieldHandwrittenDerivedLive`、`TestIntegrationChainRWGetterFreshReceiver` 与编译测试 `TestSignalFieldHandwrittenDerivedUsesComputed` 固化了「手写派生保鲜 / 链中间 signal 段变化保鲜」。档 5 两条边界：**并发**——共享锁只保护经由 getter 的访问，用户代码在别处直接读写同一变量需自行同步（编译测试 `TestR12SharedLockKeySameVariable/DistinctVariables` 固化同变量同 key、异变量异 key；`-race` 测试 `TestLockedGetterSharedSameKeyConcurrent` 固化多字段并发安全）；**响应式**——不登记依赖，写不通知 UI 刷新，需完整响应式请用 signal 源或 `Signal.New`。
 3. **读写解包**：`rewriteSignalFieldRefs` 用 receiver 的推断类型（`Bindings.ResolveAt(...).Type`，已增强为识别具名复合字面量 `X{...}`）查表，只对命中的 selector 补 `()` / 改写为调用式。普通字段、同名非 signal 字段、外部包符号都不动。JSX 插值侧 `rewriteJSXSignalFieldSelectors` 同样按 receiver 类型判定（不再按字段名全表猜），兑现 `language-spec.md` §11.1 的类型安全承诺。
 
 保鲜语义的关键在构造直通：`p := X{name: src}` 必须生成 `name: src`（getter 本身），不能是 `Signal.New(src())`（快照当前值、断开后续更新）。集成测试 `TestIntegrationSignalFieldLiveProps` 固化了这一点（源 signal 更新后持有者读到新值）。

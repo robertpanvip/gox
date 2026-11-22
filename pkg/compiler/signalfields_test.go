@@ -456,7 +456,7 @@ func main() {
 }
 `
 	got := compileOK(t, "sf8_plain.gx", src)
-	containsAll(t, got, `Signal.LockedGetter(`)
+	containsAll(t, got, `Signal.LockedGetterShared("sf:`)
 	gotCompact := strings.Join(strings.Fields(got), "")
 	containsAll(t, gotCompact,
 		`func()string{returnplain}`,
@@ -486,7 +486,7 @@ func main() {
 		`b: Signal.Computed(func() string { return n() + "!" })`,
 	)
 	containsAll(t, strings.Join(strings.Fields(got), ""),
-		`c:Signal.LockedGetter(`,
+		`c:Signal.LockedGetterShared("sf:`,
 		`func()string{returnplain}`,
 		`func(__vstring){plain=__v}`,
 	)
@@ -743,7 +743,7 @@ func main() {
 `
 	got := compileOK(t, "r10_writable.gx", src)
 	containsAll(t, got,
-		`a: Signal.LockedGetter(`,
+		`a: Signal.LockedGetterShared("sf:`,
 		`func() string { return v }`,
 		`func(__v string) { v = __v }`,
 	)
@@ -1006,5 +1006,109 @@ func main() {
 	}
 	if !strings.Contains(err.Error(), "不支持三元") {
 		t.Errorf("应给出三元不支持的诊断，got: %v", err)
+	}
+}
+
+// 第十一轮 N-1（本轮回归）：同一个 map 变量索引链的重复访问，每次都必须改写。
+// 回归点：containerElemTypeFromDecl 文本回溯在第二次访问时命中上一次引用 m["k"]
+// 的 '['，曾误判成 []T 类型起点并提前返回，导致第二次读静默失效（打印函数地址）、
+// 先读后写生成非法的 map struct field 赋值。
+func TestR12RepeatedMapIndexReadAndWrite(t *testing.T) {
+	src := `package main
+import "fmt"
+type P struct { signal a string }
+func main() {
+	m := map[string]P{"k": {a: "x"}}
+	fmt.Println(m["k"].a)
+	fmt.Println(m["k"].a)
+	m["k"].a = "y"
+	fmt.Println(m["k"].a)
+}
+`
+	got := compileOK(t, "r12_map_repeat.gx", src)
+	// 三次读都必须是 getter() 调用；少一次即第二次被静默漏改。
+	if c := strings.Count(got, `m["k"].a()`); c != 3 {
+		t.Errorf("期望 3 处 m[\"k\"].a() getter 读，实际 %d 处:\n%s", c, got)
+	}
+	// 写必须改写成调用式，否则 Validate 阶段就因 map struct field 赋值失败。
+	compact := strings.Join(strings.Fields(got), "")
+	containsAll(t, compact, `m["k"].a("y")`)
+}
+
+// 第十一轮 N-1：多层索引 m["k"][0][0].a 同样要支持重复访问。
+func TestR12RepeatedNestedMapIndexRead(t *testing.T) {
+	src := `package main
+import "fmt"
+type P struct { signal a string }
+func main() {
+	m := map[string][][]P{"k": {{{a: "x"}}}}
+	fmt.Println(m["k"][0][0].a)
+	fmt.Println(m["k"][0][0].a)
+}
+`
+	got := compileOK(t, "r12_nested_map_repeat.gx", src)
+	if c := strings.Count(got, `m["k"][0][0].a()`); c != 2 {
+		t.Errorf("期望 2 处 getter 读，实际 %d 处:\n%s", c, got)
+	}
+}
+
+// 第十一轮 N-3：同一变量被多个 fields / 多个实例引用时，生成的共享锁 key 必须相同，
+// 否则运行时各持一把锁，同实例多字段/跨实例并发仍 race。
+func TestR12SharedLockKeySameVariable(t *testing.T) {
+	src := `package main
+type P struct { signal a string; signal b string }
+func main() {
+	v := "x"
+	p1 := P{a: v, b: v}
+	p2 := P{a: v, b: v}
+	_, _ = p1, p2
+}
+`
+	got := compileOK(t, "r12_share_key.gx", src)
+	// 提取所有 LockedGetterShared("key"...) 的 key，应全部相同（都是 v 的声明）。
+	var keys []string
+	for _, line := range strings.Split(got, "\n") {
+		if i := strings.Index(line, "LockedGetterShared(\""); i >= 0 {
+			rest := line[i+len("LockedGetterShared(\""):]
+			if j := strings.Index(rest, "\""); j >= 0 {
+				keys = append(keys, rest[:j])
+			}
+		}
+	}
+	if len(keys) != 4 {
+		t.Fatalf("期望 4 个档5 getter（p1.a/p1.b/p2.a/p2.b），实际 %d:\n%s", len(keys), got)
+	}
+	for _, k := range keys[1:] {
+		if k != keys[0] {
+			t.Errorf("同一变量 v 的 getter 必须共享 key，期望 %q，另有 %q:\n%s", keys[0], k, got)
+		}
+	}
+}
+
+// 第十一轮 N-3：不同变量必须生成不同 key，避免无关变量被强制串行化。
+func TestR12SharedLockKeyDistinctVariables(t *testing.T) {
+	src := `package main
+type P struct { signal a string; signal b string }
+func main() {
+	v := "x"
+	w := "y"
+	p := P{a: v, b: w}
+	_ = p
+}
+`
+	got := compileOK(t, "r12_distinct_key.gx", src)
+	compact := strings.Join(strings.Fields(got), "")
+	if strings.Count(compact, "LockedGetterShared(") != 2 {
+		t.Fatalf("期望 2 个档5 getter:\n%s", got)
+	}
+	// 两个 key 必须不同：v 与 w 是不同声明。
+	i1 := strings.Index(compact, "LockedGetterShared(\"")
+	r1 := compact[i1+len("LockedGetterShared(\""):]
+	k1 := r1[:strings.Index(r1, "\"")]
+	i2 := strings.Index(compact[i1+1:], "LockedGetterShared(\"") + i1 + 1
+	r2 := compact[i2+len("LockedGetterShared(\""):]
+	k2 := r2[:strings.Index(r2, "\"")]
+	if k1 == k2 {
+		t.Errorf("不同变量 v/w 不应共享 key，都是 %q:\n%s", k1, got)
 	}
 }
