@@ -1,0 +1,31 @@
+[package]
+name = "gxbackend_rust"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "gxbackend_rust"
+crate-type = ["staticlib"]
+
+# GX 的 Rust 渲染后端：编译成 C 静态库，由 Go 侧 cgo 消费。
+# 渲染内核来自已验证的独立 demo；新增 C ABI + 场景协议(JSON)解析。
+[dependencies]
+taffy = "0.5"
+tiny-skia = "0.11"
+wgpu = "25"
+glyphon = "0.9"
+winit = "0.30"
+cosmic-text = "0.14"
+pollster = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# 静态库体积优化：LTO + 去符号 + 单代码单元 + 体积优先优化。
+# 注意：不能用 panic="abort"，因为 gx_window_run 依赖 catch_unwind 把 panic 转成 rc=2。
+[profile.release]
+opt-level = "z"       # 体积优先
+lto = "fat"           # 全量链接期优化，跨 crate 内联 + 死代码消除
+codegen-units = 1     # 单代码单元，配合 LTO 最大化优化
+strip = "symbols"     # 去除符号表与调试信息
+panic = "unwind"      # 保留 unwind：C ABI 用 catch_unwind 兜底 panic
+overflow-checks = false

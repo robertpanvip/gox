@@ -1,0 +1,22 @@
+[package]
+name = "pulse-rust-backend"
+version = "0.1.0"
+edition = "2021"
+
+# PULSE 看板 —— 独立 Rust 渲染后端技术验证
+# 技术栈：winit(IME) + wgpu + tiny-skia(图形) + glyphon(文本 shaping/字体回退) + Taffy(布局)
+# 不依赖 GX Go 核心；用于验证这套栈作为未来 Rust 后端的可行性，尤其 IME preedit 能力。
+
+[dependencies]
+# 布局：Taffy（Rust 现代 flex/grid）
+taffy = "0.5"
+# CPU 光栅化 2D
+tiny-skia = "0.11"
+wgpu = "25"
+# GPU 文本渲染（基于 wgpu + cosmic-text，含字体回退/IME shaping 基础）
+glyphon = "0.9"
+# 窗口 + 原生 IME preedit 事件
+winit = "0.30"
+# 字库管理（glyphon 重导出，显式列出以便探测字体）
+cosmic-text = "0.14"
+pollster = "0.4"
