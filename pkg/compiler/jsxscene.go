@@ -47,6 +47,9 @@ type jsxSceneCtx struct {
 	// 该参数是 item getter（func() T），render body 里对它的读取须补写成 u()，
 	// 才能让子树 getter 登记对 item signal 的依赖。仅 render body 生成期间非空。
 	forItemParam string
+	// signalFields: struct signal 字段表（类型名 → signal 字段名集合）。
+	// item 逃逸检测用它区分：props 字段是 signal 字段时本身保鲜，无需回退值快照。
+	signalFields signalFieldTable
 }
 
 // sceneOp 是一条待发射的 opcode 描述（编译期中间结构）。
@@ -351,36 +354,49 @@ func branchGetterTokens(c *jsxCond, ctx *jsxSceneCtx) []Token {
 //
 // 只检测组件 props 这一处确定的逃逸点；直接插值 {u.name} 是 signal 模式的主路径，
 // 不算逃逸。item 被赋给局部变量等更边缘的逃逸由文档约束（见 language-spec）。
-func itemEscapesIntoComponentProps(body, param string) bool {
+func itemEscapesIntoComponentProps(body, param string, ctx *jsxSceneCtx) bool {
 	if param == "" {
 		return false
 	}
 	root := newJSXParser(body, NoPos).parseElement()
-	return nodeHasItemInCompProps(root, param)
+	return nodeHasItemInCompProps(root, param, ctx)
 }
 
-// nodeHasItemInCompProps 递归检查节点树：组件节点的 props 表达式引用了 param 即逃逸。
-func nodeHasItemInCompProps(n *jsxNode, param string) bool {
+// nodeHasItemInCompProps 递归检查节点树：item 进入组件的「非 signal 字段」props 即逃逸。
+// signal 字段（struct signal name T）本身是 getter、值实时保鲜，item signal 能正常驱动，
+// 不算逃逸——否则与用户显式声明的响应式字段语义冲突。
+func nodeHasItemInCompProps(n *jsxNode, param string, ctx *jsxSceneCtx) bool {
 	if n == nil {
 		return false
 	}
 	if n.component {
+		// 查组件 props 类型名（对齐 compCallTokens 的取名：取最后一段）。
+		compName := n.name
+		if idx := strings.LastIndex(compName, "."); idx >= 0 {
+			compName = compName[idx+1:]
+		}
+		typeName := ctx.comps[compName]
 		for _, a := range n.attrs {
-			if a.kind == attrExpr && exprMentionsIdent(a.value, param) {
-				return true
+			if a.kind != attrExpr || !exprMentionsIdent(a.value, param) {
+				continue
 			}
+			// signal 字段保鲜，不需回退。
+			if typeName != "" && ctx.signalFields.has(typeName, a.name) {
+				continue
+			}
+			return true
 		}
 	}
 	for _, c := range n.children {
 		switch c.kind {
 		case childElement:
-			if nodeHasItemInCompProps(c.node, param) {
+			if nodeHasItemInCompProps(c.node, param, ctx) {
 				return true
 			}
 		case childCond:
 			for _, br := range c.cond.branches {
 				for _, ch := range br.children {
-					if ch.kind == childElement && nodeHasItemInCompProps(ch.node, param) {
+					if ch.kind == childElement && nodeHasItemInCompProps(ch.node, param, ctx) {
 						return true
 					}
 				}
@@ -456,7 +472,7 @@ func forTokens(n *jsxNode, ctx *jsxSceneCtx) []Token {
 	// 逃逸检测：item 传入组件 props 时，组件插槽只求值一次、props 是值快照，
 	// item signal 无法驱动它。回退到 ForGetterOf 值快照模式（整项重建），
 	// 保持与 item signal 引入前一致的行为——静默旧值比重建更危险。
-	escaped := itemEscapesIntoComponentProps(rBody, paramName)
+	escaped := itemEscapesIntoComponentProps(rBody, paramName, ctx)
 
 	factory := "ForGetterOfSignal"
 	if escaped {

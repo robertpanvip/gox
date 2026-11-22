@@ -30,6 +30,14 @@ runtime/             运行时组件（统一收纳）
 .gx 源码
   │ lex（token 流，保留原始位置与空白）
   ▼
+downgradeSignalFields  struct 内 `signal name T` → `name Signal.Signal[T]`（在 Bind 之前！）
+  │                     建 signalFieldTable 供后续读写解包；避免 signal 关键字被局部逻辑误判
+  ▼
+Bind / transformSignals / Analyze / ...对象字面量、模板等 desugar
+  ▼
+wrapSignalFieldLiterals  构造位置 signal 字段值包 Signal.New（已是 signal 则直通 getter）
+rewriteSignalFieldRefs   selector 读写解包：p.name → p.name() / p.name = v → p.name(v)
+  ▼
 transformEnum      enum → 具名类型 + const + String/Parse（注入 strconv import）
   ▼
 transformPub       pub 声明处大写，收集「小写原名 → 导出名」到 names
@@ -55,9 +63,21 @@ emit               拼装 Go 源码，同时记录输出 token → 输入位置�
 `imports=nil`（默认单文件）时所有 import 按 Go 来源处理，与改造前一致；`CompileWithModule` 委托于它。`collectScopeWithImports` 用来源表给每条 import 打标签（`ImportGo` / `ImportGX`）。
 
 **顺序约束**：
+- `downgradeSignalFields` 必须在 `Bind` 之前：降级后 struct 字段是标准 Go `Signal.Signal[T]`，绑定表/作用域/objectlit 才能正确识别它；否则 `signal name T` 会被局部 signal 逻辑误判为 `signal name = expr`（旧行为生成非法 `var name any T`）。
+- `wrapSignalFieldLiterals` / `rewriteSignalFieldRefs` 在 signal 局部变量改写与模板展开之后、external 之前：此时右侧表达式已处理，字段名仍是小写、可用原始类型名查 `signalFieldTable`。
 - `collectScope` 必须在 `transformPub` 之后（pub 名已大写，不会被误收为私有）；
 - 必须在 JSX / collections 之后（它们注入的 import 也要被识别为包名）；
 - `restoreRefs` 与 `transformExternal` / `transformCompositeFields` 都在 scope 之后，共享同一份符号信息。
+
+## struct signal 字段（响应式 props）
+
+`pkg/compiler/signalfields.go` 实现 struct 字段级的响应式语言特性。核心是一张 `signalFieldTable`（`type 名 → signal 字段名集合`），三段协作：
+
+1. **降级（Bind 之前）**：`collectSignalFieldDecls` 扫 `type X struct{...}` 找 `signal name T`，`downgradeSignalFields` 改写为 `name Signal.Signal[T]`，Signal token 标记 `IsGen` 由 `ReconcileImports` 统一注入 import。放在 Bind 之前是关键——降级后所有下游都以标准 Go 处理该字段。
+2. **构造包装**：`wrapSignalFieldLiterals` 对 `X{name: v}` 中命中的 signal 字段：普通值包 `Signal.New(v)`；已是 signal 的值（`src()`／`Signal.New(...)`）直通 getter 本身。前者实现"字段可独立初始化"，后者实现保鲜——传 getter 而非快照，源 signal 变化会反映到字段。
+3. **读写解包**：`rewriteSignalFieldRefs` 用 receiver 的推断类型（`Bindings.ResolveAt(...).Type`，已增强为识别具名复合字面量 `X{...}`）查表，只对命中的 selector 补 `()` / 改写为调用式。普通字段、同名非 signal 字段、外部包符号都不动。
+
+保鲜语义的关键在构造直通：`p := X{name: src}` 必须生成 `name: src`（getter 本身），不能是 `Signal.New(src())`（快照当前值、断开后续更新）。集成测试 `TestIntegrationSignalFieldLiveProps` 固化了这一点（源 signal 更新后持有者读到新值）。
 
 ## 外部符号还原：为何不需要 importer
 

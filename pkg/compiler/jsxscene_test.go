@@ -265,6 +265,35 @@ func main() {
 	}
 }
 
+// struct signal 字段的 props 本身保鲜（getter），item 传入时不应回退值快照：
+// 显式声明响应式字段的用户应享受 item signal 零重建，而非被强制整项重建。
+func TestJSXSceneForItemIntoSignalFieldStaysSignal(t *testing.T) {
+	src := `package main
+import gxscene "github.com/robertpanvip/gox/runtime/scene"
+type User struct { id int; name string }
+type CardProps struct { signal name string }
+func Card(props CardProps) *gxscene.Instance { return nil }
+func main() {
+	signal users = []User{{1,"Tom"}}
+	_ = <ul><For each={users} key={(u) => u.id}>{(u User) => <li><Card name={u.name}/></li>}</For></ul>
+}
+`
+	res, err := CompileScene("for-sigfield.gx", src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := res.GoSource
+	if !strings.Contains(out, "gxscene.ForGetterOfSignal[User]") {
+		t.Errorf("item 进 signal 字段 props 应保持 ForGetterOfSignal（保鲜）, got:\n%s", out)
+	}
+	if strings.Contains(out, "gxscene.ForGetterOf[") {
+		t.Errorf("signal 字段场景不应回退值快照 ForGetterOf, got:\n%s", out)
+	}
+	if !strings.Contains(out, "func(u func() User) *gxscene.Instance") {
+		t.Errorf("render 应保持 getter 参数 func(u func() User), got:\n%s", out)
+	}
+}
+
 // 直接插值（不经过组件边界）仍应走信号化，保持 item signal 零重建。
 func TestJSXSceneForDirectInterpStaysSignal(t *testing.T) {
 	res, err := CompileScene("for-direct.gx", `package main

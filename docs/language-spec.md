@@ -1,6 +1,6 @@
 # GoX 语言规范
 
-GoX（`.gx`）= Go 语法 + 十三项语法糖（pub / enum / JSX / 外部符号还原 / 集合链式 / is 守卫 / 联合类型 / 模板字符串 / 参数默认值 / Lambda / 对象字面量 / 对象解构 / Signal 响应式）。转译产物是标准 Go 源码，交给官方工具链编译。**需要 Go 1.27+**。
+GoX（`.gx`）= Go 语法 + 十三项语法糖（pub / enum / JSX / 外部符号还原 / 集合链式 / is 守卫 / 联合类型 / 模板字符串 / 参数默认值 / Lambda / 对象字面量 / 对象解构 / Signal 响应式，含 struct signal 字段）。转译产物是标准 Go 源码，交给官方工具链编译。**需要 Go 1.27+**。
 
 ## 书写约定（最重要）
 
@@ -155,12 +155,39 @@ println(doubled)                                   // → println(doubled())，�
 
 - **声明**：`signal n = v` → `var n = Signal.New(v)`；`let n = v` → `n := v`（let 即短声明，无新语义）。
 - **读写改写**：signal 变量的读（裸标识符）自动补 `()`；写改写 `n = v` → `n(v)`、`n += v` → `n(n() + v)`、`n++` → `n(n() + 1)`。
-- **作用域排除**：selector `obj.n`、复合字段键 `{n: ...}`、struct 字段、函数参数、已显式调用 `n()` 均不改写。
+- **作用域排除**：selector `obj.n`、复合字段键 `{n: ...}`、struct 字段、函数参数、已显式调用 `n()` 均不改写（注：struct 里显式声明的 `signal name T` 字段是另一项特性，见 §11.1）。
 - **computed**：惰性求值 + 缓存，仅依赖变化时失效；链式派生正确传播。
 - **effect**：立即执行一次，依赖变化时重跑；每次重跑动态重建依赖集合（条件分支依赖可增删）。
 - **并发安全**：全局互斥锁保护观察者栈与依赖图，用户回调在锁外执行。
 - **读取性能**：依赖追踪只在 effect/computed 重算期间需要，而这类场景是少数；普通读取走**无锁快路径**——用原子计数器 `activeObservers` 判断当前无 observer 重算时，直接原子读取当前值，跳过抓栈（goroutine id 解析）与加锁。signal 值用原子指针存储避免撕裂。实测读取 ~2 ns（约为普通变量的 2 倍），相较抓栈方案（~2900 ns）提速约 1400×；computed 缓存命中读 ~14 ns。
 - **import**：`Signal` 占位包名由 ImportManager 统一解析为 `import Signal "<module>/runtime/signal"`；源码已用别名导入则复用。
+
+### 11.1 struct signal 字段（响应式 props）
+
+struct 的字段可以声明为 `signal`，编译器生成一个 getter 字段（`Signal.Signal[T]`），并自动改写读写。这样持有该 struct 的地方（含组件/持有者函数）读到的是**实时值**而非构造时的一次性快照——值可由外部 signal 驱动保鲜。
+
+```gx
+type CardProps struct {
+    signal name string    // 响应式字段
+    age int               // 普通字段
+}
+func show(p CardProps) string { return p.name }
+
+func main() {
+    signal src = "x"
+    p := CardProps{name: src, age: 3}  // → name: src（传 getter 本身，保鲜）
+    println(show(p))                   // x
+    src("changed")
+    println(show(p))                   // changed —— 不是快照
+    p.name = "direct"                  // → p.name("direct")
+}
+```
+
+- **声明**：`signal name T` → `name Signal.Signal[T]`（函数字段，无参读/带参写）。
+- **读**：`p.name` → `p.name()`；**写**：`p.name = v` → `p.name(v)`；复合写 `+=` 与 `++/--` 同样展开。
+- **构造**：`CardProps{name: v}` 中 signal 字段的普通值自动包 `Signal.New(v)`；若 `v` 本身是 signal（变量读取 `src()` / `Signal.New(...)` 等），则直通 getter 本身（剥离 `()`），保持与外部 signal 的关联。
+- **类型安全**：只有 receiver 类型已知、且该字段确为某 struct 的 signal 字段时才解包；普通字段、同名但非 signal 的字段、外部包符号都不受影响。
+- **与局部 signal 共存**：两者独立，互不干扰；降级在绑定表构建之前完成，避免 `signal` 关键字被局部逻辑误判。
 
 ## 12. sourcemap / LSP / 编译检查
 

@@ -84,6 +84,13 @@ func CompileSceneWithModule(file, src, module string) (*Result, error) {
 // imports 提供跨文件 import 来源表（nil 表示单文件、一律按 Go 来源处理）。
 func compileWithMode(file, src, module string, imports map[string]ImportInfo) (*Result, error) {
 	toks := New(src).AllTokens()
+	// struct signal 字段语言特性：必须在 Bind 之前降级 `signal name TYPE`
+	// → `name Signal.Signal[TYPE]`，否则 `signal` 关键字会被局部 signal 逻辑
+	// 误判为 `signal name = expr`（旧行为生成非法 `var name any string`）。
+	// 降级后字段成为标准 Go，所有下游 transform 天然享受既有作用域/大小写保护。
+	signalDecls := collectSignalFieldDecls(toks)
+	signalFields := buildSignalFieldTable(signalDecls)
+	toks = downgradeSignalFields(toks, signalDecls)
 	// 统一绑定表 + 表达式 AST：lex 之后、任何 transform 之前构建一次，贯穿整条管线。
 	// 以 Pos.Offset 为稳定身份，不受后续 desugar 增删 token 的下标漂移影响。
 	bindings := Bind(toks)
@@ -118,6 +125,11 @@ func compileWithMode(file, src, module string, imports map[string]ImportInfo) (*
 		return nil, err
 	}
 	toks = transformTemplates(toks, bindings, templateAST)
+	// struct signal 字段：构造位置自动包 Signal.New，selector 读写自动调用化。
+	// 放在 signal 局部变量改写与模板展开之后（右侧表达式已处理），external 之前
+	// （字段名仍是小写，signalFieldTable 用原始类型名判定）。
+	toks = wrapSignalFieldLiterals(toks, bindings, signalFields)
+	toks = rewriteSignalFieldRefs(toks, bindings, signalFields)
 	toks = runUnion(toks)
 	toks = transformTypeGuard(toks, analysis)
 	if err := checkStrandedIs(toks); err != nil {
@@ -130,7 +142,7 @@ func compileWithMode(file, src, module string, imports map[string]ImportInfo) (*
 	// 会从签名补全 Card(CardProps{...}) 并校验字段。
 	structs := collectStructTypes(toks)
 	comps := collectCompContracts(toks, structs)
-	ctx := &jsxSceneCtx{sigs: sigs, comps: comps, sigTypes: sigTypes, bindings: bindings}
+	ctx := &jsxSceneCtx{sigs: sigs, comps: comps, sigTypes: sigTypes, bindings: bindings, signalFields: signalFields}
 	toks = transformJSXScene(toks, ctx)
 	// 第二次对象字面量变换：补全 JSX 转换新产生的 Card({...}) 期望类型并校验。
 	// 第一次已在 desugar 早期处理非 JSX 字面量；这里处理 JSX 阶段新增的。

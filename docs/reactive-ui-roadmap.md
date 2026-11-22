@@ -92,12 +92,16 @@ view := <ul>
 **编译器**：`<For>` 产出 `gxscene.OpFor` + `gxscene.ForGetterOfSignal[T](each, key, render)`，
 render 签名为 `func(u func() T) *gxscene.Instance`，body 内 `u.field` 改写为 `u().field`。
 
-> **组件边界限制（item 逃逸回退）**：组件 props 是挂载时求值一次的值快照（组件插槽
-> getter 只调一次），item signal 无法驱动它。若 render body 里把 item 传入组件 props
-> （如 `<Card name={u.name}/>` / `<Card u={u}/>`），编译器检测到该逃逸后，整个 `<For>`
-> 回退到值快照 `ForGetterOf[T]`（render 签名 `func(u T)`、props 内 `u.field` 不改写），
-> 同 key 值变化走销毁重建以取到新 props 值——行为正确但失去 item signal 的零重建收益。
-> 直接插值 `{u.name}`、item 参与事件/普通表达式等不跨组件边界的场景仍走信号化。
+> **组件边界与响应式 props**：普通 props 字段是挂载时求值一次的值快照（组件插槽
+> getter 只调一次），item signal 无法驱动它。若 render body 把 item 传入组件的**普通**
+> props 字段（如 `<Card name={u.name}/>` / `<Card u={u}/>`），编译器检测到该逃逸后，
+> 整个 `<For>` 回退到值快照 `ForGetterOf[T]`（render 签名 `func(u T)`），同 key 值变化走
+> 销毁重建以取到新 props 值——行为正确但失去零重建收益。
+>
+> **根治写法：把 props 字段声明为 signal**（`type CardProps struct { signal name string }`，
+> 见语言规范 §11.1）。signal 字段本身是 getter、值实时保鲜，item 传入时**不触发回退**，
+> 仍走 `ForGetterOfSignal` 零重建——这是组件需要响应 item 变化时的推荐写法。
+> 直接插值 `{u.name}`、item 参与事件/普通表达式等不跨组件边界的场景也走信号化。
 > 同理，`let x = u` 这类在组件内手动缓存 item 的写法会固化为快照，不受 item signal 驱动，
 > 应始终在需要响应式的位置直接读 item getter。
 
