@@ -252,12 +252,19 @@ func rewriteSignals(toks []Token, ast *SignalAST, b *Bindings) []Token {
 		}
 
 		// 把用户写的 Signal.xxx 的 Signal 标记为生成 token，供 ReconcileImports 识别注入。
+		// 第八轮 P1-4：标记前必须查 Bindings——若 Signal 在该位置解析到用户自己的
+		// 局部/参数/类型绑定（如 `Signal := Holder{...}; Signal.val`），它是一次普通
+		// 字段访问，不是手写运行时包名。误标 IsGen 会让 ReconcileImports 在别名冲突时
+		// 把它连同 import 一起替换成 Signal2.val，静默篡改语义。
 		if t.is("Signal") {
 			if j := nextSig(toks, i+1); j >= 0 && toks[j].Text == "." {
-				c := t
-				c.IsGen = true
-				out = append(out, c)
-				continue
+				bd := b.ResolveAt(t.Text, t.Pos)
+				if bd == nil || bd.Kind == BkImport {
+					c := t
+					c.IsGen = true
+					out = append(out, c)
+					continue
+				}
 			}
 		}
 

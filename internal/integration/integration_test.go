@@ -1007,3 +1007,51 @@ func main() {
 		t.Errorf("未变更项应保持 Jack, got:\n%s", seg)
 	}
 }
+
+// 第八轮回归：普通变量 / 普通字段作为 signal 字段的值，编译成裸 getter，
+// 后续修改普通变量能读到新值——用户不应感知 signal 与普通变量的差别。
+func TestIntegrationPlainVarSignalFieldStaysLive(t *testing.T) {
+	src := `package main
+import "fmt"
+type Q struct { title string }
+type P struct { signal a string; signal b string }
+func main() {
+	plain := "x"
+	q := Q{title: "y"}
+	p := P{a: plain, b: q.title}
+	fmt.Println("before", p.a(), p.b())
+	plain = "X"
+	q.title = "Y"
+	fmt.Println("after", p.a(), p.b())
+}
+`
+	out := runGX(t, src)
+	if !strings.Contains(out, "before x y") || !strings.Contains(out, "after X Y") {
+		t.Errorf("普通变量应通过裸 getter 保鲜（before x y / after X Y）, got:\n%s", out)
+	}
+}
+
+// 第八轮回归：含 signal 读的派生表达式仍走 Computed 保鲜；链式 signal 字段读
+// 按 receiver 类型补 () 后能读到真实值（P1-2 / P1-3 的运行级验证）。
+func TestIntegrationDerivedAndChainSignalFieldsLive(t *testing.T) {
+	src := `package main
+import "fmt"
+type P struct { signal a string; signal b string }
+type Inner struct { signal v string }
+type Mid struct { in Inner }
+type Outer struct { mid Mid }
+func main() {
+	p := P{a: "x", b: "y"}
+	q := P{a: p.a + p.b}
+	o := Outer{mid: Mid{in: Inner{v: "chain"}}}
+	fmt.Println("before", q.a(), o.mid.in.v())
+	p.a = "X"
+	p.b = "Y"
+	fmt.Println("after", q.a())
+}
+`
+	out := runGX(t, src)
+	if !strings.Contains(out, "before xy chain") || !strings.Contains(out, "after XY") {
+		t.Errorf("派生 Computed 与链式字段读应保鲜, got:\n%s", out)
+	}
+}

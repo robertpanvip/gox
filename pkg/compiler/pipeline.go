@@ -95,7 +95,7 @@ func compileWithMode(file, src, module string, imports map[string]ImportInfo) (*
 	// 误判为 `signal name = expr`（旧行为生成非法 `var name any string`）。
 	// 降级后字段成为标准 Go，所有下游 transform 天然享受既有作用域/大小写保护。
 	signalDecls := collectSignalFieldDecls(toks)
-	signalFields := buildSignalFieldTable(signalDecls)
+	signalFields := buildSignalFieldTable(toks, signalDecls)
 	toks = downgradeSignalFields(toks, signalDecls)
 	// 统一绑定表 + 表达式 AST：lex 之后、任何 transform 之前构建一次，贯穿整条管线。
 	// 以 Pos.Offset 为稳定身份，不受后续 desugar 增删 token 的下标漂移影响。
@@ -124,6 +124,9 @@ func compileWithMode(file, src, module string, imports map[string]ImportInfo) (*
 	if err != nil {
 		return nil, err
 	}
+	// 显式类型名的指针 props：Card(CardProps{...}) 传 *CardProps 时补 '&'（P2-3）。
+	// 省略类型名的 Card({...}) 已由 transformObjectLits 的 ptrPrefix 覆盖。
+	toks = adaptPtrCompositeArgs(toks, analysis, bindings)
 	// 对象解构：{ name, age } := p → name := p.name; age := p.age
 	// 放在对象字面量之后，右值声明类型（含 struct{...}{...} 展开形态）已可见。
 	toks, err = expandDestructures(toks, bindings)

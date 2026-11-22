@@ -142,22 +142,36 @@ func signalFieldPropTokens(a jsxAttr, ctx *jsxSceneCtx, propsType string) ([]Tok
 		return leaf, true
 	}
 
-	// 派生档：包 Signal.Computed(func() T { return <改写后表达式> })，
-	// 每次读重新求值并登记依赖，实现 item signal / 外部 signal 的保鲜。
-	var out []Token
-	out = append(out, signalPkgToken(p), tokOp(".", p), tokIdent("Computed", p), tokOp("(", p))
-	out = append(out, tokIdent("func", p), tokOp("(", p), tokOp(")", p), tokSpace(" ", p))
-	out = append(out, tokensForType(T, p)...)
-	out = append(out, tokSpace(" ", p))
-	out = append(out, tokOp("{", p), tokSpace(" ", p), tokIdent("return", p), tokSpace(" ", p))
-	for _, t := range vt {
-		if t.Kind == EOF {
-			continue
+	// 派生档按表达式来源分（第八轮用户规则）：
+	//   - 含 signal 读 → Signal.Computed(func() T { return expr })，登记依赖并缓存；
+	//   - 纯普通变量/普通字段 → 裸 getter func(...T) T { return expr }，每次读重新求值。
+	// Computed 只在其依赖的 signal 变化时重算；若表达式读的是普通字段（如 q.title），
+	// 没有 signal 依赖可登记，Computed 会把首值永久缓存 → 普通字段后续改动冻结。
+	// 裸 getter 则每次读都拿到普通字段的最新值，兑现"用户不感知 signal 差异"。
+	hasSig := exprHasSignalRead(vt, 0, len(vt), ctx.bindings, ctx.signalFields, ctx.jsxPos)
+	// For item getter（u() 形式的 item signal）也属 signal 读：它在每次读取时
+	// 拿到当前 item 值，走 Computed 登记依赖、item 变化时自动重算。
+	// forItemParam 不是 BkSignal 绑定，exprHasSignalRead 认不出，这里补判。
+	if !hasSig && ctx.forItemParam != "" {
+		for k := 0; k+2 < len(vt); k++ {
+			if vt[k].Kind == Ident && vt[k].Text == ctx.forItemParam &&
+				vt[k+1].Text == "(" && vt[k+2].Text == ")" {
+				hasSig = true
+				break
+			}
 		}
-		out = append(out, t)
 	}
-	out = append(out, tokSpace(" ", p), tokOp("}", p), tokOp(")", p))
-	return out, true
+	// 去掉 EOF，得到纯表达式 token。
+	expr := make([]Token, 0, len(vt))
+	for _, t := range vt {
+		if t.Kind != EOF {
+			expr = append(expr, t)
+		}
+	}
+	if hasSig {
+		return signalComputedCall(T, p, expr), true
+	}
+	return signalGetterCall(T, p, expr), true
 }
 
 // signalNewCall 生成 Signal.New(<lit>) token 序列。
@@ -243,11 +257,20 @@ func pureSignalRead(expr string, vt []Token, ctx *jsxSceneCtx) ([]Token, bool) {
 		return []Token{tokIdent(s[0].Text, s[0].Pos)}, true
 	}
 	// 形态：recv.field() —— signal 字段 selector 读，整体直通（剥末尾 ()）。
-	if len(s) >= 3 {
-		n := len(s)
-		if s[n-1].Text == ")" && n >= 4 && s[n-2].Text == "(" &&
-			s[n-3].Kind == Ident && s[n-4].Text == "." && ctx.signalFields.hasField(s[n-3].Text) {
-			return append([]Token{}, s[:n-2]...), true
+	// 第八轮 P1-1：旧实现只看末尾 4 个 token + hasField 按字段名全表匹配，
+	// 导致 p.a() + p.b() 这种派生表达式被误判为「单个 selector 读」，
+	// 返回 p.a()+p.b（p.b 少了 ()）且没包 Computed → 编译失败。
+	// 修法：要求整段恰好是 <receiver-chain>.field()（左端是标识符、单一字段链），
+	// 并用统一入口 resolveSignalSel 按 receiver 类型判定，不再按名兜底。
+	if n := len(s); n >= 5 && s[n-1].Text == ")" && s[n-2].Text == "(" &&
+		s[0].Kind == Ident && !isGoKeyword(s[0].Text) {
+		// 整段须为 selector：标识符(链).field()，中间不含运算符/字面量。
+		// 用统一入口从链首解析；fieldIdx 必须是倒数第三个 token（field），
+		// 其后紧跟 ()，且 () 就是整段结尾——保证没有 p.a()+p.b 之类的尾巴。
+		if sel, ok := resolveSignalSel(s, 0, ctx.jsxPos, ctx.bindings, ctx.signalFields, n); ok {
+			if sel.fieldIdx == n-3 && nextSigIn(s, sel.fieldIdx+1, n) == n-2 {
+				return append([]Token{}, s[:n-2]...), true
+			}
 		}
 	}
 	return nil, false

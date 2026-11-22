@@ -351,8 +351,11 @@ func main() {
 }
 `
 	// compileOK 内含 Validate()：产物语法非法会直接 fail。
+	// 第八轮规则：复合字面量 Inner{v: n} 不是纯字面量，用裸 getter
+	// func(...Inner) Inner { return ... } 每次读重新构造（内部的 v 是活 getter），
+	// 而非 Signal.New 快照。此处仍验证嵌套下标不漂移、产物合法。
 	got := compileOK(t, "sfhw_nested.gx", src)
-	containsAll(t, got, `p := Outer{inner: Signal.New(Inner{v: n}), other: n}`)
+	containsAll(t, got, `inner: func(...Inner) Inner { return Inner{v: n} }`, `other: n`)
 }
 
 // 三层嵌套 + 混合字段，进一步压测递归下标的正确性。
@@ -368,7 +371,7 @@ func main() {
 }
 `
 	got := compileOK(t, "sfhw_deep.gx", src)
-	containsAll(t, got, `Signal.New(L2{inner: Signal.New(L3{v: n, plain: 1}), tag: "t"})`)
+	containsAll(t, got, `child: func(...L2) L2 { return L2{inner: func(...L3) L3 { return L3{v: n, plain: 1} }, tag: "t"} }`)
 }
 
 // 第七轮 §4 回归：手写字段间赋值 p.a → q.a 必须直通裸 getter（保鲜），
@@ -398,4 +401,196 @@ func main() {
 `
 	got := compileOK(t, "sfhw_lit.gx", src)
 	containsAll(t, got, `name: Signal.New("lit")`)
+}
+
+// ============ 第八轮回归 ============
+
+// P1-1/P1-2 邻居用例：派生表达式里出现两个 signal 字段读，必须整体包 Computed，
+// 且两个字段读都补 ()——不能只根据末尾 token 判定导致 p.b 丢 ()、也不能走 New 快照。
+func TestSignalFieldTwoSignalReadsDerived(t *testing.T) {
+	src := `package main
+type P struct { signal a string; signal b string }
+type Q struct { signal v string }
+func main() {
+	p := P{a: "x", b: "y"}
+	q := Q{v: p.a + p.b}
+	_ = q
+}
+`
+	got := compileOK(t, "sf8_two.gx", src)
+	containsAll(t, got, `v: Signal.Computed(func() string { return p.a() + p.b() })`)
+	if strings.Contains(got, `return p.a() + p.b}`) {
+		t.Errorf("末尾字段读 p.b 必须补 ():\n%s", got)
+	}
+}
+
+// P1-3 邻居：链式 receiver + 同名字段不同类型——链尾按真实 receiver 类型判定，
+// 链上普通字段不补 ()，链尾 signal 字段补 ()；同名非 signal 字段不被误伤。
+func TestSignalFieldChainReceiverTyped(t *testing.T) {
+	src := `package main
+type Inner struct { signal v string }
+type Mid struct { in Inner }
+type Outer struct { mid Mid; v string }
+func main() {
+	o := Outer{mid: Mid{in: Inner{v: "x"}}, v: "plain"}
+	println(o.mid.in.v, o.v)
+}
+`
+	got := compileOK(t, "sf8_chain.gx", src)
+	containsAll(t, got, `println(o.mid.in.v(), o.v)`)
+	if strings.Contains(got, `o.v()`) {
+		t.Errorf("Outer.v 是普通字段，不得补 ()：\n%s", got)
+	}
+}
+
+// 用户核心规则：普通变量 / 普通字段作为 signal 字段的值 → 裸 getter func(...T) T，
+// 每次读重新求值；Signal.New 快照会在变量后续改动时冻结（错误）。
+func TestSignalFieldPlainVarUsesGetter(t *testing.T) {
+	src := `package main
+type Q struct { title string }
+type P struct { signal a string; signal b string }
+func main() {
+	plain := "x"
+	q := Q{title: "y"}
+	p := P{a: plain, b: q.title}
+	_ = p
+}
+`
+	got := compileOK(t, "sf8_plain.gx", src)
+	containsAll(t, got,
+		`a: func(...string) string { return plain }`,
+		`b: func(...string) string { return q.title }`,
+	)
+	if strings.Contains(got, `Signal.New(plain)`) || strings.Contains(got, `Signal.New(q.title)`) {
+		t.Errorf("普通变量/字段不得用 Signal.New 快照：\n%s", got)
+	}
+}
+
+// 普通变量 vs signal 读分档：字面量仍 New、signal 派生仍 Computed、普通变量裸 getter。
+func TestSignalFieldThreeTiersCoexist(t *testing.T) {
+	src := `package main
+type P struct { signal a string; signal b string; signal c string }
+func main() {
+	signal n = "n"
+	plain := "p"
+	p := P{a: "lit", b: n + "!", c: plain}
+	_ = p
+}
+`
+	got := compileOK(t, "sf8_tiers.gx", src)
+	containsAll(t, got,
+		`a: Signal.New("lit")`,
+		`b: Signal.Computed(func() string { return n() + "!" })`,
+		`c: func(...string) string { return plain }`,
+	)
+}
+
+// P2-1 邻居：&{...} 省略类型名 + 取址，指针 props 补全单个 &、signal 字段透传 getter。
+func TestSignalFieldAddrOmittedTypeLit(t *testing.T) {
+	src := `package main
+type CardProps struct { signal name string; title string }
+func Card(p *CardProps) { println(p.name(), p.title) }
+func main() {
+	signal n = "nn"
+	Card(&{name: n, title: "t"})
+}
+`
+	got := compileOK(t, "sf8_addr.gx", src)
+	containsAll(t, got, `Card(&CardProps{name: n, title: "t"})`)
+	if strings.Contains(got, "&&") {
+		t.Errorf("不得生成双取址 &&：\n%s", got)
+	}
+}
+
+// P2-2 邻居：map value / slice 元素字面量的期望类型下推 + signal 字段包装。
+func TestSignalFieldContainerElemExpectedType(t *testing.T) {
+	src := `package main
+type P struct { signal a string }
+func main() {
+	signal n = "x"
+	m := map[string]P{"k": {a: n}}
+	s := []P{{a: n}, {a: "lit"}}
+	_, _ = m, s
+}
+`
+	got := compileOK(t, "sf8_container.gx", src)
+	compact := strings.Join(strings.Fields(got), "")
+	containsAll(t, compact,
+		`m:=map[string]P{"k":P{a:n}}`,
+		`s:=list.List[P]{P{a:n},P{a:Signal.New("lit")}}`, // []P 经集合提升为 list.List[P]
+	)
+	if strings.Contains(compact, `struct{a any}`) {
+		t.Errorf("容器元素不应退化为匿名 struct：\n%s", got)
+	}
+}
+
+// P2-3 邻居：显式类型名的指针 props 补全 &。
+func TestSignalFieldPtrExplicitLitGetsAmp(t *testing.T) {
+	src := `package main
+type CardProps struct { signal name string }
+func Card(p *CardProps) { println(p.name()) }
+func main() {
+	signal n = "nn"
+	Card(CardProps{name: n})
+}
+`
+	got := compileOK(t, "sf8_ptrexplicit.gx", src)
+	containsAll(t, got, `Card(&CardProps{name: n})`)
+}
+
+// P3-1 邻居：普通变量直通档保留尾随注释。
+func TestSignalFieldPassthroughKeepsTrailingComment(t *testing.T) {
+	src := `package main
+type P struct { signal a string }
+func main() {
+	signal src = "x"
+	p := P{a: src /* note */}
+	_ = p
+}
+`
+	got := compileOK(t, "sf8_comment.gx", src)
+	containsAll(t, got, `p := P{a: src /* note */}`)
+}
+
+// 第八轮用户补充：链条 a.b.c 的"中间段" b 若是 signal 也要加括号。
+// 旧实现只判链尾，导致 o.mid.b.c（b 是 signal）生成非法 Go。
+func TestSignalFieldChainMiddleSegmentSignal(t *testing.T) {
+	src := `package main
+type Inner struct { c string; signal d string }
+type Mid struct { signal b Inner }
+type Outer struct { mid Mid; v string }
+func main() {
+	o := Outer{mid: Mid{b: Inner{c: "x", d: "y"}}, v: "plain"}
+	println(o.mid.b.c, o.mid.b.d, o.v)
+}
+`
+	got := compileOK(t, "sf8_mid.gx", src)
+	containsAll(t, got, `println(o.mid.b().c, o.mid.b().d(), o.v)`)
+	if strings.Contains(got, `o.mid.b.c`) {
+		t.Errorf("中间 signal 段 b 必须补 ():\n%s", got)
+	}
+	if strings.Contains(got, `o.v()`) {
+		t.Errorf("普通字段 o.v 不得补 ():\n%s", got)
+	}
+}
+
+// 链式两段都是 signal + 已是调用式：每段各补一次，不重复补（防 c.n()()）。
+func TestSignalFieldChainTwoSignalNoDoubleCall(t *testing.T) {
+	src := `package main
+type Leaf struct { signal v string }
+type Mid struct { signal b Leaf }
+type Outer struct { mid Mid }
+func main() {
+	o := Outer{mid: Mid{b: Leaf{v: "hi"}}}
+	println(o.mid.b().v(), o.mid.b.v)
+}
+`
+	got := compileOK(t, "sf8_twochain.gx", src)
+	gotCompact := strings.Join(strings.Fields(got), "")
+	containsAll(t, gotCompact,
+		`println(o.mid.b().v(),o.mid.b().v())`,
+	)
+	if strings.Contains(gotCompact, `()()`) {
+		t.Errorf("不得出现重复调用 ()()：\n%s", got)
+	}
 }

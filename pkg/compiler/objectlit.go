@@ -213,7 +213,9 @@ func detectObjectLits(toks []Token) []objectLit {
 func exprStartBefore(toks []Token, p int) bool {
 	t := toks[p]
 	switch t.Text {
-	case ":=", "=", ",", "(", "[", "return", ":":
+	case ":=", "=", ",", "(", "[", "return", ":", "&":
+		// '&'：省略类型名的取址字面量 &{...}（第八轮 P2-1）。补全时 ptrPrefix
+		// 已生成 '&'，这里的源码 '&' 会被替换区间覆盖，最终仍是单个 '&T{...}'。
 		return true
 	}
 	// '{' 作为外层对象字面量的字段值起点（嵌套对象）也允许
@@ -359,6 +361,56 @@ func resolveExpectType(toks []Token, lit *objectLit, an *Analysis, structs map[s
 	return typ
 }
 
+// containerElemTypeBefore 从容器内「省略类型名的元素字面量」的 '{' 往前定位
+// 容器字面量（map[K]V{...} / []T{...} / [N]T{...}），返回元素类型文本（V 或 T）。
+// 用于 map[string]P{"k": {a: n}} / []P{{a: n}} 这类内层字面量的期望类型下推（P2-2）。
+// 无法确定返回空串（调用方退化为匿名 struct）。
+func containerElemTypeBefore(toks []Token, open int) string {
+	// 1) 从 open-1 往前做括号平衡，找与内层字面量配对的父容器 '{'。
+	//    内层已闭合的 {...} / (...) 会增加深度，遇开括号时逐层回退。
+	depth := 0
+	parentBrace := -1
+	for i := open - 1; i >= 0; i-- {
+		switch toks[i].Text {
+		case "}", ")":
+			depth++
+		case "{", "(":
+			if depth > 0 {
+				depth--
+			} else if toks[i].Text == "{" {
+				parentBrace = i
+			}
+		}
+		if parentBrace >= 0 {
+			break
+		}
+	}
+	if parentBrace < 0 {
+		return ""
+	}
+	// 2) 父容器 '{' 前是元素类型，类型里必含 ']'（map[K]V / []T / [N]T）。
+	//    往前找最近的 ']'，其后的 token 即元素类型文本。
+	closeBracket := -1
+	for i := parentBrace - 1; i >= 0; i-- {
+		if toks[i].Text == "]" {
+			closeBracket = i
+			break
+		}
+	}
+	if closeBracket < 0 {
+		return ""
+	}
+	elemFrom := nextSig(toks, closeBracket+1)
+	if elemFrom < 0 || elemFrom >= parentBrace {
+		return ""
+	}
+	elem := strings.TrimSpace(exprText(toks, elemFrom, parentBrace))
+	if elem == "" || isGoKeyword(elem) {
+		return ""
+	}
+	return elem
+}
+
 // isAnyLikeType 判断类型文本是否为 any / interface{}（含带空格写法 interface { }）。
 func isAnyLikeType(s string) bool {
 	s = strings.TrimSpace(s)
@@ -372,8 +424,22 @@ func isAnyLikeType(s string) bool {
 func resolveExpectTypeRaw(toks []Token, lit *objectLit, an *Analysis, structs map[string]*structInfo, b *Bindings) string {
 	open := lit.open
 	p := prevSig(toks, open-1)
+	// 省略类型名的取址字面量 &{...}：'&' 只是取址前缀，期望类型由它之前的
+	// 上下文决定（实参 / 赋值 / return 等）。跳过 '&' 继续向前判定（第八轮 P2-1）。
+	if p >= 0 && toks[p].Text == "&" {
+		p = prevSig(toks, p-1)
+	}
 	if p < 0 {
 		return ""
+	}
+	// 0) 容器内省略类型名的元素字面量：map[K]V{"k": {...}} / []T{{...}, {...}}。
+	// 前缀是 ':'（map value）/ '{'（外层字面量开）/ ','（后续元素）时，
+	// 往前找容器字面量类型，取其元素类型作为期望类型（第八轮 P2-2）。
+	switch toks[p].Text {
+	case ":", "{", ",":
+		if et := containerElemTypeBefore(toks, open); et != "" {
+			return et
+		}
 	}
 	// 1) var p point = {...}：'=' 前是类型名（var 声明带显式类型）
 	if toks[p].Text == "=" {
@@ -874,6 +940,13 @@ func transformObjectLits(in []Token, an *Analysis, b *Bindings) ([]Token, error)
 				typeText = buildAnonymousStructType(out, lit.open, lit.close, b)
 			}
 
+			// 省略类型名的取址字面量 &{...}：补全已生成 '&T{...}'（typeText 含
+			// ptrPrefix '&'），而源码里的 '&' 前缀在 lit.open 之前、不在原替换区间
+			// [lit.open, close] 内。把它纳入替换区间，避免生成 '&&T{...}'（P2-1）。
+			replFrom := lit.open
+			if pp := prevSig(out, lit.open-1); pp >= 0 && out[pp].Text == "&" && strings.HasPrefix(typeText, "&") {
+				replFrom = pp
+			}
 			p := lit.pos
 			var toks []Token
 			toks = append(toks, New(typeText).AllTokens()...)
@@ -889,7 +962,7 @@ func transformObjectLits(in []Token, an *Analysis, b *Bindings) ([]Token, error)
 				toks = append(toks, out[k])
 			}
 			toks = append(toks, tokOp("}", p))
-			reps = append(reps, repl{from: lit.open, to: lit.close + 1, toks: toks})
+			reps = append(reps, repl{from: replFrom, to: lit.close + 1, toks: toks})
 		}
 
 		// 从后往前替换，避免下标漂移
@@ -918,6 +991,58 @@ func leafObjectLits(lits []objectLit) []objectLit {
 		if !contains {
 			out = append(out, l)
 		}
+	}
+	return out
+}
+
+// adaptPtrCompositeArgs 为「显式写了类型名的具名字面量实参」补齐取址符：
+// 当函数形参期望 *T，而实参写作 T{...}（如 Card(CardProps{name: n})）时，
+// Go 不接受值到指针的隐式转换。省略类型名的写法 Card({name: n}) 已由
+// transformObjectLits 的 ptrPrefix 处理；这里补上显式类型名这一形态（P2-3）。
+//
+// 仅在「期望类型明确为 *T 且实参类型名恰为 T」时插入 '&'，其余情况一律不动，
+// 避免改变用户意图。调用时机：transformObjectLits 之后（期望类型推断就绪）。
+func adaptPtrCompositeArgs(in []Token, an *Analysis, b *Bindings) []Token {
+	var insertAt []int // 在这些下标前插入 '&'
+	for i := 0; i < len(in)-1; i++ {
+		t := in[i]
+		if t.Kind != Ident || isGoKeyword(t.Text) {
+			continue
+		}
+		// 类型名后紧跟 '{'（具名复合字面量起点）；排除 pkg.T{...} 的 selector。
+		open := nextSig(in, i+1)
+		if open < 0 || in[open].Text != "{" {
+			continue
+		}
+		if p := prevSig(in, i-1); p >= 0 && in[p].Text == "." {
+			continue
+		}
+		// 已经带 & 前缀（&T{...}）→ 不重复补。
+		if p := prevSig(in, i-1); p >= 0 && in[p].Text == "&" {
+			continue
+		}
+		// 期望类型（从 '{' 位置反查调用实参类型）须为 *T，且 T 等于字面量类型名。
+		expect := inferArgExpectType(in, open, an, b)
+		if !strings.HasPrefix(expect, "*") {
+			continue
+		}
+		elem := strings.TrimSpace(strings.TrimPrefix(expect, "*"))
+		if elem != t.Text {
+			continue
+		}
+		insertAt = append(insertAt, i)
+	}
+	if len(insertAt) == 0 {
+		return in
+	}
+	out := make([]Token, 0, len(in)+len(insertAt))
+	ins := 0
+	for i := 0; i < len(in); i++ {
+		if ins < len(insertAt) && insertAt[ins] == i {
+			out = append(out, tokOp("&", in[i].Pos))
+			ins++
+		}
+		out = append(out, in[i])
 	}
 	return out
 }
