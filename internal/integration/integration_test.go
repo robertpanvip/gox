@@ -1055,3 +1055,33 @@ func main() {
 		t.Errorf("派生 Computed 与链式字段读应保鲜, got:\n%s", out)
 	}
 }
+
+// 第九轮：链中间 signal 段的读写合一 getter 必须在 receiver 更换后保鲜。
+// q.v 来自 o.mid.b.c（b 是 signal）；b 换成新 Leaf 后，q.v() 必须读到新 Leaf 的 c，
+// 且 q.v = val 必须写到 b 当前指向的 Leaf——旧的「剥 () 裸透传」会固定初始 receiver。
+func TestIntegrationChainRWGetterFreshReceiver(t *testing.T) {
+	src := `package main
+import "fmt"
+type Leaf struct { signal c string }
+type Mid struct { signal b Leaf }
+type Outer struct { mid Mid }
+type Q struct { signal v string }
+func main() {
+	signal lb = Leaf{c: "first"}
+	o := Outer{mid: Mid{b: lb}}
+	q := Q{v: o.mid.b.c}
+	fmt.Println("read1", q.v())
+	lb(Leaf{c: "second"})
+	fmt.Println("read2", q.v())
+	q.v = "written"
+	fmt.Println("read3", q.v())
+}
+`
+	out := runGX(t, src)
+	want := []string{"read1 first", "read2 second", "read3 written"}
+	for _, w := range want {
+		if !strings.Contains(out, w) {
+			t.Errorf("链读写 getter 未保鲜, 期望包含 %q, got:\n%s", w, out)
+		}
+	}
+}

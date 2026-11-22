@@ -233,7 +233,8 @@ func isPlainLiteralExpr(expr string) bool {
 // getter token。识别形态（vt 为 lexExprScene 改写后的 token）：
 //   - <sig>()        全局 signal/computed 读 → 剥离 () 传 getter（保鲜）；
 //   - <itemGetter>   For item getter（无调用括号，forItemParam）→ 直通其本身；
-//   - recv.field()   signal 字段 selector 读 → 整体直通（字段本身是 signal）。
+//   - recv.chain.field()  signal 字段链读 → 交 signalChainGetter 统一分档（第九轮）：
+//     中间有 signal 段生成读写 lambda / 裸 getter，单段链尾剥 () 裸透传。
 func pureSignalRead(expr string, vt []Token, ctx *jsxSceneCtx) ([]Token, bool) {
 	// 收集非空白 token
 	var s []Token
@@ -256,21 +257,14 @@ func pureSignalRead(expr string, vt []Token, ctx *jsxSceneCtx) ([]Token, bool) {
 	if len(s) == 1 && s[0].Kind == Ident && ctx.forItemParam == s[0].Text {
 		return []Token{tokIdent(s[0].Text, s[0].Pos)}, true
 	}
-	// 形态：recv.field() —— signal 字段 selector 读，整体直通（剥末尾 ()）。
+	// 形态：recv.chain.field() —— signal 字段链读，统一交 signalChainGetter 分档。
 	// 第八轮 P1-1：旧实现只看末尾 4 个 token + hasField 按字段名全表匹配，
-	// 导致 p.a() + p.b() 这种派生表达式被误判为「单个 selector 读」，
-	// 返回 p.a()+p.b（p.b 少了 ()）且没包 Computed → 编译失败。
-	// 修法：要求整段恰好是 <receiver-chain>.field()（左端是标识符、单一字段链），
-	// 并用统一入口 resolveSignalSel 按 receiver 类型判定，不再按名兜底。
-	if n := len(s); n >= 5 && s[n-1].Text == ")" && s[n-2].Text == "(" &&
-		s[0].Kind == Ident && !isGoKeyword(s[0].Text) {
-		// 整段须为 selector：标识符(链).field()，中间不含运算符/字面量。
-		// 用统一入口从链首解析；fieldIdx 必须是倒数第三个 token（field），
-		// 其后紧跟 ()，且 () 就是整段结尾——保证没有 p.a()+p.b 之类的尾巴。
-		if sel, ok := resolveSignalSel(s, 0, ctx.jsxPos, ctx.bindings, ctx.signalFields, n); ok {
-			if sel.fieldIdx == n-3 && nextSigIn(s, sel.fieldIdx+1, n) == n-2 {
-				return append([]Token{}, s[:n-2]...), true
-			}
+	// 导致 p.a() + p.b() 这种派生表达式被误判为「单个 selector 读」。
+	// 第九轮：改走 signalChainGetter——它内部用「跳过已补 () 」的链解析走到真正
+	// 链尾，并做「整段恰好是链读」完整性校验，杜绝把派生表达式误判成链读。
+	if n := len(s); n >= 5 && s[0].Kind == Ident && !isGoKeyword(s[0].Text) {
+		if gen, ok := signalChainGetter(s, 0, n, ctx.bindings, ctx.signalFields, ctx.jsxPos); ok {
+			return gen, true
 		}
 	}
 	return nil, false

@@ -594,3 +594,110 @@ func main() {
 		t.Errorf("不得出现重复调用 ()()：\n%s", got)
 	}
 }
+
+// ============ 第九轮回归：链中间含 signal 段作为表达式 → 读写合一 getter ============
+
+// 链中间有 signal 段 + 链尾 signal（手写结构体字段值）：必须生成读写合一 lambda，
+// 每次读写重新走链——旧的「剥 () 裸透传」会把中间 signal 段的 receiver 固定，b 变化后腐烂。
+func TestSignalFieldChainRWGetterHandwritten(t *testing.T) {
+	src := `package main
+type Leaf struct { signal c string }
+type Mid struct { signal b Leaf }
+type Outer struct { mid Mid }
+type Q struct { signal v string }
+func main() {
+	o := Outer{mid: Mid{b: Leaf{c: "x"}}}
+	q := Q{v: o.mid.b.c}
+	_ = q; _ = o
+}
+`
+	got := compileOK(t, "sf9_rw.gx", src)
+	containsAll(t, got,
+		`func(arg ...string) string`,
+		`if len(arg) > 0`,
+		`return o.mid.b().c(arg...)`,
+		`return o.mid.b().c()`,
+	)
+}
+
+// 同上，JSX signal prop 走同一入口，产物一致（判据不分裂）。
+func TestSignalFieldChainRWGetterJSX(t *testing.T) {
+	src := `package main
+import gxscene "github.com/robertpanvip/gox/runtime/scene"
+type Leaf struct { signal c string }
+type Mid struct { signal b Leaf }
+type Outer struct { mid Mid }
+type CardProps struct { signal title string }
+func Card(p CardProps) *gxscene.Instance { return <div>{p.title}</div> }
+func main() {
+	o := Outer{mid: Mid{b: Leaf{c: "x"}}}
+	_ = <Card title={o.mid.b.c}/>
+	_ = o
+}
+`
+	got := compileOK(t, "sf9_rwjsx.gx", src)
+	containsAll(t, got,
+		`func(arg ...string) string`,
+		`if len(arg) > 0`,
+		`return o.mid.b().c(arg...)`,
+		`return o.mid.b().c()`,
+	)
+}
+
+// 链中间有 signal 段 + 链尾普通字段：退回裸 getter（无写分支），不生成 Computed 快照。
+func TestSignalFieldChainGetterTailPlain(t *testing.T) {
+	src := `package main
+type Leaf struct { c string }
+type Mid struct { signal b Leaf }
+type Outer struct { mid Mid }
+type Q struct { signal v string }
+func main() {
+	o := Outer{mid: Mid{b: Leaf{c: "x"}}}
+	q := Q{v: o.mid.b.c}
+	_ = q; _ = o
+}
+`
+	got := compileOK(t, "sf9_tailplain.gx", src)
+	containsAll(t, got, `func(...string) string { return o.mid.b().c }`)
+	if strings.Contains(got, `Signal.Computed(func() string { return o.mid.b().c })`) {
+		t.Errorf("链尾普通字段应走裸 getter，不生成 Computed 快照:\n%s", got)
+	}
+}
+
+// 单段链（仅链尾 signal）保持裸透传、零开销，不包 lambda。
+func TestSignalFieldChainSingleStillPassthrough(t *testing.T) {
+	src := `package main
+type Leaf struct { signal c string }
+type Q struct { signal v string }
+func main() {
+	o := Leaf{c: "x"}
+	q := Q{v: o.c}
+	_ = q; _ = o
+}
+`
+	got := compileOK(t, "sf9_single.gx", src)
+	containsAll(t, got, `q := Q{v: o.c}`)
+	if strings.Contains(got, `func(arg ...string) string`) {
+		t.Errorf("单段链不应包读写 lambda:\n%s", got)
+	}
+}
+
+// 派生表达式里即使含链式 signal 读，也不得被误判成单条链读（完整性校验）。
+func TestSignalFieldChainGetterRejectsDerivedExpr(t *testing.T) {
+	src := `package main
+type Leaf struct { signal c string }
+type Mid struct { signal b Leaf }
+type Outer struct { mid Mid }
+type Q struct { signal v string }
+func main() {
+	o := Outer{mid: Mid{b: Leaf{c: "x"}}}
+	q := Q{v: o.mid.b().c() + "!"}
+	_ = q; _ = o
+}
+`
+	got := compileOK(t, "sf9_derived.gx", src)
+	containsAll(t, got, `Signal.Computed(func() string { return o.mid.b().c() + "!" })`)
+	if strings.Contains(got, `func(arg ...string) string`) {
+		t.Errorf("派生表达式不得走读写 lambda:\n%s", got)
+	}
+}
