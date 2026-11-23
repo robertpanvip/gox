@@ -121,9 +121,10 @@ func (p *painter) paintOverlays(root *gxscene.Node, inherited textStyle) {
 			p.paintOverlayTree(ov, inheritedStyle(ov, inherited))
 		}
 	}
-	// 浮层后画，保证盖在遮罩和普通内容之上。
+	// 内容浮层（popover/modal/portal）后画，保证盖在遮罩和普通内容之上。
+	// 按树序绘制，后出现的浮层在上；portal 常作为最外层全局浮层放在树末尾。
 	for _, ov := range overlays {
-		if isPopover(ov) {
+		if isContentOverlay(ov) {
 			p.paintOverlayTree(ov, inheritedStyle(ov, inherited))
 		}
 	}

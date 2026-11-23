@@ -3,6 +3,8 @@
 package main
 
 import (
+	"os"
+
 	gxapp "github.com/robertpanvip/gox/runtime/app"
 	gxscene "github.com/robertpanvip/gox/runtime/scene"
 	"github.com/robertpanvip/gox/runtime/signal"
@@ -59,6 +61,9 @@ func main() {
 	segment := signal.New("day")
 	tab := signal.New("overview")
 	volume := signal.New(60.0)
+	// GX_DEMO_MODAL=1 让模态框初始打开（截图/演示用）；GX_DEMO_PORTAL=1 显示传送门提示。
+	modalState := widgets.NewModalState(os.Getenv("GX_DEMO_MODAL") == "1")
+	portalShown := signal.New(os.Getenv("GX_DEMO_PORTAL") == "1")
 
 	// ===== 左栏：表单与交互 =====
 	leftCol := col("406", "10",
@@ -162,6 +167,18 @@ func main() {
 				widgets.Skeleton(gxscene.Props{"width": "120", "height": "14"}),
 			),
 		)),
+		section("浮层 Modal / Portal", col("380", "8",
+			widgets.Button(gxscene.Props{
+				"label": "打开模态框", "variant": "primary",
+				"onClick": func() any {
+					return gxscene.Handler(func(gxscene.EventContext) { modalState.Open() })
+				},
+			}),
+			widgets.Text(gxscene.Props{
+				"value": func() any { return "Modal 视口居中 · Portal 脱离父级裁剪" },
+				"tone":  "muted", "size": "12",
+			}),
+		)),
 	)
 
 	app, err := gxapp.OpenWith(gxapp.WindowConfig{
@@ -182,6 +199,55 @@ func main() {
 				),
 				widgets.Divider(gxscene.Props{"width": "824"}),
 				row("12", leftCol, rightCol),
+				// 模态框：默认关闭，点"打开模态框"按钮弹出。
+				widgets.Modal(gxscene.Props{
+					"state":   func() any { return modalState },
+					"title":   func() any { return "确认删除" },
+					"width":   "400",
+					"content": func() any {
+						return col("352", "8",
+							widgets.Text(gxscene.Props{
+								"value": func() any { return "确定要删除这个项目吗？此操作不可撤销。" },
+								"tone":  "text", "size": "14",
+							}),
+							widgets.Text(gxscene.Props{
+								"value": func() any { return "删除后数据将无法恢复，请谨慎操作。" },
+								"tone":  "muted", "size": "12",
+							}),
+						)
+					},
+					"actions": func() any {
+						return row("8",
+							widgets.Button(gxscene.Props{
+								"label": "取消",
+								"onClick": func() any {
+									return gxscene.Handler(func(gxscene.EventContext) { modalState.Close() })
+								},
+							}),
+							widgets.Button(gxscene.Props{
+								"label": "删除", "variant": "danger",
+								"onClick": func() any {
+									return gxscene.Handler(func(gxscene.EventContext) { modalState.Close() })
+								},
+							}),
+						)
+					},
+				}),
+				// 传送门：右侧浮层提示（演示脱离父级裁剪，自定 absolute 定位）。
+				widgets.Portal(gxscene.Props{
+					"open": func() bool { return portalShown() },
+					"children": func() any {
+						return widgets.Col(gxscene.Props{
+							"position": "absolute", "left": "480", "top": "955",
+							"bg": widgets.AppleMaterialReg, "border-radius": widgets.RadiusCard,
+							"border": widgets.AppleHairline, "border-width": "1",
+							"box-shadow": widgets.ShadowFloat, "padding": "14", "gap": "4",
+							"children": func() any { return []any{
+								widgets.Text(gxscene.Props{"value": func() any { return "✓ 已保存到 iCloud" }, "tone": "green", "size": "13", "weight": "bold"}),
+							} },
+						})
+					},
+				}),
 			} },
 		})
 	})

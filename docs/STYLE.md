@@ -11,7 +11,7 @@
 
 - absolute 节点相对**直接父节点的 padding box** 定位（CSS 语义），不占用父容器空间、不影响兄弟布局。
 - Skia 用 Yoga `PositionTypeAbsolute` + `SetPosition(Edge)`；Rust 用 Taffy `Position::Absolute` + `inset`。
-- **浮层是 absolute 的高层封装**：`gx-role="popover"` 节点同样脱离流，但位置由 `gx-anchor`/`gx-placement` 二次计算贴锚点（见浮层约定）。两者不冲突：浮层优先走锚点逻辑。
+- **浮层是 absolute 的高层封装**：`gx-role="popover"` 节点同样脱离流，但位置由 `gx-anchor`/`gx-placement` 二次计算贴锚点；`gx-role="modal"` 相对画布居中；`gx-role="portal"` 平移到画布原点并铺满（子树 absolute 自主定位）。两者不冲突：浮层优先走锚点逻辑。三种浮层角色 + scrim 的完整约定见 `backend/skia/overlay.go` 与 [docs/APPLE_DESIGN.md](APPLE_DESIGN.md)。
 - **注意**：`position:absolute` 不要放在 `For` / 组件包装产生的 `#frag`（display:contents）子节点上——display:contents 节点不产生布局盒，absolute 会失去定位参照（实测坐标塌成 0×0）。需要脱离流时用浮层机制，或把 absolute 节点直接挂在有尺寸的容器下。
 
 ## 2. 溢出与虚拟滚动

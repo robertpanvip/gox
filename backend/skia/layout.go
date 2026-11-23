@@ -325,6 +325,22 @@ func layoutOverlays(root *gxscene.Node, cache layoutCache, measure fontMeasurer,
 			cache[ov] = layoutBox{X: 0, Y: 0, W: availW, H: availH}
 			continue
 		}
+		if isModal(ov) {
+			// 模态框相对画布居中（无锚点）；把整棵子树平移到中心。
+			// 注意只平移、不单独写 cache[ov]——shiftSubtree 会把 ov 自身也平移到位。
+			x, y := placeCentered(box.W, box.H, availW, availH)
+			shiftSubtree(ov, cache, x-box.X, y-box.Y)
+			continue
+		}
+		if isPortal(ov) {
+			// 传送门容器：把整棵子树从 flex 流末尾的原始坐标平移到画布原点，
+			// 再把根 box 重置为铺满画布（作为子树 absolute 定位的参考系）。
+			// 顺序：先平移（含根），后覆盖根 box——否则根被二次平移。
+			dx, dy := 0-box.X, 0-box.Y
+			shiftSubtree(ov, cache, dx, dy)
+			cache[ov] = layoutBox{X: 0, Y: 0, W: availW, H: availH}
+			continue
+		}
 		if !isPopover(ov) {
 			continue
 		}

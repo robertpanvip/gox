@@ -41,20 +41,36 @@ fn measure_text(
     taffy::geometry::Size { width: w, height: c.size * 1.35 }
 }
 
-// ---------- 浮层（popover/dropdown/select）协议辅助 ----------
+// ---------- 浮层（popover/modal/portal/scrim）协议辅助 ----------
 // 与 Skia 后端 backend/skia/overlay.go 完全一致的语义：所有约定走 props 全量透传，
-// gx-role=popover/scrim 标记浮层，gx-anchor 引用锚点 id，gx-placement/gx-offset 定位。
+// gx-role 标记浮层角色，gx-anchor 引用锚点 id，gx-placement/gx-offset 定位。
 
 fn gx_role(n: &crate::scene::SceneNode) -> &str {
     n.props.get("gx-role").map(|s| s.trim().to_ascii_lowercase())
-        .map(|s| match s.as_str() { "popover" => "popover", "scrim" => "scrim", _ => "" })
+        .map(|s| match s.as_str() {
+            "popover" => "popover", "modal" => "modal",
+            "portal" => "portal", "scrim" => "scrim", _ => "",
+        })
         .unwrap_or("")
 }
 fn is_overlay(n: &crate::scene::SceneNode) -> bool {
-    matches!(gx_role(n), "popover" | "scrim")
+    matches!(gx_role(n), "popover" | "modal" | "portal" | "scrim")
 }
 fn is_popover(n: &crate::scene::SceneNode) -> bool { gx_role(n) == "popover" }
+fn is_modal(n: &crate::scene::SceneNode) -> bool { gx_role(n) == "modal" }
+fn is_portal(n: &crate::scene::SceneNode) -> bool { gx_role(n) == "portal" }
 fn is_scrim(n: &crate::scene::SceneNode) -> bool { gx_role(n) == "scrim" }
+/// 内容型浮层（非遮罩）：统一在 scrim 之后绘制。
+fn is_content_overlay(n: &crate::scene::SceneNode) -> bool {
+    is_popover(n) || is_modal(n) || is_portal(n)
+}
+
+/// 视口居中浮层左上角（与 Skia placeCentered 对齐）。
+fn place_centered(pw: f32, ph: f32, avail_w: f32, avail_h: f32) -> (f32, f32) {
+    let pw = pw.min(avail_w);
+    let ph = ph.min(avail_h);
+    (((avail_w - pw) / 2.0).max(0.0), ((avail_h - ph) / 2.0).max(0.0))
+}
 
 /// 浮层定位结果：side(bottom/top) + align(start/center/end)。
 fn parse_placement(s: &str) -> (&'static str, &'static str) {
@@ -431,6 +447,17 @@ impl DisplayList {
                 overrides.insert(ov.node.id.clone(), (0.0, 0.0)); // 遮罩铺满，尺寸在 emit 时按画布覆盖
                 continue;
             }
+            if is_modal(ov.node) {
+                // 视口居中（无锚点），与 Skia 端一致。
+                overrides.insert(ov.node.id.clone(), place_centered(ov.w, ov.h, avail_w, avail_h));
+                continue;
+            }
+            if is_portal(ov.node) {
+                // 传送门根平移到画布原点（子树坐标随之相对画布左上角）。
+                // portal 根自身透明，负坐标无视觉影响；与 Skia 端"子树平移到原点"对齐。
+                overrides.insert(ov.node.id.clone(), (-ov.x, -ov.y));
+                continue;
+            }
             if !is_popover(ov.node) { continue; }
             let mut target = (ov.x, ov.y);
             if let Some(anchor_id) = ov.node.props.get("gx-anchor") {
@@ -535,10 +562,12 @@ impl DisplayList {
             emit(ov.node, ov.tnode, &ctx, &mut dl, (226, 232, 240), 16.0, 0.0, 0.0,
                 &overrides, avail_w, avail_h, false, None);
         }
-        // 第三遍：浮层内容（最上层）。
-        for ov in overlays.iter().filter(|o| is_popover(o.node)) {
-            emit(ov.node, ov.tnode, &ctx, &mut dl, (226, 232, 240), 16.0, 0.0, 0.0,
-                &overrides, avail_w, avail_h, false, None);
+        // 第三遍：内容浮层 popover → modal → portal（最上层），按角色分层保证层级稳定。
+        for role in ["popover", "modal", "portal"] {
+            for ov in overlays.iter().filter(|o| gx_role(o.node) == role) {
+                emit(ov.node, ov.tnode, &ctx, &mut dl, (226, 232, 240), 16.0, 0.0, 0.0,
+                    &overrides, avail_w, avail_h, false, None);
+            }
         }
         dl
     }
@@ -1005,6 +1034,17 @@ mod overlay_tests {
     fn place_end_align() {
         let (x, _) = place_overlay(100.0, 200.0, 100.0, 30.0, 60.0, 60.0, "bottom-end", 8.0, 800.0, 600.0);
         assert_eq!(x, 140.0); // 100+100-60
+    }
+
+    #[test]
+    fn place_centered_modal() {
+        let (x, y) = place_centered(200.0, 100.0, 800.0, 600.0);
+        assert_eq!(x, 300.0);
+        assert_eq!(y, 250.0);
+        // 超画布时 clamp 后贴左上。
+        let (x, y) = place_centered(900.0, 500.0, 800.0, 600.0);
+        assert_eq!(x, 0.0);
+        assert_eq!(y, 50.0);
     }
 }
 

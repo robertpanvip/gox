@@ -100,6 +100,28 @@ func asOption(v any) (Option, bool) {
 	}
 }
 
+// boolGet 读取一个布尔 getter，兼容 bool / func() bool / func() any(signal)。
+// Modal/Portal 的 open/closable/maskClosable 用它抹平业务侧书写差异。
+func boolGet(props gxscene.Props, key string, def bool) func() bool {
+	raw, ok := props[key]
+	if !ok {
+		return func() bool { return def }
+	}
+	return func() bool {
+		switch v := raw.(type) {
+		case bool:
+			return v
+		case func() bool:
+			return v()
+		case func() any:
+			if b, ok := v().(bool); ok {
+				return b
+			}
+		}
+		return def
+	}
+}
+
 // numberGet 读取一个数值 getter，兼容 int / float64 / string("12px") 及 func() any。
 // 滑块、进度类组件用它抹平业务侧的数值书写差异。
 func numberGet(props gxscene.Props, key string, def float64) func() float64 {

@@ -9,7 +9,11 @@ package skia
 //
 // 属性：
 //
-//	gx-role       元素角色："popover"=浮层内容，"scrim"=点外部关闭的遮罩层
+//	gx-role       元素角色：
+//	              "popover" = 锚点浮层内容（下拉菜单/Select/Tooltip）
+//	              "modal"   = 视口居中的模态对话框（相对画布居中，无锚点）
+//	              "portal"  = 传送门容器（脱离父级裁剪/层级，子树自定 absolute 定位）
+//	              "scrim"   = 遮罩层（点外部关闭；modal 常配半透明压暗）
 //	gx-anchor     浮层引用锚点的 Node.ID（引用带 gx-anchor-id 的节点）
 //	gx-placement  定位方位：bottom / bottom-start / bottom-end / top / top-start / top-end
 //	              留白优先；空间不足时后端自动翻转到反向（bottom<->top, start<->end）
@@ -17,6 +21,11 @@ package skia
 //
 // 生命周期：浮层由组件用条件分支（OpBranch）动态挂载——open=false 时子树不存在，
 // open=true 时整棵子树出现，天然走 GRX2 的 InsertBefore/RemoveChild 结构动作。
+//
+// Modal 与 Popover 的区别仅在定位：popover 贴锚点，modal 相对画布居中；二者共用
+// scrim 与"最后绘制 + 浮层优先命中"的层级语义。Portal 更基础——它只做"传送"
+// （脱离父级 overflow 裁剪与 flex 流、最后绘制），子树用普通 absolute/inset 自主定位，
+// 是 Modal / Toast / 全局浮层的共同底座。
 import (
 	"strings"
 
@@ -31,10 +40,12 @@ const (
 	propOffset     = "gx-offset"
 
 	rolePopover = "popover"
+	roleModal   = "modal"
+	rolePortal  = "portal"
 	roleScrim   = "scrim"
 )
 
-// gxRole 返回节点的浮层角色（"" / "popover" / "scrim"）。
+// gxRole 返回节点的浮层角色（"" / "popover" / "modal" / "portal" / "scrim"）。
 func gxRole(n *gxscene.Node) string {
 	if n == nil || n.Props == nil {
 		return ""
@@ -47,13 +58,24 @@ func gxRole(n *gxscene.Node) string {
 
 // isOverlay 报告节点是否是需要脱离 flex 流、最后绘制的浮层/遮罩。
 func isOverlay(n *gxscene.Node) bool {
-	r := gxRole(n)
-	return r == rolePopover || r == roleScrim
+	switch gxRole(n) {
+	case rolePopover, roleModal, rolePortal, roleScrim:
+		return true
+	}
+	return false
 }
 
-// isPopover / isScrim 细分角色。
+// isPopover / isModal / isPortal / isScrim 细分角色。
 func isPopover(n *gxscene.Node) bool { return gxRole(n) == rolePopover }
+func isModal(n *gxscene.Node) bool   { return gxRole(n) == roleModal }
+func isPortal(n *gxscene.Node) bool  { return gxRole(n) == rolePortal }
 func isScrim(n *gxscene.Node) bool   { return gxRole(n) == roleScrim }
+
+// isContentOverlay 报告是否是"内容型"浮层（popover/modal/portal），区别于纯遮罩 scrim。
+// 绘制顺序上内容浮层统一在 scrim 之后绘制。
+func isContentOverlay(n *gxscene.Node) bool {
+	return isPopover(n) || isModal(n) || isPortal(n)
+}
 
 // collectAnchors 深度优先收集带 gx-anchor-id 的节点，按 id 索引。
 // 锚点通常是 Popover 的 trigger 子树根。重复 id 后者覆盖（与命中测试一致）。
@@ -117,6 +139,26 @@ func parsePlacement(s string) placement {
 // placeOverlay 计算浮层左上角绝对坐标。
 // 入参：锚点矩形 a、浮层尺寸 pw/ph、方位 p、间距 offset、画布尺寸 availW/availH。
 // 空间不足时按 side 翻转（bottom↔top）、按 align 翻转（start↔end），避免溢出画布。
+// placeCentered 计算视口居中浮层的左上角坐标，并把尺寸 clamp 到画布内。
+// modal 相对整个画布居中（与锚点无关）；超大盘缩到画布并贴左上。
+func placeCentered(pw, ph, availW, availH float32) (float32, float32) {
+	if pw > availW {
+		pw = availW
+	}
+	if ph > availH {
+		ph = availH
+	}
+	x := (availW - pw) / 2
+	y := (availH - ph) / 2
+	if x < 0 {
+		x = 0
+	}
+	if y < 0 {
+		y = 0
+	}
+	return x, y
+}
+
 func placeOverlay(a layoutBox, pw, ph float32, p placement, offset float32, availW, availH float32) (float32, float32) {
 	var x, y float32
 

@@ -172,8 +172,8 @@ func Stat(props gxscene.Props) *gxscene.Instance {
 	hasDelta := delta() != ""
 	ops := []gxscene.Op{
 		el("div"), attr("gx-role", "stat"),
-		attr("bg", ThemePanel), attr("border", ThemeBorder), attr("border-width", "1"),
-		attr("border-radius", "10"), attr("padding", "14"),
+		attr("bg", ThemePanel), attr("border", AppleSeparator), attr("border-width", "1"),
+		attr("border-radius", RadiusCard), attr("box-shadow", ShadowCard), attr("padding", "14"),
 		attr("flex-direction", "column"), attr("gap", "4"),
 	}
 	if w := width(); w != "" {

@@ -51,8 +51,8 @@ func TestButtonStructure(t *testing.T) {
 	if got := n.Props["bg"]; got != ThemeAccent {
 		t.Errorf("primary 按钮底色 = %v, want %v", got, ThemeAccent)
 	}
-	if got := n.Props["border-radius"]; got != "8" {
-		t.Errorf("圆角 = %v, want 8", got)
+	if got := n.Props["border-radius"]; got != RadiusControl {
+		t.Errorf("圆角 = %v, want %v", got, RadiusControl)
 	}
 	if n.Handler("onClick") == nil {
 		t.Error("onClick handler 未绑定")

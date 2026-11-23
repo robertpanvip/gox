@@ -33,30 +33,38 @@ import (
 	"github.com/robertpanvip/gox/runtime/signal"
 )
 
-// ---- 预制主题（深色）----
+// ---- 预制主题（Apple HIG 深色模式）----
 // 集中在这里，业务无需（也不应）在 JSX 里散写颜色。tone 名 → 强调色。
+// Theme* 常量保留原名称以兼容现有业务与测试，取值改为 Apple 系统色；
+// 更完整的 Apple 配色/圆角/阴影/材质标度见 apple_theme.go。
 const (
-	ThemeBg      = "#0b1020" // 页面底色
-	ThemePanel   = "#161d2e" // 卡片/输入框底
-	ThemeBorder  = "#2a3550" // 常规描边
-	ThemeText    = "#eef3fb" // 主文字
-	ThemeMuted   = "#8b9bb4" // 次要文字/占位符
-	ThemeAccent  = "#2dd4bf" // 主强调（青）
-	ThemeInputBg = "#0d1526" // 输入框底（比卡片略深，光标靠同色隐藏）
-	CursorColor  = "#2dd4bf"
+	ThemeBg      = AppleWindowBg   // 页面底色
+	ThemePanel   = AppleElevated   // 卡片底
+	ThemeBorder  = AppleSeparator  // 常规描边
+	ThemeText    = AppleLabel      // 主文字
+	ThemeMuted   = AppleLabel2     // 次要文字/占位符
+	ThemeAccent  = AppleBlue       // 主强调（系统蓝）
+	ThemeInputBg = AppleInputBg    // 输入框底（光标靠同色隐藏）
+	CursorColor  = AppleBlue
 )
 
 var tones = map[string]string{
-	"primary": ThemeAccent,
-	"cyan":    "#2dd4bf",
-	"purple":  "#a78bfa",
-	"orange":  "#fb923c",
-	"green":   "#4ade80",
-	"danger":  "#f87171",
-	"info":    "#60a5fa",
+	"primary": AppleBlue,
+	"cyan":    AppleTeal,
+	"purple":  ApplePurple,
+	"orange":  AppleOrange,
+	"green":   AppleGreen,
+	"yellow":  AppleYellow,
+	"pink":    ApplePink,
+	"indigo":  AppleIndigo,
+	"danger":  AppleRed,
+	"info":    AppleBlue,
 }
 
 func toneColor(tone string) string {
+	if c, ok := appleTones[tone]; ok {
+		return c
+	}
 	if c, ok := tones[tone]; ok {
 		return c
 	}
@@ -120,7 +128,7 @@ func Button(props gxscene.Props) *gxscene.Instance {
 	colorGetter := func() any {
 		switch variant() {
 		case "primary", "danger":
-			return "#07130f"
+			return AppleLabel // 系统蓝/红底配白字
 		default:
 			return ThemeText
 		}
@@ -138,7 +146,7 @@ func Button(props gxscene.Props) *gxscene.Instance {
 
 	ops := []gxscene.Op{
 		el("button"),
-		attr("padding", "11"), attr("border-radius", "8"),
+		attr("padding", "11"), attr("border-radius", RadiusControl),
 		attr("border-width", "1"), attr("font-size", "15"), attr("weight", "bold"),
 		attr("align-items", "center"), attr("justify-content", "center"),
 		dynAttr("bg", bgSlot), dynAttr("color", colorSlot), dynAttr("border", borderSlot),
@@ -206,7 +214,7 @@ func Input(props gxscene.Props) *gxscene.Instance {
 	ops := []gxscene.Op{
 		el("input"),
 		attr("gx-input-id", focusID),
-		attr("bg", ThemeInputBg), attr("border-radius", "8"),
+		attr("bg", ThemeInputBg), attr("border-radius", RadiusControl),
 		attr("border-width", "1"), attr("padding", "10"), attr("height", "20"),
 		attr("flex-direction", "row"), attr("align-items", "center"), attr("width", w),
 		dynAttr("border", borderSlot),
@@ -396,8 +404,9 @@ func Card(props gxscene.Props) *gxscene.Instance {
 		pad = "16"
 	}
 	ops := []gxscene.Op{
-		el("div"), attr("bg", ThemePanel), attr("border", ThemeBorder),
-		attr("border-width", "1"), attr("border-radius", "12"),
+		el("div"), attr("bg", ThemePanel), attr("border", AppleSeparator),
+		attr("border-width", "1"), attr("border-radius", RadiusCard),
+		attr("box-shadow", ShadowCard),
 		attr("padding", pad), attr("flex-direction", "column"), attr("gap", "8"),
 	}
 	if w := width(); w != "" {

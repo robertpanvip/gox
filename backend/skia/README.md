@@ -79,7 +79,9 @@ _ = w.DrawLog() // 最近一帧的绘制指令（观测面）
 
 ## 预制控件库（`widgets` 子包）
 
-`backend/skia/widgets` 提供一组跨后端通用的预制组件。组件是纯函数 `func(gxscene.Props) *gxscene.Instance`，产出「带样式属性的场景树」，后端零侵入；深色主题统一管理在 `Theme*` / `tones`。所有交互组件都是**受控**的：业务用 signal 持有状态，通过 `Bind*` 把 setter 包装成事件 handler 回传。
+`backend/skia/widgets` 提供一组跨后端通用的预制组件。组件是纯函数 `func(gxscene.Props) *gxscene.Instance`，产出「带样式属性的场景树」，后端零侵入；所有交互组件都是**受控**的：业务用 signal 持有状态，通过 `Bind*` 把 setter 包装成事件 handler 回传。
+
+**视觉风格贴近 Apple HIG 深色模式**：中性灰系统色分层（窗口/分组/卡片/填充）、系统语义色（蓝/绿/红/橙/紫…）、连续大圆角、柔和多层阴影、`#rrggbbaa` 半透明材质近似毛玻璃、8pt 间距标度。常量集中在 `apple_theme.go`（`Apple*` / `Radius*` / `Shadow*` / `Space*`）；`Theme*` 保留旧名兼容业务，取值指向 Apple 系统色。详见 [docs/APPLE_DESIGN.md](../../docs/APPLE_DESIGN.md)。
 
 | 分类 | 组件 | 关键 props |
 |---|---|---|
@@ -88,13 +90,19 @@ _ = w.DrawLog() // 最近一帧的绘制指令（观测面）
 | 反馈展示 | `Badge` / `Tag` / `Progress` / `Avatar` / `Stat` / `Alert` / `EmptyState` / `Skeleton` / `Spinner` | `label` `tone` `value` `title` |
 | 表单交互 | `Checkbox` / `Switch` / `RadioGroup` / `Slider` | `checked` / `value` + `onChange`(BindBool/BindValue/BindNumber) |
 | 导航选择 | `Tabs` / `Segmented` / `Select` | `value` `tabs`/`segments`/`options` `onChange` |
-| 浮层 | `Popover` | `state`/`open` `trigger` `content` `placement` |
+| 浮层 | `Popover` / `Modal` / `Portal` | `state`/`open` `trigger` `content` `title` `actions` `placement` |
 
 事件绑定辅助：`BindInput(func(string))`、`BindBool(func(bool))`、`BindValue(func(string))`、`BindNumber(func(float64))`，与受控 signal 配合形成闭环。
 
-`Select` 基于 `Popover` 浮层底座实现（锚点定位 + 遮罩 + 选中关闭），是 Dropdown/Menu 的通用形态。`VirtualList` 只渲染可见窗口项（+ overscan），节点数与数据量解耦。
+**浮层三件套**（共用 `gx-role` 协议、两个后端语义一致，见 `overlay.go`）：
 
-完整用法与可运行示例见 `examples/skia-gallery/`（含 [preview.png](../../examples/skia-gallery/preview.png) 全组件截图）。
+- `Popover`：贴锚点定位的轻量浮层，Dropdown/Menu/Tooltip 的底座；`Select` 基于它实现。
+- `Modal`：`gx-role=modal` 视口居中 + scrim 遮罩 + 标题/内容/操作区；点遮罩关闭（`maskClosable`）、关闭按钮（`closable`）、ESC 关闭（`ModalHandleKey(state, key)` 由 GUI 键盘回调调用）。
+- `Portal`：`gx-role=portal` 纯传送门——子树脱离父级 overflow 裁剪与 flex 流、铺满画布作为定位参考、最后绘制在最上层；子树用 `position:absolute` + `left`/`top` 自主定位。Modal/Toast/全局提示的共同底座。
+
+`VirtualList` 只渲染可见窗口项（+ overscan），节点数与数据量解耦。
+
+可运行示例见 `examples/skia-gallery/`：[全组件](../../examples/skia-gallery/preview.png) / [模态框](../../examples/skia-gallery/preview-modal.png) / [传送门](../../examples/skia-gallery/preview-portal.png) 截图。`GX_DEMO_MODAL=1` / `GX_DEMO_PORTAL=1` 环境变量可让对应浮层初始打开以便截图。
 
 ## 切到独立仓库
 
