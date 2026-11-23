@@ -41,9 +41,18 @@ type Window struct {
 	anim *Animator
 	// cache 跨帧持有布局结果/内容快照，实现"无变化不重算 + 脏矩形局部重绘"。
 	cache FrameCache
+
+	// 焦点目标：Skia 是离屏光栅后端，没有平台控件，Focuser 记录最近一次
+	// 命令式聚焦的 NodeID，由 GUI 集成层经 FocusedID/FocusHandler 消费。
+	focusID      gxscene.NodeID
+	hasFocus     bool
+	focusHandler func(gxscene.NodeID)
 }
 
-var _ gxapp.Window = (*Window)(nil) // 编译期断言：满足 host 后端契约
+var (
+	_ gxapp.Window  = (*Window)(nil) // 满足 host 后端契约
+	_ gxapp.Focuser = (*Window)(nil) // 可选焦点能力：记录焦点目标供 GUI 集成层消费
+)
 
 // NewWindow 创建一个 Skia 后端实例。零配置，Open 时按 WindowConfig 分配画布。
 // 返回具体 *Window 而非 gxapp.Window，便于调用方访问 DrawLog 等后端特有 API。
@@ -182,6 +191,35 @@ func (w *Window) HitTest(x, y float32) *gxscene.Node {
 		}
 	}
 	return nil
+}
+
+// Focus 实现 gxapp.Focuser：记录 ref 句柄请求聚焦的节点，并通知集成层。
+// Skia 本身是离屏光栅后端、没有平台控件，本方法不持有第二套组件焦点状态；
+// 真实窗口集成层通过 FocusHandler 或 FocusedID 拿到焦点意图，按所用窗口
+// 系统把键盘焦点落到原生输入框。回调在锁外执行，避免重入 Draw 自锁。
+func (w *Window) Focus(id gxscene.NodeID) {
+	w.mu.Lock()
+	w.focusID, w.hasFocus = id, true
+	h := w.focusHandler
+	w.mu.Unlock()
+	if h != nil {
+		h(id)
+	}
+}
+
+// FocusedID 返回最近一次 Focus 的目标节点；ok=false 表示尚未聚焦。
+func (w *Window) FocusedID() (gxscene.NodeID, bool) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.focusID, w.hasFocus
+}
+
+// SetFocusHandler 注册焦点意图回调，供 GUI 集成层把焦点转发给原生控件。
+// 传 nil 清空。未注册时 Focus 仍会记录目标，可由 FocusedID 查询。
+func (w *Window) SetFocusHandler(fn func(gxscene.NodeID)) {
+	w.mu.Lock()
+	w.focusHandler = fn
+	w.mu.Unlock()
 }
 
 // PaintTo 用本后端一致的 painter 把场景树画到任意 Skia canvas（供真实窗口复用布局/绘制协议）。

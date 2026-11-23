@@ -105,7 +105,14 @@ func view() any {
 }
 ```
 
-后端能力是**可选契约**：实现 `gxapp.Focuser` 即获得 focus，实现 `gxapp.Measurer` 即获得布局读取；两者都不实现（含 headless / 现有 Skia、Rust 后端）时行为零改动——Focus 为 no-op、Measure 回填零值。`App.Measure(id, cb)` 是等价的 App 级 API，供只知道 NodeID 的高级调用方登记异步读取。
+后端能力是**可选契约**：实现 `gxapp.Focuser` 即获得 focus，实现 `gxapp.Measurer` 即获得布局读取；两者都不实现（含 headless）时行为零改动——Focus 为 no-op、Measure 回填零值。`App.Measure(id, cb)` 是等价的 App 级 API，供只知道 NodeID 的高级调用方登记异步读取。
+
+内置两个后端均已接 `gxapp.Focuser`，且**不引入第二套焦点状态**，各自复用既有路径：
+
+- **Rust 后端**：`Focus(id)` 把聚焦意图作为 `focus` 事件投进 `events → Dispatcher` 通道，与「点击输入框」走完全相同的闭环——应用在 `SetDispatcher` 里对 `"focus"` 事件调 `widgets.Focus(findNode(app, ev.NodeID))` 即可，node_id 就是 ref 句柄持有的那个 `NodeID.String()`。Focuser 本身不 import 组件库，分派权始终在应用层。
+- **Skia 后端**：离屏光栅后端没有平台控件，`Focus(id)` 记录焦点目标，经 `FocusedID()` 查询或 `SetFocusHandler(fn)` 回调交给真实窗口集成层，由它把键盘焦点落到原生输入框。
+
+> 所以 `el.focus()` 不是把焦点写进某个全局变量，而是把「让这个节点获得焦点」的意图交给后端；具体如何落到平台控件由后端决定，host 核心与组件库都不感知。
 
 > 节点身份（`NodeID`）只在 host 与后端协议层流转，不通过 `ref` 暴露给业务代码；`Element` 是唯一对外的命令式句柄。
 

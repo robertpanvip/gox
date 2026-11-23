@@ -43,8 +43,11 @@ type Window struct {
 	drawFn func(data []byte) int
 }
 
-// 编译期断言：本后端采用 Frame 契约。
-var _ gxapp.FramePresenter = (*Window)(nil)
+// 编译期断言：本后端采用 Frame 契约，并实现可选的焦点能力。
+var (
+	_ gxapp.FramePresenter = (*Window)(nil)
+	_ gxapp.Focuser        = (*Window)(nil)
+)
 
 // 全局注册表：C 回调的 ctx 是注册表 key（uintptr），避免把 Go 指针长期交给 C。
 var (
@@ -209,6 +212,24 @@ func (w *Window) SetDispatcher(fn func(ev InputEvent)) {
 	w.mu.Lock()
 	w.dispatcher = fn
 	w.mu.Unlock()
+}
+
+// Focus 实现 gxapp.Focuser：把 ref 句柄的命令式聚焦意图注入事件通道，
+// 走与「点击输入框」完全相同的 focus 事件闭环：
+//
+//	Focus(id) → w.events → Run → Dispatcher → widgets.Focus(node)
+//
+// 应用只需在 SetDispatcher 的处理器里对 "focus" 事件调用 widgets.Focus
+// （demo 已如此处理原生点击焦点），无需为 ref 另写一套焦点逻辑。Focuser
+// 因此不引入第二套焦点状态，也不依赖组件库——事件分派权始终在应用层。
+//
+// 非阻塞投递：通道满（或零值 Window 的 nil 通道）时丢弃，与 goEventBridge
+// 的投递策略一致，绝不阻塞调用方。
+func (w *Window) Focus(id gxscene.NodeID) {
+	select {
+	case w.events <- inputEvent{Kind: "focus", NodeID: id.String()}:
+	default:
+	}
 }
 
 // InputEvent 是导出给业务的事件类型。
