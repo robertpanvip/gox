@@ -145,3 +145,111 @@ func TestDynChildScalarStillUpdates(t *testing.T) {
 		t.Fatalf("标量插槽应更新到 2:\n%s", out)
 	}
 }
+
+// Issue #3 回归：动态子节点槽位收到「类型化的子树切片」（[]*Instance / []*Node）时，
+// 必须和 []any 一样按子树嫁接，不能被 type switch 漏掉后经 valueText 序列化成文本。
+func TestDynChildrenTypedSubtreeSlices(t *testing.T) {
+	// 一个 <span>"OK"</span> 子树模板。
+	spanTpl := gxscene.Template{Ops: []gxscene.Op{
+		{Code: gxscene.OpElem, Arg: "span"},
+		{Code: gxscene.OpChildText, Arg: "OK"},
+		{Code: gxscene.OpClose},
+	}}
+	wrap := gxscene.Template{Ops: []gxscene.Op{
+		{Code: gxscene.OpElem, Arg: "div"},
+		{Code: gxscene.OpDynChild, Slot: 0},
+		{Code: gxscene.OpClose},
+	}, N: 1}
+
+	cases := []struct {
+		name  string
+		value any
+	}{
+		{"[]any", func() any { return []any{gxscene.Render(spanTpl), gxscene.Render(spanTpl)} }()},
+		{"[]*Instance", func() any { return []*gxscene.Instance{gxscene.Render(spanTpl), gxscene.Render(spanTpl)} }()},
+		{"[]*Node", func() any { return []*gxscene.Node{gxscene.Render(spanTpl).Root(), gxscene.Render(spanTpl).Root()} }()},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			v := c.value
+			inst := gxscene.Render(wrap, func() any { return v })
+			out := (gxscene.TextBackend{}).Paint(inst.Root())
+			// 期望两棵 span 子树；不应出现 "[<span>" / "[0x..." 这类被 fmt.Sprint
+			// 序列化的原文（类型化切片掉进 default 分支的症状）。
+			if strings.Count(out, `<span>`) != 2 || strings.Count(out, `"OK"`) != 2 {
+				t.Fatalf("类型化子树切片应按节点嫁接，得到:\n%s", out)
+			}
+			if strings.Contains(out, "[<span>") || strings.Contains(out, `[0x`) {
+				t.Fatalf("子树切片被序列化成文本:\n%s", out)
+			}
+		})
+	}
+}
+
+// Issue #3 守护：非子树类型的切片（[]string / []int）不能因反射改动被误当成子树列表，
+// 仍应退化为文本；嵌套的子树切片应递归展开。
+func TestDynChildrenScalarSliceStaysText(t *testing.T) {
+	wrap := gxscene.Template{Ops: []gxscene.Op{
+		{Code: gxscene.OpElem, Arg: "div"},
+		{Code: gxscene.OpDynChild, Slot: 0},
+		{Code: gxscene.OpClose},
+	}, N: 1}
+	v := []string{"a", "b"}
+	inst := gxscene.Render(wrap, func() any { return v })
+	out := (gxscene.TextBackend{}).Paint(inst.Root())
+	if !strings.Contains(out, `[a b]`) {
+		t.Fatalf("标量切片仍应序列化为文本 [a b]:\n%s", out)
+	}
+}
+
+func TestDynChildrenNestedTypedSlices(t *testing.T) {
+	spanTpl := gxscene.Template{Ops: []gxscene.Op{
+		{Code: gxscene.OpElem, Arg: "span"},
+		{Code: gxscene.OpChildText, Arg: "OK"},
+		{Code: gxscene.OpClose},
+	}}
+	wrap := gxscene.Template{Ops: []gxscene.Op{
+		{Code: gxscene.OpElem, Arg: "div"},
+		{Code: gxscene.OpDynChild, Slot: 0},
+		{Code: gxscene.OpClose},
+	}, N: 1}
+	// [][]any{[]{*Instance}, []{*Instance}} 嵌套切片。
+	nested := [][]any{
+		{gxscene.Render(spanTpl)},
+		{gxscene.Render(spanTpl)},
+	}
+	inst := gxscene.Render(wrap, func() any { return nested })
+	out := (gxscene.TextBackend{}).Paint(inst.Root())
+	if strings.Count(out, `<span>`) != 2 || strings.Count(out, `"OK"`) != 2 {
+		t.Fatalf("嵌套子树切片应递归展开为两棵 span:\n%s", out)
+	}
+}
+
+// Issue #3：类型化子树切片在 Update（getter 重求值）时也应正确嫁接，
+// 而不是在第二次求值时掉回文本分支。
+func TestDynChildrenTypedSliceOnUpdate(t *testing.T) {
+	span := func(s string) *gxscene.Instance {
+		return gxscene.Render(gxscene.Template{Ops: []gxscene.Op{
+			{Code: gxscene.OpElem, Arg: "span"},
+			{Code: gxscene.OpChildText, Arg: s},
+			{Code: gxscene.OpClose},
+		}})
+	}
+	wrap := gxscene.Template{Ops: []gxscene.Op{
+		{Code: gxscene.OpElem, Arg: "div"},
+		{Code: gxscene.OpDynChild, Slot: 0},
+		{Code: gxscene.OpClose},
+	}, N: 1}
+	kids := []*gxscene.Instance{span("A")}
+	inst := gxscene.Render(wrap, func() any { return kids })
+	out := (gxscene.TextBackend{}).Paint(inst.Root())
+	if !strings.Contains(out, `"A"`) {
+		t.Fatalf("首帧应含 A:\n%s", out)
+	}
+	kids = []*gxscene.Instance{span("B"), span("C")}
+	inst.Update()
+	out = (gxscene.TextBackend{}).Paint(inst.Root())
+	if strings.Count(out, `<span>`) != 2 || !strings.Contains(out, `"B"`) || !strings.Contains(out, `"C"`) {
+		t.Fatalf("Update 后类型化切片应按子树嫁接:\n%s", out)
+	}
+}

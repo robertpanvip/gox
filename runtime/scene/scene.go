@@ -536,8 +536,39 @@ func graftNode(dst *Node, src *Node) {
 	dst.Children = append(dst.Children, src)
 }
 
-// embedValue 把一个动态值写入子节点槽位。结构性值（*Instance/*Node/切片）按节点嫁接，
-// 标量退化为文本节点——这让 `{childJSX}` 和 `{普通值}` 走同一套 slot。
+// subtreeElems 把任意类型的子树切片规整为 []any，供子节点槽位统一按子树嫁接。
+//
+// Issue #3：编译器生成的 children 是 []any，但 Go 侧手写组件/命令式构造常写
+// []*Instance / []*Node 等类型化切片。Go 中它们与 []any 是不同类型，type switch
+// 的 case []any 命不中，会掉进 default 被 valueText 序列化成文本（静默错误）。
+// 用反射识别「元素为 *Instance / *Node 的切片」，逐元素规整后交给 embedAnyChild：
+// 元素本身是子树则嫁接，其余退化为文本；nil/非子树切片返回 ok=false，保持原语义。
+// []any 直接在调用处走快路径，不经过反射。
+func subtreeElems(v any) ([]any, bool) {
+	rv := reflect.ValueOf(v)
+	if !rv.IsValid() || rv.Kind() != reflect.Slice {
+		return nil, false
+	}
+	n := rv.Len()
+	out := make([]any, 0, n)
+	for i := 0; i < n; i++ {
+		e := rv.Index(i).Interface()
+		// 只认元素本身是子树或子树的 []any；非子树切片（[]string/[]int/...）
+		// 不当作子树列表，避免把 `{[]string{"a","b"}}` 这类标量切片误嫁接。
+		switch e.(type) {
+		case *Instance, *Node, []any:
+		default:
+			if _, ok := subtreeElems(e); !ok {
+				return nil, false
+			}
+		}
+		out = append(out, e)
+	}
+	return out, true
+}
+
+// embedValue 把一个动态值写入子节点槽位。结构性值（*Instance/*Node/子树切片）按节点
+// 嫁接，标量退化为文本节点——这让 `{childJSX}` 和 `{普通值}` 走同一套 slot。
 func embedValue(s *slot, v any) {
 	s.node.Children = nil
 	s.child = nil
@@ -553,12 +584,22 @@ func embedValue(s *slot, v any) {
 		s.node.Type = NodeFragment
 		graftNode(s.node, x)
 	case []any:
+		// 编译器生成的 children 快路径，免反射。
 		s.node.Kind = "#frag"
 		s.node.Type = NodeFragment
 		for _, e := range x {
 			embedAnyChild(s.owner, s.node, e)
 		}
 	default:
+		// Issue #3：类型化的子树切片（[]*Instance / []*Node / ...）。
+		if elems, ok := subtreeElems(v); ok {
+			s.node.Kind = "#frag"
+			s.node.Type = NodeFragment
+			for _, e := range elems {
+				embedAnyChild(s.owner, s.node, e)
+			}
+			return
+		}
 		s.node.Kind = "#text"
 		s.node.Type = NodeText
 		s.node.Text = valueText(v)
@@ -577,6 +618,13 @@ func embedAnyChild(owner *Instance, dst *Node, v any) {
 			embedAnyChild(owner, dst, e)
 		}
 	default:
+		// Issue #3：类型化的子树切片递归展开，与 []any 同语义。
+		if elems, ok := subtreeElems(v); ok {
+			for _, e := range elems {
+				embedAnyChild(owner, dst, e)
+			}
+			return
+		}
 		n := &Node{Kind: "#text", Type: NodeText, Text: valueText(v), parent: dst,
 			ID: dst.ID + "/t" + strconv.Itoa(len(dst.Children))}
 		dst.Children = append(dst.Children, n)
