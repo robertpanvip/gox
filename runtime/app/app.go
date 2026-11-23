@@ -123,6 +123,10 @@ type App struct {
 	frameVersion  uint64            // 单调递增的提交序号（Frame 契约）
 	needsFullSync bool              // 上次 Present 失败后置位：下帧要求后端全量重建（Frame 契约）
 	rendered      bool
+
+	// ref Element 句柄的异步布局读取：事件回调登记，帧后统一回填（见 capabilities.go）。
+	pendingMu       sync.Mutex
+	pendingMeasures []measureReq
 }
 
 // Open 按配置创建默认 Headless 窗口，返回应用句柄。不接收 JSX——JSX 交给 Render。
@@ -255,6 +259,12 @@ func (a *App) drawNowErr() error {
 	if err != nil && hook != nil {
 		hook(err)
 	}
+	// 帧后回填异步布局读取（ref 的 el.Measure / App.Measure）：本帧布局已就绪，
+	// 用最新结果回调。回调在 commit gate 内执行（gate 可重入），写 signal 安全；
+	// 真正重绘仍由帧边界统一派发。
+	if err == nil {
+		a.flushMeasures()
+	}
 	return err
 }
 
@@ -341,6 +351,9 @@ func (a *App) Render(build func() any) (err error) {
 		}
 		if inst != nil {
 			a.inst = inst
+			// ref Element 句柄的宿主能力（Focuser/Measurer）注入共享 sink。
+			// 必须在首帧 Draw 前接好回填钩子：首帧布局就绪后如有 pending 读取可回填。
+			a.installElementCaps(inst)
 			a.drawNow() // 首帧：同步绘制，此时组件的建树期副作用已登记
 			// 响应式接线也放在同一 Owner 内：各 effect 随 Owner 一起销毁。
 			a.bindReactive()

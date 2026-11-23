@@ -446,6 +446,17 @@ func walkScene(n *jsxNode, ops *[]sceneOp, getters *[]sceneGetter, slotCounter *
 			*getters = append(*getters, eventGetter(a))
 			continue
 		}
+		// ref 模板引用（命令式逃生口）：ref={fn} 编成 OpRef + getter，fn 是
+		// func(*gxscene.Element)（或 func(any) 兼容形态）。建树时该节点 ID 已分配，
+		// 运行时回调一次 *Element 句柄，销毁时回调 nil。只认原生元素上的 attrExpr；
+		// 字符串/bool 的 ref 无意义，按普通静态属性透传（后端自行解释）。
+		if a.name == "ref" && a.kind == attrExpr {
+			s := *slotCounter
+			*slotCounter++
+			*ops = append(*ops, sceneOp{code: "OpRef", slot: s})
+			*getters = append(*getters, sceneGetter{expr: a.value, pos: a.pos})
+			continue
+		}
 		switch a.kind {
 		case attrBool:
 			*ops = append(*ops, sceneOp{code: "OpAttr", key: a.name, argQuote: strconv.Quote("true"), slot: -1})

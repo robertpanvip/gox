@@ -46,6 +46,11 @@ const (
 	// 该插槽每次求值 getter，按返回实例的场景模板身份比较——身份变化则替换子树、
 	// 身份不变则复用旧子树只做细粒度更新。是"确实想按条件切换组件"的显式出口。
 	OpDynComp
+	// OpRef 模板引用插槽（命令式逃生口）：Slot=索引；getter 返回一个回调
+	// func(*Element)（或其 func(any) 兼容形态）。建树时该节点 ID 分配完毕后回调
+	// 一次 *Element 句柄，Dispose 时回调 nil 表示卸载。ref 是一次性挂载/卸载语义，
+	// 不进响应式重新绑定——signal 变化不会重跑 ref。
+	OpRef
 )
 
 // Op 是一条 opcode 指令。Arg/Key/Slot 的含义由 Code 决定。
@@ -194,6 +199,7 @@ const (
 	slotBranch  // 动态子树：getter 返回 subtreeController（*Branch 条件分支 / *For keyed 列表）
 	slotEvent   // 事件绑定：getter 返回 handler 原值，写入节点的 Handlers（不进 Props）
 	slotDynamic // 动态组件（OpDynComp / <Dynamic>）：getter 返回 *Instance，按模板身份切换子树
+	slotRef     // 模板引用：getter 返回 func(*Element) 回调，建树/销毁各触发一次，不进响应式重绑
 )
 
 // subtreeController 是动态子树控制器的公共契约：Branch（条件分支）与 For（keyed 列表）
@@ -220,6 +226,9 @@ type slot struct {
 	child *Instance         // slotComp 时挂载的子组件实例
 	ctrl  subtreeController // slotBranch/OpFor 时挂载的动态子树控制器
 	owner *Instance         // 所属实例，供挂载子实例时共享变更 sink
+
+	refElem *Element // slotRef 建树时创建的句柄，Dispose 时标记销毁并回调 nil
+	refCb   any      // slotRef 的回调原值 func(*Element)，Dispose 时回填 nil
 }
 
 // PerfStats 是场景树的可观测性能指标（T4.5）。所有计数在响应式 effect 内累加，
@@ -372,6 +381,12 @@ func compile(t Template) *compiledTemplate {
 			cur.Handlers[op.Key] = nil
 			if op.Slot >= 0 && op.Slot < t.N {
 				slots[op.Slot] = &slot{kind: slotEvent, path: childPath(cur), attr: op.Key}
+			}
+		case OpRef:
+			// ref 挂在栈顶元素节点上：不新增节点、不进 Props/Handlers，仅记录目标
+			// 路径。建树时该节点已由 clone 分配 ID，applyAll 里回调 func(*Element)。
+			if op.Slot >= 0 && op.Slot < t.N {
+				slots[op.Slot] = &slot{kind: slotRef, path: childPath(cur)}
 			}
 		case OpComp, OpDynComp:
 			// 组件在场景树里是一个逻辑包装节点（Kind=组件名，Type=NodeFragment 透明透传）。
@@ -807,6 +822,31 @@ func mountBranch(s *slot, sub *Instance) {
 	}
 }
 
+// callRef 把 ref getter 的结果当作命令式回调，在节点 ID 已分配后调用一次。
+// 主签名 func(*Element)；兼容 func(any)（GX 侧未注解参数时的通用形态）。
+// 返回保存下来供 Dispose 回填 nil 的回调原值（无有效回调时返回 nil）。
+func (i *Instance) callRef(s *slot, v any) any {
+	if s.node == nil || v == nil {
+		return nil
+	}
+	elem := newElement(s.node.ID, i.changes)
+	switch fn := v.(type) {
+	case func(*Element):
+		if elem != nil {
+			fn(elem)
+		}
+		s.refElem = elem
+		return v
+	case func(any):
+		if elem != nil {
+			fn(elem)
+		}
+		s.refElem = elem
+		return v
+	}
+	return nil
+}
+
 // applyAll 首次填充所有插槽（不计入 Writes——那是「更新」指标）。
 func (i *Instance) applyAll() {
 	for _, s := range i.slots {
@@ -839,6 +879,9 @@ func (i *Instance) applyAll() {
 			}
 		case slotBranch:
 			attachController(i, s, v)
+		case slotRef:
+			// 一次性挂载语义：建树时 ID 已分配，回调一次 *Element 句柄。
+			s.refCb = i.callRef(s, v)
 		}
 	}
 }
@@ -861,6 +904,10 @@ func (i *Instance) Update() int {
 	i.Updates++
 	written := 0
 	for _, s := range i.slots {
+		// ref 是一次性挂载/卸载语义，不进响应式重新绑定：Update 不重求值 ref getter。
+		if s.kind == slotRef {
+			continue
+		}
 		// 稳定组件子树：slotComp 组件插槽，或 slotChild（children 插槽）首次求值产出
 		// 的 *Instance。getter 只在首次渲染调用一次，之后递归驱动子组件自身的细粒度
 		// 更新；不重新求值 getter、不重建子树——组件实例与局部状态保稳（Issue #1）。
@@ -1086,6 +1133,10 @@ func (i *Instance) BindReactive(effect func(func()) Computation) {
 		return
 	}
 	for s, sl := range i.slots {
+		// ref 不建响应式 effect：它是一次性生命周期回调，signal 变化不重跑。
+		if sl.kind == slotRef {
+			continue
+		}
 		// 稳定组件子树：slotComp 或承载 *Instance 的 slotChild。组件实例常驻，
 		// 递归进子树接线（叶子 + 内部的结构插槽都接）；不为它建 SetPart(getter())
 		// effect——getter 每次产出新 *Instance，重求值会重建子树、丢失局部状态（Issue #1）。
@@ -1167,6 +1218,10 @@ func (i *Instance) bindLeaves(effect func(func()) Computation) {
 		return
 	}
 	for s, sl := range i.slots {
+		// ref 不建响应式 effect：一次性生命周期回调，signal 变化不重跑。
+		if sl.kind == slotRef {
+			continue
+		}
 		// 稳定组件子树（slotComp / 承载 *Instance 的 slotChild）：递归进子树接叶子，
 		// 不为其建 SetPart(getter()) effect（getter 重求值会重建子树，Issue #1）。
 		if ch := sl.stableChildComp(); ch != nil {
@@ -1330,6 +1385,21 @@ func (i *Instance) Dispose() {
 		}
 		if sl.kind == slotBranch && sl.ctrl != nil {
 			sl.ctrl.Dispose()
+		}
+		if sl.kind == slotRef {
+			// 卸载语义：先标记句柄失效，再回调 nil（与建树时的一次性回调对称）。
+			// 支持 func(*Element) 与 func(any) 两种签名。
+			if sl.refElem != nil {
+				sl.refElem.disposeRef()
+			}
+			switch fn := sl.refCb.(type) {
+			case func(*Element):
+				fn(nil)
+			case func(any):
+				fn(nil)
+			}
+			sl.refCb = nil
+			sl.refElem = nil
 		}
 	}
 }

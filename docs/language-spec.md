@@ -80,7 +80,36 @@ app.render(() =>
 
 运行时 `runtime/scene/`：`Template` / `Op` / `Render` / `Instance`。`Render` 缓存静态骨架、clone 出常驻场景树；`Instance.Update()` 只回写变化的插槽（可观测指标 `Writes`），不含调度。host 不定义绘制后端接口：GUI 后端实现 `gxapp.Window`，可用 `Node.ID`（整数稳定身份）/ `Changes()` 做增量绘制；内置 `TextBackend` 只是文本工具。
 
-### 3.1 `<For>` 列表
+### 3.1 `ref` 模板引用（命令式逃生口）
+
+`<tag ref={fn}/>` 里的 `fn` 是 `func(*gxscene.Element)`（或兼容形态 `func(any)`）。编译器编成 `gxscene.OpRef` 插槽：建树时该节点 ID 分配完毕后回调一次 `*Element` 句柄，实例销毁（重渲染 / 关闭 / 分支切换）时回调 `nil`。ref 是一次性挂载/卸载语义，**不进响应式重新绑定**——signal 变化不会重跑 ref。
+
+`*Element` 是命令式句柄，不暴露裸 `NodeID`。按 GX 规范用小写书写方法，编译器经 `transformExternal` 还原为首字母大写的 Go 方法；类型名 `*gxscene.Element` 保持大写：
+
+| GX 写法 | Go 方法 | 语义 |
+|---|---|---|
+| `el.focus()` | `Focus() bool` | 请求后端把焦点移到该节点；未实现焦点能力时返回 false |
+| `el.boundingClientRect()` | `BoundingClientRect() gxscene.Rect` | 同步读最近一次布局矩形；无布局返回零矩形（宽高 0） |
+| `el.measure(cb)` | `Measure(func(w, h float32))` | 登记异步读布局：下一帧绘制后由宿主回填 `cb`；无布局能力以 `(0,0)` 回填，不悬挂 |
+
+```jsx
+import gxscene "github.com/robertpanvip/gox/runtime/scene"
+
+func onMount(el *gxscene.Element) {
+    el.focus()
+    el.measure(func(w, h float32) { println(w, h) })
+}
+
+func view() any {
+    return <input ref={onMount} placeholder="自动聚焦" />
+}
+```
+
+后端能力是**可选契约**：实现 `gxapp.Focuser` 即获得 focus，实现 `gxapp.Measurer` 即获得布局读取；两者都不实现（含 headless / 现有 Skia、Rust 后端）时行为零改动——Focus 为 no-op、Measure 回填零值。`App.Measure(id, cb)` 是等价的 App 级 API，供只知道 NodeID 的高级调用方登记异步读取。
+
+> 节点身份（`NodeID`）只在 host 与后端协议层流转，不通过 `ref` 暴露给业务代码；`Element` 是唯一对外的命令式句柄。
+
+### 3.2 `<For>` 列表
 
 `<For each={xs} key={(item) => ...}>{(item) => ...}</For>` 是 keyed 列表控制器（对齐 SolidJS `<For>`）。`each` 在读 sig 的响应式上下文求值，列表变化时做 keyed diff：同 key 节点复用（移动不重建），删除项销毁其 Owner（级联停止内部 effect / cleanup），重排只调顺序。
 

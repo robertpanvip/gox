@@ -93,6 +93,42 @@ type changeSink struct {
 	enabled bool
 	changes []Change
 	differ  ChildDiffer // nil 表示使用 host 内建 LIS diff
+
+	// caps 是 ref Element 句柄用的宿主能力（focus / measure），由 gxapp 注入，
+	// 经 sink 在整棵实例树共享。纯 scene / headless 下为零值，Element 安全降级。
+	caps hostCaps
+	// afterDraw 是异步布局读取的回填通道：Element.Measure 在同步读不到布局时
+	// 把 (NodeID, cb) 登记到这里，gxapp 在下一帧 Present/Draw 后统一回填。
+	// 由 gxapp 注入；未注入时 Element.Measure 直接以零值回调（不悬挂）。
+	afterDraw func(NodeID, func(w, h float32))
+}
+
+// SetMeasureHook 注入异步布局回填通道（gxapp 用）。传 nil 清空。
+// 它是 Instance 的导出转发，供装配层在 Render 后接上帧后回填。
+func (i *Instance) SetMeasureHook(fn func(NodeID, func(w, h float32))) {
+	if i != nil {
+		i.changes.setMeasureHook(fn)
+	}
+}
+
+func (s *changeSink) setMeasureHook(fn func(NodeID, func(w, h float32))) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.afterDraw = fn
+	s.mu.Unlock()
+}
+
+// measureHook 返回当前回填通道。
+func (s *changeSink) measureHook() func(NodeID, func(w, h float32)) {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	fn := s.afterDraw
+	s.mu.Unlock()
+	return fn
 }
 
 func newChangeSink() *changeSink { return &changeSink{} }
