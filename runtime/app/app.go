@@ -18,6 +18,8 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync"
+	"sync/atomic"
 
 	gxscene "github.com/robertpanvip/gox/runtime/scene"
 	"github.com/robertpanvip/gox/runtime/signal"
@@ -87,8 +89,12 @@ type App struct {
 	drawPending bool              // 一批 effect 内是否发生需要重绘的变化（预留给 Dispatcher 精确化）
 	lastDrawErr error             // 最近一次 Draw 的错误（T2.2）
 	errHook     func(error)       // 可选：Draw 错误回调
-	closed      bool
-	rendered    bool
+	commit       *commitGate       // 串行化 Scene Mutation 与 Backend Draw（Host 评审 P0）
+	stateMu      sync.Mutex        // 保护 errHook / lastDrawErr / frameVersion 的并发读写
+	closed       atomic.Bool       // 并发安全的关闭标记（Run/Close/Draw 契约）
+	closeOnce    sync.Once         // 保证 Close 幂等且只释放一次资源
+	frameVersion uint64            // 单调递增的提交序号（Frame 契约）
+	rendered     bool
 }
 
 // Open 按配置创建默认 Headless 窗口，返回应用句柄。不接收 JSX——JSX 交给 Render。
@@ -113,7 +119,12 @@ func OpenWith(cfg WindowConfig, win Window) (*App, error) {
 	if err := win.Open(cfg); err != nil {
 		return nil, fmt.Errorf("gxapp: 打开窗口失败: %w", err)
 	}
-	app := &App{win: win, cfg: cfg}
+	// 回读后端实际生效的配置：窗口后端可能因平台限制调整尺寸/全屏等值（Host 评审
+	// P1：App.Config() 与窗口实际配置可能不一致）。以窗口回报为准。
+	if actual := win.Config(); actual.Width > 0 && actual.Height > 0 {
+		cfg = actual.normalize()
+	}
+	app := &App{win: win, cfg: cfg, commit: newCommitGate()}
 	app.setDispatcher(&InlineDispatcher{})
 	return app, nil
 }
@@ -140,24 +151,70 @@ func (a *App) setDispatcher(d FrameDispatcher) {
 }
 
 // drawNow 是派发器最终执行的绘制动作：真正调用窗口 Draw 并记录错误（T2.2）。
+//
+// Draw 在 commit gate 内执行——与所有 Scene Mutation 互斥（Host 评审 P0）：后端
+// 遍历 Node 树期间，不会有 effect 并发写入同一棵树。InlineDispatcher 下它同步
+// 执行；QueueDispatcher 下它运行在投递到的 UI 线程。
 func (a *App) drawNow() {
-	if a.closed || a.inst == nil {
+	if a.closed.Load() || a.inst == nil {
 		return
 	}
-	err := a.win.Draw(a.inst.Root())
-	a.lastDrawErr = err
-	if err != nil && a.errHook != nil {
-		a.errHook(err)
+	a.commit.lock()
+
+	// 判断后端是否采用 Frame 契约。FramePresenter 每帧收到 Root+Changes+Version，
+	// 无需反向持有 App；老后端走 Draw(root) 兼容路径。
+	presenter, useFrame := a.win.(FramePresenter)
+
+	var root = a.inst.Root()
+	var changes []gxscene.Change
+	if useFrame {
+		// 只在确有 Present 消费者时取走增量（TakeChanges 会清空）——兼容路径下
+		// 增量仍留给后端自行通过 app.TakeChanges() 消费，行为不变。
+		changes = a.inst.TakeChanges()
 	}
+
+	a.stateMu.Lock()
+	a.frameVersion++
+	frame := &Frame{Root: root, Changes: changes, Version: a.frameVersion}
+	a.stateMu.Unlock()
+
+	var err error
+	if useFrame {
+		err = presenter.Present(frame)
+	} else {
+		err = a.win.Draw(root)
+	}
+	a.commit.unlock()
+
+	a.stateMu.Lock()
+	a.lastDrawErr = err
+	hook := a.errHook
+	a.stateMu.Unlock()
+	if err != nil && hook != nil {
+		hook(err)
+	}
+}
+
+// FrameVersion 返回最近一次提交的帧序号（Frame 契约的可观测指标）。
+func (a *App) FrameVersion() uint64 {
+	a.stateMu.Lock()
+	defer a.stateMu.Unlock()
+	return a.frameVersion
 }
 
 // SetErrorHandler 设置 Draw 错误回调（T2.2）。err 为 nil 时不调用。
 func (a *App) SetErrorHandler(fn func(error)) {
+	a.stateMu.Lock()
 	a.errHook = fn
+	a.stateMu.Unlock()
 }
 
 // LastDrawError 返回最近一次 Draw 的错误（未出错为 nil）。
-func (a *App) LastDrawError() error { return a.lastDrawErr }
+func (a *App) LastDrawError() error {
+	a.stateMu.Lock()
+	defer a.stateMu.Unlock()
+	return a.lastDrawErr
+}
 
 // Render 在一棵根 Owner 下运行 build 构建并挂载 JSX 场景树：画首帧，并在内部
 // 完成响应式接线（signal 变化 → 精确更新 + 自动重绘，含条件分支 / keyed 列表的结构重绘）。
@@ -172,8 +229,8 @@ func (a *App) LastDrawError() error { return a.lastDrawErr }
 //	app.render(() => <div id="app">{count}</div>)
 //
 // 重复调用会先销毁上一棵树的 Owner（含组件副作用）与订阅，再渲染新树。
-func (a *App) Render(build func() any) error {
-	if a.closed {
+func (a *App) Render(build func() any) (err error) {
+	if a.closed.Load() {
 		return fmt.Errorf("gxapp: 应用已关闭，无法 Render")
 	}
 	if build == nil {
@@ -183,6 +240,17 @@ func (a *App) Render(build func() any) error {
 		// 重渲染：先销毁旧树的 Owner（级联组件 effect/cleanup）与订阅，避免泄漏到新帧。
 		a.teardownTree()
 	}
+
+	// 建树失败（build 未返回实例等）时统一清理本次创建的 Owner：
+	// CreateRoot 内组件可能已登记 effect/computed/cleanup，若直接返回 error 而
+	// 不 Dispose，这些响应式资源会永久泄漏。defer 覆盖所有失败出口（Host 评审 P1）。
+	ok := false
+	defer func() {
+		if !ok {
+			a.teardownTree()
+			a.rendered = false
+		}
+	}()
 
 	// 在根 Owner 下建树：组件函数内创建的 effect/computed/cleanup 自动归属它。
 	var inst *gxscene.Instance
@@ -198,10 +266,11 @@ func (a *App) Render(build func() any) error {
 			a.bindReactive()
 		}
 	})
-	a.rendered = true
 	if inst == nil {
 		return fmt.Errorf("gxapp: 建树函数未返回场景树实例（*gxscene.Instance）")
 	}
+	a.rendered = true
+	ok = true
 	return nil
 }
 
@@ -239,7 +308,7 @@ func (a *App) teardownTree() {
 // 内的叶子变化同样触发重绘——这是插槽级模型下替代「聚合 Update 递归全树」的关键。
 // 所有 effect 挂在 a.owner 下，teardown 时随 Owner 级联销毁。
 func (a *App) bindReactive() {
-	if a.inst == nil || a.closed {
+	if a.inst == nil || a.closed.Load() {
 		return
 	}
 	// 帧边界 hook：一批 effect 跑完后统一画一帧。
@@ -250,7 +319,7 @@ func (a *App) bindReactive() {
 	// 触发（写相同值被 DeepEqual 短路、无关 signal 无订阅者都不触发），因此不会多画
 	// 无效帧，同时覆盖所有层级的叶子（含动态子树首帧项）。
 	a.unFlush = signal.AfterEffects(func() {
-		if a.closed {
+		if a.closed.Load() {
 			return
 		}
 		a.drawPending = false
@@ -260,9 +329,15 @@ func (a *App) bindReactive() {
 		a.dispatcher.RequestFrame()
 	})
 
+	// wrap 是所有叶子/结构 effect 的统一入口。effect body 里的 SetPart/graft 是
+	// Scene Mutation，必须在 commit gate 内执行——与 drawNow 里的 win.Draw 互斥，
+	// 消除「后台改树 + UI 遍历」的数据竞争（Host 评审 P0）。gate 基于 goid 可重入，
+	// 故 effect body 内同步写 signal 触发的嵌套 effect 不会自锁。
 	wrap := func(body func()) signal.Computation {
 		return signal.Effect(func() {
+			a.commit.lock()
 			body()
+			a.commit.unlock()
 			a.requestDraw()
 		})
 	}
@@ -276,50 +351,61 @@ func (a *App) bindReactive() {
 // requestDraw 标记本轮需要重绘。由响应式 effect 与结构 onDirty 调用；真正绘制
 // 延迟到 signal 的 AfterEffects 帧边界执行，从而把同批多次变化合并为一帧。
 func (a *App) requestDraw() {
-	if !a.closed {
+	if !a.closed.Load() {
 		a.drawPending = true
 	}
 }
 
-// Draw 立即把当前场景树绘制一帧到窗口（同步，不经派发器）。Render 之前 no-op。
-// 错误被记录并可通过 LastDrawError 查询（T2.2）。
+// Draw 请求把当前场景树绘制一帧到窗口。所有绘制入口统一经过派发器（Host 评审 P1）：
+// InlineDispatcher 下同步完成（headless/测试），QueueDispatcher 下投递到 UI 线程。
+// Render 之前 no-op。错误被记录并可通过 LastDrawError 查询（T2.2）。
 func (a *App) Draw() error {
-	a.drawNow()
-	return a.lastDrawErr
+	if a.closed.Load() {
+		return nil
+	}
+	a.dispatcher.RequestFrame()
+	return a.LastDrawError()
 }
 
-// Update 触发场景树细粒度更新（转发 Instance.Update），成功后重绘一帧。
+// Update 触发场景树细粒度更新（转发 Instance.Update），成功后请求重绘一帧。
 // 返回本次实际写入的节点数（与 Instance.Update 一致）。
+//
+// inst.Update() 会重算 getter 并写回节点，属于 Scene Mutation，因此在 commit gate
+// 内执行——与窗口绘制互斥（Host 评审 P0）。重绘统一交给派发器，不再直接调 drawNow。
 func (a *App) Update() int {
-	if a.closed || a.inst == nil {
+	if a.closed.Load() || a.inst == nil {
 		return 0
 	}
+	a.commit.lock()
 	n := a.inst.Update()
-	a.drawNow()
+	a.commit.unlock()
+	a.dispatcher.RequestFrame()
 	return n
 }
 
 // Run 进入窗口事件循环，直到窗口关闭。Headless 后端立即返回 nil。
 func (a *App) Run() error {
-	if a.closed {
+	if a.closed.Load() {
 		return nil
 	}
 	return a.win.Run()
 }
 
-// Close 关闭窗口。可重复调用（幂等）。
+// Close 关闭窗口。可重复调用（幂等），且并发调用安全（Host 评审 P1）：
+// closeOnce 保证响应式树销毁、派发器关闭、窗口关闭只执行一次；closed 用原子标记，
+// 使并发的 Run/Draw/Update 能立即观察到关闭状态并 no-op。
 func (a *App) Close() error {
-	if a.closed {
-		return nil
-	}
-	a.closed = true
-	// 先销毁整棵响应式树：停订阅、执行组件 onCleanup，避免关闭过程中 signal 写入
-	// 触发已关闭窗口的重绘。
-	a.teardownTree()
-	if a.dispatcher != nil {
-		a.dispatcher.Close()
-	}
-	return a.win.Close()
+	a.closeOnce.Do(func() {
+		a.closed.Store(true)
+		// 先销毁整棵响应式树：停订阅、执行组件 onCleanup，避免关闭过程中 signal 写入
+		// 触发已关闭窗口的重绘。
+		a.teardownTree()
+		if a.dispatcher != nil {
+			a.dispatcher.Close()
+		}
+		_ = a.win.Close()
+	})
+	return nil
 }
 
 // Instance 返回底层场景树实例（Render 之前为 nil；供 SetPart / SetGetter 等高级用法）。

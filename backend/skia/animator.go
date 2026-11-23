@@ -20,7 +20,7 @@ type Animator struct {
 }
 
 type animKey struct {
-	nodeID   string
+	nodeID   gxscene.NodeID
 	property string
 }
 
@@ -69,7 +69,7 @@ func (a *Animator) apply(root *gxscene.Node, now time.Time) func() {
 		if n == nil {
 			return
 		}
-		if trans := parseStyle(n.Props).transition; len(trans) > 0 && n.ID != "" {
+		if trans := parseStyle(n.Props).transition; len(trans) > 0 && n.ID != gxscene.NoNode {
 			for _, tr := range trans {
 				if tr.property == "all" {
 					continue

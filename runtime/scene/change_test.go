@@ -220,10 +220,10 @@ func sameIDs(a, b []string) bool {
 
 // 纯重排应只产生 MoveChild，不产生增删；apply 后顺序与目标一致。
 func TestDiffChildrenReorderEmitsMoveOnly(t *testing.T) {
-	parent := &Node{ID: "p", Kind: "#frag"}
-	a := &Node{ID: "a", Kind: "div"}
-	b := &Node{ID: "b", Kind: "div"}
-	c := &Node{ID: "c", Kind: "div"}
+	parent := &Node{ID: 1, Kind: "#frag"}
+	a := &Node{ID: 2, Kind: "div"}
+	b := &Node{ID: 3, Kind: "div"}
+	c := &Node{ID: 4, Kind: "div"}
 	old := []*Node{a, b, c}
 	next := []*Node{c, a, b} // 循环右移：LIS 保留 a,b，只移动 c
 	parent.Children = old
@@ -240,18 +240,18 @@ func TestDiffChildrenReorderEmitsMoveOnly(t *testing.T) {
 		t.Fatalf("纯重排不应产生增删: %v", changes)
 	}
 	applyChanges(parent, changes)
-	if !sameIDs(nodeIDs(parent.Children), []string{"c", "a", "b"}) {
+	if !sameIDs(nodeIDs(parent.Children), []string{"4", "2", "3"}) {
 		t.Fatalf("apply 后顺序不符: %v", nodeIDs(parent.Children))
 	}
 }
 
 // 增删应产生 InsertBefore / RemoveChild，apply 后与目标 children 一致。
 func TestDiffChildrenAddRemove(t *testing.T) {
-	parent := &Node{ID: "p", Kind: "#frag"}
-	a := &Node{ID: "a", Kind: "div"}
-	b := &Node{ID: "b", Kind: "div"}
-	c := &Node{ID: "c", Kind: "div"}
-	d := &Node{ID: "d", Kind: "div"}
+	parent := &Node{ID: 1, Kind: "#frag"}
+	a := &Node{ID: 2, Kind: "div"}
+	b := &Node{ID: 3, Kind: "div"}
+	c := &Node{ID: 4, Kind: "div"}
+	d := &Node{ID: 5, Kind: "div"}
 	old := []*Node{a, b, c}
 	next := []*Node{a, c, d} // 删 b，末尾加 d
 	parent.Children = old
@@ -268,16 +268,16 @@ func TestDiffChildrenAddRemove(t *testing.T) {
 		t.Fatalf("应产生 1 条 InsertBefore: %v", changes)
 	}
 	applyChanges(parent, changes)
-	if !sameIDs(nodeIDs(parent.Children), []string{"a", "c", "d"}) {
+	if !sameIDs(nodeIDs(parent.Children), []string{"2", "4", "5"}) {
 		t.Fatalf("apply 后顺序不符: %v", nodeIDs(parent.Children))
 	}
 }
 
 // 同位置内容变化（标量/文本节点）应表现为删+插，而非被同位置 ID 误判为未变。
 func TestDiffChildrenTextChangeIsRemoveInsert(t *testing.T) {
-	parent := &Node{ID: "p", Kind: "#frag"}
-	oldText := &Node{ID: "p/t0", Kind: "#text", Type: NodeText, Text: "old"}
-	newText := &Node{ID: "p/t0", Kind: "#text", Type: NodeText, Text: "new"}
+	parent := &Node{ID: 1, Kind: "#frag"}
+	oldText := &Node{ID: 6, Kind: "#text", Type: NodeText, Text: "old"}
+	newText := &Node{ID: 6, Kind: "#text", Type: NodeText, Text: "new"}
 	old := []*Node{oldText}
 	next := []*Node{newText} // ID 相同但指针不同（值变了）
 
@@ -358,9 +358,9 @@ func TestForEmitsFineGrainedChanges(t *testing.T) {
 
 // 后端注入自己的 diff 策略后，应覆盖内建算法（不再发内建的 MoveChild/InsertBefore）。
 func TestCustomChildDifferOverridesBuiltin(t *testing.T) {
-	parent := &Node{ID: "p", Kind: "#frag"}
-	a := &Node{ID: "a", Kind: "div"}
-	b := &Node{ID: "b", Kind: "div"}
+	parent := &Node{ID: 1, Kind: "#frag"}
+	a := &Node{ID: 2, Kind: "div"}
+	b := &Node{ID: 3, Kind: "div"}
 	parent.Children = []*Node{a, b}
 
 	sink := newChangeSink()
@@ -369,7 +369,7 @@ func TestCustomChildDifferOverridesBuiltin(t *testing.T) {
 	sink.setDiffer(func(p *Node, old, next []*Node, emit func(Change)) {
 		called++
 		// 自定义策略：只发一条 ReplaceChildren（模拟"用自己的镜像树整块重画"）。
-		emit(Change{Kind: ChangeReplaceChildren, NodeID: p.ID})
+		emit(Change{Kind: ChangeReplaceChildren, NodeID: nodeID(p)})
 	})
 
 	diffChildren(sink, parent, parent.Children, []*Node{b, a})
@@ -388,15 +388,15 @@ func TestCustomChildDifferOverridesBuiltin(t *testing.T) {
 
 // setDiffer(nil) 恢复内建 diff。
 func TestSetDifferNilRestoresBuiltin(t *testing.T) {
-	parent := &Node{ID: "p", Kind: "#frag"}
-	a := &Node{ID: "a", Kind: "div"}
-	b := &Node{ID: "b", Kind: "div"}
+	parent := &Node{ID: 1, Kind: "#frag"}
+	a := &Node{ID: 2, Kind: "div"}
+	b := &Node{ID: 3, Kind: "div"}
 	parent.Children = []*Node{a, b}
 
 	sink := newChangeSink()
 	sink.enable()
 	sink.setDiffer(func(p *Node, old, next []*Node, emit func(Change)) {
-		emit(Change{Kind: ChangeReplaceChildren, NodeID: p.ID})
+		emit(Change{Kind: ChangeReplaceChildren, NodeID: nodeID(p)})
 	})
 	sink.setDiffer(nil) // 恢复内建
 

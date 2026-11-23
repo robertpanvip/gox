@@ -265,14 +265,17 @@ func (i *Instance) recordChild(kind ChangeKind, parent, child, before *Node, val
 	})
 }
 
-// nodeID 取节点稳定 ID，nil 安全。极少数未预分配 ID 的节点用指针地址兜底——
-// 同一节点在一批指令里地址恒定，足以作为内部锚点使用。
+// nodeID 取节点的对外协议 ID（十进制字符串），nil 安全。
+//
+// Node.ID 现在是整数稳定身份（NodeID），但对外协议（Change / 二进制 / JSON）沿用
+// 字符串编码，以便后端零改动。未分配 ID（NoNode）的节点用指针地址兜底——同一节点
+// 在一批指令里地址恒定，足以作为内部锚点；这类兜底 ID 以 "ptr/" 前缀区分。
 func nodeID(n *Node) string {
 	if n == nil {
 		return ""
 	}
-	if n.ID != "" {
-		return n.ID
+	if n.ID != NoNode {
+		return n.ID.String()
 	}
 	return fmt.Sprintf("ptr/%p", n)
 }
@@ -327,7 +330,7 @@ func builtinDiffChildren(sink *changeSink, parent *Node, old, next []*Node) {
 	// ① 删除：旧有新无。按原顺序发出，便于后端顺序释放缓存。
 	for _, n := range old {
 		if !newSet[n] {
-			sink.add(Change{Kind: ChangeRemoveChild, NodeID: parent.ID, ChildID: nodeID(n), Value: n})
+			sink.add(Change{Kind: ChangeRemoveChild, NodeID: nodeID(parent), ChildID: nodeID(n), Value: n})
 		}
 	}
 
@@ -377,9 +380,9 @@ func builtinDiffChildren(sink *changeSink, parent *Node, old, next []*Node) {
 		n := next[j]
 		id := nodeID(n)
 		if _, reused := oldIndex[n]; !reused {
-			sink.add(Change{Kind: ChangeInsertBefore, NodeID: parent.ID, ChildID: id, BeforeID: succ, Value: n})
+			sink.add(Change{Kind: ChangeInsertBefore, NodeID: nodeID(parent), ChildID: id, BeforeID: succ, Value: n})
 		} else if !keep[j] {
-			sink.add(Change{Kind: ChangeMoveChild, NodeID: parent.ID, ChildID: id, BeforeID: succ})
+			sink.add(Change{Kind: ChangeMoveChild, NodeID: nodeID(parent), ChildID: id, BeforeID: succ})
 		}
 		if id != "" {
 			succ = id
@@ -504,7 +507,7 @@ func applyChanges(root *Node, changes []Change) *Node {
 		case ChangeMoveChild:
 			var moving *Node
 			for _, c := range kids {
-				if c != nil && c.ID == ch.ChildID {
+				if c != nil && nodeID(c) == ch.ChildID {
 					moving = c
 					break
 				}

@@ -113,6 +113,49 @@ type EventContext struct {
 // 后端可自行断言为 Handler 或自己约定的任意签名——前端不强制签名，不阻拦自定义事件。
 type Handler func(ctx EventContext)
 
+// NodeID 是节点的稳定身份，一个 App/Instance 生命周期内唯一且不复用。
+//
+// 设计（Host 架构评审 P1）：身份**不由图结构位置派生**——插入兄弟节点不会改变
+// 其他节点的 ID。节点首次创建时分配一个单调递增的整数，逻辑节点存活（同 key 的
+// 列表项、未切换的分支、同一动态 part）就保留该 ID；只有真正重建（新实例）才分配
+// 新 ID。这解决了字符串结构路径 ID 的两大问题：插入导致身份漂移、fmt.Sprint(key)
+// 让整数 1 与字符串 "1" 碰撞。
+//
+// 0 是保留的「无节点/空锚点」值（对应旧协议的空字符串），后端据此表示末尾插入。
+// 分配器是全局的：不同 Instance / 列表 / 分支各自分配的 ID 天然不撞车。
+type NodeID uint64
+
+// NoNode 表示无节点（InsertBefore 的末尾锚点、nil 节点的安全 ID）。
+const NoNode NodeID = 0
+
+// nodeIDSeq 全局单调分配器。不随节点销毁复用——评审要求「ID 不能因节点销毁立即
+// 复用」，避免后端缓存里旧节点的延迟事件误命中新节点。
+var nodeIDSeq atomic.Uint64
+
+// nextNodeID 分配一个全局唯一的节点身份。
+func nextNodeID() NodeID { return NodeID(nodeIDSeq.Add(1)) }
+
+// String 返回 NodeID 的十进制字符串形式，供对外协议（Change / 二进制 / JSON）编码。
+// 协议层用字符串承载 ID 只是传输格式，不改变「内部是整数稳定身份」的事实。
+func (id NodeID) String() string {
+	if id == NoNode {
+		return ""
+	}
+	return strconv.FormatUint(uint64(id), 10)
+}
+
+// parseNodeID 是 String 的逆操作；空串与非法值归一为 NoNode。
+func parseNodeID(s string) NodeID {
+	if s == "" {
+		return NoNode
+	}
+	v, err := strconv.ParseUint(s, 10, 64)
+	if err != nil {
+		return NoNode
+	}
+	return NodeID(v)
+}
+
 // Node 是常驻场景树的节点。Kind 为标签名（元素）或 "#text"/"#root"/"#frag"（内部）。
 // Type 是给后端分派用的协议类型；Handlers 存原样透传的事件处理器（key 为 JSX 事件名原样）。
 type Node struct {
@@ -123,15 +166,14 @@ type Node struct {
 	Children []*Node
 	Text     string // 仅 NodeText 节点使用
 
-	// ID 是 host 生成、跨帧稳定的逻辑节点 id，供后端做命中缓存、焦点/hover 跟踪等。
-	// host 只按结构位置/key 派生它，不解释其语义；后端可完全忽略。
-	// 规则：静态节点=结构路径（如 "r/0/1"）；keyed 列表项=".../[key]"；动态文本=".../tN"。
-	ID string
+	// ID 是 host 分配的稳定整数身份（见 NodeID）。后端可用它做命中缓存、焦点/hover
+	// 跟踪、布局缓存键；不解释其语义，可完全忽略。0（NoNode）表示尚未分配。
+	ID NodeID
 
-	// Layout 是给后端存放自己布局结果（rect/尺寸等）的空挂载点。
-	// host 不解释、不填充、不计算——命中/布局/绘制全部归后端，这里只提供存放位置，
-	// 避免每个后端被迫维护 map[*Node]any 旁路结构。后端不采用时为 nil。
-	Layout any
+	// 布局结果等后端私有状态**不放在 Node 上**（Host 评审 P1）：Node 是 host 管理的
+	// 场景节点描述，不应变成"什么都能塞"的公共对象。后端用 map[NodeID]any 自行维护
+	// 布局缓存——整数 ID 是天然高效的 map key，节点销毁时后端按其 ID 清理即可。
+	// 旧的 Layout any 挂载点已移除，因全仓无后端实际使用，移除不破坏既有实现。
 
 	parent *Node
 	dirty  bool
@@ -247,12 +289,13 @@ func templateKey(t Template) string {
 
 // compile 把 opcode 解释成一棵静态骨架树，并记录每个 slot 的目标路径。
 func compile(t Template) *compiledTemplate {
-	root := &Node{Kind: "#root", Type: NodeFragment, ID: "r"}
+	// 骨架节点不分配身份（ID=NoNode）：模板是共享原型，真实 ID 由 clone 时分配。
+	root := &Node{Kind: "#root", Type: NodeFragment}
 	stack := []*Node{root}
 	slots := make([]*slot, t.N)
 	childOfStack := func(parent *Node) int {
 		idx := len(parent.Children)
-		parent.Children = append(parent.Children, &Node{ID: parent.ID + "/" + strconv.Itoa(idx)})
+		parent.Children = append(parent.Children, &Node{})
 		return idx
 	}
 	for _, op := range t.Ops {
@@ -364,21 +407,15 @@ func childPath(n *Node) []int {
 	return path
 }
 
-// 全局实例序号：每次 Render / 动态子树构建分配一个唯一短前缀，保证跨实例、跨列表
-// 的 Node.ID 全局唯一。同一实例生命周期内前缀固定，故其节点 ID 跨帧稳定。
-var instanceSeq atomic.Uint64
-
-func nextIDBase() string {
-	return "i" + strconv.FormatUint(instanceSeq.Add(1), 36)
-}
-
-// clone 复制静态骨架：Props/Children 深拷贝避免实例间污染，并把骨架里的相对
-// ID（根 "r"、子 "r/0"...）重写为以 base 开头的实例专属 ID。这样两棵由同一
-// 缓存骨架 clone 出的树不会共享 ID，后端按 ID 做缓存/焦点跟踪不再串台。
-func clone(n *Node, base string) *Node {
-	// 骨架根节点 ID 是 "r"，其后代是 "r/0/1" 形式；把前导 "r" 换成 base。
-	id := base + strings.TrimPrefix(n.ID, "r")
-	c := &Node{Kind: n.Kind, Type: n.Type, Text: n.Text, ID: id, dirty: true}
+// clone 复制静态骨架为常驻场景树：Props/Children 深拷贝避免实例间污染，并为每个
+// 节点分配一个全新的稳定整数身份（NodeID）。
+//
+// 与旧的字符串结构路径方案（"r/0/1"→"iN/0/1"）相比：整数身份绑定到节点对象本身，
+// 不再从「结构位置」派生。因此即使在相邻位置插入兄弟节点，其他节点 ID 也不变；
+// 后端按 ID 缓存的 rect/焦点/滚动状态不会因结构微调而集体失效（Host 评审 P1）。
+// 同一骨架被多次 clone 时每次分配新 ID，两棵树不串台。
+func clone(n *Node) *Node {
+	c := &Node{Kind: n.Kind, Type: n.Type, Text: n.Text, ID: nextNodeID(), dirty: true}
 	if n.Props != nil {
 		c.Props = make(map[string]any, len(n.Props))
 		for k, v := range n.Props {
@@ -394,7 +431,7 @@ func clone(n *Node, base string) *Node {
 	if len(n.Children) > 0 {
 		c.Children = make([]*Node, len(n.Children))
 		for i, child := range n.Children {
-			c.Children[i] = clone(child, base)
+			c.Children[i] = clone(child)
 			c.Children[i].parent = c
 		}
 	}
@@ -421,7 +458,6 @@ type Instance struct {
 	comps   []Computation // BindReactive 建立的响应式计算句柄，Dispose 时统一清理
 	Writes  int           // 累计实际写入节点的次数（细粒度更新的可观测指标）
 	Updates int           // Update 调用次数
-	idBase  string        // 本实例专属 ID 前缀； graft 子树时据此重编号，保证全局唯一
 
 	changes *changeSink // 增量变更缓冲；根实例创建，子实例共享同一 sink
 	bctx    *bindCtx    // 统一接线上下文；动态子树构建后据此递归接线
@@ -450,9 +486,8 @@ func Render(tpl Template, getters ...func() any) *Instance {
 		cacheMu.Unlock()
 	}
 
-	base := nextIDBase()
-	root := clone(ct.root, base)
-	inst := &Instance{tpl: tpl, root: root, slots: make([]*slot, len(ct.slots)), changes: newChangeSink(), idBase: base}
+	root := clone(ct.root)
+	inst := &Instance{tpl: tpl, root: root, slots: make([]*slot, len(ct.slots)), changes: newChangeSink()}
 	for i, proto := range ct.slots {
 		s := &slot{
 			kind:  proto.kind,
@@ -577,8 +612,8 @@ func embedAnyChild(owner *Instance, dst *Node, v any) {
 			embedAnyChild(owner, dst, e)
 		}
 	default:
-		n := &Node{Kind: "#text", Type: NodeText, Text: valueText(v), parent: dst,
-			ID: dst.ID + "/t" + strconv.Itoa(len(dst.Children))}
+		// 动态文本节点分配独立稳定 ID（Host 评审 P1：动态文本对应固定 part 身份）。
+		n := &Node{Kind: "#text", Type: NodeText, Text: valueText(v), parent: dst, ID: nextNodeID()}
 		dst.Children = append(dst.Children, n)
 	}
 }

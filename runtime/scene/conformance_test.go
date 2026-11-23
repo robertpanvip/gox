@@ -15,15 +15,15 @@ import (
 // assertUniqueIDs 遍历整棵树，断言所有非空 Node.ID 唯一，并返回 ID 集合。
 func assertUniqueIDs(t *testing.T, root *Node) map[string]bool {
 	t.Helper()
-	seen := map[string]*Node{}
+	seen := map[NodeID]*Node{}
 	var walk func(*Node)
 	walk = func(n *Node) {
 		if n == nil {
 			return
 		}
-		if n.ID != "" {
+		if n.ID != NoNode {
 			if prev, ok := seen[n.ID]; ok {
-				t.Fatalf("Node.ID 冲突: %q 同时用于 %v 与 %v", n.ID, prev.Kind, n.Kind)
+				t.Fatalf("Node.ID 冲突: %d 同时用于 %v 与 %v", n.ID, prev.Kind, n.Kind)
 			}
 			seen[n.ID] = n
 		}
@@ -34,7 +34,7 @@ func assertUniqueIDs(t *testing.T, root *Node) map[string]bool {
 	walk(root)
 	out := make(map[string]bool, len(seen))
 	for id := range seen {
-		out[id] = true
+		out[id.String()] = true
 	}
 	return out
 }
@@ -260,7 +260,7 @@ func TestConformanceForKeyedRebuildKeepsInnerIDs(t *testing.T) {
 			if n == nil {
 				return
 			}
-			out[n.ID] = true
+			out[n.ID.String()] = true
 			for _, c := range n.Children {
 				walk(c)
 			}
@@ -279,5 +279,105 @@ func TestConformanceForKeyedRebuildKeepsInnerIDs(t *testing.T) {
 	}
 	if !strings.Contains(view.String(), "new") {
 		t.Fatalf("重建后应显示新值:\n%s", view.String())
+	}
+}
+
+// ---------- NodeID 稳定整数身份（Host 架构评审 P1）----------
+
+// 同一缓存骨架 clone 出的两棵树，节点 ID 必须完全不同——避免后端缓存串台。
+func TestNodeIDUniqueAcrossRenders(t *testing.T) {
+	tpl := Template{Ops: []Op{
+		{Code: OpElem, Arg: "div"},
+		{Code: OpElem, Arg: "span"}, {Code: OpChildText, Arg: "a"}, {Code: OpClose},
+		{Code: OpElem, Arg: "b"}, {Code: OpChildText, Arg: "b"}, {Code: OpClose},
+		{Code: OpClose},
+	}}
+	a := Render(tpl)
+	b := Render(tpl)
+	idsA := assertUniqueIDs(t, a.Root())
+	idsB := assertUniqueIDs(t, b.Root())
+	for id := range idsA {
+		if idsB[id] {
+			t.Fatalf("两棵独立 Render 的树共享 ID %q，后端缓存会串台", id)
+		}
+	}
+}
+
+// 节点身份不随结构位置派生：两棵同构树对应位置的 ID 应不同（因为是独立身份，
+// 不是 "r/0/1" 之类的路径）。这样插入兄弟节点才不会改变其它节点身份。
+func TestNodeIDNotStructuralPath(t *testing.T) {
+	tpl := Template{Ops: []Op{
+		{Code: OpElem, Arg: "div"},
+		{Code: OpElem, Arg: "span"}, {Code: OpClose},
+		{Code: OpElem, Arg: "span"}, {Code: OpClose},
+		{Code: OpClose},
+	}}
+	a := Render(tpl)
+	b := Render(tpl)
+	// 若 ID 是结构路径，两棵树根 ID 必然相同；整数身份下必须不同。
+	if a.Root().ID == b.Root().ID {
+		t.Fatalf("独立树的根 ID 相同（%d），身份疑似仍按结构路径派生", a.Root().ID)
+	}
+	if a.Root().Children[0].ID == b.Root().Children[0].ID {
+		t.Fatal("独立树的同位置子节点 ID 相同，身份疑似按位置派生")
+	}
+}
+
+// 列表项重排后，同 key 节点的 ID 保持不变（身份绑定 key，不绑定位置）。
+func TestNodeIDStableAcrossForReorder(t *testing.T) {
+	items := signal.New([]any{"a", "b", "c"})
+	f := NewFor(
+		func() []any { return items() },
+		func(v any) any { return v },
+		func(v any) *Instance {
+			return Render(Template{Ops: []Op{
+				{Code: OpElem, Arg: "li"}, {Code: OpChildText, Arg: "x"}, {Code: OpClose},
+			}, N: 0})
+		},
+	)
+	_ = Render(Template{Ops: []Op{
+		{Code: OpElem, Arg: "ul"}, {Code: OpFor, Slot: 0}, {Code: OpClose},
+	}, N: 1}, func() any { return f })
+
+	// 收集 key -> 项包装节点 ID（#frag 的直接子节点即 render 的 li）。
+	snapshot := func() map[string]NodeID {
+		m := map[string]NodeID{}
+		f.mu.Lock()
+		for k, e := range f.entries {
+			m[k.(string)] = e.node.ID
+		}
+		f.mu.Unlock()
+		return m
+	}
+	before := snapshot()
+	items([]any{"c", "a", "b"}) // 循环重排
+	f.Resolve()
+	after := snapshot()
+	for k, id := range before {
+		if after[k] != id {
+			t.Fatalf("key %q 重排后 ID 变化: %d -> %d", k, id, after[k])
+		}
+	}
+}
+
+// 重复 key 不应导致列表项塌缩成一项（每项都有独立身份）。
+func TestForDuplicateKeysNoCollapse(t *testing.T) {
+	items := []any{"x", "x", "x"}
+	f := NewFor(
+		func() []any { return items },
+		func(v any) any { return v }, // 所有元素 key 相同
+		func(v any) *Instance {
+			return Render(Template{Ops: []Op{
+				{Code: OpElem, Arg: "li"}, {Code: OpClose},
+			}})
+		},
+	)
+	root := f.Resolve()
+	if root == nil || len(root.Root().Children) != len(items) {
+		got := 0
+		if root != nil {
+			got = len(root.Root().Children)
+		}
+		t.Fatalf("重复 key 列表应保留 %d 项，实际 %d 项（塌缩）", len(items), got)
 	}
 }

@@ -82,7 +82,7 @@ pub func render(name string) any {
 | `{name}` 表达式子节点 | `gxscene.OpDynChild` + getter `func() any{ return name }` |
 | `<Foo/>` 组件 | `gxscene.OpComp` + `Foo(gxscene.Props{…})`（不加引号） |
 
-借鉴 lit-html 的「静态模板 + 动态 part」：`gxscene.Render` 按 opcode 结构缓存静态骨架，clone 得到常驻场景树；数据变化后调 `Update()` 只回写变化节点（可观测指标 `Instance.Writes`）。**host 不定义绘制后端接口**——真实 GUI 后端（Skia / wgpu / GLFW）实现 `gxapp.Window` 直接吃 `*Node` 树自行布局/绘制；host 只通过 `Node.ID`（稳定身份）、`Node.Layout`（布局挂载点）、`Changes()`（增量变更流）提供可选能力，命中/布局/绘制全归后端。详见[后端接入契约](docs/backend-integration.md)。
+借鉴 lit-html 的「静态模板 + 动态 part」：`gxscene.Render` 按 opcode 结构缓存静态骨架，clone 得到常驻场景树；数据变化后调 `Update()` 只回写变化节点（可观测指标 `Instance.Writes`）。**host 不定义绘制后端接口**——真实 GUI 后端（Skia / wgpu / GLFW）实现 `gxapp.Window` 直接吃 `*Node` 树自行布局/绘制；host 只通过 `Node.ID`（整数稳定身份）、`Changes()`（增量变更流）提供可选能力，命中/布局/绘制全归后端（布局缓存由后端自建 `map[NodeID]any`，不放在 Node 上）。详见[后端接入契约](docs/backend-integration.md)。
 
 #### 使用指南
 

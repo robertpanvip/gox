@@ -46,7 +46,7 @@ backend/skia  ──import──▶  gxapp / gxscene  ──import──▶  sig
 类型安全、无跨语言 marshalling 成本。职责分离清晰。
 
 ### 2.4 additive 扩展设计
-`Node.ID`（命中缓存）、`Node.Layout`（布局结果挂载点）、`Changes()`（增量补丁）、
+`Node.ID`（整数稳定身份，命中缓存）、`Changes()`（增量补丁）、
 合成事件（`SyntheticEvent`）都是可选的：不用就完全无感，用了才生效。新增这些没有 forcing 任何已有后端改动——这是成熟协议设计的标志。
 
 ### 2.5 host 不做表现层

@@ -113,7 +113,7 @@ func serializeFrameBin(root *gxscene.Node, width, height uint32) ([]byte, error)
 			bn.typ = typeFrag
 			bn.kindOff = pool.add(n.Kind)
 		}
-		bn.idOff = pool.add(n.ID)
+		bn.idOff = pool.add(n.ID.String())
 
 		// 属性：字符串池去重
 		bn.propStart = uint32(len(bf.props))

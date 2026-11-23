@@ -17,7 +17,7 @@ func collectTreeIDs(root *gxscene.Node) map[string]bool {
 		if n == nil {
 			return
 		}
-		out[n.ID] = true
+		out[n.ID.String()] = true
 		for _, c := range n.Children {
 			walk(c)
 		}

@@ -78,7 +78,7 @@ app.render(() =>
 
 > 只有紧邻调用闭合符号的排版换行会被吞；后接标识符或 `}`（函数体/语句结束）的换行是真正的语句分隔，保留——不会把 `return` 与函数闭合挤到同一行。
 
-运行时 `runtime/scene/`：`Template` / `Op` / `Render` / `Instance`。`Render` 缓存静态骨架、clone 出常驻场景树；`Instance.Update()` 只回写变化的插槽（可观测指标 `Writes`），不含调度。host 不定义绘制后端接口：GUI 后端实现 `gxapp.Window`，可用 `Node.ID` / `Node.Layout` / `Changes()` 做增量绘制；内置 `TextBackend` 只是文本工具。
+运行时 `runtime/scene/`：`Template` / `Op` / `Render` / `Instance`。`Render` 缓存静态骨架、clone 出常驻场景树；`Instance.Update()` 只回写变化的插槽（可观测指标 `Writes`），不含调度。host 不定义绘制后端接口：GUI 后端实现 `gxapp.Window`，可用 `Node.ID`（整数稳定身份）/ `Changes()` 做增量绘制；内置 `TextBackend` 只是文本工具。
 
 ### 3.1 `<For>` 列表
 

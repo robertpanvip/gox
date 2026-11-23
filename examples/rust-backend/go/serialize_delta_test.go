@@ -7,15 +7,15 @@ import (
 	gxscene "github.com/robertpanvip/gox/runtime/scene"
 )
 
-func leaf(id, text string) *gxscene.Node {
+func leaf(id gxscene.NodeID, text string) *gxscene.Node {
 	return &gxscene.Node{Type: gxscene.NodeText, ID: id, Text: text}
 }
 
 func TestSerializeDeltaAttrText(t *testing.T) {
 	changes := []gxscene.Change{
-		{Kind: gxscene.ChangeSetText, NodeID: "n1", Value: "hello"},
-		{Kind: gxscene.ChangeSetAttr, NodeID: "n1", Key: "bg", Value: "#fff"},
-		{Kind: gxscene.ChangeSetHandler, NodeID: "n1", Key: "onClick"},
+		{Kind: gxscene.ChangeSetText, NodeID: "8", Value: "hello"},
+		{Kind: gxscene.ChangeSetAttr, NodeID: "8", Key: "bg", Value: "#fff"},
+		{Kind: gxscene.ChangeSetHandler, NodeID: "8", Key: "onClick"},
 	}
 	buf, ok := serializeDelta(changes, nil, 100, 100)
 	if !ok {
@@ -38,17 +38,17 @@ func TestSerializeDeltaAttrText(t *testing.T) {
 
 func TestSerializeDeltaStructuralNoFallback(t *testing.T) {
 	root := &gxscene.Node{
-		Type: gxscene.NodeDiv, ID: "r",
+		Type: gxscene.NodeDiv, ID: 1,
 		Children: []*gxscene.Node{
-			leaf("a", "A"), leaf("b", "B"), leaf("c", "C"),
+			leaf(2, "A"), leaf(3, "B"), leaf(4, "C"),
 		},
 	}
 	changes := []gxscene.Change{
-		{Kind: gxscene.ChangeRemoveChild, NodeID: "r", ChildID: "a"},
-		{Kind: gxscene.ChangeMoveChild, NodeID: "r", ChildID: "b", BeforeID: "c"},
-		{Kind: gxscene.ChangeInsertBefore, NodeID: "r", ChildID: "d",
-			BeforeID: "c", Value: leaf("d", "D")},
-		{Kind: gxscene.ChangeReplaceChildren, NodeID: "r"}, // Value=nil → 从 root 查
+		{Kind: gxscene.ChangeRemoveChild, NodeID: "1", ChildID: "2"},
+		{Kind: gxscene.ChangeMoveChild, NodeID: "1", ChildID: "3", BeforeID: "4"},
+		{Kind: gxscene.ChangeInsertBefore, NodeID: "1", ChildID: "5",
+			BeforeID: "4", Value: leaf(5, "D")},
+		{Kind: gxscene.ChangeReplaceChildren, NodeID: "1"}, // Value=nil → 从 root 查
 	}
 	buf, ok := serializeDelta(changes, root, 100, 100)
 	if !ok {
@@ -78,19 +78,19 @@ func TestSerializeDeltaStructuralNoFallback(t *testing.T) {
 // 不再被误降级为全量快照——否则后端每帧都得重建整棵镜像树，失去增量意义。
 func TestSerializeDeltaManyStructuralOpsStayDelta(t *testing.T) {
 	root := &gxscene.Node{
-		Type: gxscene.NodeDiv, ID: "r",
-		Children: []*gxscene.Node{leaf("a", "A"), leaf("b", "B"), leaf("c", "C")},
+		Type: gxscene.NodeDiv, ID: 1,
+		Children: []*gxscene.Node{leaf(2, "A"), leaf(3, "B"), leaf(4, "C")},
 	}
 	// 8 个结构动作（远超旧阈值 4）：6 次删除 + 2 次插入。
 	changes := []gxscene.Change{
-		{Kind: gxscene.ChangeRemoveChild, NodeID: "r", ChildID: "a"},
-		{Kind: gxscene.ChangeRemoveChild, NodeID: "r", ChildID: "b"},
-		{Kind: gxscene.ChangeRemoveChild, NodeID: "r", ChildID: "c"},
-		{Kind: gxscene.ChangeInsertBefore, NodeID: "r", ChildID: "d", Value: leaf("d", "D")},
-		{Kind: gxscene.ChangeInsertBefore, NodeID: "r", ChildID: "e", Value: leaf("e", "E")},
-		{Kind: gxscene.ChangeRemoveChild, NodeID: "r", ChildID: "d"},
-		{Kind: gxscene.ChangeRemoveChild, NodeID: "r", ChildID: "e"},
-		{Kind: gxscene.ChangeInsertBefore, NodeID: "r", ChildID: "f", Value: leaf("f", "F")},
+		{Kind: gxscene.ChangeRemoveChild, NodeID: "1", ChildID: "2"},
+		{Kind: gxscene.ChangeRemoveChild, NodeID: "1", ChildID: "3"},
+		{Kind: gxscene.ChangeRemoveChild, NodeID: "1", ChildID: "4"},
+		{Kind: gxscene.ChangeInsertBefore, NodeID: "1", ChildID: "5", Value: leaf(5, "D")},
+		{Kind: gxscene.ChangeInsertBefore, NodeID: "1", ChildID: "6", Value: leaf(6, "E")},
+		{Kind: gxscene.ChangeRemoveChild, NodeID: "1", ChildID: "5"},
+		{Kind: gxscene.ChangeRemoveChild, NodeID: "1", ChildID: "6"},
+		{Kind: gxscene.ChangeInsertBefore, NodeID: "1", ChildID: "7", Value: leaf(7, "F")},
 	}
 	buf, ok := serializeDelta(changes, root, 100, 100)
 	if !ok {

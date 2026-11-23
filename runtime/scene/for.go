@@ -1,8 +1,6 @@
 package gxscene
 
 import (
-	"fmt"
-	"strings"
 	"sync"
 )
 
@@ -42,7 +40,6 @@ type For struct {
 	indexKey bool
 	sink     *changeSink // 所属实例树的变更缓冲，传给各列表项子实例
 	bctx     *bindCtx    // 统一接线上下文，传给新建的列表项子树
-	idBase   string      // 本列表专属 ID 前缀；项节点 ID = idBase + "/[" + key + "]"，跨列表唯一
 }
 
 type forEntry struct {
@@ -52,6 +49,38 @@ type forEntry struct {
 	owner Owner  // 该项的响应式作用域（抽象，默认由 signal 实现）
 	node  *Node  // 该元素在场景树中的包装节点（透明 #frag）
 	item  Signal // 信号化模式：该项的 item signal，子树 getter 经它读值并登记依赖
+}
+
+// dupKey 是重复 key 的唯一化包装：保留原 key 与出现序号，使不同元素即使业务 key
+// 相同也有独立身份。Go 的 map[any] 按动态类型+值区分，dupKey 结构体与任何原始 key
+// 类型都不相等，故不会与正常 key 冲突。
+type dupKey struct {
+	key any
+	seq int
+}
+
+// keysForItems 计算每个元素的最终 key（含重复 key 唯一化），并返回是否存在重复。
+// 短路检测与完整 diff 共用它，保证两条路径对 key 的判定一致。
+func (f *For) keysForItems(items []any) (keys []any, hasDup bool) {
+	keys = make([]any, len(items))
+	seen := make(map[any]int, len(items))
+	for i, item := range items {
+		k := item
+		if f.indexKey {
+			k = i
+		} else if f.key != nil {
+			k = f.key(item)
+		}
+		if n, dup := seen[k]; dup {
+			seen[k] = n + 1
+			keys[i] = dupKey{key: k, seq: n + 1}
+			hasDup = true
+		} else {
+			seen[k] = 1
+			keys[i] = k
+		}
+	}
+	return
 }
 
 // NewFor 创建 keyed 列表控制器（值快照模式）。
@@ -70,7 +99,6 @@ func NewFor(each func() []any, key func(any) any, render func(any) *Instance) *F
 		render:   render,
 		entries:  make(map[any]*forEntry),
 		indexKey: key == nil,
-		idBase:   nextIDBase(),
 	}
 }
 
@@ -88,7 +116,6 @@ func NewForSignal(each func() []any, key func(any) any, render func(func() any) 
 		sigRender: render,
 		entries:   make(map[any]*forEntry),
 		indexKey:  key == nil,
-		idBase:    nextIDBase(),
 	}
 }
 
@@ -204,6 +231,9 @@ func (f *For) Resolve() *Instance {
 		value any
 	}
 
+	// 计算最终 keys（含重复 key 唯一化）；短路与完整 diff 共用，避免判定不一致。
+	keys, _ := f.keysForItems(items)
+
 	// 短路：先比长度，再直接遍历 items 比对 key 顺序与每项值，全程不构造 newList。
 	// 常见场景是"别的 signal 变了触发 each 重算，但列表本身没变"——命中即复用
 	// 上次 root，省掉 make([]kv)、order/children 重建与 root Instance 分配。
@@ -211,12 +241,7 @@ func (f *For) Resolve() *Instance {
 	if f.lastRoot != nil && len(items) == len(f.order) {
 		unchanged := true
 		for i, item := range items {
-			k := item
-			if f.indexKey {
-				k = i
-			} else if f.key != nil {
-				k = f.key(item)
-			}
+			k := keys[i]
 			if !equalValue(f.order[i], k) {
 				unchanged = false
 				break
@@ -232,16 +257,10 @@ func (f *For) Resolve() *Instance {
 		}
 	}
 
-	// 计算新 keys 与 values（短路未命中才需要）。
+	// 复用上面算好的 keys 装配 newList（重复 key 已唯一化，每项独立身份）。
 	newList := make([]kv, len(items))
 	for i, item := range items {
-		k := item
-		if f.indexKey {
-			k = i
-		} else if f.key != nil {
-			k = f.key(item)
-		}
-		newList[i] = kv{key: k, value: item}
+		newList[i] = kv{key: keys[i], value: item}
 	}
 
 	// 标记新 keys 集合。
@@ -288,13 +307,13 @@ func (f *For) Resolve() *Instance {
 			// 重读该节点的 children——否则只显示旧内容的镜像树会漏掉这一项。
 			// sink 判空后记录：For 未挂载（无 sink）时手工 Resolve 也能安全运行。
 			if f.sink != nil {
-				f.sink.add(Change{Kind: ChangeReplaceChildren, NodeID: entry.node.ID})
+				f.sink.add(Change{Kind: ChangeReplaceChildren, NodeID: nodeID(entry.node)})
 			}
 			continue
 		}
-		// 列表项 ID 按「本列表唯一前缀 + key」派生：同 key 重排/增删时 ID 不变，
-		// 不同列表即使同 key 也不撞车（各自的 idBase 不同）。
-		itemID := f.idBase + "/[" + fmt.Sprint(e.key) + "]"
+		// 列表项包装节点分配独立稳定 ID：同 key 的 entry 复用时 node 不变、ID 也不变，
+		// 因此重排/增删只动顺序、身份保持；不同列表各节点由全局分配器给号，天然不撞。
+		itemID := nextNodeID()
 		// Type 必须为 NodeFragment：零值是 NodeText，会让后端把透明包装当空文本跳过，
 		// 导致整棵列表项子树不被绘制（Kind="#frag" 只标 Kind，不决定渲染语义）。
 		entry := &forEntry{key: e.key, value: e.value, node: &Node{Kind: "#frag", Type: NodeFragment, Props: map[string]any{}, ID: itemID, dirty: true}}
@@ -313,7 +332,7 @@ func (f *For) Resolve() *Instance {
 	}
 
 	// 组装根子树（透明容器），供 mountBranch 类似的嫁接待用。
-	root := &Node{Kind: "#root", Type: NodeFragment, Props: map[string]any{}, ID: f.idBase + "/root", dirty: true}
+	root := &Node{Kind: "#root", Type: NodeFragment, Props: map[string]any{}, ID: nextNodeID(), dirty: true}
 	for _, c := range children {
 		c.parent = root
 		root.Children = append(root.Children, c)
@@ -326,12 +345,13 @@ func (f *For) Resolve() *Instance {
 // buildEntry 在新 Owner 下为条目构建子树并接线，把子树 children 挂到 entry.node。
 // 新条目与同 key 值变化重建都走这里；调用方负责先 Dispose 旧 Owner、清空 node.Children。
 func (f *For) buildEntry(entry *forEntry) {
-	// 重建（同 key 值变化）时复用旧实例的 idBase：render 每次 Render 会分配新前缀，
-	// 导致项内所有节点 ID 变化，破坏"跨帧稳定"。把新树的 ID 前缀重写回旧 base，
-	// 后端按 ID 缓存的 rect/焦点/滚动状态才不会因一次文本更新而全部失效。
-	oldBase := ""
+	// 重建（值快照模式同 key 值变化）时保留旧子树的 ID：render 每次都分配全新整数，
+	// 若直接采用会让项内所有节点 ID 变化，破坏"跨帧稳定"，后端按 ID 缓存的 rect/
+	// 焦点/滚动状态会因一次文本更新而全部失效。buildEntry 结束后按结构位置把旧 ID
+	// 复制回新树（见下方 rebaseTreeIDs），使项内身份与重建前一致。
+	var oldRoot *Node
 	if entry.inst != nil {
-		oldBase = entry.inst.idBase
+		oldRoot = entry.inst.root
 	}
 	entry.node.Children = nil
 	// 信号化模式：item signal 在 Owner 外创建（纯信号，不挂 Effect），首次构建时
@@ -348,9 +368,8 @@ func (f *For) buildEntry(entry *forEntry) {
 		if entry.inst == nil {
 			return
 		}
-		if oldBase != "" && entry.inst.idBase != oldBase {
-			rebaseTreeIDs(entry.inst.root, entry.inst.idBase, oldBase)
-			entry.inst.idBase = oldBase
+		if oldRoot != nil {
+			rebaseTreeIDs(entry.inst.root, oldRoot)
 		}
 		if f.sink != nil {
 			// 递归共享所属实例树的变更缓冲：子树 Render 时内部组件/嵌套控制器
@@ -381,20 +400,26 @@ func (f *For) buildEntry(entry *forEntry) {
 	})
 }
 
-// rebaseTreeIDs 把子树里所有以 from 为前缀的 Node.ID 改写成以 to 开头。
-// 只动本实例骨架派生的 ID（"iN"、"iN/0/1"）；项内若嵌了子 For/Branch，它们的
-// idBase 是独立的 nextIDBase，不以 from 开头，故不受影响。
-func rebaseTreeIDs(n *Node, from, to string) {
-	if n == nil || from == "" {
+// rebaseTreeIDs 按前序遍历把旧树 old 的节点身份复制回新树 n 的对应位置。
+//
+// 用于列表项「值快照模式」的同 key 重建：render 产出的新树每个节点都是新分配的
+// 整数 ID，但逻辑上它是旧树同一位置的延续（同一个列表项、同一段文本）。把旧 ID
+// 复制回去，后端按 ID 维护的 rect/焦点/滚动缓存才不会因一次值更新而整体失效。
+//
+// 按结构位置配对对嵌套控制器同样成立：子 For/Branch 的包装节点也在此树中，复制
+// ID 后这些控制器持有的 entry.node.ID 已是旧值，后续 emit 的 Change 自然带旧 ID。
+// 结构不同的部分（新增节点）保留新分配的 ID——本就是新身份，符合评审预期。
+func rebaseTreeIDs(n, old *Node) {
+	if n == nil || old == nil {
 		return
 	}
-	if n.ID == from {
-		n.ID = to
-	} else if strings.HasPrefix(n.ID, from+"/") {
-		n.ID = to + strings.TrimPrefix(n.ID, from)
+	n.ID = old.ID
+	common := len(n.Children)
+	if len(old.Children) < common {
+		common = len(old.Children)
 	}
-	for _, c := range n.Children {
-		rebaseTreeIDs(c, from, to)
+	for i := 0; i < common; i++ {
+		rebaseTreeIDs(n.Children[i], old.Children[i])
 	}
 }
 

@@ -25,7 +25,7 @@
 | 2 | Signal 与 Scene 职责耦合 | P1 | ✅ 属实：scene 需注入 `effect func(func()) Computation` | 已用 `Computation` 类型别名统一签名；抽象 `ReactiveAdapter` 属锦上添花，单实现阶段收益低 |
 | 3 | 编译器语义分析需统一 | P1 | ✅ 属实：`jsxSceneCtx` 同时持 `bindings`/`sigs`/`sigTypes`/`signalFields` 多源 | 已有统一 Bindings、表达式 AST、`Pos.Offset` 绑定身份；"Symbol/Type/Expression 三概念"是下一步收敛方向 |
 | 4 | GUI 调度不完善，Draw 可能非 UI 线程 | P1 | ✅ 属实：`a.Draw()` 在 effect 回调里同步执行，全仓无 dispatcher/scheduler | `Batch` 已合并同轮写入为一帧；缺的是"帧请求 → UI 线程"这一步 |
-| 5 | Node 协议宽泛 `Props map[string]any` | P2 | ✅ 属实：`Node` 结构如报告所述，`Layout any` 挂载点已留白 | `ID`（跨帧稳定）、`Layout`、`SyntheticEvent` 已是后端扩展机制的基础 |
+| 5 | Node 协议宽泛 `Props map[string]any` | P2 | ✅ 属实：`Node` 结构如报告所述，布局挂载点已改为后端自建 map[NodeID]any | `ID`（整数稳定身份）、`SyntheticEvent` 已是后端扩展机制的基础 |
 | 债 | goid 依赖 `runtime.Stack` | P2 | ✅ 属实：`signal.go` 仍抓栈取 goid | 已有 `activeObservers` 原子计数，普通读走无锁快路径跳过 goid（~2ns）；只需隔离模块，不必重写 |
 
 ## 2. 任务清单

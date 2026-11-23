@@ -122,7 +122,7 @@ func findNode(n *gxscene.Node, id string) *gxscene.Node {
 	if n == nil {
 		return nil
 	}
-	if n.ID == id {
+	if n.ID.String() == id {
 		return n
 	}
 	for _, c := range n.Children {

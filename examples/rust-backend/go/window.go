@@ -4,8 +4,10 @@
 //
 // 数据流：
 //
-//	GX 响应式 → app.Draw(root) → Window.Draw 把场景树序列化成二进制协议 → CABI → Rust 渲染
+//	GX 响应式 → Host 提交 Frame{Root,Changes,Version} → Window.Present 序列化成二进制协议 → CABI → Rust 渲染
 //	Rust 命中/IME → 事件回调 → goEventBridge → Window.events → Dispatcher → node.DispatchBubble
+//
+// 增量由 Host 经 Frame 契约主动交付（见 gxapp.FramePresenter），后端零反向依赖。
 package rustbackend
 
 import (
@@ -18,21 +20,26 @@ import (
 	gxscene "github.com/robertpanvip/gox/runtime/scene"
 )
 
-// Window 实现 gxapp.Window，把绘制委托给 Rust 静态库。
+// Window 实现 gxapp.Window + gxapp.FramePresenter，把绘制委托给 Rust 静态库。
 //
 // 传输采用增量动作流（Zed 式）：首帧发全量快照（Rust 建镜像树），
-// 之后每次 Draw 只发 app.TakeChanges() 的增量动作；遇结构动作退化重发快照。
+// 之后每帧只发 Frame.Changes 里的增量动作；遇结构动作退化重发快照。
+//
+// 增量由 Host 通过 Frame 契约随帧交付（Present），后端不再反向持有 App 取
+// Changes——这正是 Host 架构评审 P0「增量提交通道」要求的接入方式。
 type Window struct {
 	handle unsafe.Pointer
 	cfg    gxapp.WindowConfig
 
-	app       *gxapp.App      // BindApp 注入，用于取增量动作
 	hasBase   bool            // Rust 侧是否已建立基线镜像树
 	events    chan inputEvent
 	dispatcher func(ev InputEvent)
 	mu        sync.Mutex
 	closed    bool
 }
+
+// 编译期断言：本后端采用 Frame 契约。
+var _ gxapp.FramePresenter = (*Window)(nil)
 
 // 全局注册表：C 回调的 ctx 是注册表 key（uintptr），避免把 Go 指针长期交给 C。
 var (
@@ -64,35 +71,38 @@ func (w *Window) Open(cfg gxapp.WindowConfig) error {
 	return nil
 }
 
-// BindApp 注入 App 引用以启用增量动作流。Render 之后调用；未绑定则每帧全量。
+// BindApp 启用增量动作流（兼容旧 demo 调用）。Render 之后调用。
+//
+// 旧实现在此保存 App 引用并从中 TakeChanges；采用 Frame 契约后不再需要——Host 会把
+// Changes 随 Frame 主动推给 Present。这里只负责打开变更记录并重置基线。参数保留以
+// 维持 demo 源码兼容（调用方可传 nil）。
 func (w *Window) BindApp(app *gxapp.App) {
 	w.mu.Lock()
-	w.app = app
 	w.hasBase = false // 重新建基线
 	w.mu.Unlock()
-	app.EnableChanges()
-	app.TakeChanges() // 清掉接线期变更
+	if app != nil {
+		app.EnableChanges()
+	}
 }
 
-// Draw 实现 gxapp.Window：首帧全量快照，后续增量动作。
-func (w *Window) Draw(root *gxscene.Node) error {
-	if w.handle == nil || root == nil {
+// Present 实现 gxapp.FramePresenter：首帧全量快照，后续用 frame.Changes 发增量。
+// 后端不再反向访问 App——Changes 由 Host 随帧交付，Version 可用于去重/排序。
+func (w *Window) Present(frame *gxapp.Frame) error {
+	if w.handle == nil || frame == nil || frame.Root == nil {
 		return nil
 	}
+	root := frame.Root
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
 	var data []byte
 	var err error
-	if w.hasBase && w.app != nil {
-		changes := w.app.TakeChanges()
-		if len(changes) > 0 {
-			if delta, ok := serializeDelta(changes, root, uint32(w.cfg.Width), uint32(w.cfg.Height)); ok {
-				data = delta
-			}
+	if w.hasBase && len(frame.Changes) > 0 {
+		if delta, ok := serializeDelta(frame.Changes, root, uint32(w.cfg.Width), uint32(w.cfg.Height)); ok {
+			data = delta
 		}
 	}
-	// 没有基线 / 无 App / 有结构动作 / 无变化 → 发全量快照（无变化也重发首帧保证不空）
+	// 没有基线 / 无变化 / 有结构动作退化 → 发全量快照。
 	if data == nil {
 		data, err = serializeFrameBin(root, uint32(w.cfg.Width), uint32(w.cfg.Height))
 		if err != nil {
@@ -104,6 +114,13 @@ func (w *Window) Draw(root *gxscene.Node) error {
 		return fmt.Errorf("rustbackend: gx_window_draw rc=%d", rc)
 	}
 	return nil
+}
+
+// Draw 实现 gxapp.Window 的兼容路径：未走 Frame 契约时每帧发全量快照。
+// App 检测到本后端实现 FramePresenter 后会优先调用 Present，故正常路径不会到这里；
+// 保留它是为了满足 gxapp.Window 接口（需要一个 Draw 方法）。
+func (w *Window) Draw(root *gxscene.Node) error {
+	return w.Present(&gxapp.Frame{Root: root})
 }
 
 // Run 实现 gxapp.Window：goroutine 跑 Rust 事件循环，本线程消费事件并分派。

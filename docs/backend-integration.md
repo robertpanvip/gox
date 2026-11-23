@@ -12,11 +12,11 @@
 |---|---|---|
 | **host 内部实现**（协议不变） | 编译器优化、opcode 增删内部指令、`Update()` 算法、`sig` 调度、内置 Headless/Text 实现、`App` 内部字段、新增不暴露的辅助 API | **不用动** |
 | **协议变更**（契约面变了） | `Window` 接口增删方法或改签名、**已有** `Node` 字段语义变化或删除、`NodeType` 枚举变化、`Handler`/`EventContext` 签名变化、`WindowConfig` 字段语义变化 | **必须跟着实现** |
-| **additive 字段/方法**（协议面扩展但向后兼容） | 新增 `Node.ID`/`Node.Layout`、合成事件、`Changes()` 等——只加不删、不改已有签名，旧后端忽略即可 | **不用动**（可选采用） |
+| **additive 字段/方法**（协议面扩展但向后兼容） | 新增 `Node.ID`（整数身份）/`Changes()`、合成事件 等——只加不删、不改已有签名，旧后端忽略即可 | **不用动**（可选采用） |
 
 **协议面**就是第 2 节列出的那几样：`gxapp.Window`、`gxapp.WindowConfig`、`gxscene.Node` / `NodeType`、事件约定（`Handlers` / `Handler` / `EventContext`）。它们是后端唯一依赖的东西，其余 host 代码对后端透明。host **不定义绘制后端接口**——曾有的 `gxscene.Backend interface{Paint(root) string}` 已删除（返回字符串只适合文本，对 Skia/wgpu 是误导）；`TextBackend` 降级为具体文本工具，不是要实现的协议。
 
-其中 `SyntheticEvent` / `DispatchBubble` / `DispatchCapture` / `NormalizeEventName` / `Modifier`（§2.3）以及 `Node.ID` / `Node.Layout` / `Changes()`（§2.4）属于 **additive 扩展**：它们只新增类型、字段与方法，`Window`/`Handler` 的既有签名一个没动，因此归入"additive 字段/方法"一类 —— 后端不采用就完全无感。
+其中 `SyntheticEvent` / `DispatchBubble` / `DispatchCapture` / `NormalizeEventName` / `Modifier`（§2.3）以及 `Node.ID` / `Changes()`（§2.4）属于 **additive 扩展**：它们只新增类型、字段与方法，`Window`/`Handler` 的既有签名一个没动，因此归入"additive 字段/方法"一类 —— 后端不采用就完全无感。
 
 这条规则是拆库的价值所在：host 可以持续迭代渲染核心和编译器，后端只在协议升级时才需要跟进。因此**协议变更要当作 breaking change 对待**——尽量 additive（加可选字段/新方法给默认实现），避免改动已有签名，并在 host 侧 bump 版本、后端侧同步升级。
 
@@ -47,6 +47,30 @@
 **后端负责**：窗口创建与事件循环；遍历 `Node` 树做布局；命中测试；取 handler 派发事件；把场景树绘制成实际像素（Skia / wgpu / GLFW / 文本等）。**布局、命中、派发归后端**，host 不参与。
 
 host 内置的 `HeadlessWindow` + `TextBackend` 只是参考实现/占位实现，用于测试和 CI，不是必须使用的后端。
+
+### 1.1 线程、提交与生命周期契约（Host 架构评审 P0）
+
+这一节明确三个所有权问题——它们是 Host 接口稳定的前提：
+
+**① 谁保证 Node 更新与 Backend 读取不竞争？——Host 的串行提交门。**
+
+- Signal 可在任意 goroutine 写入；响应式 effect 的调度由 `runtime/signal` 负责。
+- 但**所有 Scene Mutation**（effect body 里的 `SetPart`/子树 graft、`App.Update()`）与 **Backend Draw**（`Window.Draw` / `FramePresenter.Present` 遍历 Node）都在 Host 的 `commitGate` 内串行执行，二者绝不并发。`commitGate` 基于 goroutine id 可重入——effect body 内同步写 signal 触发的嵌套 effect 不会自锁。
+- 结论：**后端遍历 `*Node` 时，Node 树一定处于一次完整 Mutation 提交后的稳定状态**，不会有 effect 并发写入。后端无需自己加锁保护读树。
+- `QueueDispatcher` 负责把 Draw 派发到 UI 线程；`commitGate` 负责 Node 读写的互斥。两者正交、缺一不可（只调度 Draw 而不串行 Mutation 仍然会竞争）。
+
+**② 更新的所有权——Frame 提交。**
+
+- Host 负责把响应式变化提交成 `Frame{Root, Changes, Version}`（见 §2.4），通过 `FramePresenter.Present` 主动推给后端。增量提交是 Host 的职责，后端不反向访问 App。
+- Draw 与 Update 等所有绘制入口统一经过 `FrameDispatcher`（`InlineDispatcher` 同步 / `QueueDispatcher` 投递 UI 线程），不存在绕过派发器的绘制路径。
+
+**③ Node 与 App 的所有权——生命周期。**
+
+- Node 由 Host 创建/销毁：clone 骨架时分配整数 ID，节点移出树（`RemoveChild`）后其 ID 不再复用；后端按 ID 维护的缓存应在收到 `RemoveChild` 时主动释放。
+- `App` 生命周期独立于原生窗口：`gxapp.Open` 建外壳 → `Render` 在根 Owner 下建树 → `Run` 进事件循环 → `Close` 级联销毁 Owner/Cleanup、关闭派发器与窗口。
+- `Close` 用 `sync.Once` + 原子关闭标记实现幂等且并发安全：并发的 `Run`/`Draw`/`Update` 能立即观察到关闭状态并 no-op。`Render` 失败会统一清理本次创建的 Owner，不残留响应式资源。
+
+**④ 事件边界（重申）**：后端负责原生事件采集、命中测试、坐标转换、焦点/Hover 状态；Host 只提供事件对象、冒泡/捕获、停止传播等通用机制。Host 不承担命中/布局/焦点管理。
 
 ## 2. 协议清单（host 暴露给后端的全部契约）
 
@@ -113,21 +137,46 @@ host 额外提供一套**跨后端一致的合成事件 + 冒泡/捕获派发**�
   - `node.DispatchCapture(name, ctx)`：自根向命中节点捕获派发，`StopPropagation` 语义相同。
   - 两者都自动补 `Synthetic`（若后端没填），`Target` 固定为命中节点；自定义签名 handler 不被拦截，仍可经 `Handler(name)` 取原值。
 
-> 这里没有引入任何新的**必做**契约，因此不触发"协议变更 → 后端必须跟进"：`Window` 接口没动、`Handler`/`EventContext` 的既有用法没变。新增的 `Node.ID`/`Node.Layout`（§2.4）与合成事件一样是 additive 字段，后端不读则无感。后端可以一直用 `Dispatch` + `Raw`，也可按需切到 `Synthetic` + `DispatchBubble` 或增量变更通道。
+> 这里没有引入任何新的**必做**契约，因此不触发"协议变更 → 后端必须跟进"：`Window` 接口没动、`Handler`/`EventContext` 的既有用法没变。新增的 `Node.ID`/`Changes()`（§2.4）与合成事件一样是 additive 字段，后端不读则无感。后端可以一直用 `Dispatch` + `Raw`，也可按需切到 `Synthetic` + `DispatchBubble` 或增量变更通道。
 
-### 2.4 节点身份、布局挂载点与增量变更通道（全部 additive）
+### 2.4 节点身份、布局缓存与增量变更通道（全部 additive）
 
 host **不定义绘制后端接口**（旧 `gxscene.Backend interface{Paint}` 已删除——返回字符串只适合文本，对 Skia/wgpu 是误导）。真实 GUI 后端实现 `Window`，直接吃 `*Node` 树。为让后端少做全量遍历，host 提供三样**可选**能力：
 
-**① 稳定节点 ID** — `Node.ID string`
-- host 按结构位置/key 派生，跨帧稳定：`r/0/1`（静态）、`r/[key]`（keyed 列表项）、`.../tN`（动态文本）。
-- 用途：后端做命中缓存、焦点/hover 跟踪时按 ID 定位节点，不依赖易失效的 `*Node` 指针。**host 只生成、不解释**。
+**① 稳定节点身份** — `Node.ID`（类型 `gxscene.NodeID`，底层 `uint64`）
+- host 在节点创建时分配**全局唯一、不复用**的整数身份；身份绑定到逻辑节点对象，而非结构位置。因此在相邻位置插入兄弟节点不会改变其他节点的 ID（解决了字符串结构路径 ID 的"插入即漂移"问题）。
+- 稳定性规则：静态节点在实例生命周期内固定；keyed 列表项按 key 复用 ID（同 key 重排/增删身份不变，重复 key 唯一化）；条件分支各实例独立；动态文本对应固定 part；真正重建才分配新 ID。
+- 用途：后端做命中缓存、焦点/hover 跟踪时按 ID 定位节点（整数是高效 map key），不依赖易失效的 `*Node` 指针。**host 只生成、不解释**。
+- `NodeID.String()` 给出十进制字符串，供 `Change` 字段与二进制/JSON 协议编码；`0`（`NoNode`）表示"无节点/末尾锚点"（对应协议的空字符串）。
+- **Key 类型安全**：For 的 key 用 `map[any]` 管理，Go 按动态类型+值区分，整数 `1` 与字符串 `"1"` 不会碰撞（消除了 `fmt.Sprint(key)` 的类型混淆）。
 
-**② 布局挂载点** — `Node.Layout any`
-- host 给后端存自己布局结果（rect/尺寸等）的空槽位，host 不解释/不填充/不计算。
-- 用途：避免每个后端维护 `map[*Node]any` 旁路结构。不用则为 nil。
+**② 布局缓存归后端所有** — `map[NodeID]any`
+- Node **不承载后端私有状态**（Host 架构评审 P1）：旧的 `Node.Layout any` 挂载点已移除。布局结果（rect/尺寸等）由后端用自己的 `map[NodeID]any` 维护，整数 ID 作 key。
+- 所有权与销毁规则完全归后端：节点销毁（后端收到 `RemoveChild`）时按 ID 清理对应缓存。host 不解释、不填充、不计算布局。
+- 这样避免 Node 退化成"什么都能塞"的公共对象，也消除多后端共享 Node 时的类型冲突与生命周期不明。
 
-**③ 增量变更通道** — `Instance.Changes()/TakeChanges()`（App 同名转发）
+**③ Frame 提交契约（推荐）+ 增量变更通道**
+
+Host 把每帧的完整提交打包成 `gxapp.Frame`，通过可选的 `gxapp.FramePresenter` 接口主动推给后端——后端**无需反向持有 App**：
+```go
+type Frame struct {
+    Root    *gxscene.Node      // 当前完整场景树（建/重建全量镜像）
+    Changes []gxscene.Change   // 自上次 Present 以来的有序增量（需 EnableChanges）
+    Version uint64             // 单调递增提交序号（去重/排序/判漏帧）
+}
+type FramePresenter interface { Present(frame *Frame) error }
+```
+后端实现 `Present` 即自动生效（App.drawNow 检测到后优先调用，否则回退 `Draw(root)` 兼容路径，老后端零改动）：
+```go
+func (w *Backend) Present(frame *gxapp.Frame) error {
+    if !w.hasBase { w.buildMirror(frame.Root); w.hasBase = true } // 首帧全量
+    for _, ch := range frame.Changes { w.apply(ch) }              // 后续增量
+    return nil
+}
+```
+Rust 后端（`examples/rust-backend/go/window.go`）已采用此契约，移除了旧的 `BindApp` 反向引用。
+
+底层增量流仍可独立使用（不实现 FramePresenter 时，或需要自行控制取变化时）：
 ```go
 app.EnableChanges()                  // 打开记录（不调用则零开销、行为不变）
 // ... sig 变化触发更新 ...
@@ -143,6 +192,8 @@ for _, ch := range app.TakeChanges() { // 取走自上帧以来的有序变更
     }
 }
 ```
+
+**全量与补丁的关系**：`Frame.Root` 永远是最新完整快照，`Frame.Changes` 是两次 Present 之间的差量。后端正常路径只需 apply Changes；当镜像丢失、Version 不连续或遇到无法处理的 Change 时，用 Root 重建全量基线。首帧（Version=1）Changes 可能为空，必须用 Root 建基线。
 
 **`ChangeKind` 全表与字段语义**（`BeforeID` 为空表示末尾）：
 
@@ -182,7 +233,7 @@ app.SetChildDiffer(nil) // 恢复 host 内建
 - 策略作用于整棵共享 sink（组件/分支/列表项全覆盖），任意时刻可设；不设则行为不变。
 - 注入只替换"如何算 diff"，`Change` 协议与字段不变；策略只描述结构变化，命中/布局/绘制仍归后端。
 
-> 三样都不触碰命中/布局/绘制：ID 是身份、Layout 是空容器、Changes 是"什么变了"的数据描述。决策与实现仍 100% 归后端。
+> 三样都不触碰命中/布局/绘制：ID 是身份、Changes 是"什么变了"的数据描述、布局缓存归后端自建 map[NodeID]any。决策与实现仍 100% 归后端。
 
 ## 3. 拆成两个项目如何跑通
 
@@ -267,7 +318,7 @@ func Run(cfg gxapp.WindowConfig, build func() any) error {
 | **事件回路隐式** | `Window` 无事件输入方法，命中→派发全靠约定 | 后端在 `Run()` 内集中实现这条回路，并写清命中策略 |
 | **增量变更可选导致两套路径** | 后端可选消费 `Changes()` 或继续全量 `Draw`；混用需注意幂等 | 一个后端固定一种策略；消费增量的后端每帧 `TakeChanges()` 一次，配合 `Node.ID` 定位 |
 
-**边界澄清（本轮已落实）**：host **不做命中/布局/绘制**，也不定义绘制后端接口（旧 `Backend` 已删）。`Node.ID`/`Layout`/`Changes()` 只是给后端提供身份、存放位置与"什么变了"的数据，决策仍在后端。剩下的隐式点是事件回路——它属后端职责，靠 `Run()` 内的胶水层与本文约定即可，不需要在 host 侧加命中接口。
+**边界澄清（本轮已落实）**：host **不做命中/布局/绘制**，也不定义绘制后端接口（旧 `Backend` 已删）。`Node.ID`（整数稳定身份）/`Frame{Changes,Version}` 只是给后端提供身份与"什么变了"的数据，布局缓存归后端自建 `map[NodeID]any`，决策仍在后端。剩下的隐式点是事件回路——它属后端职责，靠 `Run()` 内的胶水层与本文约定即可，不需要在 host 侧加命中接口。线程与生命周期契约见 §1.1。
 
 ## 5. 一句话总结
 

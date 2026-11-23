@@ -81,7 +81,7 @@ host **不计算布局**；这些只是 JSS 风格的布局提示，原样放入
 | 字段 | 类型 | 用途 |
 |---|---|---|
 | `Node.ID` | `string` | host 生成、跨帧稳定的逻辑 id，供命中缓存/焦点跟踪；后端可忽略 |
-| `Node.Layout` | `any` | 后端存放自己布局结果（rect/尺寸）的位置，避免旁路 `map[*Node]any`；host 恒不填充 |
+| `Node.ID` | `NodeID`(uint64) | 稳定整数身份，创建时分配、不随结构位置漂移；后端用作缓存/焦点/map key |
 | `EventContext.Raw` | `any` | 平台原生事件对象，后端填入、业务原样可取 |
 | `SyntheticEvent.Data` | `map[string]any` | 后端自定义扩展位，host 不解释 |
 
@@ -105,4 +105,4 @@ host **不计算布局**；这些只是 JSS 风格的布局提示，原样放入
 3. 布局属性遇到 `%` 按百分比解析，不当裸数字。
 4. 文本 `fontSize`/`lineHeight` 裸数值按后端默认单位/倍数解释，未知 `textAlign` 降级 `left`。
 5. 事件只读 `Handlers`，不读 `Props`；`on*` 无白名单。
-6. `Node.Layout` / `Node.ID` 可用可不用，不用时无副作用。
+6. `Node.ID` 可用可不用（后端缓存/焦点跟踪时有用）；布局缓存由后端自建 `map[NodeID]any`，不与 Node 共享状态。

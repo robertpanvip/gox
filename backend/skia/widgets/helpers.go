@@ -24,8 +24,8 @@ func event(name string, slot int) gxscene.Op {
 
 // findByID 在当前场景树里按 host 生成的稳定 ID 找回节点。
 // 输入焦点用节点 ID 记录而不是裸指针，因此结构插槽重建子树后仍能定位到新节点。
-func findByID(n *gxscene.Node, id string) *gxscene.Node {
-	if n == nil || id == "" {
+func findByID(n *gxscene.Node, id gxscene.NodeID) *gxscene.Node {
+	if n == nil || id == gxscene.NoNode {
 		return nil
 	}
 	if n.ID == id {
