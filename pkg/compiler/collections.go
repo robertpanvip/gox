@@ -18,7 +18,13 @@ var chainMethods = map[string]string{
 	"map": "Map", "filter": "Filter", "reduce": "Reduce",
 }
 
-const defaultModule = "github.com/robertpanvip/gox"
+// DefaultModule 是 gox 运行时的 module 路径。跨文件项目模式下项目 module 与
+// 运行时 module 必须解耦：runtime 包（runtime/scene、runtime/signal、runtime/list）
+// 永远在 gox 自己的 module 下，与用户项目的 module 无关。
+const DefaultModule = "github.com/robertpanvip/gox"
+
+// defaultModule 保留为包内别名，兼容既有引用。
+const defaultModule = DefaultModule
 
 func listImportPath(module string) string {
 	if module == "" {

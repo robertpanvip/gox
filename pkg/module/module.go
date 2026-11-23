@@ -45,6 +45,7 @@ type Project struct {
 	Root       string               // 项目根目录（绝对路径）
 	ModulePath string               // Go module 路径，如 example.com/proj
 	Prefer     Prefer               // 歧义裁决
+	RuntimeModule string            // gox 运行时 module（算 runtime/scene 等 import 路径），默认 compiler.DefaultModule
 	packages   map[string]*GXModule // importPath → 包
 	order      []*GXModule          // 拓扑序（被依赖方在前），Build 时填充
 }
@@ -78,7 +79,8 @@ func LoadProject(root, modulePath string, prefer Prefer) (*Project, error) {
 	}
 	p := &Project{
 		Root: abs, ModulePath: strings.TrimSuffix(modulePath, "/"),
-		Prefer: prefer, packages: map[string]*GXModule{},
+		Prefer: prefer, RuntimeModule: compiler.DefaultModule,
+		packages: map[string]*GXModule{},
 	}
 
 	// 按 (目录, package) 分组。
@@ -290,7 +292,9 @@ func (p *Project) Build(entry string) ([]*CompiledFile, error) {
 				return nil, err
 			}
 			imports := p.importMapFor(string(src))
-			res, err := compiler.CompileWithProject(f, string(src), p.ModulePath, imports)
+			// 运行时 import 路径用 gox 的 module，而非项目 module——
+			// runtime/scene、runtime/signal 等永远在 gox 自己的 module 下。
+			res, err := compiler.CompileWithProject(f, string(src), p.RuntimeModule, imports)
 			if err != nil {
 				return nil, fmt.Errorf("转译 %s: %w", f, err)
 			}

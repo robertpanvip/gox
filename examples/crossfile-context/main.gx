@@ -1,0 +1,36 @@
+// 跨文件共享 Context：定义在一个 .gx 文件里，另一个文件 import 后读写同一实例。
+// 构建：gox build examples/crossfile-context/main.gx -root examples/crossfile-context \
+//       -replace github.com/robertpanvip/gox=<gox 本地路径> -check
+//
+// 机制：GX 跨文件模块用 pub 导出符号，调用方写小写源名（theme.labelCtx），
+// 编译器查导出表还原成大写（theme.LabelCtx）。pub var 导出的是同一个 Context
+// 指针——这就是"跨文件共享"：不是值拷贝，是共享同一个响应式通道。
+package main
+
+import (
+    "example.com/crossfilectx/theme"
+    gxscene "github.com/robertpanvip/gox/runtime/scene"
+    "github.com/robertpanvip/gox/runtime/signal"
+    "fmt"
+)
+
+// Label 是 consumer：建树期 .use() 读的是跨文件共享的 Context。
+pub func Label(props gxscene.Props) *gxscene.Instance {
+    text := theme.labelCtx.use()
+    return <b class="label">{text()}</b>
+}
+
+func main() {
+    // 一处写入（跨文件调 theme.apply）
+    theme.apply("shared-hello", "#0a84ff")
+
+    view := <div id="app">
+        <Label/>
+    </div>
+    view.BindReactive(signal.Effect)
+    fmt.println(view)
+
+    // 再写一次，另一个文件定义的 Context 通道驱动本文件组件重绘
+    theme.labelCtx.set("changed-across-files")
+    fmt.println(view)
+}

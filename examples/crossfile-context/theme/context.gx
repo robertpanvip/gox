@@ -1,0 +1,15 @@
+package theme
+
+import "github.com/robertpanvip/gox/widgets"
+
+// 跨文件共享的关键：pub var 导出的是同一个 *Context 实例（指针）。
+// 所有 import 本包的文件读写的是同一个上下文通道，Set 一处、全树消费者可见。
+// 小写源名 labelCtx / accentCtx → 编译器按 GX 模块导出表还原为 LabelCtx / AccentCtx。
+pub var labelCtx = widgets.NewContext[string]("default-label")
+pub var accentCtx = widgets.NewContext[string]("#000000")
+
+// pub func 也可跨文件调用：写主题的工具函数
+pub func apply(label string, accent string) {
+    labelCtx.set(label)
+    accentCtx.set(accent)
+}

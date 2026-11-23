@@ -307,3 +307,66 @@ pub type box struct { pub value int }
 		}
 	}
 }
+
+// 跨文件项目用了 JSX/sig（会注入 runtime import）时，runtime 路径必须指向
+// gox 自己的 module，不得被项目 module 前缀污染，也不得重复注入错误别名。
+// 同时验证跨文件 Context 导出还原（小写 .use() → .Use()）。
+func TestBuildRuntimeImportUsesGoxModule(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "theme", "ctx.gx"), `package theme
+import "github.com/robertpanvip/gox/widgets"
+pub var labelCtx = widgets.NewContext[string]("default")
+`)
+	writeFile(t, filepath.Join(root, "main.gx"), `package main
+import (
+    "example.com/proj/theme"
+    gxscene "github.com/robertpanvip/gox/runtime/scene"
+    "github.com/robertpanvip/gox/runtime/signal"
+)
+func main() {
+    theme.labelCtx.set("shared")
+    _ = theme.labelCtx.use()
+    view := <div>{theme.labelCtx.value()}</div>
+    view.BindReactive(signal.Effect)
+    _ = gxscene.Props{}
+}
+`)
+	p, err := LoadProject(root, "example.com/proj", PreferGX)
+	if err != nil {
+		t.Fatal(err)
+	}
+	files, err := p.Build(filepath.Join(root, "main.gx"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var mainGo, ctxGo string
+	for _, f := range files {
+		if strings.HasSuffix(f.SourcePath, "main.gx") {
+			mainGo = f.GoSource
+		}
+		if strings.HasSuffix(f.SourcePath, "ctx.gx") {
+			ctxGo = f.GoSource
+		}
+	}
+	if mainGo == "" || ctxGo == "" {
+		t.Fatalf("产物不全: main=%q ctx=%q", mainGo, ctxGo)
+	}
+	// runtime 路径必须是 gox 官方 module，不得出现项目前缀的 runtime 路径
+	if strings.Contains(mainGo, "example.com/proj/runtime/") {
+		t.Errorf("runtime import 被项目 module 前缀污染:\n%s", mainGo)
+	}
+	if !strings.Contains(mainGo, `"github.com/robertpanvip/gox/runtime/scene"`) {
+		t.Errorf("缺少正确的 gxscene runtime import:\n%s", mainGo)
+	}
+	// 不得出现重复别名 gxscene2 / Signal2（旧 bug 的症状）
+	if strings.Contains(mainGo, "gxscene2") || strings.Contains(mainGo, "Signal2") {
+		t.Errorf("出现重复 runtime 别名（错误注入症状）:\n%s", mainGo)
+	}
+	// 跨文件 Context 导出还原：pub var labelCtx → LabelCtx，小写 .use() → .Use()
+	if !strings.Contains(ctxGo, "var LabelCtx") {
+		t.Errorf("ctx 产物应导出 LabelCtx:\n%s", ctxGo)
+	}
+	if !strings.Contains(mainGo, "theme.LabelCtx.Use()") {
+		t.Errorf("main 产物应还原为 theme.LabelCtx.Use():\n%s", mainGo)
+	}
+}

@@ -236,6 +236,9 @@ func cmdBuildProject(f *buildFlags) error {
 	if err != nil {
 		return err
 	}
+	// runtime 包（runtime/scene 等）永远在 gox module 下，与项目 module 无关。
+	// -module 是用户覆盖 runtime module 的入口（如 fork gox），默认已是 gox 官方路径。
+	proj.RuntimeModule = f.module
 	files, err := proj.Build(f.file)
 	if err != nil {
 		return err

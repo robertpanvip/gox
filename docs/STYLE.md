@@ -159,6 +159,17 @@ Context/Provider 是 Go API（`widgets` 包），在 `.gx` 源码里平铺直用
 - **Props 用带引号 key + 带类型变量再传**：`p := gxscene.Props{"value": ..., "children": ...}; ctx.provider(p)`。裸 key（`value:`）会被 `transformCompositeFields` 当成结构体字段名还原成大写；对象字面量直接作为方法调用参数时编译器无法推断目标类型（函数形式 `gxapp.open({...})` 可以，方法形态不行）。包级函数形式的 `ThemeProvider` 可直接写 `<widgets.ThemeProvider value={...}>...</widgets.ThemeProvider>`。
 - 动态插槽里写 `score()`（带括号）才读取并登记依赖；写 `score`（函数值）是快照，不会随 context/sig 更新。
 
+### 10.2 跨文件共享 Context
+
+Context **可以跨文件共享**，且共享的是同一个响应式实例（指针），不是值拷贝。完整示例见 `examples/crossfile-context/`：
+
+- 定义方（GX 模块）用 `pub var` 导出：`pub var labelCtx = widgets.NewContext[string]("default")`，编译产物为 `var LabelCtx = ...`。
+- 使用方 `import "example.com/proj/theme"` 后写**小写源名** `theme.labelCtx`，编译器查该 GX 模块的 `pub` 导出表还原成 `theme.LabelCtx`；`.set()` / `.use()` / `.value()` 同样按 Go 包规则还原成大写。
+- 一处 `theme.labelCtx.set("x")`，另一个文件里 `theme.labelCtx.use()` 的消费者随订阅重绘——跨文件的 Set/Use 走的是同一个 signal 通道。
+- 构建走跨文件项目模式：`gox build main.gx -root <项目根> -replace github.com/robertpanvip/gox=<gox路径> -check`。运行时 import（`runtime/scene` 等）恒指向 gox module，不会被项目 module 前缀污染（已有回归测试 `TestBuildRuntimeImportUsesGoxModule`）。
+
+注意：`pub var` 导出的是包级单例，天然是"应用级共享"。若要多套并存的子树隔离，仍用 `Provider`（在同一文件里包子树），两者不冲突。
+
 ## 11. 窗口外观配置（无边框 / 透明 / 置顶 / 图标）
 
 `gxapp.WindowConfig` 新增外观字段，两端各自实现：
