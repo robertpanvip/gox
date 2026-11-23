@@ -180,7 +180,7 @@ func restoreRefs(in []Token, names map[string]string, b *Bindings) []Token {
 // ScanExports 扫描一份 .gx 源码，返回其 pub 导出表「小写原名 → 导出名」。
 //
 // 这是 pkg/module 建立 GX 模块导出符号表的入口：只需 lex + enum/pub 两个阶段
-// （导出名由声明处的大写结果决定），不跑 signal/JSX/类型等无关阶段，速度快、
+// （导出名由声明处的大写结果决定），不跑 sig/JSX/类型等无关阶段，速度快、
 // 耦合低。导出名严格来自被导入方，供导入方还原时精确查表，不做 upperFirst 猜测。
 //
 // 除顶层符号外，还收集 struct 的 pub 字段导出，用限定名「Type.field → Field」

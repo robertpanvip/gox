@@ -39,7 +39,7 @@ func (r *Result) Validate() error {
 // 先展开为 struct 形态，对象解构（expandDestructures）随后把 {a,b} := p 改写为
 // 逐字段声明，并借此做「解构字段 ⊆ 构造类型字段」的编译期校验。
 //
-// Signal transform 在 analyze 之前：消除 signal/let 声明并把 signal 变量读写改为
+// Signal transform 在 analyze 之前：消除 sig/let 声明并把 sig 变量读写改为
 // 调用式（n / n=v → n() / n(v)），使语义层看到的是标准 Go；Signal 占位包名由
 // ReconcileImports 统一注入 import。
 // analyze 必须在 union 之前：此时联合类型 A|B 尚未被擦除，is 守卫仍是原貌，
@@ -93,9 +93,9 @@ func compileWithMode(file, src, module string, imports map[string]ImportInfo) (*
 				file, t.Pos.Line, t.Pos.Col)
 		}
 	}
-	// struct signal 字段语言特性：必须在 Bind 之前降级 `signal name TYPE`
-	// → `name Signal.Signal[TYPE]`，否则 `signal` 关键字会被局部 signal 逻辑
-	// 误判为 `signal name = expr`（旧行为生成非法 `var name any string`）。
+	// struct sig 字段语言特性：必须在 Bind 之前降级 `sig name TYPE`
+	// → `name Signal.Signal[TYPE]`，否则 `sig` 关键字会被局部 sig 逻辑
+	// 误判为 `sig name = expr`（旧行为生成非法 `var name any string`）。
 	// 降级后字段成为标准 Go，所有下游 transform 天然享受既有作用域/大小写保护。
 	signalDecls := collectSignalFieldDecls(toks)
 	signalFields := buildSignalFieldTable(toks, signalDecls)
@@ -107,12 +107,12 @@ func compileWithMode(file, src, module string, imports map[string]ImportInfo) (*
 	// 默认值：声明处先物理剥离（否则 Analyze 会把 `= default` 算进类型），
 	// 调用点在 Analyze 之后补全（补全表达式仍流经后续全部 transform）。
 	toks, defaultDefs := stripDefaults(toks)
-	// Signal 语法糖：signal/let 声明消除 + signal 变量读写改写为调用式。
-	// 放在 Analyze 之前，让语义层看到标准 Go（signal/let 已消除、读写已是调用）。
-	// 先收集 signal 变量名并透传给 JSX 转换：JSX 插值 {count} 在此时是整体 token，
+	// Signal 语法糖：sig/let 声明消除 + sig 变量读写改写为调用式。
+	// 放在 Analyze 之前，让语义层看到标准 Go（sig/let 已消除、读写已是调用）。
+	// 先收集 sig 变量名并透传给 JSX 转换：JSX 插值 {count} 在此时是整体 token，
 	// 信号改写穿透不到；scene 后端重新词法化插值时需据此补上读调用 count()。
 	sigs := collectSignalVars(toks)
-	// 在 signal 改写前收集 signal 变量的声明类型（如 users→[]User）。
+	// 在 sig 改写前收集 sig 变量的声明类型（如 users→[]User）。
 	// 改写后初值被 Signal.New(...) 包裹，字面量类型无法直接推断，故必须在此处采集。
 	// 供 <For> 在 render 参数无类型注解时从 each 推断元素类型。
 	sigTypes := collectSignalTypes(toks)
@@ -145,11 +145,11 @@ func compileWithMode(file, src, module string, imports map[string]ImportInfo) (*
 		return nil, err
 	}
 	toks = transformTemplates(toks, bindings, templateAST)
-	// struct signal 字段：selector 读写自动调用化 + 构造位置三档包装。
-	// 放在 signal 局部变量改写与模板展开之后（右侧表达式已处理），external 之前
+	// struct sig 字段：selector 读写自动调用化 + 构造位置三档包装。
+	// 放在 sig 局部变量改写与模板展开之后（右侧表达式已处理），external 之前
 	// （字段名仍是小写，signalFieldTable 用原始类型名判定）。
 	//
-	// 顺序：rewriteSignalFieldRefs 必须先于 wrapSignalFieldLiterals——前者把 signal
+	// 顺序：rewriteSignalFieldRefs 必须先于 wrapSignalFieldLiterals——前者把 sig
 	// 字段读 p.a 改写成 p.a()，后者才能在构造位置识别 recv.field() 形态并直通裸
 	// getter（保鲜）。若反序，wrap 生成的直通 getter p.a 会被随后的 rewrite 改成
 	// p.a()（快照，静默冻结）。两者互不依赖对方的产物结构，顺序调换对其余场景无影响。

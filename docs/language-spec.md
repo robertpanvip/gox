@@ -1,6 +1,6 @@
 # GoX 语言规范
 
-GoX（`.gx`）= Go 语法 + 十三项语法糖（pub / enum / JSX / 外部符号还原 / 集合链式 / is 守卫 / 联合类型 / 模板字符串 / 参数默认值 / Lambda / 对象字面量 / 对象解构 / Signal 响应式，含 struct signal 字段）。转译产物是标准 Go 源码，交给官方工具链编译。**需要 Go 1.27+**。
+GoX（`.gx`）= Go 语法 + 十三项语法糖（pub / enum / JSX / 外部符号还原 / 集合链式 / is 守卫 / 联合类型 / 模板字符串 / 参数默认值 / Lambda / 对象字面量 / 对象解构 / Signal 响应式，含 struct sig 字段）。转译产物是标准 Go 源码，交给官方工具链编译。**需要 Go 1.27+**。
 
 ## 书写约定（最重要）
 
@@ -82,11 +82,11 @@ app.render(() =>
 
 ### 3.1 `<For>` 列表
 
-`<For each={xs} key={(item) => ...}>{(item) => ...}</For>` 是 keyed 列表控制器（对齐 SolidJS `<For>`）。`each` 在读 signal 的响应式上下文求值，列表变化时做 keyed diff：同 key 节点复用（移动不重建），删除项销毁其 Owner（级联停止内部 effect / cleanup），重排只调顺序。
+`<For each={xs} key={(item) => ...}>{(item) => ...}</For>` 是 keyed 列表控制器（对齐 SolidJS `<For>`）。`each` 在读 sig 的响应式上下文求值，列表变化时做 keyed diff：同 key 节点复用（移动不重建），删除项销毁其 Owner（级联停止内部 effect / cleanup），重排只调顺序。
 
 | 写法 | 语义 |
 |---|---|
-| `key={(item) => item.id}` | 用稳定键 diff：同 key 值变化只写 item signal，精确重跑依赖它的叶子，不重建子树、ID 稳定 |
+| `key={(item) => item.id}` | 用稳定键 diff：同 key 值变化只写 item sig，精确重跑依赖它的叶子，不重建子树、ID 稳定 |
 | **省略 `key`** | `key = nil` → **用元素下标作 key**（仅适合纯追加 / 尾部删除；中间插入/删除会导致后续项按新下标重建）。这是最自然的写法，运行时以 `indexKey` 模式处理，不会出现"塌成一项"或死循环 |
 | render 参数 `item` | 是元素值的 getter（`func() T`）：子树动态 getter 必须经它读值以登记依赖。`item` 逃逸到组件 props 等无法信号化的场景时，编译器回退值快照模式（同 key 值变化重建该项） |
 
@@ -169,46 +169,54 @@ labels := nums.map(fn).filter(keep).reduce(0, add)
 
 ## 11. Signal 响应式
 
-`signal` 声明源信号，`Signal.computed` 派生只读信号，`Signal.effect` 注册副作用；依赖变化时 effect 自动重跑。底层为函数式 signal（`Signal[T] = func(...T) T`，无参读、带参写）+ 依赖追踪运行时 `runtime/signal`。
+`sig` 声明源信号，`Signal.computed` 派生只读信号，`Signal.effect` 注册副作用；依赖变化时 effect 自动重跑。底层为函数式 sig（`Signal[T] = func(...T) T`，无参读、带参写）+ 依赖追踪运行时 `runtime/signal`。
 
 ```gx
-signal count = 0
+sig count = 0
 let doubled = Signal.computed(() => count * 2)   // → Signal[int] 派生信号
 Signal.effect(() => println(count))               // → func(){ println(count()) }，count 变化时重跑
 count = 5                                          // → count(5)，触发依赖失效
 println(doubled)                                   // → println(doubled())，惰性重算得 10
 ```
 
-- **声明**：`signal n = v` → `var n = Signal.New(v)`；`let n = v` → `n := v`（let 即短声明，无新语义）。
-- **读写改写**：signal 变量的读（裸标识符）自动补 `()`；写改写 `n = v` → `n(v)`、`n += v` → `n(n() + v)`、`n++` → `n(n() + 1)`。
-- **作用域排除**：selector `obj.n`、复合字段键 `{n: ...}`、struct 字段、函数参数、已显式调用 `n()` 均不改写（注：struct 里显式声明的 `signal name T` 字段是另一项特性，见 §11.1）。
+- **声明**：`sig n = v` → `var n = Signal.New(v)`；`let n = v` → `n := v`（let 即短声明，无新语义）。
+- **读写改写**：sig 变量的读（裸标识符）自动补 `()`；写改写 `n = v` → `n(v)`、`n += v` → `n(n() + v)`、`n++` → `n(n() + 1)`。
+- **作用域排除**：selector `obj.n`、复合字段键 `{n: ...}`、struct 字段、函数参数、已显式调用 `n()` 均不改写（注：struct 里显式声明的 `sig name T` 字段是另一项特性，见 §11.1）。
 - **computed**：惰性求值 + 缓存，仅依赖变化时失效；链式派生正确传播。
 - **effect**：立即执行一次，依赖变化时重跑；每次重跑动态重建依赖集合（条件分支依赖可增删）。
-- **底层 API 禁止手写**：`Signal.New` / `Signal.Computed` / `Signal.Effect` / `Signal.NewWithEquals` 等首字母大写的运行时构造器是编译器内部实现细节，用户源码里直接调用会报编译错误。GX 只暴露语法糖：`signal n = v` 声明源信号、`Signal.computed(() => expr)` 派生、`Signal.effect(() => {...})` 副作用；迟早需要的自定义相等策略等仍由运行时保留，但不从语言层暴露。这样用户无需感知 signal 与普通变量的区别，也杜绝了手写值与编译器 binding 不一致引发的快照冻结 / 别名冲突 / 二次包装等一系列问题。小写语法糖（含作为函数值传递的 `Signal.effect`）由编译器在末尾还原成对应大写符号，是唯一合法入口。
+- **底层 API 禁止手写**：`Signal.New` / `Signal.Computed` / `Signal.Effect` / `Signal.NewWithEquals` 等首字母大写的运行时构造器是编译器内部实现细节，用户源码里直接调用会报编译错误。GX 只暴露语法糖：`sig n = v` 声明源信号、`Signal.computed(() => expr)` 派生、`Signal.effect(() => {...})` 副作用；迟早需要的自定义相等策略等仍由运行时保留，但不从语言层暴露。这样用户无需感知 sig 与普通变量的区别，也杜绝了手写值与编译器 binding 不一致引发的快照冻结 / 别名冲突 / 二次包装等一系列问题。小写语法糖（含作为函数值传递的 `Signal.effect`）由编译器在末尾还原成对应大写符号，是唯一合法入口。
 - **`Signal` 是保留标识符**：作为占位包名的语义优先，勿用作变量名/类型名/字段名。`Signal.New` 形式的底层 API 调用会被拦截；若确需同名局部变量（如 `Signal := Holder{...}`），对其字段的访问（`Signal.New`）会按绑定表放行——判据是「`Signal` 是否解析为包名绑定」，不是纯词法匹配。
 - **并发安全**：全局互斥锁保护观察者栈与依赖图，用户回调在锁外执行。
-- **读取性能**：依赖追踪只在 effect/computed 重算期间需要，而这类场景是少数；普通读取走**无锁快路径**——用原子计数器 `activeObservers` 判断当前无 observer 重算时，直接原子读取当前值，跳过抓栈（goroutine id 解析）与加锁。signal 值用原子指针存储避免撕裂。实测读取 ~2 ns（约为普通变量的 2 倍），相较抓栈方案（~2900 ns）提速约 1400×；computed 缓存命中读 ~14 ns。
+- **读取性能**：依赖追踪只在 effect/computed 重算期间需要，而这类场景是少数；普通读取走**无锁快路径**——用原子计数器 `activeObservers` 判断当前无 observer 重算时，直接原子读取当前值，跳过抓栈（goroutine id 解析）与加锁。sig 值用原子指针存储避免撕裂。实测读取 ~2 ns（约为普通变量的 2 倍），相较抓栈方案（~2900 ns）提速约 1400×；computed 缓存命中读 ~14 ns。
 - **import**：`Signal` 占位包名由 ImportManager 统一解析为 `import Signal "<module>/runtime/signal"`；源码已用别名导入则复用。
 
 **已知边界与绕法**（能跑但需按规则写，编译器不改写也不会自动报警的三处）：
 
-- **signal 作实参传的是当前值**：裸标识符读一律补 `()`，所以 `show(n)` → `show(n())`，传进去的是当前值而非 getter，`show` 内部拿不到响应式。这是函数式 signal 的既定语义（读即解包），不是 bug。想传 getter 保鲜，用 `func() T { return n }` 包一层、或改用 §11.1 的 struct `signal` 字段 / 组件 `Props`（getter-map）传递。
+- **sig 作实参传的是当前值**：裸标识符读一律补 `()`，所以 `show(n)` → `show(n())`，传进去的是当前值而非 getter，`show` 内部拿不到响应式。这是函数式 sig 的既定语义（读即解包），不是 bug。想传 getter 保鲜，用 `func() T { return n }` 包一层、或改用 §11.1 的 struct `sig` 字段 / 组件 `Props`（getter-map）传递。
 - **props getter 只读**：`Get[T](props, "k")` 返回 `func() T`，只能读；`rows(append(rows(), x))` 带参写会编译错（`want ()`）。这是单向数据流的设计选择——组件内要改父状态，由父级额外传一个 `func(...)` 回调，而不是写 prop getter 本身。
-- **signal 持复合值的「深写」不刷新、且已诊断化**：`signal s = S{n:1}; s.n = 2` 与 `signal rows = []Row{...}; rows[0].name = "b"` 会改写为 `s().n = 2` / `rows()[0].name = "b"`——值确实变了，但没有调用 signal 写函数、依赖它的 slot 不刷新。编译器对这两种形态报 `signal-deep-write` 诊断并给出修法：整体替换后重新赋值（`s(S{n:2})` / `rows(新切片)`）；只读（如插值里的 `rows()[0].name`）与普通非 signal 变量的字段赋值不受影响。
+- **sig 持复合值的「深写」不刷新、且已诊断化**：`sig s = S{n:1}; s.n = 2` 与 `sig rows = []Row{...}; rows[0].name = "b"` 会改写为 `s().n = 2` / `rows()[0].name = "b"`——值确实变了，但没有调用 sig 写函数、依赖它的 slot 不刷新。编译器对这两种形态报 `signal-deep-write` 诊断并给出修法：整体替换后重新赋值（`s(S{n:2})` / `rows(新切片)`）；只读（如插值里的 `rows()[0].name`）与普通非 sig 变量的字段赋值不受影响。
 
-### 11.1 struct signal 字段（响应式 props）
+### 11.1 struct sig 字段（响应式 props）
 
-struct 的字段可以声明为 `signal`，编译器生成一个 getter 字段（`Signal.Signal[T]`），并自动改写读写。这样持有该 struct 的地方（含组件/持有者函数）读到的是**实时值**而非构造时的一次性快照——值可由外部 signal 驱动保鲜。
+struct 的字段可以声明为 `sig`，编译器生成一个 getter 字段（`Signal.Signal[T]`），并自动改写读写。这样持有该 struct 的地方（含组件/持有者函数）读到的是**实时值**而非构造时的一次性快照——值可由外部 sig 驱动保鲜。
+
+> **sig 字段的核心语义规则（三条）**
+>
+> 1. **谁被修饰谁响应式**：`sig` 修饰哪个字段，就只有那个字段具备响应式读（`p.f` → `p.f()`）与响应式写（`p.f = v` → `p.f(v)`、`+=`/`++/--` 同理）语义。未修饰的普通字段没有任何响应式行为。
+> 2. **语义沿嵌套访问链保留**：响应式语义沿 struct 嵌套访问链 `a.b.c` 逐段保留——链上每一个 `sig` 字段段都在读取处补 `()`（含中间段，如 `o.mid.b().d()` 中 `b`、`d` 各自解包；写入目标段只写不读，省略 `()`）。因此中间任意 `sig` 段值变化时，链尾读到的是最新值。
+> 3. **不自动传染给其他字段**：响应式语义不沿链扩散到普通字段。链上的普通字段段、以及「同名但未被 `sig` 修饰」的字段都不补 `()`，按普通 Go 字段读取。判据始终是「该字段在其 receiver 类型上是否被声明为 `sig`」，不是按字段名猜测，也不是从某个 `sig` 祖先传播而来。
+>
+> 这三条共同保证：显式标注即响应、嵌套链上处处保鲜、未标注字段零副作用。
 
 ```gx
 type CardProps struct {
-    signal name string    // 响应式字段
+    sig name string    // 响应式字段
     age int               // 普通字段
 }
 func show(p CardProps) string { return p.name }
 
 func main() {
-    signal src = "x"
+    sig src = "x"
     p := CardProps{name: src, age: 3}  // → name: src（传 getter 本身，保鲜）
     println(show(p))                   // x
     src("changed")
@@ -217,26 +225,26 @@ func main() {
 }
 ```
 
-- **声明**：`signal name T` → `name Signal.Signal[T]`（函数字段，无参读/带参写）。
+- **声明**：`sig name T` → `name Signal.Signal[T]`（函数字段，无参读/带参写）。
 - **读**：`p.name` → `p.name()`；**写**：`p.name = v` → `p.name(v)`；复合写 `+=` 与 `++/--` 同样展开。
-- **构造（六档，手写与 JSX 一致）**：signal 字段的值按来源分档处理。**档位表的单一事实来源是 `pkg/compiler/signalfields.go` 顶部注释**，此处仅摘要，改动以实现为准——
+- **构造（六档，手写与 JSX 一致）**：sig 字段的值按来源分档处理。**档位表的单一事实来源是 `pkg/compiler/signalfields.go` 顶部注释**，此处仅摘要，改动以实现为准——
   
   | 档 | 形态 | 产物 |
   |---|---|---|
-  | 1 透传 | `v` 本身是 signal（signal 变量/字段/链读） | 直通 getter 本身，零开销；链中间含 signal 段时走读写合一 lambda 保鲜 |
+  | 1 透传 | `v` 本身是 sig（sig 变量/字段/链读） | 直通 getter 本身，零开销；链中间含 sig 段时走读写合一 lambda 保鲜 |
   | 2 字面量 | 纯常量（数字/字符串/bool/nil） | `Signal.New(v)` |
   | 3 构造 | 复合字面量（如 `Leaf{v:"a"}`） | `Signal.New(v)`，一次构造、可写、可响应 |
-  | 4 派生 | 含 signal 读的表达式（如 `p.a + p.b`） | `Signal.Computed(func() T { return v })`，登记依赖、只读（带参写入显式 panic，不再静默丢弃） |
+  | 4 派生 | 含 sig 读的表达式（如 `p.a + p.b`） | `Signal.Computed(func() T { return v })`，登记依赖、只读（带参写入显式 panic，不再静默丢弃） |
   | 5 裸变量 | 单个普通变量/字段（如 `v`、`q.title`） | 可写跟随 getter（内部为按变量共享锁的 `LockedGetterShared`）：读跟随、写落回变量；**不登记依赖，UI 不自动刷新** |
-  | 6 其它 | 普通表达式（无 signal 读、非上述形态） | `Signal.New(v)` 快照 |
+  | 6 其它 | 普通表达式（无 sig 读、非上述形态） | `Signal.New(v)` 快照 |
   
-  **硬判据**：凡是生成出的 `func(...T) T` 忽略参数、不登记依赖的，都不是合法 signal。档 3 的复合字面量必须走 `Signal.New`（一次构造、可写），不能包成每次读重建的裸闭包——否则中间 signal 段变化时 UI 不刷新、写入静默丢失。档 5 用可写跟随 getter（内部 `LockedGetterShared`）保留"读跟随、写落回变量"：早期版本是裸闭包 `v=arg[0]`/`return v`，无锁读写捕获变量会造成数据竞争（并发读写同一字段 `-race` 实证）；加锁后经由该字段的读写安全，且同一被跟随变量的多个字段/多个实例共享同一把锁（按根标识符的声明位置生成 key），避免"各持一把锁彼此不互斥"的竞态。**边界 1（并发）**：并发安全只覆盖经由 getter 的访问——若代码在别处直接读写同一变量 `v`（与字段并发），需自行同步（编译器无法给用户的裸变量读写加锁）。**边界 2（响应式）**：档 5 不登记依赖，写入不会自动通知 UI 刷新；需要写自动通知依赖的完整响应式，请用 `signal` 源（档 1 透传）或 `Signal.New`（档 2/3）。**边界 3（性能）**：档 5 每次读都要加锁（约 14ns，真 signal 约 2ns），且不应登记依赖、不刷 UI——只用于"跟随外部普通变量"的场景，不要用在列表渲染的热路径；列表项请用 `signal` 源（档 1）。
+  **硬判据**：凡是生成出的 `func(...T) T` 忽略参数、不登记依赖的，都不是合法 sig。档 3 的复合字面量必须走 `Signal.New`（一次构造、可写），不能包成每次读重建的裸闭包——否则中间 sig 段变化时 UI 不刷新、写入静默丢失。档 5 用可写跟随 getter（内部 `LockedGetterShared`）保留"读跟随、写落回变量"：早期版本是裸闭包 `v=arg[0]`/`return v`，无锁读写捕获变量会造成数据竞争（并发读写同一字段 `-race` 实证）；加锁后经由该字段的读写安全，且同一被跟随变量的多个字段/多个实例共享同一把锁（按根标识符的声明位置生成 key），避免"各持一把锁彼此不互斥"的竞态。**边界 1（并发）**：并发安全只覆盖经由 getter 的访问——若代码在别处直接读写同一变量 `v`（与字段并发），需自行同步（编译器无法给用户的裸变量读写加锁）。**边界 2（响应式）**：档 5 不登记依赖，写入不会自动通知 UI 刷新；需要写自动通知依赖的完整响应式，请用 `sig` 源（档 1 透传）或 `Signal.New`（档 2/3）。**边界 3（性能）**：档 5 每次读都要加锁（约 14ns，真 sig 约 2ns），且不应登记依赖、不刷 UI——只用于"跟随外部普通变量"的场景，不要用在列表渲染的热路径；列表项请用 `sig` 源（档 1）。
   
-  > 上述表格中的 `Signal.New` / `Signal.Computed` 等是实现内部产物，用户不应在 `.gx` 里手写底层大写 API（会被 `checkNoRawSignalAPI` 拦下）；源信号一律用 `signal n = v` 语法糖。
+  > 上述表格中的 `Signal.New` / `Signal.Computed` 等是实现内部产物，用户不应在 `.gx` 里手写底层大写 API（会被 `checkNoRawSignalAPI` 拦下）；源信号一律用 `sig n = v` 语法糖。
   
   手写 `CardProps{name: v}` 与 JSX `<Card name={v}/>` 共用 `buildSignalFieldValue`，走同一套六档语义。派生档（档 4）是惰性求值的（首次读字段时才计算）。
-- **类型安全**：只有 receiver 类型已知、且该字段确为某 struct 的 signal 字段时才解包；普通字段、同名但非 signal 的字段、外部包符号都不受影响。JSX 插值里的 selector 补 `()` 也按 receiver 断言类型判定，不会因同文件别处有同名字段而误伤普通字段读取。
-- **与局部 signal 共存**：两者独立，互不干扰；降级在绑定表构建之前完成，避免 `signal` 关键字被局部逻辑误判。
+- **类型安全**：只有 receiver 类型已知、且该字段确为某 struct 的 sig 字段时才解包；普通字段、同名但非 sig 的字段、外部包符号都不受影响。JSX 插值里的 selector 补 `()` 也按 receiver 断言类型判定，不会因同文件别处有同名字段而误伤普通字段读取。
+- **与局部 sig 共存**：两者独立，互不干扰；降级在绑定表构建之前完成，避免 `sig` 关键字被局部逻辑误判。
 
 > Go 版本说明：需要 Go 1.27+ 只为 `runtime/list` 的泛型方法（集合链式特性）。不使用集合的 `.gx` 项目在更低版本的 Go 工具链上通常也能编译；工具链要求以官方发布为准。
 

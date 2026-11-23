@@ -2,8 +2,6 @@ package gxscene
 
 import (
 	"sync"
-
-	"github.com/robertpanvip/gox/runtime/signal"
 )
 
 // Branch 是一个条件分支控制器，对应 JSX 里的 if/else 区域。
@@ -23,7 +21,7 @@ type Branch struct {
 	builders []func() *Instance
 	idx      int
 	cur      *Instance
-	owner    *signal.Owner
+	owner    Owner
 	disposed bool
 	init     bool        // 是否已完成首次求值（idx 初始为 0，需要区分「从未求值」）
 	sink     *changeSink // 所属实例树的变更缓冲，传给各分支子实例
@@ -96,7 +94,7 @@ func (b *Branch) Resolve() *Instance {
 	if sel >= 0 && sel < len(b.builders) && b.builders[sel] != nil {
 		// 在新 Owner 下构建并接线子树：子树内的插值 Effect 归属该 Owner，
 		// 分支再次切换/销毁时随之级联清理。
-		b.owner = signal.CreateRoot(func(o *signal.Owner) {
+		b.owner = Reactive().Root(func(o Owner) {
 			cur = b.builders[sel]()
 			if cur != nil {
 				if b.sink != nil {
@@ -106,14 +104,18 @@ func (b *Branch) Resolve() *Instance {
 				}
 				// 用所属实例树的统一接线上下文递归接线（含 onDirty 重绘回调）。
 				// 这替代了原先的裸 BindReactive——后者让嵌套分支切换后树变了却不重绘。
-				// 分支子树挂在 slotBranch.child 上、其叶子由根聚合 effect 的 Update
-				// 递归覆盖，因此这里只接结构插槽，不另建聚合 effect（避免重复重绘）。
+				// 插槽级模型下，分支子树的叶子也需要自己的 effect：app 已去掉聚合
+				// Update，叶子若只靠聚合遍历就再也收不到 signal 写入。结构与叶子
+				// 分工——结构走 bindStructure（含嵌套），叶子走 bindLeaves，二者互斥。
 				if b.bctx != nil {
 					// 构建子树期间的静音：新子树内的结构 effect 首次回调不该各自触发重绘；
 					// 分支切换本身的重绘由外层 SetPart effect 的 onDirty 负责（1 帧）。
-					b.bctx.withSilent(func() { cur.bindStructure(b.bctx) })
+					b.bctx.withSilent(func() {
+						cur.bindLeaves(b.bctx.effect)
+						cur.bindStructure(b.bctx)
+					})
 				} else {
-					cur.BindReactive(signal.Effect)
+					cur.BindReactive(Reactive().Effect)
 				}
 			}
 		})

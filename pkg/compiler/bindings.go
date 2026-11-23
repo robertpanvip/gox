@@ -3,7 +3,7 @@ package compiler
 // bindings.go — 统一符号表 + 词法作用域 + 绑定解析（改造方案 P0）。
 //
 // 背景：同一份「名字 → 声明 / 作用域」知识曾在各 transform 里被重复实现 5+ 次，
-// 坐标基准不一（token 下标 vs Pos）、规则不一，导致 signal 遮蔽（P1-1）、pub 遮蔽
+// 坐标基准不一（token 下标 vs Pos）、规则不一，导致 sig 遮蔽（P1-1）、pub 遮蔽
 // （M-5）、selector 误保护（L-7）一类「同名冲突」缺陷反复出现。
 //
 // 本文件把这份知识收敛成一套贯穿管线的绑定解析服务：
@@ -12,7 +12,7 @@ package compiler
 //   - ResolveAt(name, pos) 沿作用域链从内到外解析，天然处理遮蔽。
 //
 // P0 阶段：纯新增，不改动任何现有 transform；先用单元测试对拍解析正确性，
-// 后续阶段（P1 signal / P2 pub / P3 类型查询 / P4 external）再逐个把消费者切到本 API。
+// 后续阶段（P1 sig / P2 pub / P3 类型查询 / P4 external）再逐个把消费者切到本 API。
 
 import (
 	"sort"
@@ -20,7 +20,7 @@ import (
 )
 
 // BindingKind 是一个名字被声明的语义类别。
-// 它取代各 transform 里零散的「这是不是 signal / 参数 / pub」判断。
+// 它取代各 transform 里零散的「这是不是 sig / 参数 / pub」判断。
 type BindingKind uint8
 
 const (
@@ -33,8 +33,8 @@ const (
 	BkType                          // type 声明（含别名）
 	BkField                         // struct 字段（含匿名 struct）
 	BkEnumMember                    // enum 成员
-	BkSignal                        // signal 声明 → 运行期 Signal
-	BkComputed                      // Signal.computed 派生的只读 signal
+	BkSignal                        // sig 声明 → 运行期 Signal
+	BkComputed                      // Signal.computed 派生的只读 sig
 	BkImport                        // import 包名 / 别名
 	BkRangeVar                      // for x := range 的迭代变量
 	BkLabel                         // goto / break / continue 标签
@@ -61,7 +61,7 @@ func (k BindingKind) String() string {
 	case BkEnumMember:
 		return "enum"
 	case BkSignal:
-		return "signal"
+		return "sig"
 	case BkComputed:
 		return "computed"
 	case BkImport:
@@ -241,7 +241,7 @@ func (b *Bindings) scan(toks []Token, start, end int, scope *BindScope) {
 			i = b.scanFunc(toks, i, end, scope)
 		case t.is("type"):
 			i = b.scanType(toks, i, end, scope)
-		case t.is("signal"):
+		case t.is("sig"):
 			if j := nextSig(toks, i+1); j >= 0 && j < end && toks[j].Kind == Ident && !isGoKeyword(toks[j].Text) {
 				b.addBinding(toks[j], BkSignal, scope, "")
 			}
@@ -421,7 +421,7 @@ func (b *Bindings) scanFunc(toks []Token, fi, end int, parent *BindScope) int {
 		return fi
 	}
 	// 作用域从参数 '(' 开始覆盖到函数体 '}'：参数声明 token 在 '{' 之前，
-	// 必须从 '(' 起才能落在 SkFunc 内，ResolveAt 才会命中参数而非外层 signal。
+	// 必须从 '(' 起才能落在 SkFunc 内，ResolveAt 才会命中参数而非外层 sig。
 	fn := b.newScope(SkFunc, parent, toks[open].Pos, toks[bodyEnd].Pos)
 
 	// 接收者（方法）：func (p point) m(...) — funcParamParens 的第一个 ( 是接收者。
@@ -1073,14 +1073,14 @@ func structFieldIdxs(toks []Token, open, close int) []int {
 // ---------- 查询 API ----------
 
 // ResolveAt 解析 pos 处对 name 的引用，沿作用域链从内到外返回词法可见的绑定。
-// 这是消除遮蔽类 bug 的核心：signal/pub/typeinfer 不再自己扫 token 判断遮蔽。
+// 这是消除遮蔽类 bug 的核心：sig/pub/typeinfer 不再自己扫 token 判断遮蔽。
 func (b *Bindings) ResolveAt(name string, pos Pos) *Binding {
 	off := pos.Offset
 	for s := b.ScopeAt(pos); s != nil; s = s.Parent {
 		cands := s.Bindings[name]
 		var best *Binding
 		for _, c := range cands {
-			// 声明点自身总是可见：pub/signal 等 transform 在声明 token 位置
+			// 声明点自身总是可见：pub/sig 等 transform 在声明 token 位置
 			// 查询绑定以判断「此声明是否遮蔽外层符号」，必须命中新声明本身。
 			if c.DeclPos.Offset == off {
 				return c
@@ -1098,7 +1098,7 @@ func (b *Bindings) ResolveAt(name string, pos Pos) *Binding {
 		if best != nil {
 			return best
 		}
-		// 包级允许前向引用（func/type/var/const/signal 可先使用后声明）。
+		// 包级允许前向引用（func/type/var/const/sig 可先使用后声明）。
 		if s.Kind == SkGlobal && len(cands) > 0 {
 			return cands[0]
 		}

@@ -34,10 +34,10 @@ func findBinding(t *testing.T, b *Bindings, name string, line int) *Binding {
 }
 
 func TestBindParamShadowsPackageSignal(t *testing.T) {
-	// P1-1 根因场景：包级 signal count，但函数参数也叫 count。
-	// 函数体内 ResolveAt("count") 必须解析到参数（BkParam），而非 signal。
+	// P1-1 根因场景：包级 sig count，但函数参数也叫 count。
+	// 函数体内 ResolveAt("count") 必须解析到参数（BkParam），而非 sig。
 	src := `package main
-signal count = 0
+sig count = 0
 func getCount(count int) int {
     return count
 }
@@ -58,9 +58,9 @@ func getCount(count int) int {
 }
 
 func TestBindLocalShadowsPackageSignal(t *testing.T) {
-	// 函数内局部 count := 遮蔽包级 signal。
+	// 函数内局部 count := 遮蔽包级 sig。
 	src := `package main
-signal count = 0
+sig count = 0
 func f() int {
     count := 5
     return count
@@ -79,9 +79,9 @@ func f() int {
 }
 
 func TestBindPackageSignalVisibleInFunc(t *testing.T) {
-	// 无遮蔽时，函数体内引用解析到包级 signal（BkSignal）。
+	// 无遮蔽时，函数体内引用解析到包级 sig（BkSignal）。
 	src := `package main
-signal count = 0
+sig count = 0
 func f() int {
     return count
 }
@@ -177,15 +177,15 @@ func f(a, b int) int {
 func TestBindDeclAtStableIdentity(t *testing.T) {
 	// DeclAt 用稳定 Pos.Offset 命中声明点。
 	src := `package main
-signal count = 0
+sig count = 0
 func main() { println(count) }
 `
 	toks := New(src).AllTokens()
 	b := Bind(toks)
-	declPos := posAtNthIdent(t, toks, "count", 1) // signal count
+	declPos := posAtNthIdent(t, toks, "count", 1) // sig count
 	bd := b.DeclAt(declPos)
 	if bd == nil || bd.Kind != BkSignal {
-		t.Fatalf("DeclAt 应命中 signal 声明，实际 %v", bd)
+		t.Fatalf("DeclAt 应命中 sig 声明，实际 %v", bd)
 	}
 }
 
@@ -220,7 +220,7 @@ func f() {
 func TestBindBuildDeterministic(t *testing.T) {
 	// 同一源码多次构建结果一致（身份稳定）。
 	src := `package main
-signal count = 0
+sig count = 0
 func f(count int) int { return count }
 `
 	toks := New(src).AllTokens()
@@ -282,9 +282,9 @@ func f(name string) {
 }
 
 func TestBindTypeAtShadow(t *testing.T) {
-	// 遮蔽场景下，TypeAt 应返回遮蔽变量的类型而非外层 signal 的。
+	// 遮蔽场景下，TypeAt 应返回遮蔽变量的类型而非外层 sig 的。
 	src := `package main
-signal flag = true
+sig flag = true
 func f() {
     flag := 5
     println(flag)
@@ -400,11 +400,11 @@ type point struct { x int }
 // ===== P1-2 / P2-1 回归：短变量声明显式可见性 + 控制语句作用域 =====
 
 func TestBindShortDeclRHSReferencesOuter(t *testing.T) {
-	// 回归 P1-2：`x := x + 1` 右侧的 x 必须引用外层 signal，而非刚声明的局部 x。
+	// 回归 P1-2：`x := x + 1` 右侧的 x 必须引用外层 sig，而非刚声明的局部 x。
 	// 旧实现用 DeclPos.Offset <= off，右侧 x 会误命中新绑定，导致类型推断 /
-	// signal 读取改写出错。
+	// sig 读取改写出错。
 	src := `package main
-signal count = 10
+sig count = 10
 func f() {
     count := count + 1
     println(count)
@@ -412,9 +412,9 @@ func f() {
 `
 	toks := New(src).AllTokens()
 	b := Bind(toks)
-	// count 出现次序：1=signal声明 2=右侧(:=的RHS) 3=左侧声明 4=println
+	// count 出现次序：1=sig声明 2=右侧(:=的RHS) 3=左侧声明 4=println
 	// 注意 lexer 先扫到 := 左侧还是 RHS 取决于文本顺序：源码是 "count := count + 1"，
-	// 故次序为 1=signal, 2=左侧声明, 3=右侧, 4=println。
+	// 故次序为 1=sig, 2=左侧声明, 3=右侧, 4=println。
 	rhsPos := posAtNthIdent(t, toks, "count", 3)
 	bd := b.ResolveAt("count", rhsPos)
 	if bd == nil {
@@ -424,7 +424,7 @@ func f() {
 		t.Errorf("`:=` 右侧 count 应解析到外层 BkSignal，实际 %s @line %d", bd.Kind, bd.DeclPos.Line)
 	}
 	if bd.DeclPos.Line != 2 {
-		t.Errorf("右侧 count 应引用第 2 行的 signal 声明，实际第 %d 行", bd.DeclPos.Line)
+		t.Errorf("右侧 count 应引用第 2 行的 sig 声明，实际第 %d 行", bd.DeclPos.Line)
 	}
 	// 而 println(count) 应解析到新声明的局部变量（语句结束后可见）。
 	lhsUsePos := posAtNthIdent(t, toks, "count", 4)
@@ -604,12 +604,12 @@ func main() {
 }
 
 // 第十三轮 P2-C：comma-ok 索引取值 `v, ok := m[k]` 的第一左值应取元素类型，
-// 使 v 的 signal 字段读（v.a）被正确改写成 v.a()，而非打印 Signal 函数地址。
+// 使 v 的 sig 字段读（v.a）被正确改写成 v.a()，而非打印 Signal 函数地址。
 // 同时守护其它 comma-ok 形态不受影响。
 func TestBindCommaOKIndexElemType(t *testing.T) {
 	src := `package main
 import gxscene "github.com/robertpanvip/gox/runtime/scene"
-type P struct { signal a string }
+type P struct { sig a string }
 func main() {
 	m := map[string]P{"k": {a: "x"}}
 	v, ok := m["k"]
@@ -625,10 +625,10 @@ func main() {
 		t.Fatalf("生成 Go 语法无效: %v", verr)
 	}
 	if !strings.Contains(res.GoSource, "v.a()") {
-		t.Errorf("comma-ok 首值的 signal 字段读应改写为 v.a():\n%s", res.GoSource)
+		t.Errorf("comma-ok 首值的 sig 字段读应改写为 v.a():\n%s", res.GoSource)
 	}
 	if strings.Contains(res.GoSource, "v.a }") || strings.Contains(res.GoSource, "return v.a ") {
-		t.Errorf("comma-ok 首值 signal 字段读未改写, got:\n%s", res.GoSource)
+		t.Errorf("comma-ok 首值 sig 字段读未改写, got:\n%s", res.GoSource)
 	}
 }
 

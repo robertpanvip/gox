@@ -2,7 +2,7 @@ package compiler
 
 // exprast.go — GX 扩展表达式 AST（E0 地基层）。
 //
-// 背景：各 GX 扩展表达式（signal / lambda / 对象字面量 / 解构 / 模板）此前各自
+// 背景：各 GX 扩展表达式（sig / lambda / 对象字面量 / 解构 / 模板）此前各自
 // 在 token 流上做「扫 token 找边界 + 消歧」的模式匹配，判定逻辑重复、坐标基准
 // 不一（token 下标 vs Pos）。符号表方案里反复出现的 P4/P5 障碍，根因就是没有
 // 一个「节点直接持有 Binding」的语义载体，只能靠 Pos 跨流映射。
@@ -16,7 +16,7 @@ package compiler
 //
 // 阶段：
 //   - E0（本文件）：只建层 + 单元测试对拍，不改任何 transform 行为。
-//   - E1：signal 的引用判定切到本层（transformSignals 消费 SignalAST）。
+//   - E1：sig 的引用判定切到本层（transformSignals 消费 SignalAST）。
 //   - E2：其余 detect 逐个切到本层，删除重复的扫 token 补丁函数。
 
 import "fmt"
@@ -25,7 +25,7 @@ import "fmt"
 type ExprKind uint8
 
 const (
-	ExSignalDecl     ExprKind = iota // signal name = expr（声明改写点）
+	ExSignalDecl     ExprKind = iota // sig name = expr（声明改写点）
 	ExSignalRead                     // 裸读：name → name()
 	ExSignalWrite                    // 简单写：name = expr → name(expr)
 	ExSignalCompound                 // 复合写：name += expr → name(name()+expr)
@@ -36,15 +36,15 @@ const (
 func (k ExprKind) String() string {
 	switch k {
 	case ExSignalDecl:
-		return "signal-decl"
+		return "sig-decl"
 	case ExSignalRead:
-		return "signal-read"
+		return "sig-read"
 	case ExSignalWrite:
-		return "signal-write"
+		return "sig-write"
 	case ExSignalCompound:
-		return "signal-compound"
+		return "sig-compound"
 	case ExSignalIncDec:
-		return "signal-incdec"
+		return "sig-incdec"
 	case ExTemplate:
 		return "template"
 	}
@@ -53,14 +53,14 @@ func (k ExprKind) String() string {
 
 // GXExpr 是一个 GX 扩展表达式 AST 节点。
 //   - Pos 是稳定锚点（Pos.Offset 单调，不受后续 desugar 增删 token 影响）；
-//   - Binding 是解析到的声明，节点持有它即可判定 signal/computed/遮蔽，
+//   - Binding 是解析到的声明，节点持有它即可判定 sig/computed/遮蔽，
 //     无需再靠 token 下标跨流映射。
 type GXExpr struct {
 	Kind    ExprKind
 	Name    string
 	Idx     int      // 标识符/关键字在原始流的下标（调试用，不参与跨流定位）
 	Pos     Pos      // 稳定锚点
-	Binding *Binding // 解析到的 signal/computed 声明；声明节点为自身绑定
+	Binding *Binding // 解析到的 sig/computed 声明；声明节点为自身绑定
 	RhsFrom int      // 右侧表达式起点（Decl/Write/Compound）；其余为 -1
 	RhsTo   int      // 右侧表达式终点（开区间）
 	TplBody string   // ExTemplate：模板原文（含反引号）
@@ -70,19 +70,19 @@ func (e *GXExpr) String() string {
 	return fmt.Sprintf("%s(%s)@off=%d", e.Kind, e.Name, e.Pos.Offset)
 }
 
-// SignalAST 是一份源码里全部 signal 相关 AST 节点的集合。
+// SignalAST 是一份源码里全部 sig 相关 AST 节点的集合。
 // byOffset 以 Pos.Offset 为键，O(1) 查询且不受 token 下标漂移影响。
 type SignalAST struct {
 	byOffset    map[int]*GXExpr // 标识符/声明点 Pos.Offset → 节点
 	nodes       []*GXExpr       // 稳定顺序的全体节点
-	signalNames map[string]bool // 声明为 signal/computed 的名字（对齐 collectSignalVars）
+	signalNames map[string]bool // 声明为 sig/computed 的名字（对齐 collectSignalVars）
 	hasSignal   bool
 }
 
-// ParseSignalExprs 在原始 token 流上解析全部 signal 相关表达式节点。
+// ParseSignalExprs 在原始 token 流上解析全部 sig 相关表达式节点。
 //
 // 判定顺序与现有 signal.go 完全对齐（E1 接入靠 golden 对拍兜底等价）：
-//  1. signal 声明 → ExSignalDecl；
+//  1. sig 声明 → ExSignalDecl；
 //  2. 标识符经 ResolveAt 解析，仅 BkSignal/BkComputed 进入引用判定（遮蔽天然排除）；
 //  3. 形态排除：selector 右侧 / 复合字段键 / 声明目标 / 声明区 / 已是调用；
 //  4. 按后继 token 分类为 Read/Write/Compound/IncDec。
@@ -101,8 +101,8 @@ func ParseSignalExprs(toks []Token, b *Bindings) *SignalAST {
 	for i := 0; i < len(toks); i++ {
 		t := toks[i]
 
-		// 1) signal 声明：signal name [= expr]
-		if t.is("signal") {
+		// 1) sig 声明：sig name [= expr]
+		if t.is("sig") {
 			if j := nextSig(toks, i+1); j >= 0 && toks[j].Kind == Ident && !isGoKeyword(toks[j].Text) {
 				n := &GXExpr{
 					Kind:    ExSignalDecl,
@@ -127,13 +127,13 @@ func ParseSignalExprs(toks []Token, b *Bindings) *SignalAST {
 			continue
 		}
 
-		// 2) 绑定判定：仅 signal/computed 声明的引用进入；同名参数/局部变量的
+		// 2) 绑定判定：仅 sig/computed 声明的引用进入；同名参数/局部变量的
 		// ResolveAt 落在 BkParam/BkLocal 上，天然被排除（等价于旧 isSignalRefAt）。
 		bd := bindingAt(b, t.Text, t.Pos)
 		if bd == nil || (bd.Kind != BkSignal && bd.Kind != BkComputed) {
 			continue
 		}
-		// 记录声明名（computed 派生的目标在声明区被排除，但仍是 signal 名字）。
+		// 记录声明名（computed 派生的目标在声明区被排除，但仍是 sig 名字）。
 		a.signalNames[bd.Name] = true
 		a.hasSignal = true
 
@@ -145,7 +145,7 @@ func ParseSignalExprs(toks []Token, b *Bindings) *SignalAST {
 			continue // 复合字段键 {name: ...}
 		}
 		if isSignalDeclTarget(toks, i) {
-			continue // var/signal/let/:= 声明目标
+			continue // var/sig/let/:= 声明目标
 		}
 		if inDeclZone(toks, i) {
 			continue // 函数参数 / struct 字段声明
@@ -190,7 +190,7 @@ func (a *SignalAST) ExprAt(off int) *GXExpr {
 	return a.byOffset[off]
 }
 
-// HasSignal 表示源码里存在 signal/computed 声明（对齐 transformSignals 的早退条件）。
+// HasSignal 表示源码里存在 sig/computed 声明（对齐 transformSignals 的早退条件）。
 func (a *SignalAST) HasSignal() bool { return a != nil && a.hasSignal }
 
 // Nodes 返回全体节点（稳定顺序）。
@@ -201,7 +201,7 @@ func (a *SignalAST) Nodes() []*GXExpr {
 	return a.nodes
 }
 
-// SignalNames 返回声明为 signal/computed 的名字集合（对拍用）。
+// SignalNames 返回声明为 sig/computed 的名字集合（对拍用）。
 func (a *SignalAST) SignalNames() map[string]bool { return a.signalNames }
 
 // TemplateAST 是一份源码里全部顶层模板表达式节点的集合。

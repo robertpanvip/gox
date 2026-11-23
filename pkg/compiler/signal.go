@@ -10,12 +10,12 @@ import (
 //
 // GX 写法：
 //
-//	signal count = 0                              // 声明源 signal
-//	let doubled = Signal.computed(() => count * 2) // 派生 signal（只读）
+//	sig count = 0                              // 声明源 sig
+//	let doubled = Signal.computed(() => count * 2) // 派生 sig（只读）
 //	Signal.effect(() => println(count))            // 副作用，依赖变化时重跑
-//	count = 5                                      // 写 signal
+//	count = 5                                      // 写 sig
 //
-// 降级为（函数式 signal，见 runtime/signal）：
+// 降级为（函数式 sig，见 runtime/signal）：
 //
 //	var count = Signal.New(0)
 //	doubled := Signal.Computed(func() int { return count() * 2 })
@@ -23,9 +23,9 @@ import (
 //	count(5)
 //
 // 核心改写：
-//  1. 声明：signal name = expr → var name = Signal.New(expr)；let name = expr → name := expr；
-//  2. 登记所有 signal 变量（signal 声明 + Signal.computed/Computed 派生）；
-//  3. 读改写：表达式中裸写 signal 变量 name → name()；
+//  1. 声明：sig name = expr → var name = Signal.New(expr)；let name = expr → name := expr；
+//  2. 登记所有 sig 变量（sig 声明 + Signal.computed/Computed 派生）；
+//  3. 读改写：表达式中裸写 sig 变量 name → name()；
 //  4. 写改写：name = expr → name(expr)。
 //
 // 作用域排除（读改写不误伤）：selector 右侧 obj.name、复合字段键 {name: ...}、
@@ -36,10 +36,10 @@ import (
 
 // checkNoRawSignalAPI 禁止用户直接书写底层 Signal 运行时构造器（大写 API）。
 //
-// GX 只暴露语法糖：源信号用 `signal n = v`、派生用 `Signal.computed(...)`、
+// GX 只暴露语法糖：源信号用 `sig n = v`、派生用 `Signal.computed(...)`、
 // 副作用用 `Signal.effect(...)`。底层 `Signal.New/Computed/Effect/...`（首字母
 // 大写）是编译器内部实现细节，用户手写会绕过编译器导致：binding 认成普通变量
-// 失去透明改写、占位包名被重命名触发 Signal2 未定义、被 signal 字段二次包装
+// 失去透明改写、占位包名被重命名触发 Signal2 未定义、被 sig 字段二次包装
 // 类型错等一系列问题——这些正是第六、七轮反复打补丁的根因。禁止手写即可归零。
 //
 // 判据：`Signal . <大写开头标识符>` 形态，且 Signal 是「包名引用」而非用户同名变量：
@@ -69,7 +69,7 @@ func checkNoRawSignalAPI(toks []Token, b *Bindings) error {
 		if name < 0 || toks[name].Kind != Ident || !startsUpper(toks[name].Text) {
 			continue
 		}
-		return fmt.Errorf("%d:%d: 不允许直接调用底层 API Signal.%s；源信号请用 `signal n = v`，派生用 `Signal.computed(() => expr)`，副作用用 `Signal.effect(() => {...})`",
+		return fmt.Errorf("%d:%d: 不允许直接调用底层 API Signal.%s；源信号请用 `sig n = v`，派生用 `Signal.computed(() => expr)`，副作用用 `Signal.effect(() => {...})`",
 			toks[name].Pos.Line, toks[name].Pos.Col, toks[name].Text)
 	}
 	return nil
@@ -84,11 +84,11 @@ func startsUpper(s string) bool {
 	return false
 }
 
-// transformSignals 执行 signal 语法糖降级，返回改写后的 token 流。
-// 放在 Analyze 之前：Analyze 看到的是标准 Go（signal/let 已消除、读写已是调用式）。
+// transformSignals 执行 sig 语法糖降级，返回改写后的 token 流。
+// 放在 Analyze 之前：Analyze 看到的是标准 Go（sig/let 已消除、读写已是调用式）。
 //
 // P1：接收统一绑定表 bindings，遮蔽由 ResolveAt 词法解析（P1-1 根治）。
-// E1（表达式 AST 阶段）：signal 声明与引用的识别收敛到 SignalAST —— 节点在原始流
+// E1（表达式 AST 阶段）：sig 声明与引用的识别收敛到 SignalAST —— 节点在原始流
 // 上一次构建、直接持有 Binding，主循环按节点 Kind 驱动改写，不再在主循环里重复
 // 「名字集合 + 遮蔽 + 形态排除」的扫 token 判定。sigs/isSignalRefAt 保留为对拍参照。
 func transformSignals(in []Token, b *Bindings) []Token {
@@ -99,7 +99,7 @@ func transformSignals(in []Token, b *Bindings) []Token {
 	return rewriteSignals(in, ast, b)
 }
 
-// isSignalRefAt 判断 pos 处对 name 的引用是否解析到 signal 绑定。
+// isSignalRefAt 判断 pos 处对 name 的引用是否解析到 sig 绑定。
 // 若解析到参数 / 局部变量 / 普通 var（同名遮蔽），返回 false —— 保持原样。
 func isSignalRefAt(b *Bindings, name string, pos Pos) bool {
 	if b == nil {
@@ -109,9 +109,9 @@ func isSignalRefAt(b *Bindings, name string, pos Pos) bool {
 	return bd != nil && (bd.Kind == BkSignal || bd.Kind == BkComputed)
 }
 
-// collectSignalVars 收集所有 signal 变量名：
-//   - signal name = ... 声明的源 signal；
-//   - name := Signal.computed(...) / var name = Signal.Computed(...) 等派生 signal。
+// collectSignalVars 收集所有 sig 变量名：
+//   - sig name = ... 声明的源 sig；
+//   - name := Signal.computed(...) / var name = Signal.Computed(...) 等派生 sig。
 func collectSignalVars(toks []Token) map[string]bool {
 	sigs := map[string]bool{}
 	for i := 0; i < len(toks); i++ {
@@ -119,8 +119,8 @@ func collectSignalVars(toks []Token) map[string]bool {
 		if t.Kind != Ident {
 			continue
 		}
-		// signal name = ...
-		if t.is("signal") {
+		// sig name = ...
+		if t.is("sig") {
 			if j := nextSig(toks, i+1); j >= 0 && toks[j].Kind == Ident && !isGoKeyword(toks[j].Text) {
 				sigs[toks[j].Text] = true
 			}
@@ -137,15 +137,15 @@ func collectSignalVars(toks []Token) map[string]bool {
 	return sigs
 }
 
-// collectSignalTypes 在 signal 改写前，从原始 token 流收集 signal/let 变量的
-// 声明类型（如 signal users = []User{{...}} → {"users":"[]User"}）。
+// collectSignalTypes 在 sig 改写前，从原始 token 流收集 sig/let 变量的
+// 声明类型（如 sig users = []User{{...}} → {"users":"[]User"}）。
 // 改写后初值被 Signal.New(...) 包裹，字面量类型无法从声明直接推断，
 // 因此本函数必须在 transformSignals 之前调用。
 // 只收集能静态推断出类型的变量（布尔/字符串/数字/切片等），无法判定则不入表。
 func collectSignalTypes(toks []Token) map[string]string {
 	out := map[string]string{}
 	for i := 0; i < len(toks); i++ {
-		if !toks[i].is("signal") && !toks[i].is("let") {
+		if !toks[i].is("sig") && !toks[i].is("let") {
 			continue
 		}
 		j := nextSig(toks, i+1)
@@ -210,10 +210,10 @@ func rewriteSignals(toks []Token, ast *SignalAST, b *Bindings) []Token {
 	for i := 0; i < len(toks); i++ {
 		t := toks[i]
 
-		// 1) signal 声明：signal name = expr → var name = Signal.New(expr)
-		if t.is("signal") {
+		// 1) sig 声明：sig name = expr → var name = Signal.New(expr)
+		if t.is("sig") {
 			if j := nextSig(toks, i+1); j >= 0 && toks[j].Kind == Ident && !isGoKeyword(toks[j].Text) {
-				// M-4：必须有显式 `=`。否则 `signal x` 的 nextSig 会指向后续语句，
+				// M-4：必须有显式 `=`。否则 `sig x` 的 nextSig 会指向后续语句，
 				// 把下一条语句吞进 Signal.New(...)。无 `=` 时只降级为 `var name`，
 				// 不消费后续 token（交给主循环原样输出）。
 				eq := nextSig(toks, j+1)
@@ -234,7 +234,7 @@ func rewriteSignals(toks []Token, ast *SignalAST, b *Bindings) []Token {
 				for k < end && toks[k].Kind == Space {
 					k++
 				}
-				// 右侧表达式里的裸 signal 读取也要改写（H-3）：signal b = a → Signal.New(a())
+				// 右侧表达式里的裸 sig 读取也要改写（H-3）：sig b = a → Signal.New(a())
 				out = append(out, rewriteSignalReads(toks[k:end], ast)...)
 				out = append(out, tokOp(")", t.Pos))
 				i = end - 1
@@ -277,7 +277,7 @@ func rewriteSignals(toks []Token, ast *SignalAST, b *Bindings) []Token {
 			}
 		}
 
-		// 3) signal 变量读写改写：节点由 AST 按 Pos.Offset 命中；遮蔽/形态排除
+		// 3) sig 变量读写改写：节点由 AST 按 Pos.Offset 命中；遮蔽/形态排除
 		// 已在 ParseSignalExprs 完成，这里只按 Kind 生成。
 		if t.Kind == Ident {
 			node := ast.ExprAt(t.Pos.Offset)
@@ -298,7 +298,7 @@ func rewriteSignals(toks []Token, ast *SignalAST, b *Bindings) []Token {
 				for k < end && toks[k].Kind == Space {
 					k++
 				}
-				// 右侧表达式里的裸 signal 读取改写：a += b → a(a() + b())
+				// 右侧表达式里的裸 sig 读取改写：a += b → a(a() + b())
 				out = append(out, rewriteSignalReads(toks[k:end], ast)...)
 				out = append(out, tokOp(")", t.Pos))
 				i = end - 1
@@ -323,7 +323,7 @@ func rewriteSignals(toks []Token, ast *SignalAST, b *Bindings) []Token {
 				for k < end && toks[k].Kind == Space {
 					k++
 				}
-				// 右侧表达式里的裸 signal 读取改写：a = b → a(b())
+				// 右侧表达式里的裸 sig 读取改写：a = b → a(b())
 				out = append(out, rewriteSignalReads(toks[k:end], ast)...)
 				out = append(out, tokOp(")", t.Pos))
 				i = end - 1
@@ -339,8 +339,8 @@ func rewriteSignals(toks []Token, ast *SignalAST, b *Bindings) []Token {
 	return out
 }
 
-// rewriteSignalReads 改写一段表达式 token 里的裸 signal 读取 name → name()。
-// 用于被整段拷贝出主循环的右侧表达式（signal 声明 / 简单赋值 / 复合赋值），
+// rewriteSignalReads 改写一段表达式 token 里的裸 sig 读取 name → name()。
+// 用于被整段拷贝出主循环的右侧表达式（sig 声明 / 简单赋值 / 复合赋值），
 // 这些片段不会经过 rewriteSignals 主循环的读改写，需在此补上（H-3）。
 // E1：片段 token 保留原始 Pos，直接按 Pos.Offset 查 AST 节点；只有 ExSignalRead
 // 类节点改写成调用式，其余（遮蔽/selector/字段键/声明目标/已调用）在 AST 解析
@@ -360,10 +360,10 @@ func rewriteSignalReads(seg []Token, ast *SignalAST) []Token {
 	return out
 }
 
-// rewriteSignalReadsInTemplateExpr 对模板插值片段内的 signal 裸读补 name → name()。
+// rewriteSignalReadsInTemplateExpr 对模板插值片段内的 sig 裸读补 name → name()。
 //
-// 背景：signal 读写改写（transformSignals）先于模板展开（transformTemplates）执行，
-// 彼时 ${...} 还是整块 Template token、内部标识符未被识别，导致模板里的 signal
+// 背景：sig 读写改写（transformSignals）先于模板展开（transformTemplates）执行，
+// 彼时 ${...} 还是整块 Template token、内部标识符未被识别，导致模板里的 sig
 // 读取漏改（实测 `v=${a}` 生成 fmt.Sprint(a)，输出函数地址而非值 0x…）。此处在
 // 插值展开后按绑定表补一次改写。
 //
@@ -373,7 +373,7 @@ func rewriteSignalReads(seg []Token, ast *SignalAST) []Token {
 // 一致：selector 右侧 / 复合字段键 / 声明目标 / 声明区 / 已是调用都不改。
 func rewriteSignalReadsInTemplateExpr(seg []Token, b *Bindings, at Pos) []Token {
 	if b == nil {
-		return seg // 无绑定表时无法判定 signal，保持原样（生产路径 b 始终非 nil）
+		return seg // 无绑定表时无法判定 sig，保持原样（生产路径 b 始终非 nil）
 	}
 	out := make([]Token, 0, len(seg))
 	for i := range seg {
@@ -405,7 +405,7 @@ func rewriteSignalReadsInTemplateExpr(seg []Token, b *Bindings, at Pos) []Token 
 // isAssignOp 判断是否为简单赋值运算符。
 func isAssignOp(s string) bool { return s == "=" }
 
-// compoundAssignOps 是 signal 写需要展开为 name(name() op expr) 的复合赋值运算符。
+// compoundAssignOps 是 sig 写需要展开为 name(name() op expr) 的复合赋值运算符。
 // 覆盖 Go 全部复合赋值：算术(+ - * / %)与位运算(& | ^ << >> &^)。
 var compoundAssignOps = map[string]bool{
 	"+=": true, "-=": true, "*=": true, "/=": true, "%=": true,
@@ -418,7 +418,7 @@ func isSignalDeclTarget(toks []Token, i int) bool {
 		return true
 	}
 	if p := prevSig(toks, i-1); p >= 0 {
-		if toks[p].is("var") || toks[p].is("signal") || toks[p].is("let") {
+		if toks[p].is("var") || toks[p].is("sig") || toks[p].is("let") {
 			return true
 		}
 		// var name TYPE = ... （name 后是类型，再后是 =）：name 仍是声明目标
@@ -518,7 +518,7 @@ func signalPkgToken(p Pos) Token {
 	return Token{Kind: Ident, Text: "Signal", Pos: p, IsGen: true}
 }
 
-// signalImportPath 返回 signal 运行时的 import 路径。
+// signalImportPath 返回 sig 运行时的 import 路径。
 func signalImportPath(module string) string {
 	if module == "" {
 		module = defaultModule
@@ -529,12 +529,12 @@ func signalImportPath(module string) string {
 // trimSignalText 仅用于诊断展示：去掉空白。
 func trimSignalText(s string) string { return strings.TrimSpace(s) }
 
-// rewriteJSXInterpSignals 是给 JSX 插值片段专用的 signal 读改写（两参数版）。
+// rewriteJSXInterpSignals 是给 JSX 插值片段专用的 sig 读改写（两参数版）。
 //
 // 背景：JSX 插值 {count} 在 transformSignals（基于 bindings+AST 的主流程）执行时
 // 仍是整体 JSX token，改写穿透不到；scene/vdom 后端重新词法化插值时需要按名字集合
 // 补上读调用 count()。这里的片段已脱离原始 token 流、无对应 Binding/AST，故沿用
-// 基于 sigs 名字集合的改写逻辑（保留 signal 声明/赋值/复合赋值/自增等完整形态），
+// 基于 sigs 名字集合的改写逻辑（保留 sig 声明/赋值/复合赋值/自增等完整形态），
 // 与上游三参数 rewriteSignals 分工不同、名字不冲突。
 func rewriteJSXInterpSignals(toks []Token, sigs map[string]bool) []Token {
 	out := make([]Token, 0, len(toks))
@@ -574,7 +574,7 @@ func rewriteJSXInterpSignals(toks []Token, sigs map[string]bool) []Token {
 			for k < end && toks[k].Kind == Space {
 				k++
 			}
-			// 复合赋值 RHS 必须递归改写裸 signal 读（H-3），与顶层闭包一致：
+			// 复合赋值 RHS 必须递归改写裸 sig 读（H-3），与顶层闭包一致：
 			// load = load + 1 → load(load() + 1)，漏改会生成 load(load + 1)
 			// 导致 Signal[int] 与 int 相加的类型错误。形态排除（selector 右侧 /
 			// 字段键 / 声明目标 / 已是调用 / 嵌套复合赋值）由本函数递归统一处理。

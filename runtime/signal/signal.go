@@ -28,7 +28,6 @@ package signal
 
 import (
 	"reflect"
-	"runtime"
 	"sync"
 	"sync/atomic"
 )
@@ -44,28 +43,6 @@ var (
 	observers       = map[uint64][]*node{} // 各 goroutine 的观察者栈，按 goroutine id 隔离（H-8/P1-3）
 	activeObservers atomic.Int64           // 当前正在重算的 observer 数量；为 0 时读可走无锁快路径
 )
-
-// goid 返回当前 goroutine 的 id。通过 runtime.Stack 首行 "goroutine N ..." 解析。
-// 用于把观察者栈按 goroutine 隔离——Go 没有官方 goroutine-local 存储，这是
-// 社区通用的取值方式。栈缓冲 64 字节足够容纳首行的 goroutine 编号。
-func goid() uint64 {
-	var buf [64]byte
-	n := runtime.Stack(buf[:], false)
-	// 形如 "goroutine 123 [running]:\n..."
-	const prefix = "goroutine "
-	if n < len(prefix) || string(buf[:len(prefix)]) != prefix {
-		return 0
-	}
-	var id uint64
-	for i := len(prefix); i < n; i++ {
-		c := buf[i]
-		if c < '0' || c > '9' {
-			break
-		}
-		id = id*10 + uint64(c-'0')
-	}
-	return id
-}
 
 // node 是一个依赖图节点：源 signal、computed 或 effect 共用。
 type node struct {

@@ -32,7 +32,32 @@ var (
 	reVar    = regexp.MustCompile(`^\s*(?:pub\s+)?(?:var|const)\s+([a-zA-Z_][\w]*)`)
 	reAssign = regexp.MustCompile(`^\s*([a-zA-Z_][\w]*)\s*:=`)
 	reMember = regexp.MustCompile(`^\s*([a-zA-Z_][\w]*)`)
+	// T4.3：sig 声明 sig name [Type] = expr；Type 可省略（从 expr 推断）。
+	reSignal = regexp.MustCompile(`^\s*sig\s+([a-zA-Z_][\w]*)(\s+[\w\[\]]+)?\s*=`)
 )
+
+// inferLitType 从简单字面量/构造式推断类型文本，供 sig hover 显示 Signal[T]（T4.3）。
+// 只做高置信推断，推不出返回 ""（hover 显示 Signal 即可，不瞎猜）。
+func inferLitType(expr string) string {
+	e := strings.TrimSpace(expr)
+	switch {
+	case e == "true" || e == "false":
+		return "bool"
+	case strings.HasPrefix(e, `"`) || strings.HasPrefix(e, "`"):
+		return "string"
+	case strings.HasPrefix(e, "[]"):
+		return e[:strings.IndexByte(e, '{')] // []int / []Row
+	case strings.HasPrefix(e, "map["):
+		if i := strings.IndexByte(e, ']'); i > 0 {
+			return e[:i+1] // map[K]
+		}
+	case regexp.MustCompile(`^-?\d+\.\d+$`).MatchString(e):
+		return "float64"
+	case regexp.MustCompile(`^-?\d+$`).MatchString(e):
+		return "int"
+	}
+	return ""
+}
 
 // BuildSymbolMap 从 gx 源码抽取符号定义（含枚举成员的三拼写索引）。轻量扫描，不求语法精确。
 func BuildSymbolMap(src string) *SymbolMap {
@@ -146,11 +171,37 @@ func BuildSymbolMap(src string) *SymbolMap {
 			add(name, 5, i, col+strings.Index(trimmed, name), "type", "类型 "+name)
 			continue
 		}
+		// T4.3：sig 声明——Detail 带 Signal[T]，hover 直接展示响应式类型。
+		if r := reSignal.FindStringSubmatch(line); r != nil {
+			name := r[1]
+			typ := strings.TrimSpace(r[2])
+			if typ == "" {
+				// 从 = 右侧表达式推断元素类型。
+				if eq := strings.IndexByte(line, '='); eq >= 0 {
+					typ = inferLitType(line[eq+1:])
+				}
+			}
+			detail := "Signal"
+			if typ != "" {
+				detail = "Signal[" + typ + "]"
+			}
+			add(name, 13, i, col+strings.Index(line, name), detail, "sig "+name)
+			continue
+		}
 		if r := reVar.FindStringSubmatch(trimmed); r != nil {
 			add(r[1], 13, i, col+strings.Index(trimmed, r[1]), "var", "变量 "+r[1])
 		}
 		if r := reAssign.FindStringSubmatch(trimmed); r != nil {
-			add(r[1], 13, i, col+strings.Index(trimmed, r[1]), ":=", "局部变量 "+r[1])
+			// T4.1：从 := 右侧字面量推断类型填 Detail，hover 展示推导类型。
+			typ := ""
+			if eq := strings.Index(trimmed, ":="); eq >= 0 && eq+2 < len(trimmed) {
+				typ = inferLitType(trimmed[eq+2:])
+			}
+			detail := ":="
+			if typ != "" {
+				detail = typ + " (推导)"
+			}
+			add(r[1], 13, i, col+strings.Index(trimmed, r[1]), detail, "局部变量 "+r[1])
 		}
 	}
 	return m

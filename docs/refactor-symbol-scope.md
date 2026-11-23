@@ -1,6 +1,6 @@
 # GoX 统一符号表 + 作用域 + 绑定解析改造方案
 
-> 状态：设计提案（待评审）。目标是把分散在各 transform 里的「名字 → 声明 / 作用域」知识收敛为一套贯穿管线的绑定解析服务，从根上消除 signal 遮蔽（P1-1）、pub 遮蔽（M-5）、selector 误保护（L-7）这类「同名冲突」缺陷，并为后续表达式 AST 打地基。
+> 状态：设计提案（待评审）。目标是把分散在各 transform 里的「名字 → 声明 / 作用域」知识收敛为一套贯穿管线的绑定解析服务，从根上消除 sig 遮蔽（P1-1）、pub 遮蔽（M-5）、selector 误保护（L-7）这类「同名冲突」缺陷，并为后续表达式 AST 打地基。
 >
 > 本方案只解决**符号绑定**这一层，不重写 Go Parser、不新增语法。
 
@@ -8,7 +8,7 @@
 
 ## 1. 为什么要做
 
-第二轮外部审查的 P1-1（signal 名被参数 / 局部变量遮蔽）不是孤立 bug，而是架构症状：同一份「变量名 → 声明 / 作用域」知识，在编译器里被独立实现了 5 遍以上，彼此零散、坐标基准不一、规则不一致。
+第二轮外部审查的 P1-1（sig 名被参数 / 局部变量遮蔽）不是孤立 bug，而是架构症状：同一份「变量名 → 声明 / 作用域」知识，在编译器里被独立实现了 5 遍以上，彼此零散、坐标基准不一、规则不一致。
 
 | 重复能力 | 各实现位置（`pkg/compiler/`） |
 |---|---|
@@ -20,7 +20,7 @@
 
 直接后果：
 
-- **规则不一致**：signal 用「函数体区间」判遮蔽，`pub.restoreRefs` 用「整个函数体」，`scope.private` 是文件级全局（L-7 的根因）。同一段代码里同名标识符在不同 transform 得到不同结论。
+- **规则不一致**：sig 用「函数体区间」判遮蔽，`pub.restoreRefs` 用「整个函数体」，`scope.private` 是文件级全局（L-7 的根因）。同一段代码里同名标识符在不同 transform 得到不同结论。
 - **坐标基准冲突**：`Symbol` / `NarrowFact` / `FuncSig` 用 token 下标，`Guard` / `ElseShadow` / 诊断用 `Pos`（行列）。`typeinfer.go:20-21` 明确注释「desugar 改写的 token 流会让 Analysis 下标漂移，故每次重扫」——同一份知识被迫算两遍。
 - **新特性放大问题**：Signal 在 Analyze 之前（`pipeline.go:62-63`），拿不到语义层，只能自带轻量分析（`signal.go:104-107`），这正是 P1-1 漏判遮蔽的直接原因。
 
@@ -38,7 +38,7 @@
 | 原则 | 说明 |
 |---|---|
 | **Pos 是稳定身份，下标是易失坐标** | 所有 transform 保留原始 `Pos`（`token.go:58-66` 已有 Offset/Line/Col；现有 Guard/diag 已用 Pos 免疫漂移）。Binding 以 `Pos`（具体用 `Offset`，见 §3.1）为身份；下标仅在单次扫描内使用，绝不跨 transform 持久化。 |
-| **一次构建，全程查询** | 在 lex 之后构建一次绑定表，贯穿 signal → Analyze → 所有 desugar → emit。各 transform 从「扫 token 猜」改为「按当前 token 的 Pos 查表」。 |
+| **一次构建，全程查询** | 在 lex 之后构建一次绑定表，贯穿 sig → Analyze → 所有 desugar → emit。各 transform 从「扫 token 猜」改为「按当前 token 的 Pos 查表」。 |
 | **词法作用域解析（shadowing-aware）** | `ResolveAt(name, pos)` 沿作用域链从内到外解析，天然处理参数 / 局部变量 / 字段 / 包级符号的同名遮蔽，替代各 transform 手写的排除规则。 |
 | **单一事实来源，渐进迁移** | 新表与现有 `Analysis` 先并行、对拍验证，再逐个把消费者切到新 API，最后删除旧逻辑。不搞 big-bang 重写。 |
 
@@ -54,7 +54,7 @@
 
 ```go
 // BindingKind 是一个名字被声明的语义类别。
-// 它取代各 transform 里零散的「这是不是 signal / 是不是参数 / 是不是 pub」判断。
+// 它取代各 transform 里零散的「这是不是 sig / 是不是参数 / 是不是 pub」判断。
 type BindingKind uint8
 
 const (
@@ -67,8 +67,8 @@ const (
     BkType                   // type 声明（含别名）
     BkField                  // struct 字段（含匿名 struct）
     BkEnumMember             // enum 成员
-    BkSignal                 // signal 声明 → 运行期 Signal
-    BkComputed               // Signal.computed 派生的只读 signal
+    BkSignal                 // sig 声明 → 运行期 Signal
+    BkComputed               // Signal.computed 派生的只读 sig
     BkImport                 // import 包名 / 别名
     BkRangeVar               // for x := range 的迭代变量
     BkLabel                  // goto / break / continue 标签
@@ -128,7 +128,7 @@ type Bindings struct {
 // —— 核心查询 API（各 transform 统一调用）——
 
 // ResolveAt 解析 pos 处对 name 的引用，沿作用域链从内到外，返回词法可见的绑定。
-// 这是消除遮蔽类 bug 的核心：signal/pub/typeinfer 不再自己扫 token 判断遮蔽。
+// 这是消除遮蔽类 bug 的核心：sig/pub/typeinfer 不再自己扫 token 判断遮蔽。
 func (b *Bindings) ResolveAt(name string, pos Pos) *Binding
 
 // DeclAt 返回 pos 处的声明绑定（供「声明目标不改写」判断，取代 isSignalDeclTarget）。
@@ -144,7 +144,7 @@ func (b *Bindings) SelAt(sel string, recvPos, selPos Pos) *Binding
 
 关键语义：
 
-- `ResolveAt("count", pos)`：若 pos 落在 `getCount(count int)` 的函数体内，沿作用域链先命中参数的 `Binding{Kind: BkParam}`；signal 只改 `Kind==BkSignal|BkComputed` 的 binding → **P1-1 结构上不可能再误改参数**。
+- `ResolveAt("count", pos)`：若 pos 落在 `getCount(count int)` 的函数体内，沿作用域链先命中参数的 `Binding{Kind: BkParam}`；sig 只改 `Kind==BkSignal|BkComputed` 的 binding → **P1-1 结构上不可能再误改参数**。
 - `restoreRefs`：命中 `IsPub==true` 才大写；命中局部遮蔽（BkLocal/BkParam）不动 → **M-5 消除**。
 - `external` 的 selector：`SelAt` 只对 `BkField/BkFunc/BkMethod` 返回绑定并判私有；局部变量同名不再误保护 → **L-7 消除**。
 
@@ -169,8 +169,8 @@ Binder.Build(toks):
         case t.is("func"):
             解析接收者/参数/返回 → 建 SkFunc scope，压栈
             // 复用 parseParamSeg（unionguard.go:122，已是共享件）
-        case t.is("signal"):
-            name = nextSig; 建 BkSignal，绑定当前 scope；标记该 name 为 signal
+        case t.is("sig"):
+            name = nextSig; 建 BkSignal，绑定当前 scope；标记该 name 为 sig
         case t.is("var"/"const") / t.is(":=") / t.is("range"):
             建 BkVar/BkConst/BkLocal/BkRangeVar，绑定当前 scope
         case t.is("type") / struct 字段:
@@ -188,7 +188,7 @@ Binder.Build(toks):
 要点：
 
 - **不推断类型也能建绑定**：类型推断失败只影响 `Type` 字段，不影响遮蔽解析。构建阶段不调用 `typeFromTokens` 等重逻辑，保证 O(n) 且无副作用。
-- **signal 声明识别直接用 `t.is("signal")`**：此时 signal transform 尚未运行，声明原貌可见。
+- **sig 声明识别直接用 `t.is("sig")`**：此时 sig transform 尚未运行，声明原貌可见。
 - **struct / 匿名 struct 字段**：复用现有 `collectStructFields`（`scope.go:267`）的嵌套深度处理。
 - **短变量重声明**：`x, y := ...` 中若某名字在当前 scope 已存在且类型相同，复用 Binding（Go 短声明语义）；否则新建。
 - **for/switch 的 init 语句**：其声明作用域覆盖整个块，需在压 SkBlock 前登记。
@@ -207,7 +207,7 @@ Binder.Build(toks):
 | `detectDestructures` | 自行判断目标与字段 | `ResolveAt` 确认解构目标绑定 + 字段存在性 | `rhsIdentifier` 的临时判断 |
 | `collectUnionGuards` | `parseParamSeg` 等 | 复用 Binder 的参数解析产物 | 重复的 `findFuncBodyBrace` 等（保留公共件） |
 
-**signal 迁移的可行性是全案关键**：signal 在 Analyze 前，但 Binder 在 lex 后、signal 前构建，因此 signal 可直接查表。这解决了当前「signal 拿不到符号表」的结构性矛盾。
+**sig 迁移的可行性是全案关键**：sig 在 Analyze 前，但 Binder 在 lex 后、sig 前构建，因此 sig 可直接查表。这解决了当前「sig 拿不到符号表」的结构性矛盾。
 
 ---
 
@@ -237,7 +237,7 @@ goSrc, sm := emit(toks, file)
 | 阶段 | 内容 | 验证 | 风险 |
 |---|---|---|---|
 | **P0 数据结构 + Binder** | 新增 `bindings.go`：`Binding`/`Scope`/`Bindings` + `Build` + 查询 API；加 `TestBindings*` 单元对拍 | 新表对现有 golden 样本的解析结果做断言；不动任何 transform | 低（纯新增） |
-| **P1 signal 迁移** | `transformSignals` 接 bindings，删轻量遮蔽分析 | P1-1 三个回归测试 + signal 全量 + 真实 go build | 中（作用域边界） |
+| **P1 sig 迁移** | `transformSignals` 接 bindings，删轻量遮蔽分析 | P1-1 三个回归测试 + sig 全量 + 真实 go build | 中（作用域边界） |
 | **P2 pub 迁移** | `restoreRefs` 接 bindings，删 `collectLocalShadows` | M-5/L-7 回归 + pub 全量 + golden | 中 |
 | **P3 类型查询迁移** | `inferIdentType` / `lookupVarType` 改查 Binding.Type | 对象字面量 / 模板 / lambda 全量 + golden | 中（Type 推断一致性） |
 | **P4 external/scope 合流** | selector 保护改 `SelAt`，删除 `Scope` map | L-7 / external 全量 + golden | 中 |
@@ -296,14 +296,14 @@ goSrc, sm := emit(toks, file)
 | 阶段 | 状态 | 落地内容 | 备注 |
 |---|---|---|---|
 | **P0** | ✅ 完成 | 新增 `pkg/compiler/bindings.go`：`BindingKind`/`Binding`/`ScopeKind`/`BindScope`/`Bindings` + `Bind(toks)` 一次线性扫描 + `ResolveAt`/`DeclAt`/`ScopeAt`/`TypeAt`/`SelAt` 查询 API；11 个 `TestBind*` 单元测试对拍 | 因与既有 `scope.go:Scope` 类型重名，作用域类型命名为 `BindScope` |
-| **P1** | ✅ 完成 | `transformSignals` 接收 bindings，`isSignalRefAt` 用 `ResolveAt` 判遮蔽；删除 `collectSignalShadows`/`isShadowed`（106 行专项补丁）。`inDeclZone`/`isSignalDeclTarget` 作为声明形态防御层保留 | P1-1a/b 回归测试 + signal 全量通过 |
+| **P1** | ✅ 完成 | `transformSignals` 接收 bindings，`isSignalRefAt` 用 `ResolveAt` 判遮蔽；删除 `collectSignalShadows`/`isShadowed`（106 行专项补丁）。`inDeclZone`/`isSignalDeclTarget` 作为声明形态防御层保留 | P1-1a/b 回归测试 + sig 全量通过 |
 | **P2** | ✅ 完成 | `restoreRefs` 接收 bindings，局部遮蔽由 `ResolveAt` 判定；删除 `shadowRange`/`collectLocalShadows`（57 行）。M-5/L-7 回归通过 | |
 | **P3** | 🟡 数据层完成 | Binder 补全 `Binding.Type`（参数/var/`:=` 字面量）；新增 `TypeAt` API + 对拍测试，证明绑定表类型与 `inferIdentType` 一致 | **未切换** `inferIdentType`/`lookupVarType` 的调用者：它们在 desugar 后token 流上工作，切换需跨多文件传 bindings 且回退成本高；保留现有重扫以确保零回归。类型查询的绑定表路径已就绪，待 AST 阶段统一接入 |
 | **P4** | ⚠️ 评估后回滚 | 尝试将 selector 私有保护改为 bindings 判定 | **不可行**：`Bind` 在原始流（lex 后）构建，而 (1) import 由 JSX/collections/信号 transform 在管线中注入、(2) 对象字面量在 desugar 后才展开成匿名 struct，Bind 均看不到。迁移导致 destructure 回归（`p.name`→`p.Name`），已回滚。`collectScope` 在管线后段收集的设计正确，保留。`SelAt` 作为 API 保留供 AST 阶段使用 |
 
 ### 关键结论
 
-- **核心目标达成**：P1/P2 把 signal 遮蔽（P1-1）、pub 遮蔽（M-5）两类同名冲突从「手写区间补丁」变成「词法作用域解析」，结构上不可能再误改参数/局部变量。
+- **核心目标达成**：P1/P2 把 sig 遮蔽（P1-1）、pub 遮蔽（M-5）两类同名冲突从「手写区间补丁」变成「词法作用域解析」，结构上不可能再误改参数/局部变量。
 - **一处架构边界**：绑定表适合在 lex 后一次构建、贯穿查询「源码里写了什么声明」；但**管线中动态注入的符号**（import、匿名 struct 字段）必须由后段 `collectScope` 兜底。二者是互补关系，不是替代关系——这是 P4 回滚揭示的约束。
 - **对后续 AST 阶段**：`ResolveAt`/`TypeAt` 已提供稳定的「标识符 → 声明/类型」查询，AST 节点可直接复用；P3 调用者切换与 P4 selector 合流建议放到 AST 阶段一并处理（届时注入符号已有 AST 表示）。
 - **质量门禁**：每阶段 `go test ./...` 全绿；golden 无意外变更。
@@ -358,7 +358,7 @@ P5 立项目标是「`Symbol` 由 `Binding` 派生、统一坐标基准、消除
 |---|---|---|
 | `Analysis.Symbols()` 生产代码零消费者 | grep 全仓：仅测试调用；LSP `symbolmap.go` 用独立正则扫描，不消费它 | "消除重扫"收益面比想象窄；真正消费符号数据的只有 `declaredTypeAt`（类型检查核心） |
 | `Symbol.Type` 是语义类型，`Binding.Type` 是词法文本 | `Type` 是 `{Name, Members}` 结构，联合/命名别名展开由 `typeFromTokens`+`namedTypes` 算；`Binding.Type` 只是字符串 | Binding 无法直接替代 Symbol 的 Type，语义计算必须在 Analysis 侧保留 |
-| signal 声明的 Pos 在 transform 后漂移 | `signal count = 0` → `var count = Signal.New(0)`，生成 token 复用 `signal` 的 off=13，而 Binding 的 `count` 声明是 off=20 | Binding.DeclPos 无法映射到 Analyze 后流的 token 下标，"统一坐标基准"对 signal 失效 |
+| sig 声明的 Pos 在 transform 后漂移 | `sig count = 0` → `var count = Signal.New(0)`，生成 token 复用 `sig` 的 off=13，而 Binding 的 `count` 声明是 off=20 | Binding.DeclPos 无法映射到 Analyze 后流的 token 下标，"统一坐标基准"对 sig 失效 |
 | `collectParams` 共享类型参数丢失 | `a, b int\|string` 只有 b 进符号表，a 的联合类型丢失 → `_ = a + 1` **漏报** union-operand | 真实 bug，有修复价值 |
 
 ### 14.2 落地内容（收窄为高价值参数合流）
@@ -378,7 +378,7 @@ P5 立项目标是「`Symbol` 由 `Binding` 派生、统一坐标基准、消除
 「Symbol 全部由 Binding 派生 + 统一坐标基准」不做，原因：
 1. **消费者缺失**：`Symbols()` 生产代码零调用，消除重扫的实际收益仅是去掉一个测试消费的中间数组。
 2. **语义分层**：`Symbol.Type`（联合/别名展开的语义类型）与 `Binding.Type`（词法文本）是不同抽象，强行派生会丢语义；Analysis 侧的 `typeFromTokens` 是必要的语义计算层。
-3. **坐标硬障碍**：signal 声明 Pos 在 transform 后漂移，Binding 的原始流 Pos 无法统一到 Analyze 后流坐标——这是「统一坐标基准」无法跨越的结构性问题（与 P4 的注入符号时序问题同类）。
+3. **坐标硬障碍**：sig 声明 Pos 在 transform 后漂移，Binding 的原始流 Pos 无法统一到 Analyze 后流坐标——这是「统一坐标基准」无法跨越的结构性问题（与 P4 的注入符号时序问题同类）。
 
 结论：**符号系统的架构合流（P4/P5 完整形态）在当前 token-transform 架构下不可行**，其收益要在「表达式 AST 阶段」才有实质载体——届时 AST 节点直接持有 Binding 引用，无需再靠 Pos 跨流映射。本次只落地了调研中发现的真实 bug 修复。
 
@@ -386,34 +386,34 @@ P5 立项目标是「`Symbol` 由 `Binding` 派生、统一坐标基准、消除
 
 ## 15. 表达式 AST 阶段（E0/E1，2026-11-20）
 
-前面的结论是：符号架构合流要等「表达式 AST」才有载体。本轮正式启动这一层，按「逐个替换、避免大爆炸」的节奏推进，先拿 signal 开刀。
+前面的结论是：符号架构合流要等「表达式 AST」才有载体。本轮正式启动这一层，按「逐个替换、避免大爆炸」的节奏推进，先拿 sig 开刀。
 
-### 15.1 为什么 signal 是合适的首个切入点
+### 15.1 为什么 sig 是合适的首个切入点
 
-signal transform 位于管线最前段（Analyze 之前），处理的是**原始 token 流**——AST 节点用 `Pos.Offset` 索引，与原始 token 一一对应，**不存在 P4/P5 的坐标漂移**（那些问题都发生在 desugar 后流）。这让「AST 节点直接持有 Binding」第一次有了稳定载体。
+sig transform 位于管线最前段（Analyze 之前），处理的是**原始 token 流**——AST 节点用 `Pos.Offset` 索引，与原始 token 一一对应，**不存在 P4/P5 的坐标漂移**（那些问题都发生在 desugar 后流）。这让「AST 节点直接持有 Binding」第一次有了稳定载体。
 
 ### 15.2 E0：AST 地基层（提交 a6ce1da）
 
 - 新增 `pkg/compiler/exprast.go`：`GXExpr` 节点持有 `Pos.Offset`（稳定锚点）+ `Binding` 引用 + token 区间；`SignalAST` 在原始流一次构建，`byOffset` 以 Offset 为键 O(1) 查询，不受 token 下标漂移影响。
-- `ParseSignalExprs` 解析 signal 声明/读/写/复合/自增节点，形态排除（selector 右侧、字段键、声明目标、声明区、已调用）与旧逻辑逐条对齐；遮蔽由 `ResolveAt` 的 `BkSignal`/`BkComputed` 判定天然处理。
+- `ParseSignalExprs` 解析 sig 声明/读/写/复合/自增节点，形态排除（selector 右侧、字段键、声明目标、声明区、已调用）与旧逻辑逐条对齐；遮蔽由 `ResolveAt` 的 `BkSignal`/`BkComputed` 判定天然处理。
 - 4 个单元测试：声明节点、读写分类、遮蔽、与旧判定全量对拍，全绿。**纯新增，不改任何 transform 行为**。
 
-### 15.3 E1：signal 识别收敛到 AST（本轮）
+### 15.3 E1：sig 识别收敛到 AST（本轮）
 
 - `transformSignals` 改为构建 `SignalAST`，早退条件用 `ast.HasSignal()`；`rewriteSignals`/`rewriteSignalReads` 消费 AST 节点 Kind 驱动改写，**主循环删除「名字集合 + 遮蔽 + 形态排除」的重复扫 token 判定**（净删 84 行）。
 - 等价性验证（三重）：
-  1. **节点级对拍** `TestExprASTParityWithLegacy`：AST 认定的 signal 引用 offset 集合与旧判定完全一致。
+  1. **节点级对拍** `TestExprASTParityWithLegacy`：AST 认定的 sig 引用 offset 集合与旧判定完全一致。
   2. **端到端对拍**：16 个覆盖全分支的样本（声明/读写/复合/自增/RHS 读取/computed/effect/遮蔽/selector 排除/参数组/嵌套/链式赋值），新旧版本编译输出**逐字一致**。
   3. **全量门禁**：`go test -race`/`go vet`/`go build ./...` 全绿，golden 无变化。
 - `collectSignalVars`/`isSignalRefAt` 仅留作对拍参照，生产路径已不调用。
 
 ### 15.4 E2：模板识别收敛到 AST（本轮）
 
-模板 transform 没有 signal 那样的遮蔽/形态排除判定可收敛（`Kind==Template` 已是唯一识别条件，插值 `${}` 在 lex 阶段不产生独立 token、无法持有 Binding）。因此 E2 的价值定位在**打通中后段 offset 映射**——这是把 lambda/对象字面量/解构接进 AST 的命门：
+模板 transform 没有 sig 那样的遮蔽/形态排除判定可收敛（`Kind==Template` 已是唯一识别条件，插值 `${}` 在 lex 阶段不产生独立 token、无法持有 Binding）。因此 E2 的价值定位在**打通中后段 offset 映射**——这是把 lambda/对象字面量/解构接进 AST 的命门：
 
-- **关键前提验证**（探针 + 正式测试 `TestExprASTTemplateOffsetThroughPipeline`）：desugar 到 `transformTemplates` 之前，主流中 Template token 的 `Pos.Offset` 对原始 AST **100% 命中**，覆盖 signal/lambda/对象字面量/解构混合场景。证明「原始流建 AST + 中后段按 offset 查节点」成立，token 下标漂移不再构成障碍。
+- **关键前提验证**（探针 + 正式测试 `TestExprASTTemplateOffsetThroughPipeline`）：desugar 到 `transformTemplates` 之前，主流中 Template token 的 `Pos.Offset` 对原始 AST **100% 命中**，覆盖 sig/lambda/对象字面量/解构混合场景。证明「原始流建 AST + 中后段按 offset 查节点」成立，token 下标漂移不再构成障碍。
 - 新增 `TemplateAST` + `ExTemplate` 节点（持模板原文 `TplBody`）；`ParseTemplateExprs` 在原始流一次构建、只登记非生成 token。`transformTemplates` 主入口按 offset 命中节点并以节点原文展开，递归内层模板（无独立 offset）回退 token 原文。
-- 等价性验证：节点解析测试 + offset 映射测试 + **12 样本端到端对拍**（基础/多插值/纯插值/文本混合/嵌套/引号/整数特化/signal/lambda/对象字面量/解构/原生 raw string）新旧输出逐字一致；race/vet/build/golden 全绿。
+- 等价性验证：节点解析测试 + offset 映射测试 + **12 样本端到端对拍**（基础/多插值/纯插值/文本混合/嵌套/引号/整数特化/sig/lambda/对象字面量/解构/原生 raw string）新旧输出逐字一致；race/vet/build/golden 全绿。
 
 ### 15.5 E2 续调研：形式化 AST 化收益低，转 E3 找真实 bug
 
@@ -421,12 +421,12 @@ signal transform 位于管线最前段（Analyze 之前），处理的是**原�
 
 | 表达式 | detect 形态 | 判定是否散落 | 切 AST 的实质收益 |
 |---|---|---|---|
-| signal（E1） | 一次性、主循环 | ✅ 散落在主循环多分支 + `rewriteSignalReads` 重复一套 | 净删 84 行重复判定（实质去重） |
+| sig（E1） | 一次性、主循环 | ✅ 散落在主循环多分支 + `rewriteSignalReads` 重复一套 | 净删 84 行重复判定（实质去重） |
 | template（E2） | 一次性 | 单一判定 | 验证中后段 offset 映射（打通后续路径） |
 | destructure | 一次性、单一集中函数 | ❌ 入口只调一次，无重复判定 | 仅换入口，收益微弱 |
 | lambda / objectlit | **迭代式**（每轮替换后 re-detect） | ❌ 单一集中函数 | AST 节点在原始流算的下标每轮漂移，**根本用不上，负收益** |
 
-grep 证实三个 detect 各自只在自己的 transform 里调用一次，没有 signal 那种「多处重复判定」可收敛。强行切属于「建能力没收益」（P6 结论），故收窄为 E3——找 Analysis 类型/诊断的**真实 bug** 修。
+grep 证实三个 detect 各自只在自己的 transform 里调用一次，没有 sig 那种「多处重复判定」可收敛。强行切属于「建能力没收益」（P6 结论），故收窄为 E3——找 Analysis 类型/诊断的**真实 bug** 修。
 
 ### 15.6 E3：块级词法作用域 bug（真实漏报，本轮）
 

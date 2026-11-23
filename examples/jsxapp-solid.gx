@@ -1,9 +1,9 @@
-// SolidJS 风格的有状态组件：组件自带局部 signal + computed + effect + 生命周期，
+// SolidJS 风格的有状态组件：组件自带局部 sig + computed + effect + 生命周期，
 // 由定时器自增驱动状态变化。构建：gox build examples/jsxapp-solid.gx -o main.go && go run .
 //
 // 关键点（对照 SolidJS）：
 //   - 组件函数只在建树时执行一次，状态是组件「自己的」，不在 main 里；
-//   - signal / computed / effect 在组件内部声明，靠响应式保持 UI 新鲜；
+//   - sig / computed / effect 在组件内部声明，靠响应式保持 UI 新鲜；
 //   - onMount 启动副作用、onCleanup 清理——归属 App 的 Owner，close 时级联执行；
 //   - app.render(() => <App/>) 收「建树函数」而非已建好的树。
 package main
@@ -19,9 +19,9 @@ import (
 pub func Counter(props gxscene.Props) *gxscene.Instance {
     name := gxscene.get[string](props, "name")
 
-    // 组件局部状态：源 signal + 派生 computed（不在 main 里）。
-    // signal 读一律裸写（count * 2），编译器自动补 () 并建立依赖。
-    signal count = 0
+    // 组件局部状态：源 sig + 派生 computed（不在 main 里）。
+    // sig 读一律裸写（count * 2），编译器自动补 () 并建立依赖。
+    sig count = 0
     let doubled = Signal.computed(() => count * 2)
 
     // 组件自己的副作用：count 变化即重跑，打印状态变化逻辑

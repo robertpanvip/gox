@@ -37,7 +37,7 @@ func TestEventArrowAssignDiagnostic(t *testing.T) {
 		`<button onClick={() => n = n + 1}>a</button>`,
 		`<input onInput={(e) => n = e} />`,
 	} {
-		src := "package main\nfunc main(){ signal n = 0; _ = " + jsx + " }\n"
+		src := "package main\nfunc main(){ sig n = 0; _ = " + jsx + " }\n"
 		res, err := CompileScene("b6.gx", src)
 		if err != nil {
 			t.Fatal(err)
@@ -73,7 +73,7 @@ func TestJSXMultiRootAndReturnIfDiagnostics(t *testing.T) {
 func TestB6B9A6NoFalsePositive(t *testing.T) {
 	src := `package main
 func main() {
- signal n = 0
+ sig n = 0
  show := true
  _ = <div>{if show { <b>yes</b> } else { <i>no</i> }}</div>
  _ = <button onClick={func() { n = n + 1 }}>a</button>

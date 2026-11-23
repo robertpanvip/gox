@@ -161,7 +161,7 @@ type CompiledFile struct {
 - **方案 A（推荐，改动小）**：给 `CompileWithModule` 增加一个可选的「只跑 pub 阶段并导出 names」的模式，或复用 `CompileStage(src,"pub")` 并记录 names。`CompileStage` 目前丢弃 `names`，需让它在 pub 阶段把 names 一并返回。
 - **方案 B**：新增 `ScanExports(src) map[string]string`，只做 lex + transformPub，返回 names。职责单一、速度快，推荐作为 `pkg/module` 的入口。
 
-> 由于导出符号表只需「声明处的大写结果」，方案 B 最少耦合：它在 GX 源上做 lex → `transformEnum`/`transformPub` → 取 names，不跑 signal/JSX/类型等无关阶段。
+> 由于导出符号表只需「声明处的大写结果」，方案 B 最少耦合：它在 GX 源上做 lex → `transformEnum`/`transformPub` → 取 names，不跑 sig/JSX/类型等无关阶段。
 
 ---
 

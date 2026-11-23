@@ -1,8 +1,8 @@
 // JSX scene 后端 + Signal 响应式：端到端示例。
-// 构建：gox build examples/jsxscene-signal.gx -o main.go && go run .
+// 构建：gox build examples/jsxscene-sig.gx -o main.go && go run .
 //
-// 演示 signal 语法糖 + JSX 插值 + BindReactive 一行接线：
-//   - signal count = 0 降级为 var count = Signal.New(0)
+// 演示 sig 语法糖 + JSX 插值 + BindReactive 一行接线：
+//   - sig count = 0 降级为 var count = Signal.New(0)
 //   - JSX 插值 {count} 编译为 func() any { return count() }（读调用由编译器补全）
 //   - BindReactive(signal.Effect) 为每个插槽建 effect，count 写入即精确更新
 package main
@@ -14,7 +14,7 @@ import (
 )
 
 func main() {
-    signal count = 0
+    sig count = 0
     let doubled = Signal.computed(() => count * 2)
 
     view := <div id="app">
@@ -22,7 +22,7 @@ func main() {
         <b>{doubled}</b>
     </div>
 
-    // 一行接线：signal 变化自动精确更新对应插槽，无需 view.Update()
+    // 一行接线：sig 变化自动精确更新对应插槽，无需 view.Update()
     view.BindReactive(signal.Effect)
 
     fmt.Println("初始：")

@@ -6,9 +6,9 @@ import (
 )
 
 func TestSignalDeclDesugar(t *testing.T) {
-	// signal name = expr → var name = Signal.New(expr)，并注入 import
+	// sig name = expr → var name = Signal.New(expr)，并注入 import
 	src := `package main
-signal count = 0
+sig count = 0
 func main() { println(count()) }
 `
 	got := compileOK(t, "sig1.gx", src)
@@ -19,9 +19,9 @@ func main() { println(count()) }
 }
 
 func TestSignalReadRewrite(t *testing.T) {
-	// 表达式中的 signal 裸读 → count()
+	// 表达式中的 sig 裸读 → count()
 	src := `package main
-signal count = 0
+sig count = 0
 func main() {
     let x = count + 1
     println(x)
@@ -34,7 +34,7 @@ func main() {
 func TestSignalWriteRewrite(t *testing.T) {
 	// count = expr → count(expr)
 	src := `package main
-signal count = 0
+sig count = 0
 func main() {
     count = 5
 }
@@ -47,9 +47,9 @@ func main() {
 }
 
 func TestSignalComputedRegistered(t *testing.T) {
-	// Signal.computed 赋值的变量被登记为 signal，读取时加括号
+	// Signal.computed 赋值的变量被登记为 sig，读取时加括号
 	src := `package main
-signal count = 0
+sig count = 0
 func main() {
     let doubled = Signal.computed(() => count * 2)
     println(doubled)
@@ -63,9 +63,9 @@ func main() {
 }
 
 func TestSignalEffectVoidLambda(t *testing.T) {
-	// signal 提案里的effect：读改写 + void lambda，无非法 return
+	// sig 提案里的effect：读改写 + void lambda，无非法 return
 	src := `package main
-signal count = 0
+sig count = 0
 func main() {
     Signal.effect(() => println(count))
 }
@@ -77,7 +77,7 @@ func main() {
 func TestSignalScopeExclusions(t *testing.T) {
 	// selector 右侧、复合字段键、函数参数、声明目标都不应被读改写
 	src := `package main
-signal count = 0
+sig count = 0
 type Box struct { count int }
 func use(count int) int { return count }
 func main() {
@@ -96,20 +96,20 @@ func main() {
 }
 
 func TestSignalNoFalseReimport(t *testing.T) {
-	// 没有 signal 语法时不应注入 signal import
+	// 没有 sig 语法时不应注入 sig import
 	src := `package main
 func main() { println(1) }
 `
 	got := compileOK(t, "sig7.gx", src)
 	if strings.Contains(got, "runtime/signal") {
-		t.Errorf("无 signal 语法却注入了 signal import: %s", got)
+		t.Errorf("无 sig 语法却注入了 sig import: %s", got)
 	}
 }
 
 func TestSignalCompoundAndIncrement(t *testing.T) {
 	// 复合赋值与自增自减展开为 读旧值+运算+写新值
 	src := `package main
-signal count = 0
+sig count = 0
 func main() {
     count += 3
     count++
@@ -127,7 +127,7 @@ func main() {
 func TestSignalBitwiseCompoundAssign(t *testing.T) {
 	// Go 全部位运算复合赋值都应展开为 name(name() op expr)
 	src := `package main
-signal n = 0
+sig n = 0
 func main() {
     n &= 3
     n |= 8
@@ -152,24 +152,24 @@ func main() {
 }
 
 func TestSignalImportReuseAlias(t *testing.T) {
-	// 源码已用别名导入 signal 路径 → 生成代码复用该别名
+	// 源码已用别名导入 sig 路径 → 生成代码复用该别名
 	src := `package main
 import S "github.com/robertpanvip/gox/runtime/signal"
-signal count = 0
+sig count = 0
 func main() { println(count()) }
 `
 	got := compileOK(t, "sig8.gx", src)
 	containsAll(t, got, `S.New(0)`)
 	if strings.Count(got, "runtime/signal") != 1 {
-		t.Errorf("signal 路径应只出现一次（复用已有 import）: %s", got)
+		t.Errorf("sig 路径应只出现一次（复用已有 import）: %s", got)
 	}
 }
 
 func TestSignalReadRewriteInJSXInterpolation(t *testing.T) {
-	// vdom 后端同样要补齐 JSX 插值里的 signal 读
+	// vdom 后端同样要补齐 JSX 插值里的 sig 读
 	res, err := CompileSource(`package main
 func main() {
-	signal n = 1
+	sig n = 1
 	_ = <p>{n}</p>
 }
 `)
@@ -177,18 +177,18 @@ func main() {
 		t.Fatal(err)
 	}
 	if !strings.Contains(res.GoSource, "n()") {
-		t.Errorf("vdom JSX 插值里的 signal 读应补全 (), got:\n%s", res.GoSource)
+		t.Errorf("vdom JSX 插值里的 sig 读应补全 (), got:\n%s", res.GoSource)
 	}
 }
 
-// TestSignalRHSReads 回归 H-3：signal 声明/简单赋值/复合赋值右侧的裸 signal
+// TestSignalRHSReads 回归 H-3：sig 声明/简单赋值/复合赋值右侧的裸 sig
 // 读取必须改写为调用式，否则类型/语义错误。
 func TestSignalRHSReads(t *testing.T) {
 	src := `package main
 func main() {
-	signal a = 1
-	signal b = a
-	signal c = 2
+	sig a = 1
+	sig b = a
+	sig c = 2
 	b = c
 	c += a
 	println(b(), c())
@@ -202,11 +202,11 @@ func main() {
 	)
 }
 
-// TestSignalNoInitNotSwallowNext 回归 M-4：`signal x` 缺 '=' 时不得吞掉后续语句。
+// TestSignalNoInitNotSwallowNext 回归 M-4：`sig x` 缺 '=' 时不得吞掉后续语句。
 func TestSignalNoInitNotSwallowNext(t *testing.T) {
 	src := `package main
 func main() {
-	signal x
+	sig x
 	println(1)
 }
 `
@@ -218,11 +218,11 @@ func main() {
 }
 
 // TestSignalParamFirstInGroup 回归 L-6：`func f(a, b int)` 中逗号前的首参 a
-// 是 signal 同名时不得被误改写为 a()。
+// 是 sig 同名时不得被误改写为 a()。
 func TestSignalParamFirstInGroup(t *testing.T) {
 	src := `package main
 func f(a, b int) { println(a, b) }
-func main() { signal a = 1; f(a, 2) }
+func main() { sig a = 1; f(a, 2) }
 `
 	got := compileOK(t, "sigparam.gx", src)
 	if strings.Contains(got, "func f(a()") {
@@ -231,11 +231,11 @@ func main() { signal a = 1; f(a, 2) }
 	containsAll(t, got, `f(a(), 2)`)
 }
 
-// TestSignalNameShadowedByParam 回归 P1-1a：signal 名被函数参数遮蔽时，
+// TestSignalNameShadowedByParam 回归 P1-1a：sig 名被函数参数遮蔽时，
 // 函数体内对参数的引用必须保持普通变量，不能改写成 count()。
 func TestSignalNameShadowedByParam(t *testing.T) {
 	src := `package main
-signal count = 0
+sig count = 0
 func getCount(count int) int { return count + 1 }
 func main() { println(getCount(1), count()) }
 `
@@ -246,11 +246,11 @@ func main() { println(getCount(1), count()) }
 	containsAll(t, got, `return count + 1`, `var count = Signal.New(0)`, `count())`)
 }
 
-// TestSignalNameShadowedByLocal 回归 P1-1b：signal 名被局部变量遮蔽时，
-// 局部作用域内的引用保持普通变量，函数外的全局 signal 读写仍正常改写。
+// TestSignalNameShadowedByLocal 回归 P1-1b：sig 名被局部变量遮蔽时，
+// 局部作用域内的引用保持普通变量，函数外的全局 sig 读写仍正常改写。
 func TestSignalNameShadowedByLocal(t *testing.T) {
 	src := `package main
-signal count = 0
+sig count = 0
 func test() { count := 100; println(count) }
 func main() { test(); println(count()) }
 `
@@ -261,27 +261,27 @@ func main() { test(); println(count()) }
 	containsAll(t, got, `count := 100`, `println(count)`, `println(count())`)
 }
 
-// TestSignalReadInTemplate 回归：模板插值 ${a} 内的 signal 裸读必须改写为 a()。
+// TestSignalReadInTemplate 回归：模板插值 ${a} 内的 sig 裸读必须改写为 a()。
 // transformSignals 先于 transformTemplates 执行，插值彼时还是整块 Template token
 // 未被识别，曾在展开后漏改，导致 fmt.Sprint(a) 把函数对象当值输出（函数地址）。
 func TestSignalReadInTemplate(t *testing.T) {
-	src := "package main\nsignal a = 1\nsignal b = 2\nfunc main() {\n\tprintln(`v=${a}`)\n\tprintln(`s=${a + b}`)\n\tprintln(`${a}-${b}`)\n}\n"
+	src := "package main\nsig a = 1\nsig b = 2\nfunc main() {\n\tprintln(`v=${a}`)\n\tprintln(`s=${a + b}`)\n\tprintln(`${a}-${b}`)\n}\n"
 	got := compileOK(t, "sigtpl.gx", src)
 	containsAll(t, got,
 		`fmt.Sprint(a())`,
 		`fmt.Sprint(a() + b())`,
 		`fmt.Sprint(a())+"-"+fmt.Sprint(b())`,
 	)
-	// 不得残留裸 signal 名作为 fmt.Sprint 实参
+	// 不得残留裸 sig 名作为 fmt.Sprint 实参
 	if strings.Contains(got, "fmt.Sprint(a)") || strings.Contains(got, "fmt.Sprint(b)") {
-		t.Errorf("模板插值内 signal 未改写为 getter():\n%s", got)
+		t.Errorf("模板插值内 sig 未改写为 getter():\n%s", got)
 	}
 }
 
-// TestSignalComputedInTemplate 回归：computed 派生 signal 在模板插值里也要改写。
+// TestSignalComputedInTemplate 回归：computed 派生 sig 在模板插值里也要改写。
 // 同时验证 int 特化不受影响（strconv.Itoa(d()) 而非退化成 fmt.Sprint）。
 func TestSignalComputedInTemplate(t *testing.T) {
-	src := "package main\nsignal a = 1\nfunc main() {\n\tlet d = Signal.computed(() => a * 2)\n\tprintln(`d=${d}`)\n}\n"
+	src := "package main\nsig a = 1\nfunc main() {\n\tlet d = Signal.computed(() => a * 2)\n\tprintln(`d=${d}`)\n}\n"
 	got := compileOK(t, "sigtplcomp.gx", src)
 	containsAll(t, got, `strconv.Itoa(d())`)
 	if strings.Contains(got, "strconv.Itoa(d)") {
@@ -292,35 +292,35 @@ func TestSignalComputedInTemplate(t *testing.T) {
 // TestSignalTemplatePreservesExclusions 回归：模板插值里的 selector 右侧 /
 // 函数实参 / 已是调用 / 局部遮蔽，不能被误改写。
 func TestSignalTemplatePreservesExclusions(t *testing.T) {
-	src := "package main\nsignal a = 1\ntype Box struct { v int }\nfunc f(x int) int { return x }\nfunc main() {\n\tbox := Box{v: 3}\n\tprintln(`${box.v}`)\n\tprintln(`${f(a)}`)\n\tprintln(`${a}`)\n\ta := 9\n\tprintln(`${a}`)\n}\n"
+	src := "package main\nsig a = 1\ntype Box struct { v int }\nfunc f(x int) int { return x }\nfunc main() {\n\tbox := Box{v: 3}\n\tprintln(`${box.v}`)\n\tprintln(`${f(a)}`)\n\tprintln(`${a}`)\n\ta := 9\n\tprintln(`${a}`)\n}\n"
 	got := compileOK(t, "sigtplexcl.gx", src)
 	containsAll(t, got,
 		`fmt.Sprint(box.v)`,  // selector 不改写
-		`fmt.Sprint(f(a()))`, // signal 作函数实参要改写
+		`fmt.Sprint(f(a()))`, // sig 作函数实参要改写
 		`a := 9`,
 	)
 }
 
-// TestSignalTemplateSelectorLHS 回归：signal 作为 selector 接收者 ${a.field}
-// 应改写为 a().field（signal 本身是读），而不是整体跳过。
+// TestSignalTemplateSelectorLHS 回归：sig 作为 selector 接收者 ${a.field}
+// 应改写为 a().field（sig 本身是读），而不是整体跳过。
 func TestSignalTemplateSelectorLHS(t *testing.T) {
-	src := "package main\nsignal p = struct{ v int }{v: 1}\nfunc main() { println(`${p.v}`) }\n"
+	src := "package main\nsig p = struct{ v int }{v: 1}\nfunc main() { println(`${p.v}`) }\n"
 	got := compileOK(t, "sigtplsel.gx", src)
 	if !strings.Contains(got, "fmt.Sprint(p().v)") {
-		t.Errorf("signal 作 selector 接收者应改写为 p().v:\n%s", got)
+		t.Errorf("sig 作 selector 接收者应改写为 p().v:\n%s", got)
 	}
 }
 
-// TestSignalReadInJSX 回归：JSX 插值里的 signal 裸读必须改写为 name()。
-// JSX 在 lexer 阶段被整块吞成一个 token，transformSignals 扫不到内部的 signal
+// TestSignalReadInJSX 回归：JSX 插值里的 sig 裸读必须改写为 name()。
+// JSX 在 lexer 阶段被整块吞成一个 token，transformSignals 扫不到内部的 sig
 // 引用；曾在展开后漏改，导致把函数对象塞进 vdom（<span>{count}</span>）或直接
 // 编译失败（{a+b} → a + b，函数相加）。展开后用 ResolveAt 按名字补改写。
 func TestSignalReadInJSX(t *testing.T) {
 	src := `package main
-signal count = 0
-signal name = "x"
-signal a = 1
-signal b = 2
+sig count = 0
+sig name = "x"
+sig a = 1
+sig b = 2
 func main() {
     _ = <div id={name}><span>{count}</span>{a + b}</div>
 }
@@ -331,17 +331,17 @@ func main() {
 		`return count()`,
 		`a() + b()`,
 	)
-	// 不得残留裸 signal 名作为 scene getter 返回值
+	// 不得残留裸 sig 名作为 scene getter 返回值
 	if strings.Contains(got, "return count }") || strings.Contains(got, "return name }") {
-		t.Errorf("JSX 插值内 signal 未改写为 getter():\n%s", got)
+		t.Errorf("JSX 插值内 sig 未改写为 getter():\n%s", got)
 	}
 }
 
 // TestSignalJSXShadowing 回归：JSX 插值里的局部遮蔽变量不得被误改写。
-// signal count 被函数内 count := 3 遮蔽后，{count} 应读局部变量（原样 count）。
+// sig count 被函数内 count := 3 遮蔽后，{count} 应读局部变量（原样 count）。
 func TestSignalJSXShadowing(t *testing.T) {
 	src := `package main
-signal count = 0
+sig count = 0
 func main() {
     count := 3
     _ = <div>{count}</div>
@@ -354,10 +354,10 @@ func main() {
 	}
 }
 
-// TestSignalJSXNested 回归：嵌套 JSX 的每层插值里的 signal 都要改写。
+// TestSignalJSXNested 回归：嵌套 JSX 的每层插值里的 sig 都要改写。
 func TestSignalJSXNested(t *testing.T) {
 	src := `package main
-signal a = 1
+sig a = 1
 func main() {
     _ = <div>{a}<span>{a}</span></div>
 }
@@ -365,16 +365,16 @@ func main() {
 	got := compileOK(t, "sigjsxnest.gx", src)
 	// 两处 {a} 都应变成 a()
 	if n := strings.Count(got, "a()"); n < 2 {
-		t.Errorf("嵌套 JSX 两处 signal 读都应改写，实际 a() 出现 %d 次:\n%s", n, got)
+		t.Errorf("嵌套 JSX 两处 sig 读都应改写，实际 a() 出现 %d 次:\n%s", n, got)
 	}
 }
 
 // TestSignalJSXComponentNameNotRewritten 回归：JSX 组件名（大写开头的引用）
-// 即使与 signal 同名，也不应被改写成 signal 读取——组件名是要调用的组件引用，
-// 不是 signal 读取。改写只应作用于插值片段。
+// 即使与 sig 同名，也不应被改写成 sig 读取——组件名是要调用的组件引用，
+// 不是 sig 读取。改写只应作用于插值片段。
 func TestSignalJSXComponentNameNotRewritten(t *testing.T) {
 	src := `package main
-signal Card = 1
+sig Card = 1
 func main() {
     view := <Card/>
     _ = view
@@ -387,15 +387,15 @@ func main() {
 	}
 }
 
-// §6b 回归（禁用底层 API 后重写）：文件里只有 signal 字段、没有 signal 变量
+// §6b 回归（禁用底层 API 后重写）：文件里只有 sig 字段、没有 sig 变量
 // 声明时，小写语法糖 Signal.computed(...) 不应触发 Signal2 别名——注入的 import
 // 应复用 Signal，使小写还原后的 Signal.Computed 与生成代码指向同一包。
 // 底层 Signal.New 已禁止手写，故用小写语法糖覆盖同一条别名路径。
 func TestSignalImportNoSignal2Alias(t *testing.T) {
 	src := `package main
-type P struct { signal name string }
+type P struct { sig name string }
 func main() {
-	signal s = "x"
+	sig s = "x"
 	c := Signal.computed(() => s)
 	_ = P{name: c}
 }
@@ -439,14 +439,14 @@ func TestNoRawSignalAPIForbidden(t *testing.T) {
 	}
 }
 
-// 小写语法糖放行：computed/effect 调用与函数值传递、signal 声明、字符串内容
+// 小写语法糖放行：computed/effect 调用与函数值传递、sig 声明、字符串内容
 // 都不应触发禁用检查。小写由 transformExternal 在末尾还原成大写符号。
 func TestNoRawSignalAPILowercaseAllowed(t *testing.T) {
 	cases := []struct {
 		name, src string
 	}{
-		{"computed", "package main\nfunc main() { signal n = 1; c := Signal.computed(() => n); _ = c }"},
-		{"effect-call", "package main\nfunc main() { signal n = 1; Signal.effect(() => println(n)) }"},
+		{"computed", "package main\nfunc main() { sig n = 1; c := Signal.computed(() => n); _ = c }"},
+		{"effect-call", "package main\nfunc main() { sig n = 1; Signal.effect(() => println(n)) }"},
 		{"effect-as-value", "package main\nfunc main() { v := struct{}{}; _ = v; f := Signal.effect; _ = f }"},
 		{"string-content", "package main\nfunc main() { s := \"Signal.New(1)\"; _ = s }"},
 	}
@@ -462,12 +462,12 @@ func TestNoRawSignalAPILowercaseAllowed(t *testing.T) {
 }
 
 // 禁用检查不得误伤编译器内部生成的 Signal.New / Signal.Computed。
-// signal 声明降级、signal 字段三档包装都在检查之后发生，仍应正常生成。
+// sig 声明降级、sig 字段三档包装都在检查之后发生，仍应正常生成。
 func TestNoRawSignalAPIGeneratedStillWorks(t *testing.T) {
 	src := `package main
-type CardProps struct { signal name string; age int }
+type CardProps struct { sig name string; age int }
 func main() {
-	signal src = "x"
+	sig src = "x"
 	p := CardProps{name: src, age: 3}
 	c := Signal.computed(() => src)
 	_ = p.name

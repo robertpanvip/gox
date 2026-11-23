@@ -22,20 +22,20 @@
 | **模板字符串** | `` `hi ${name}` `` | `"hi " + fmt.Sprint(name)`（拼接，自动 import fmt） |
 | **对象字面量** | `{ name: "x", age: 1 }` | `struct{ name string; age int }{...}`，有期望类型时用 `point{...}` |
 | **对象解构** | `{ name, age } := p` / `var { name, age } = p` | `name := p.name; age := p.age`（逐字段，校验字段存在） |
-| **Signal 响应式** | `signal n = 0` / `Signal.effect(() => ...)` | `Signal.New(0)` + 函数式读写 + 依赖追踪自动重跑 |
+| **Signal 响应式** | `sig n = 0` / `Signal.effect(() => ...)` | `Signal.New(0)` + 函数式读写 + 依赖追踪自动重跑 |
 | **条件分支** | `if cond { <A/> } else { <B/> }`（JSX 内） | `gxscene.OpBranch` + `BranchGetter`，切换时销毁旧 Owner、只重建该区域 |
-| **Keyed 列表** | `<For each={xs} key={...}>{(x) => <Item/>}</For>` | `gxscene.OpFor` + `ForGetterOfSignal[T]`，元素类型从 `each` 自动推断（可显式注解），按 key 复用节点、每元素独立 Owner；item signal 使同 key 值变化只更新叶子、不重建 |
-| **应用入口** | `gxapp.open(cfg)` + `app.render(() => <App/>)` | `gxapp.Open(cfg)` 返回 App + `App.Render(func() any{...})`；open 只收配置，render 收建树函数（SolidJS 风格）并在内部建根 Owner + signal 自动重绘（源码小写，编译器还原大写） |
+| **Keyed 列表** | `<For each={xs} key={...}>{(x) => <Item/>}</For>` | `gxscene.OpFor` + `ForGetterOfSignal[T]`，元素类型从 `each` 自动推断（可显式注解），按 key 复用节点、每元素独立 Owner；item sig 使同 key 值变化只更新叶子、不重建 |
+| **应用入口** | `gxapp.open(cfg)` + `app.render(() => <App/>)` | `gxapp.Open(cfg)` 返回 App + `App.Render(func() any{...})`；open 只收配置，render 收建树函数（SolidJS 风格）并在内部建根 Owner + sig 自动重绘（源码小写，编译器还原大写） |
 
 > 响应式 UI 的 Owner / Cleanup / 条件分支 / Keyed For / 结构变化重绘等机制，详见
 > [响应式 UI 路线图落地说明](docs/reactive-ui-roadmap.md)。
 
 > **语言状态与兼容性**：GX 目前是 v0，语法与 API 仍可能调整。近期一处源码级不兼容变更——
 > 底层运行时 API 不再允许手写：`Signal.New` / `Signal.Computed` / `Signal.Effect` 等大写构造器
-> 改为编译错误，统一走语法糖（`signal n = v` / `Signal.computed(...)` / `Signal.effect(...)`）；
+> 改为编译错误，统一走语法糖（`sig n = v` / `Signal.computed(...)` / `Signal.effect(...)`）；
 > 相应地 `view.BindReactive(signal.Effect)` 的手写调用改为小写 `Signal.effect` 函数值传递。
 > `Signal` 是保留标识符（占位包名语义优先），勿用作变量名。详见
-> [语言规范 §11](docs/language-spec.md#11-响应式-signal) 与 §11.1。
+> [语言规范 §11](docs/language-spec.md#11-响应式-sig) 与 §11.1。
 
 ## 1. 可见性：`pub`
 
@@ -131,16 +131,16 @@ scene 后端**没有 Diff、没有重建**。更新 = 重新求值 getter + 只�
 | 方式 | 用法 | 适用 |
 |---|---|---|
 | **闭包 getter** | `title={title}` 编成 `func() any{return title}`；改变量后调 `view.Update()` | 外部普通变量；手动驱动 |
-| **signal 自动接线（推荐）** | `view.BindReactive(signal.Effect)` 一行接线；之后 `count(5)` 写 signal 即自动精确更新，无需 `Update()` | 响应式 UI；signal 沿 Props 传到叶子，叶子在插槽里读 |
+| **sig 自动接线（推荐）** | `view.BindReactive(signal.Effect)` 一行接线；之后 `count(5)` 写 sig 即自动精确更新，无需 `Update()` | 响应式 UI；sig 沿 Props 传到叶子，叶子在插槽里读 |
 | **命令式 `SetPart`** | `view.SetPart(slot, value)` 按插槽下标直接写，绕过 getter | 事件回调里精确改一个值；需知道 slot 下标，较少用 |
 
 `Update()` 返回本次**实际写入的节点数**，值没变则写 0（`equalValue` 按类型严格比较）。观测指标：`Instance.Writes`（累计写入，各 `Instance` 独立，不跨子树累加）、`Instance.Updates`（Update 调用次数）。
 
-##### signal 自动接线（底层 Instance 用法）
+##### sig 自动接线（底层 Instance 用法）
 
 > 若走**应用入口** `gxapp.open(cfg)` + `app.render(() => <App/>)`，下面这一步已由 `render` 内部完成，无需手写。本节仅针对直接使用 `gxscene.Instance`（不经 App）的场景。
 
-scene 核心**不依赖**任何响应式库——`BindReactive(effect)` 接受一个形如 `signal.Effect` 的 effect 原语注入。它为每个插槽建一个 effect：普通插槽读 getter 后直接 `SetPart`（signal 变化只精确命中依赖它的插槽，不遍历全树）；复合组件插槽则递归进子组件接线（组件不重建）。signal 从根经 Props getter 一路传到叶子、在叶子的动态插槽里读取，写入即自动刷新。
+scene 核心**不依赖**任何响应式库——`BindReactive(effect)` 接受一个形如 `signal.Effect` 的 effect 原语注入。它为每个插槽建一个 effect：普通插槽读 getter 后直接 `SetPart`（sig 变化只精确命中依赖它的插槽，不遍历全树）；复合组件插槽则递归进子组件接线（组件不重建）。sig 从根经 Props getter 一路传到叶子、在叶子的动态插槽里读取，写入即自动刷新。
 
 完整可运行示例见 [`examples/jsxscene-signal.gx`](examples/jsxscene-signal.gx)：
 
@@ -151,7 +151,7 @@ scene 核心**不依赖**任何响应式库——`BindReactive(effect)` 接受�
 )
 
 func main() {
-    signal count = 0
+    sig count = 0
     let doubled = Signal.computed(() => count * 2)
 
     // JSX 插值 {count} / {doubled} 由编译器编成 getter 并自动补读调用：
@@ -164,9 +164,9 @@ func main() {
 }
 ```
 
-> **编译器细节**：`signal` 语法糖在管线早期消除声明并改写读写，但 JSX 插值当时是整体 token、信号改写穿透不到。scene 后端重新词法化插值时会拿到同一个 signal 变量集合，补上读调用——因此 `{count}` 正确编成 `count()` 而非把 signal 函数对象当值（且按 JSX 位置解析绑定，被局部变量遮蔽的同名 signal 不会被误改写）。
+> **编译器细节**：`sig` 语法糖在管线早期消除声明并改写读写，但 JSX 插值当时是整体 token、信号改写穿透不到。scene 后端重新词法化插值时会拿到同一个 sig 变量集合，补上读调用——因此 `{count}` 正确编成 `count()` 而非把 sig 函数对象当值（且按 JSX 位置解析绑定，被局部变量遮蔽的同名 sig 不会被误改写）。
 
-验证见 [`runtime/scene/reactive_test.go`](runtime/scene/reactive_test.go)（运行时：signal 经两层组件 Props 传到叶子、写入自动刷新、组件不重建、写同值零冗余写入）与 `pkg/compiler/jsxscene_test.go`（编译器：插值/属性/组件 Props 里的 signal 读补全）。
+验证见 [`runtime/scene/reactive_test.go`](runtime/scene/reactive_test.go)（运行时：sig 经两层组件 Props 传到叶子、写入自动刷新、组件不重建、写同值零冗余写入）与 `pkg/compiler/jsxscene_test.go`（编译器：插值/属性/组件 Props 里的 sig 读补全）。
 
 ##### 强类型组件 Props（省略类型名 + 字段校验）
 
@@ -215,7 +215,7 @@ n := view.Update()                      // 更新，返回写入节点数
 | 3b | 强类型形态字段编译期校验 | 属性名必须存在于 struct、值类型须兼容、所有字段须提供；否则编译报错（带 GX 坐标）。属性是快照值，不随变量变化刷新 |
 | 4 | 大写/带点 = 组件，其余 = 原生标签 | JSX 后端的统一判定 |
 | 5 | children 用 `gxscene.Child(props)()` 读（getter-map） | 值是子 `Instance`，透明摊平，无多余标签层；强类型形态 children 作为 struct 字段传入 |
-| 6 | 更新靠 `Update()` 或 `BindReactive` 驱动 | scene 不内置响应式；`BindReactive(signal.Effect)` 可把 signal 直接接到插槽，免手动 Update |
+| 6 | 更新靠 `Update()` 或 `BindReactive` 驱动 | scene 不内置响应式；`BindReactive(signal.Effect)` 可把 sig 直接接到插槽，免手动 Update |
 | 7 | `SetPart` / `SetGetter` 用插槽下标 | 下标由编译期分配，手写 opcode 时才需要；JSX 开发中优先用 getter |
 | 8 | host 不定义绘制后端接口 | `TextBackend` 只是文本工具；GUI 后端实现 `gxapp.Window`，可用 `Node.ID`/`Layout`/`Changes()` 做增量绘制，编译器无需改动 |
 
@@ -251,26 +251,26 @@ app.run()
 | `gxapp.Open(cfg)` | 按配置打开默认 Headless 窗口，返回 `(*App, error)`（不绘制） |
 | `gxapp.OpenWith(cfg, win)` | 注入自定义窗口后端（实现 `Window` 接口） |
 | `Window` 接口 | `Open(cfg)` / `Draw(root)` / `Run()` / `Close()` / `Config()` |
-| `App.Render(build)` | 收建树函数 `() => <App/>`：根 Owner 下建树 + 画首帧 + 内部响应式接线（signal 变化自动更新 + 重绘） |
+| `App.Render(build)` | 收建树函数 `() => <App/>`：根 Owner 下建树 + 画首帧 + 内部响应式接线（sig 变化自动更新 + 重绘） |
 | `App.Draw()` / `App.Update()` | 手动重绘一帧 / 更新场景树并重绘 |
 | `App.Run()` / `App.Close()` | 进入事件循环 / 关闭（幂等，级联清理所有订阅与 Owner） |
 | `gxapp.RenderText(view)` | 不建窗口，直接把场景树绘制成字符串（测试用） |
 
-**signal 自动重绘（已封装进 render）**：`app.render` 内部建一个聚合 effect——`Instance.Update()` 递归读所有 getter 登记依赖并裁剪写入，随后 `Draw()` 一帧；条件分支 / keyed 列表的结构变化另有独立 effect 接线，重建子树后同样自动画一帧。一次 signal 写入 = **一帧**，不会出现「部分插槽已更新」的中间态画面（这是应用入口该有的批处理语义，区别于底层 `Instance.BindReactive` 的逐插槽精确模式）。源码**无需手写 `BindReactive`**。
+**sig 自动重绘（已封装进 render）**：`app.render` 内部建一个聚合 effect——`Instance.Update()` 递归读所有 getter 登记依赖并裁剪写入，随后 `Draw()` 一帧；条件分支 / keyed 列表的结构变化另有独立 effect 接线，重建子树后同样自动画一帧。一次 sig 写入 = **一帧**，不会出现「部分插槽已更新」的中间态画面（这是应用入口该有的批处理语义，区别于底层 `Instance.BindReactive` 的逐插槽精确模式）。源码**无需手写 `BindReactive`**。
 
 ```gx
-signal count = 0
+sig count = 0
 let doubled = Signal.computed(() => count * 2)
 app, _ := gxapp.open({ title: "Demo", width: 800, height: 600 })
 app.render(() => <div><span>{count}</span><b>{doubled}</b></div>)   // 根 Owner 下建树 + 接线
 count = 5                          // 自动更新 + 只画一帧：count=5、doubled=10 一致
 ```
 
-**有状态组件（SolidJS 风格）**：组件函数**只在建树时执行一次**，状态写在组件内部、不在 `main` 里；`signal` / `Signal.computed` / `Signal.effect` 在组件内声明，靠响应式保鲜；`Signal.onMount` 启动副作用、`Signal.onCleanup` 清理，二者归属 App 根 Owner，`app.close()` 时级联执行。完整可运行示例见 [`examples/jsxapp-solid.gx`](examples/jsxapp-solid.gx)：
+**有状态组件（SolidJS 风格）**：组件函数**只在建树时执行一次**，状态写在组件内部、不在 `main` 里；`sig` / `Signal.computed` / `Signal.effect` 在组件内声明，靠响应式保鲜；`Signal.onMount` 启动副作用、`Signal.onCleanup` 清理，二者归属 App 根 Owner，`app.close()` 时级联执行。完整可运行示例见 [`examples/jsxapp-solid.gx`](examples/jsxapp-solid.gx)：
 
 ```gx
 pub func Counter(props gxscene.Props) *gxscene.Instance {
-    signal count = 0   // 组件局部状态；读一律裸写 count，编译器自动补 ()
+    sig count = 0   // 组件局部状态；读一律裸写 count，编译器自动补 ()
     let doubled = Signal.computed(() => count * 2)
     Signal.effect(() => { fmt.println("tick", count, doubled) })
     stop := make(chan struct{})
@@ -284,11 +284,11 @@ app.render(() => <div><Counter/></div>)
 app.close()   // 级联执行 Counter 的 onCleanup
 ```
 
-> **接入真实 GUI**：实现 `Window` 接口的 `Open/Draw/Run/Close/Config`，用 `OpenWith` 注入即可——Skia / wgpu / GLFW 后端无需改动 `gxapp` 或编译器。当前 Headless 后端让整条链路在无 GUI 环境端到端可验证。最小示例见 [`examples/jsxapp.gx`](examples/jsxapp.gx)；**复合组件 + signal 响应式**见 [`examples/jsxapp-full.gx`](examples/jsxapp-full.gx)；**SolidJS 风格有状态组件**（组件内局部状态 + 定时器自增 + onMount/onCleanup 生命周期）见 [`examples/jsxapp-solid.gx`](examples/jsxapp-solid.gx)，运行时见 [`runtime/app/`](runtime/app/)。
+> **接入真实 GUI**：实现 `Window` 接口的 `Open/Draw/Run/Close/Config`，用 `OpenWith` 注入即可——Skia / wgpu / GLFW 后端无需改动 `gxapp` 或编译器。当前 Headless 后端让整条链路在无 GUI 环境端到端可验证。最小示例见 [`examples/jsxapp.gx`](examples/jsxapp.gx)；**复合组件 + sig 响应式**见 [`examples/jsxapp-full.gx`](examples/jsxapp-full.gx)；**SolidJS 风格有状态组件**（组件内局部状态 + 定时器自增 + onMount/onCleanup 生命周期）见 [`examples/jsxapp-solid.gx`](examples/jsxapp-solid.gx)，运行时见 [`runtime/app/`](runtime/app/)。
 >
 > **后端预制控件库**：`backend/skia/widgets` 提供 `widgets.button` / `input` / `card` /
 > `badge` / `progress` / `row` / `col` 等预制组件，外观全部沉淀在后端，业务 JSX 只写语义；
-> 其中 `input` 支持真实键盘输入（signal 双向绑定 + 焦点 + 光标闪烁）。完整可运行示例见
+> 其中 `input` 支持真实键盘输入（sig 双向绑定 + 焦点 + 光标闪烁）。完整可运行示例见
 > [`examples/desktop-demo`](examples/desktop-demo)（GX → Skia 真实窗口 → 可输入看板）。
 
 ## 4. 外部 Go 符号：按真实拼写书写
@@ -484,10 +484,10 @@ var { name, city } = q    // → var name = q.name; var city = q.city
 
 ## 13. Signal 响应式
 
-`signal` 声明源信号，`Signal.computed` 派生只读信号，`Signal.effect` 注册副作用；依赖变化时 effect 自动重跑。底层是函数式 signal（`func(...T) T`：无参读、带参写）+ 依赖追踪运行时（`runtime/signal`）。
+`sig` 声明源信号，`Signal.computed` 派生只读信号，`Signal.effect` 注册副作用；依赖变化时 effect 自动重跑。底层是函数式 sig（`func(...T) T`：无参读、带参写）+ 依赖追踪运行时（`runtime/signal`）。
 
 ```gx
-signal count = 0
+sig count = 0
 func main() {
     let doubled = Signal.computed(() => count * 2)
     Signal.effect(() => println("count=", count))   // count 变化时自动重跑
@@ -506,7 +506,7 @@ count(5)
 println(doubled())
 ```
 
-- **语法糖**：`signal n = v` → `var n = Signal.New(v)`；`let n = v` → `n := v`；signal 变量**读**自动补 `()`、**写**（`=`/`+=`/`++` 等）改写为调用式。
+- **语法糖**：`sig n = v` → `var n = Signal.New(v)`；`let n = v` → `n := v`；sig 变量**读**自动补 `()`、**写**（`=`/`+=`/`++` 等）改写为调用式。
 - **作用域安全**：selector `obj.count`、复合字段键 `{count: 1}`、struct 字段、函数参数、已显式调用 `count()` 均不误改。
 - **依赖追踪**：`computed` 惰性缓存，`effect` 立即执行一次并在依赖变化时重跑，条件分支依赖会动态重建；运行时并发安全。
 - `Signal` 作为运行时包名由 ImportManager 统一注入 `import Signal "<module>/runtime/signal"`，源码已用别名导入则复用。
@@ -583,7 +583,7 @@ gox/
 └── runtime/            运行时组件
     ├── scene/          opcode 模板 + 常驻场景树 + 细粒度 Update（JSX 后端）
     ├── app/            窗口外壳 + Owner/Cleanup + 响应式重绘
-    ├── signal/         Signal / Computed / Effect / Batch
+    ├── sig/         Signal / Computed / Effect / Batch
     └── list/           List[T] + 泛型 Map/Filter/Reduce 运行时
 ```
 

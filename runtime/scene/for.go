@@ -4,8 +4,6 @@ import (
 	"fmt"
 	"strings"
 	"sync"
-
-	"github.com/robertpanvip/gox/runtime/signal"
 )
 
 // For 是 keyed 列表控制器，对应评审里建议的 <For each={xs} key={...}>{render}</For>。
@@ -51,9 +49,9 @@ type forEntry struct {
 	key   any
 	value any
 	inst  *Instance
-	owner *signal.Owner
-	node  *Node              // 该元素在场景树中的包装节点（透明 #frag）
-	item  signal.Signal[any] // 信号化模式：该项的 item signal，子树 getter 经它读值并登记依赖
+	owner Owner  // 该项的响应式作用域（抽象，默认由 signal 实现）
+	node  *Node  // 该元素在场景树中的包装节点（透明 #frag）
+	item  Signal // 信号化模式：该项的 item signal，子树 getter 经它读值并登记依赖
 }
 
 // NewFor 创建 keyed 列表控制器（值快照模式）。
@@ -339,9 +337,9 @@ func (f *For) buildEntry(entry *forEntry) {
 	// 信号化模式：item signal 在 Owner 外创建（纯信号，不挂 Effect），首次构建时
 	// 初始化一次；同 key 值变化走 Resolve 里写 signal 的路径，不再进 buildEntry。
 	if f.sigRender != nil && entry.item == nil {
-		entry.item = signal.New(entry.value)
+		entry.item = Reactive().NewSignal(entry.value)
 	}
-	entry.owner = signal.CreateRoot(func(o *signal.Owner) {
+	entry.owner = Reactive().Root(func(o Owner) {
 		if f.sigRender != nil {
 			entry.inst = f.sigRender(func() any { return entry.item() })
 		} else {
@@ -367,11 +365,14 @@ func (f *For) buildEntry(entry *forEntry) {
 			// 回调会调 onDirty；批量新增 N 项就是 N 帧。静音后由 each 的外层 effect
 			// 统一画 1 帧。
 			f.bctx.withSilent(func() {
-				entry.inst.bindLeaves(signal.Effect)
+				// 用 ctx 注入的 effect（app 场景为带 UI-dirty 标记的包装 effect），
+				// 使列表项内叶子的变化也能被 app 的帧边界统一重绘；纯 scene 场景
+				// 该 effect 就是当前适配器的 Effect。
+				entry.inst.bindLeaves(f.bctx.effect)
 				entry.inst.bindRec(f.bctx)
 			})
 		} else {
-			entry.inst.BindReactive(signal.Effect)
+			entry.inst.BindReactive(Reactive().Effect)
 		}
 		for _, c := range entry.inst.root.Children {
 			c.parent = entry.node

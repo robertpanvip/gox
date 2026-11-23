@@ -423,9 +423,9 @@ func main() {
 }
 
 func TestIntegrationSignal(t *testing.T) {
-	// signal 声明 + computed 派生 + effect 自动重跑 + 读/写改写 + 函数式运行时。
+	// sig 声明 + computed 派生 + effect 自动重跑 + 读/写改写 + 函数式运行时。
 	src := `package main
-signal count = 0
+sig count = 0
 func main() {
     let doubled = Signal.computed(() => count * 2)
     Signal.effect(() => println("effect:", count))
@@ -452,10 +452,10 @@ func main() {
 }
 
 func TestIntegrationSignalCompoundWrite(t *testing.T) {
-	// 复合赋值/自增自减写 signal，computed 与 effect 应观察到最终结果。
+	// 复合赋值/自增自减写 sig，computed 与 effect 应观察到最终结果。
 	src := `package main
 import "fmt"
-signal n = 0
+sig n = 0
 func main() {
     let v = Signal.computed(() => n)
     n += 3
@@ -471,11 +471,11 @@ func main() {
 }
 
 func TestIntegrationArrowBlockCallbacks(t *testing.T) {
-	// SolidJS 风格：signal 回调用箭头函数，多语句用花括号 body () => { ... }。
+	// SolidJS 风格：sig 回调用箭头函数，多语句用花括号 body () => { ... }。
 	// batch 内两条写语句、effect 花括号 body 嵌套调用。
 	src := `package main
 import "fmt"
-signal n = 0
+sig n = 0
 func main() {
     let doubled = Signal.computed(() => n() * 2)
     Signal.effect(() => { fmt.Println("init", doubled()) })
@@ -499,7 +499,7 @@ func TestIntegrationSignalBitwiseCompound(t *testing.T) {
 	// 位运算复合赋值：&= / |= / ^= / <<= / >>= / &^= 真实运行结果。
 	src := `package main
 import "fmt"
-signal n = 0
+sig n = 0
 func main() {
     n |= 12        // 12
     n &= 10        // 8
@@ -517,10 +517,10 @@ func main() {
 }
 
 func TestIntegrationSignalMultipleEffects(t *testing.T) {
-	// 多个 signal、多个 effect，依赖追踪互不串扰。
+	// 多个 sig、多个 effect，依赖追踪互不串扰。
 	src := `package main
-signal a = 1
-signal b = 10
+sig a = 1
+sig b = 10
 func main() {
     Signal.effect(() => println("A", a))
     Signal.effect(() => println("B", b))
@@ -538,15 +538,15 @@ func main() {
 
 func TestIntegrationJSXSceneConditionalBranch(t *testing.T) {
 	// 阶段2：JSX 条件分支 → OpBranch + BranchGetter。
-	// 验证：selector 依赖切换分支、分支内 signal 只更新叶子、组件不重建。
+	// 验证：selector 依赖切换分支、分支内 sig 只更新叶子、组件不重建。
 	src := `package main
 import (
 	gxscene "github.com/robertpanvip/gox/runtime/scene"
 	"fmt"
 )
 func main() {
-	signal visible = true
-	signal count = 10
+	sig visible = true
+	sig count = 10
 	view := <div>
 		if visible {
 			<span>{count}</span>
@@ -556,7 +556,7 @@ func main() {
 	</div>
 	view.BindReactive(Signal.effect)
 	fmt.Print("INIT:", view)
-	// 分支内 signal 更新：只改叶子，不切分支。
+	// 分支内 sig 更新：只改叶子，不切分支。
 	count = 20
 	fmt.Print("COUNT:", view)
 	// selector 依赖切换分支。
@@ -591,7 +591,7 @@ import (
 )
 type User struct { id int; name string }
 func main() {
-	signal users = []User{{1,"Tom"},{2,"Jack"}}
+	sig users = []User{{1,"Tom"},{2,"Jack"}}
 	view := <ul>
 		<For each={users} key={(u) => u.id}>
 			{(u User) => <li>{u.name}</li>}
@@ -626,8 +626,8 @@ func main() {
 }
 
 func TestIntegrationJSXSceneForValueUpdate(t *testing.T) {
-	// item signal 根治端到端：同 key（id 不变）但值变化（name 改写）时必须刷新该项。
-	// 旧的值快照实现会显示旧值（除非销毁重建），这里通过 u().name 直接读 item signal。
+	// item sig 根治端到端：同 key（id 不变）但值变化（name 改写）时必须刷新该项。
+	// 旧的值快照实现会显示旧值（除非销毁重建），这里通过 u().name 直接读 item sig。
 	src := `package main
 import (
 	gxscene "github.com/robertpanvip/gox/runtime/scene"
@@ -635,7 +635,7 @@ import (
 )
 type User struct { id int; name string }
 func main() {
-	signal users = []User{{1,"Tom"},{2,"Jack"}}
+	sig users = []User{{1,"Tom"},{2,"Jack"}}
 	view := <ul>
 		<For each={users} key={(u) => u.id}>
 			{(u User) => <li>{u.name}</li>}
@@ -677,7 +677,7 @@ func Card(props CardProps) *gxscene.Instance {
 	return <b>{props.text}</b>
 }
 func main() {
-	signal users = []User{{1,"Tom"}}
+	sig users = []User{{1,"Tom"}}
 	view := <ul>
 		<For each={users} key={(u) => u.id}>
 			{(u User) => <li><Card text={u.name}/></li>}
@@ -703,8 +703,8 @@ func main() {
 }
 
 func TestIntegrationJSXSceneForInferElemType(t *testing.T) {
-	// render 参数无类型注解：应从 each={users}（signal []User）推断元素类型 User，
-	// 生成可编译的 gxscene.ForGetterOfSignal[User](...)（item signal 根治）。
+	// render 参数无类型注解：应从 each={users}（sig []User）推断元素类型 User，
+	// 生成可编译的 gxscene.ForGetterOfSignal[User](...)（item sig 根治）。
 	src := `package main
 import (
 	gxscene "github.com/robertpanvip/gox/runtime/scene"
@@ -712,7 +712,7 @@ import (
 )
 type User struct { id int; name string }
 func main() {
-	signal users = []User{{1,"Tom"},{2,"Jack"}}
+	sig users = []User{{1,"Tom"},{2,"Jack"}}
 	view := <ul>
 		<For each={users} key={(u) => u.id}>
 			{(u) => <li>{u.name}</li>}
@@ -753,7 +753,7 @@ pub func Stat(props gxscene.Props) *gxscene.Instance {
 func main() {
 	cfg := { title: "Gox", width: 800, height: 600 }
 	{ title, width } := cfg
-	signal users = []user{{1,"Tom"}}
+	sig users = []user{{1,"Tom"}}
 	app, err := gxapp.open({ Title: title, Width: width, Height: cfg.height })
 	if err != nil { panic(err) }
 	defer app.close()
@@ -768,7 +768,7 @@ func main() {
 }
 
 // TestIntegrationAppRenderAutoWiresReactive 端到端验证：app.render(() => jsx) 内部已完成
-// bindReactive 接线——GX 源码无需手写 bindReactive，signal 写入即自动更新 + 重绘一帧。
+// bindReactive 接线——GX 源码无需手写 bindReactive，sig 写入即自动更新 + 重绘一帧。
 func TestIntegrationAppRenderAutoWiresReactive(t *testing.T) {
 	src := `package main
 import (
@@ -776,7 +776,7 @@ import (
 	"fmt"
 )
 func main() {
-	signal count = 0
+	sig count = 0
 	app, err := gxapp.open({ Title: "Counter", Width: 800, Height: 600 })
 	if err != nil { panic(err) }
 	defer app.close()
@@ -794,12 +794,12 @@ func main() {
 		t.Errorf("首帧应含初始值 0:\n%s", parts[0])
 	}
 	if !strings.Contains(parts[1], `"5"`) || strings.Contains(parts[1], `"0"`) {
-		t.Errorf("signal 写入后应自动重绘为 5（无手写接线）:\n%s", parts[1])
+		t.Errorf("sig 写入后应自动重绘为 5（无手写接线）:\n%s", parts[1])
 	}
 }
 
 // TestIntegrationStatefulComponent 端到端验证 SolidJS 风格有状态组件：
-// 组件内声明局部 signal + computed + effect + onCleanup，定时器自增驱动状态变化；
+// 组件内声明局部 sig + computed + effect + onCleanup，定时器自增驱动状态变化；
 // app.render(() => <App/>) 建树时建立根 Owner，close 时级联执行组件 onCleanup。
 func TestIntegrationStatefulComponent(t *testing.T) {
 	src := `package main
@@ -810,7 +810,7 @@ import (
 	"time"
 )
 pub func Counter(props gxscene.Props) *gxscene.Instance {
-	signal count = 0
+	sig count = 0
 	let doubled = Signal.computed(() => count * 2)
 	let same = Signal.computed(() => count)
 	Signal.effect(() => { fmt.println("tick", count, doubled, same) })
@@ -855,16 +855,16 @@ func main() {
 }
 
 func TestIntegrationSignalFieldLiveProps(t *testing.T) {
-	// struct signal 字段语言特性：组件/持有者函数读到的是外部 signal 的实时值，
+	// struct sig 字段语言特性：组件/持有者函数读到的是外部 sig 的实时值，
 	// 而非构造时的一次性快照（用户核心诉求："组件值不是一次性的"）。
 	src := `package main
 type CardProps struct {
-    signal name string
+    sig name string
     age int
 }
 func show(p CardProps) string { return p.name }
 func main() {
-    signal src = "x"
+    sig src = "x"
     p := CardProps{name: src, age: 3}
     println(show(p))
     src("changed")
@@ -888,13 +888,13 @@ func main() {
 }
 
 func TestIntegrationSignalFieldHandwrittenDerivedLive(t *testing.T) {
-	// 第六轮 P2b 端到端：手写构造的派生表达式（含 signal 读）经 Computed 保鲜，
-	// 源 signal 变化后读字段得到新值，而非构造时的快照。
+	// 第六轮 P2b 端到端：手写构造的派生表达式（含 sig 读）经 Computed 保鲜，
+	// 源 sig 变化后读字段得到新值，而非构造时的快照。
 	src := `package main
-type CardProps struct { signal label string }
+type CardProps struct { sig label string }
 func show(p CardProps) string { return p.label }
 func main() {
-	signal n = 1
+	sig n = 1
 	p := CardProps{label: "n=" + Itoa(n())}
 	println(show(p))
 	n(2)
@@ -921,13 +921,13 @@ func Itoa(x int) string {
 }
 
 func TestIntegrationSignalFieldHandwrittenFieldToFieldLive(t *testing.T) {
-	// 第七轮 §4 端到端：手写字段间赋值 q.a = p.a 直通 getter，源 signal 变化后
+	// 第七轮 §4 端到端：手写字段间赋值 q.a = p.a 直通 getter，源 sig 变化后
 	// 经 p.a 读到新值（JSX 侧 TestIntegrationSignalFieldLiveProps 的手写对应版）。
 	src := `package main
-type P struct { signal a string }
-type Q struct { signal a string }
+type P struct { sig a string }
+type Q struct { sig a string }
 func main() {
-	signal src = "x"
+	sig src = "x"
 	p := P{a: src}
 	q := Q{a: p.a}
 	println(q.a)
@@ -949,9 +949,9 @@ func main() {
 }
 
 func TestIntegrationSignalFieldNestedStruct(t *testing.T) {
-	// signal 字段与复合写/自增的真实运行。
+	// sig 字段与复合写/自增的真实运行。
 	src := `package main
-type Counter struct { signal n int }
+type Counter struct { sig n int }
 func main() {
     c := Counter{n: 1}
     c.n += 2
@@ -966,8 +966,8 @@ func main() {
 }
 
 func TestIntegrationSignalFieldJSXItemPropLive(t *testing.T) {
-	// 第五轮根治端到端：signal 字段 props + For item 派生态。
-	// <Card text={u.name}/> 中 text 是 signal 字段 → 生成 Signal.Computed(func() string{return u().name})，
+	// 第五轮根治端到端：sig 字段 props + For item 派生态。
+	// <Card text={u.name}/> 中 text 是 sig 字段 → 生成 Signal.Computed(func() string{return u().name})，
 	// item 值变化时 Computed 重新求值，组件内 {p.text()} 读到新值，无需整项重建。
 	src := `package main
 import (
@@ -975,12 +975,12 @@ import (
 	"fmt"
 )
 type User struct { id int; name string }
-type CardProps struct { signal text string }
+type CardProps struct { sig text string }
 func Card(props CardProps) *gxscene.Instance {
 	return <b>{props.text}</b>
 }
 func main() {
-	signal users = []User{{1,"Tom"},{2,"Jack"}}
+	sig users = []User{{1,"Tom"},{2,"Jack"}}
 	view := <ul>
 		<For each={users} key={(u) => u.id}>
 			{(u User) => <li><Card text={u.name}/></li>}
@@ -998,7 +998,7 @@ func main() {
 	}
 	seg := out[idx:]
 	if !strings.Contains(seg, `"Thomas"`) {
-		t.Errorf("signal 字段 props 应随 item 刷新为 Thomas, got:\n%s", seg)
+		t.Errorf("sig 字段 props 应随 item 刷新为 Thomas, got:\n%s", seg)
 	}
 	if strings.Contains(seg, `"Tom"`) {
 		t.Errorf("不应残留旧值 Tom, got:\n%s", seg)
@@ -1008,13 +1008,13 @@ func main() {
 	}
 }
 
-// 第八轮回归：普通变量 / 普通字段作为 signal 字段的值，编译成裸 getter，
-// 后续修改普通变量能读到新值——用户不应感知 signal 与普通变量的差别。
+// 第八轮回归：普通变量 / 普通字段作为 sig 字段的值，编译成裸 getter，
+// 后续修改普通变量能读到新值——用户不应感知 sig 与普通变量的差别。
 func TestIntegrationPlainVarSignalFieldStaysLive(t *testing.T) {
 	src := `package main
 import "fmt"
 type Q struct { title string }
-type P struct { signal a string; signal b string }
+type P struct { sig a string; sig b string }
 func main() {
 	plain := "x"
 	q := Q{title: "y"}
@@ -1031,13 +1031,13 @@ func main() {
 	}
 }
 
-// 第八轮回归：含 signal 读的派生表达式仍走 Computed 保鲜；链式 signal 字段读
+// 第八轮回归：含 sig 读的派生表达式仍走 Computed 保鲜；链式 sig 字段读
 // 按 receiver 类型补 () 后能读到真实值（P1-2 / P1-3 的运行级验证）。
 func TestIntegrationDerivedAndChainSignalFieldsLive(t *testing.T) {
 	src := `package main
 import "fmt"
-type P struct { signal a string; signal b string }
-type Inner struct { signal v string }
+type P struct { sig a string; sig b string }
+type Inner struct { sig v string }
 type Mid struct { in Inner }
 type Outer struct { mid Mid }
 func main() {
@@ -1056,18 +1056,18 @@ func main() {
 	}
 }
 
-// 第九轮：链中间 signal 段的读写合一 getter 必须在 receiver 更换后保鲜。
-// q.v 来自 o.mid.b.c（b 是 signal）；b 换成新 Leaf 后，q.v() 必须读到新 Leaf 的 c，
+// 第九轮：链中间 sig 段的读写合一 getter 必须在 receiver 更换后保鲜。
+// q.v 来自 o.mid.b.c（b 是 sig）；b 换成新 Leaf 后，q.v() 必须读到新 Leaf 的 c，
 // 且 q.v = val 必须写到 b 当前指向的 Leaf——旧的「剥 () 裸透传」会固定初始 receiver。
 func TestIntegrationChainRWGetterFreshReceiver(t *testing.T) {
 	src := `package main
 import "fmt"
-type Leaf struct { signal c string }
-type Mid struct { signal b Leaf }
+type Leaf struct { sig c string }
+type Mid struct { sig b Leaf }
 type Outer struct { mid Mid }
-type Q struct { signal v string }
+type Q struct { sig v string }
 func main() {
-	signal lb = Leaf{c: "first"}
+	sig lb = Leaf{c: "first"}
 	o := Outer{mid: Mid{b: lb}}
 	q := Q{v: o.mid.b.c}
 	fmt.Println("read1", q.v())
@@ -1086,13 +1086,13 @@ func main() {
 	}
 }
 
-// 第十轮 P1-A：signal 字段值是结构体构造（Signal.New 一次构造）时必须可写，
+// 第十轮 P1-A：sig 字段值是结构体构造（Signal.New 一次构造）时必须可写，
 // 写入整对象后读到的应是新对象——旧「第四档裸 getter」会静默丢参数。
 func TestIntegrationR10StructFieldWritable(t *testing.T) {
 	src := `package main
 import "fmt"
-type Leaf struct { signal v string }
-type Mid struct { signal leaf Leaf }
+type Leaf struct { sig v string }
+type Mid struct { sig leaf Leaf }
 func main() {
 	m := Mid{leaf: Leaf{v: "a"}}
 	fmt.Println("before", m.leaf.v)
@@ -1111,12 +1111,12 @@ func main() {
 	}
 }
 
-// 第十轮 P1-2：普通变量构造的 signal 字段用 Signal.LockedGetter——
+// 第十轮 P1-2：普通变量构造的 sig 字段用 Signal.LockedGetter——
 // 读跟随、写落回变量（跟随语义不变）。
 func TestIntegrationR10PlainVarGetterWritable(t *testing.T) {
 	src := `package main
 import "fmt"
-type P struct { signal a string }
+type P struct { sig a string }
 func main() {
 	v := "one"
 	p := P{a: v}
@@ -1133,12 +1133,12 @@ func main() {
 	}
 }
 
-// 第十一轮：中间 signal 段显式写调用括号的链尾写必须真正生效（与裸写一致）。
+// 第十一轮：中间 sig 段显式写调用括号的链尾写必须真正生效（与裸写一致）。
 func TestIntegrationR11ExplicitParenMiddleWrite(t *testing.T) {
 	src := `package main
 import "fmt"
-type Leaf struct { signal v string }
-type Mid struct { signal leaf Leaf }
+type Leaf struct { sig v string }
+type Mid struct { sig leaf Leaf }
 func main() {
 	m := Mid{leaf: Leaf{v: "a"}}
 	fmt.Println("before", m.leaf().v)
@@ -1157,12 +1157,12 @@ func main() {
 	}
 }
 
-// 第十轮 P1-3：工厂函数返回 struct 的 signal 字段，读写必须正确改写并能运行。
+// 第十轮 P1-3：工厂函数返回 struct 的 sig 字段，读写必须正确改写并能运行。
 // p := makeP() 若类型回填失败，p.a 会打印函数地址或写时编译失败。
 func TestIntegrationR11FactoryResultField(t *testing.T) {
 	src := `package main
 import "fmt"
-type P struct { signal a string }
+type P struct { sig a string }
 func makeP(v string) P { return P{a: v} }
 func makeP2(v string) *P { return &P{a: v} }
 func main() {
@@ -1185,7 +1185,7 @@ func main() {
 func TestIntegrationR12SharedLockPlainVarField(t *testing.T) {
 	src := `package main
 import "fmt"
-type P struct { signal a string; signal b string }
+type P struct { sig a string; sig b string }
 func main() {
 	v := "x"
 	p := P{a: v, b: v}
@@ -1206,11 +1206,11 @@ func main() {
 }
 
 // 第十二轮 P2-B+P2-C：m, err := load() 的多左值与 map 字面量类型推断联动——
-// m["k"].a 必须被识别为 signal 字段并改写，否则静默打印函数地址、写生成非法 Go。
+// m["k"].a 必须被识别为 sig 字段并改写，否则静默打印函数地址、写生成非法 Go。
 func TestIntegrationR12MultiLHSMapIndex(t *testing.T) {
 	src := `package main
 import "fmt"
-type P struct { signal a string }
+type P struct { sig a string }
 func load() (map[string]P, error) { return map[string]P{"k": {a: "x"}}, nil }
 func main() {
 	m, err := load()
@@ -1224,15 +1224,15 @@ func main() {
 		t.Errorf("多左值 map 索引读写改写失败, got:\n%s", out)
 	}
 	if strings.Contains(out, "0x") {
-		t.Errorf("不得打印函数地址（signal 字段读未改写）, got:\n%s", out)
+		t.Errorf("不得打印函数地址（sig 字段读未改写）, got:\n%s", out)
 	}
 }
 
-// 第十二轮 P2-D：结构体字段容器（map / slice）里的 signal 字段读写真实运行验证。
+// 第十二轮 P2-D：结构体字段容器（map / slice）里的 sig 字段读写真实运行验证。
 func TestIntegrationR12StructFieldContainerIndex(t *testing.T) {
 	src := `package main
 import "fmt"
-type P struct { signal a string }
+type P struct { sig a string }
 type S struct { m map[string]P; ps []P }
 func main() {
 	s := S{m: map[string]P{"k": {a: "x"}}, ps: []P{{a: "p"}}}
@@ -1243,7 +1243,7 @@ func main() {
 `
 	out := runGX(t, src)
 	if !strings.Contains(out, "map x slice p") || !strings.Contains(out, "write y") {
-		t.Errorf("结构体字段容器 signal 读写失败, got:\n%s", out)
+		t.Errorf("结构体字段容器 sig 读写失败, got:\n%s", out)
 	}
 	if strings.Contains(out, "0x") {
 		t.Errorf("不得打印函数地址, got:\n%s", out)
