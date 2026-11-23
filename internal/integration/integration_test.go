@@ -1249,3 +1249,74 @@ func main() {
 		t.Errorf("不得打印函数地址, got:\n%s", out)
 	}
 }
+
+
+// GX 语言层 Context/Provider 端到端：小写 .use()/.provider() 还原为 Go API、
+// Provider 子树隔离、sig 驱动 value 响应式穿透 consumer。对应 examples/jsxapp-context.gx。
+func TestIntegrationContextProvider(t *testing.T) {
+	src := `package main
+
+import (
+    gxscene "github.com/robertpanvip/gox/runtime/scene"
+    "github.com/robertpanvip/gox/runtime/signal"
+    "github.com/robertpanvip/gox/widgets"
+    "fmt"
+)
+
+var scoreCtx = widgets.NewContext[int](0)
+
+// consumer：建树期 .use() 读 context，动态插槽 getter 读取即订阅
+pub func Score(props gxscene.Props) *gxscene.Instance {
+    score := scoreCtx.use()
+    return <b class="score">{score()}</b>
+}
+
+// provider：包一层组件函数，Props 带类型变量后传 .provider()
+pub func ScoreProvider(props gxscene.Props) *gxscene.Instance {
+    p := gxscene.Props{
+        "value": gxscene.Get[int](props, "v"),
+        "children": gxscene.Get[any](props, "children"),
+    }
+    return scoreCtx.provider(p)
+}
+
+pub func Swatch(props gxscene.Props) *gxscene.Instance {
+    accent := widgets.UseToken("accent")
+    return <span class="swatch">{accent()}</span>
+}
+
+func main() {
+    widgets.SetTheme(widgets.LightTheme)
+    sig bonus = 2
+    view := <div id="app">
+        <ScoreProvider v={bonus}><Score/></ScoreProvider>
+        <div class="panel">
+            <widgets.ThemeProvider value={widgets.DarkTheme}>
+                <Swatch/>
+            </widgets.ThemeProvider>
+        </div>
+    </div>
+    view.BindReactive(signal.Effect)
+    fmt.println("INIT", view)
+    bonus = 7
+    fmt.println("CHANGED", view)
+}
+`
+	out := runGX(t, src)
+	// 初始：Score=2，子树主题=DarkTheme accent(#0a84ff)
+	if !strings.Contains(out, "INIT") || !strings.Contains(out, "2") {
+		t.Errorf("初始渲染应含分数 2, got:\n%s", out)
+	}
+	// 子树隔离：ThemeProvider 内 accent 必须是深色 #0a84ff，而非全局浅色 #007aff
+	if !strings.Contains(out, "#0a84ff") {
+		t.Errorf("ThemeProvider 子树应读到 DarkTheme accent #0a84ff, got:\n%s", out)
+	}
+	// 响应式：bonus=7 后 Score 应更新为 7（产物里出现两次分数，CHANGED 段为 7）
+	if !strings.Contains(out, "CHANGED") || !strings.Contains(out, "7") {
+		t.Errorf("bonus=7 后应重绘分数 7, got:\n%s", out)
+	}
+	// 不得打印函数地址（use 未还原会导致快照/地址）
+	if strings.Contains(out, "0x") {
+		t.Errorf("不得打印函数地址, got:\n%s", out)
+	}
+}

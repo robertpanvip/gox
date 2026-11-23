@@ -1,0 +1,85 @@
+// GX 语言层怎么用 Context / Provider / hooks —— 端到端可运行示例。
+// 构建：gox build examples/jsxapp-context.gx -o main.go && go run .
+//
+// 对照 React 心智模型：
+//   - useContext  →  ctx.use()            建树期调用，返回 getter（读取即订阅）
+//   - Provider    →  ctx.provider(props)  子树隔离，嵌套就近覆盖
+//   - Consumer    →  不需要：组件函数本身就是 consumer，直接 ctx.use()
+//   - useState    →  sig n = v
+//   - useMemo     →  Signal.computed(() => ...)
+//   - useEffect   →  Signal.effect(() => {...})
+//
+// 关键点：Context/Provider 是 Go API（widgets 包）在 GX 里的平铺直用，
+// 编译器负责把小写 .use()/.provider() 还原成 .Use()/.Provider()，
+// 并按 Go 包规则注入 import。零新增语法、零后端改动。
+package main
+
+import (
+    gxscene "github.com/robertpanvip/gox/runtime/scene"
+    "github.com/robertpanvip/gox/runtime/signal"
+    "github.com/robertpanvip/gox/widgets"
+    "fmt"
+)
+
+// ── 1. 自定义 Context ─────────────────────────────────────────────
+// GX 顶层用 var（let 只在函数内）；NewContext[int] 泛型调用编译器原样保留。
+var scoreCtx = widgets.NewContext[int](0)
+
+// consumer：建树期读 context，放进动态文本插槽。
+// scoreCtx.use() → 编译产物 scoreCtx.Use()，返回  func() int；
+// 在插槽里写 score()（带括号）才读取并登记依赖，写 score 会成快照。
+pub func Score(props gxscene.Props) *gxscene.Instance {
+    score := scoreCtx.use()
+    return <b class="score">{score()}</b>
+}
+
+// provider：包一层组件函数，把 ctx.Provider 的方法形态封成 JSX 组件。
+// 两个 GX 约定：
+//   1. Props 的 key 用带引号字符串 "value"/"children"——裸标识符会被
+//      transformCompositeFields 当成结构体字段名还原成大写；
+//   2. 先存成 gxscene.Props 带类型变量再传——对象字面量直接作为方法调用
+//      参数时编译器无法推断目标类型（函数形式 open({...}) 可以）。
+pub func ScoreProvider(props gxscene.Props) *gxscene.Instance {
+    p := gxscene.Props{
+        "value":    gxscene.Get[int](props, "v"),
+        "children": gxscene.Get[any](props, "children"),
+    }
+    return scoreCtx.provider(p)
+}
+
+// ── 2. 预制 Theme Context ─────────────────────────────────────────
+// UseToken 返回 getter，作为动态插槽读取当前主题令牌。
+// 子树内读到 ThemeProvider 的 value；子树外读到 SetTheme 的全局默认。
+pub func Swatch(props gxscene.Props) *gxscene.Instance {
+    accent := widgets.UseToken("accent")
+    return <span class="swatch">{accent()}</span>
+}
+
+func main() {
+    // 全局默认主题（无 Provider 处生效）
+    widgets.SetTheme(widgets.LightTheme)
+
+    // sig：源信号；bonus 变化驱动 Provider 的 value，进而驱动子树 consumer。
+    sig bonus = 2
+
+    // ThemeProvider 是包级函数，可直接 JSX 组件形式；子树单独用深色主题。
+    darkPanel := <div class="panel">
+        <widgets.ThemeProvider value={widgets.DarkTheme}>
+            <Swatch/>
+        </widgets.ThemeProvider>
+    </div>
+
+    view := <div id="app">
+        <ScoreProvider v={bonus}>
+            <Score/>
+        </ScoreProvider>
+        {darkPanel}
+    </div>
+
+    // 一行接线：为每个插槽建 effect，sig / context getter 变化精确重绘。
+    view.BindReactive(signal.Effect)
+
+    fmt.Println("初始：", view)
+    bonus = 7 // Score: 2 → 7（Provider value 响应式穿透到 consumer）
+    fmt.Println("bonus=7 后：", view)
+}

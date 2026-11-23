@@ -140,6 +140,25 @@ GX 侧用 `widgets.Canvas(props)` 构建（`ops` 传 `[]canvas.Op`）。两端�
 - 组件把 `UseToken(...)` 作为 `dynAttr` getter 即可随主题切换重绘（demo 底部有深色/浅色切换演示）。需要"一个窗口深色、某个面板浅色"时，用 `ThemeProvider` 包住该子树即可，全局主题不受影响。
 - 既有 `Theme*` 常量（apple_theme.go）保持不变向后兼容；新代码优先用 `UseTheme` 以支持切换。
 
+### 10.1 在 GX 语言里用 Context/Provider
+
+Context/Provider 是 Go API（`widgets` 包），在 `.gx` 源码里平铺直用，编译器按 Go 包规则把小写方法名还原成大写、注入 import，零新增语法。完整可运行示例见 `examples/jsxapp-context.gx`。对照 React：
+
+| React          | GX 写法                                        | 说明 |
+|----------------|------------------------------------------------|------|
+| `useContext`   | `v := ctx.use()`                               | 建树期调用，产物还原为 `ctx.Use()`，返回 getter |
+| `<Provider>`   | `ctx.provider(p)`（包一层组件函数）            | 产物还原为 `ctx.Provider()`，子树隔离 |
+| `Consumer`     | 不需要——组件函数本身就是 consumer             | 函数内 `ctx.use()` 即为读取 |
+| `useState`     | `sig n = 0`                                    | 源信号，写 `n = v` 自动改写为 `n(v)` |
+| `useMemo`      | `Signal.computed(() => ...)`                   | 派生信号 |
+| `useEffect`    | `Signal.effect(() => {...})`                   | 副作用，自动依赖追踪，无 deps 数组 |
+
+两个 GX 约定（踩坑点）：
+
+- **顶层声明用 `var` 不用 `let`**：`var scoreCtx = widgets.NewContext[int](0)`；`let` 只在函数内。泛型调用 `NewContext[int]` 编译器原样保留。
+- **Props 用带引号 key + 带类型变量再传**：`p := gxscene.Props{"value": ..., "children": ...}; ctx.provider(p)`。裸 key（`value:`）会被 `transformCompositeFields` 当成结构体字段名还原成大写；对象字面量直接作为方法调用参数时编译器无法推断目标类型（函数形式 `gxapp.open({...})` 可以，方法形态不行）。包级函数形式的 `ThemeProvider` 可直接写 `<widgets.ThemeProvider value={...}>...</widgets.ThemeProvider>`。
+- 动态插槽里写 `score()`（带括号）才读取并登记依赖；写 `score`（函数值）是快照，不会随 context/sig 更新。
+
 ## 11. 窗口外观配置（无边框 / 透明 / 置顶 / 图标）
 
 `gxapp.WindowConfig` 新增外观字段，两端各自实现：

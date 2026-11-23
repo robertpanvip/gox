@@ -118,9 +118,10 @@ func CurrentTheme() Theme { return themeCtx.Value() }
 // SetTheme 切换主题，所有 UseTheme 消费者重绘。
 func SetTheme(t Theme) { themeCtx.Set(t) }
 
-// ThemeProvider 以声明式组件形式确立子树主题。value 传 Theme（构造时写入）。
-// 主题通道是应用级单例——一个应用同一时刻只有一个生效主题；需要多主题并存的
-// 独立区域请用 NewContext 创建各自的 Context[Theme]。
+// ThemeProvider 以声明式组件形式确立子树主题。value 传 Theme 或 func() Theme /
+// func() any getter（getter 形式随上游 signal 响应式切换）。
+// 语义与 Context.Provider 一致：只作用于自己的子树，嵌套时内层就近覆盖，兄弟
+// 区域互不影响；没有 Provider 的地方回落到 SetTheme 设置的全局默认主题。
 func ThemeProvider(props gxscene.Props) *gxscene.Instance {
 	return themeCtx.Provider(props)
 }
