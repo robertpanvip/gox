@@ -95,3 +95,48 @@ func view(title string) any {
 		}
 	}
 }
+
+// TestCanvasContextLowercaseRestored 验证 GX 侧按规范小写书写命令式 canvas 上下文
+// 调用（el.getContext() / ctx.fillRect() / el.requestAnimationFrame()），完整管线
+// 经 transformExternal 全部还原为首字母大写的 Go 方法。
+func TestCanvasContextLowercaseRestored(t *testing.T) {
+	res, err := Compile(`canvasctx_lower.gx`, `package main
+import gxscene "github.com/robertpanvip/gox/runtime/scene"
+
+func onMount(el *gxscene.Element) {
+	ctx := el.getContext()
+	ctx.setFillStyle("#f00")
+	ctx.fillRect(0, 0, 100, 50)
+	ctx.beginPath()
+	ctx.moveTo(0, 0)
+	ctx.lineTo(100, 50)
+	ctx.stroke()
+	el.requestAnimationFrame(func() { ctx.fillRect(1, 1, 2, 2) })
+}
+
+func view() any {
+	return <canvas ref={onMount} width="200" height="100" />
+}
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := res.GoSource
+	for _, want := range []string{
+		"el.GetContext()", "ctx.SetFillStyle(", "ctx.FillRect(",
+		"ctx.BeginPath()", "ctx.MoveTo(", "ctx.LineTo(", "ctx.Stroke()",
+		"el.RequestAnimationFrame(", "gxscene.OpRef",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("产物应包含 %q, got:\n%s", want, out)
+		}
+	}
+	for _, bad := range []string{
+		"el.getContext()", "ctx.fillRect(", "ctx.setFillStyle(",
+		"el.requestAnimationFrame(",
+	} {
+		if strings.Contains(out, bad) {
+			t.Errorf("小写方法名应被还原，却残留 %q, got:\n%s", bad, out)
+		}
+	}
+}

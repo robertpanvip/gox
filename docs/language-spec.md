@@ -116,6 +116,62 @@ func view() any {
 
 > 节点身份（`NodeID`）只在 host 与后端协议层流转，不通过 `ref` 暴露给业务代码；`Element` 是唯一对外的命令式句柄。
 
+#### `el.getContext()`：命令式 canvas 绘制
+
+对 `Kind="canvas"` 的节点（`<canvas .../>`），`el.getContext()` 返回一个**有状态的 2D 绘制上下文**，可以像 Web canvas 那样命令式绘制，不必手写 `canvas.Encode`。同一节点多次调用返回同一上下文，绘制状态连续。非 canvas 节点 / 已销毁句柄返回 nil。
+
+| GX 写法 | Go 方法 | 语义 |
+|---|---|---|
+| `ctx.setFillStyle(c)` / `setStrokeStyle` / `setLineWidth` | `SetFillStyle` / `SetStrokeStyle` / `SetLineWidth` | 设置后续绘制的样式状态 |
+| `ctx.fillRect(x,y,w,h)` / `strokeRect(...)` | `FillRect` / `StrokeRect` | 填充 / 描边矩形 |
+| `ctx.clearRect(x,y,w,h)` | `ClearRect` | 清空整幅指令（协议无局部擦除原语，语义为整幅重置） |
+| `ctx.beginPath()` / `moveTo` / `lineTo` / `closePath` / `arc` | `BeginPath` / `MoveTo` / `LineTo` / `ClosePath` / `Arc` | 累积路径（`arc` 用贝塞尔近似） |
+| `ctx.stroke()` / `fill()` | `Stroke` / `Fill` | 用当前样式把路径提交为一条 `path` 指令 |
+
+ctx 内部维护一份 `[]canvas.Op`；每次绘制后重新编码写回该节点的 `Props["canvas-ops"]`、记一条 `ChangeSetAttr` 增量、并请求重绘。后端照既有 `canvas-ops` 协议绘制——**wire 协议与两个后端都零改动**。这是立即模式：画了就在，直到被覆盖或 `clearRect`。
+
+```jsx
+func onMount(el *gxscene.Element) {
+    ctx := el.getContext()
+    ctx.setFillStyle("#e11d48")
+    ctx.fillRect(10, 10, 80, 40)
+    ctx.beginPath()
+    ctx.moveTo(0, 0)
+    ctx.lineTo(100, 50)
+    ctx.stroke()
+}
+
+func view() any {
+    return <canvas ref={onMount} width="200" height="100" />
+}
+```
+
+> 注意：`width` / `height` 决定画板布局盒尺寸，指令坐标相对盒子左上角；不写宽高画布是 0×0，画不出东西（见 `runtime/canvas` 协议说明）。
+
+#### `el.requestAnimationFrame(fn)`：下一帧
+
+`el.requestAnimationFrame(fn)`（App 级等价：`app.RequestAnimationFrame(fn)`）登记一个**下一帧回调**：它在下一帧绘制之前执行，回调里画 canvas / 写 signal 的结果当帧可见；回调里再次登记即形成动画循环。
+
+- 队列挂在共享 sink 上，因此在 `build` 期的 `ref` 回调里登记也能入队，不依赖能力注入时序。
+- drain 期间的写回会抑制重绘请求（本帧会画出写回结果），帧末若队列非空则异步预约下一帧——避免同步派发器下动画循环重入自锁。
+- `rafPending` 去抖，高频登记不会堆积帧；单个回调 panic 不影响整帧（与浏览器 rAF 语义一致）。
+
+```jsx
+func onMount(el *gxscene.Element) {
+    var tick func()
+    x := 0
+    tick = func() {
+        x++
+        ctx := el.getContext()
+        ctx.fillRect(float32(x), 0, 2, 2)
+        if x < 120 {
+            el.requestAnimationFrame(tick)
+        }
+    }
+    el.requestAnimationFrame(tick)
+}
+```
+
 ### 3.2 `<For>` 列表
 
 `<For each={xs} key={(item) => ...}>{(item) => ...}</For>` 是 keyed 列表控制器（对齐 SolidJS `<For>`）。`each` 在读 sig 的响应式上下文求值，列表变化时做 keyed diff：同 key 节点复用（移动不重建），删除项销毁其 Owner（级联停止内部 effect / cleanup），重排只调顺序。

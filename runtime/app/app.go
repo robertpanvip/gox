@@ -124,6 +124,12 @@ type App struct {
 	needsFullSync bool              // 上次 Present 失败后置位：下帧要求后端全量重建（Frame 契约）
 	rendered      bool
 
+	// RAF（requestAnimationFrame）调度状态，见 capabilities.go：
+	//   inRAF      drain 回调执行期间置位，抑制其中的重绘请求以避免同步递归；
+	//   rafPending 已预约的下一帧尚未执行，去抖防止动画循环堆积帧。
+	inRAF      atomic.Bool
+	rafPending atomic.Bool
+
 	// ref Element 句柄的异步布局读取：事件回调登记，帧后统一回填（见 capabilities.go）。
 	pendingMu       sync.Mutex
 	pendingMeasures []measureReq
@@ -225,6 +231,10 @@ func (a *App) drawNowErr() error {
 	presenter, useFrame := a.win.(FramePresenter)
 	root := inst.Root()
 
+	// RAF：帧首先行所有已登记的「下一帧」回调（el.requestAnimationFrame）。
+	// 放在 frame 快照之前——回调里命令式写回的 Change 能进本帧增量，本帧即可见。
+	a.drainRAF(inst)
+
 	a.stateMu.Lock()
 	a.frameVersion++
 	frame := &Frame{Root: root, Version: a.frameVersion, FullSync: a.needsFullSync}
@@ -265,6 +275,10 @@ func (a *App) drawNowErr() error {
 	if err == nil {
 		a.flushMeasures()
 	}
+	// RAF 续帧：若上面的回调登记了下一帧，异步预约一帧形成动画循环。
+	// 放在 commit gate 释放后？不能——defer 在函数末尾才释放；schedule 内部
+	// 用 goroutine 派发，会等本帧 unlock 后才真正 Draw，故此处安全。
+	a.scheduleRAFNext(inst)
 	return err
 }
 

@@ -50,19 +50,23 @@ func (i *Instance) SetElementCaps(focus func(NodeID) bool, measure func(NodeID) 
 // GX 侧按小写书写（el.focus() / el.boundingClientRect() / el.measure(...)），
 // 由编译器的 transformExternal 还原为上述首字母大写的方法。
 type Element struct {
-	id   NodeID
-	sink *changeSink
+	id    NodeID
+	sink  *changeSink
+	node  *Node          // 对应场景节点，供命令式写回（如 canvas context）改 Props
+	owner *Instance      // 记录变更所用的实例（按节点发 ChangeSetAttr）
+	ctx   *CanvasContext // getContext 的缓存句柄，同一节点多次调用返回同一上下文
 	// dead 在 ref 收到 nil（Dispose）后置位，之后所有方法变 no-op。
 	dead bool
 }
 
 // newElement 为一个已分配 ID 的节点构造句柄。ID==NoNode 时返回 nil——
 // 编译期保证 ref 挂在真实元素节点上（clone 阶段已分配 ID），这里是防御。
-func newElement(id NodeID, sink *changeSink) *Element {
+// node/owner 仅内部使用，供命令式绘制写回节点 Props 与变更流；不向业务暴露。
+func newElement(id NodeID, sink *changeSink, node *Node, owner *Instance) *Element {
 	if id == NoNode {
 		return nil
 	}
-	return &Element{id: id, sink: sink}
+	return &Element{id: id, sink: sink, node: node, owner: owner}
 }
 
 // caps 读取当前注入的宿主能力。句柄方法在事件回调里调用，此时 Render 已完成、
@@ -134,6 +138,20 @@ func (e *Element) Measure(cb func(w, h float32)) {
 		return
 	}
 	cb(0, 0)
+}
+
+// RequestAnimationFrame 登记一个下一帧回调（Web rAF 语义）。回调在下一帧
+// Draw 之前执行；回调里可继续登记形成动画循环。登记后请求宿主重绘一帧，
+// 保证「下一帧」真的发生（build 期 hook 未注入时由首帧 Render 兜底）。
+// 已销毁句柄忽略。
+//
+// GX 小写写法：el.requestAnimationFrame(fn)
+func (e *Element) RequestAnimationFrame(fn func()) {
+	if e == nil || e.dead || fn == nil || e.sink == nil {
+		return
+	}
+	e.sink.addRAF(fn)
+	e.sink.dirty() // 请求宿主安排下一帧；纯 scene/headless 下 no-op
 }
 
 // disposeRef 把句柄标记为销毁态：之后所有方法 no-op。ref(nil) 由 applyAll 的

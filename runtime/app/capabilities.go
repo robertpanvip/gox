@@ -71,6 +71,72 @@ func (a *App) installElementCaps(inst *gxscene.Instance) {
 	// 需要回填钩子时把 focus/measure 一起注入；没有 Measurer 时 measure 仍注入
 	// （返回 ok=false），Element.BoundingClientRect 得到零矩形——语义一致。
 	inst.SetElementCaps(focus, measure)
+
+	// 命令式写回（CanvasContext / el.requestAnimationFrame）的重绘请求通道。
+	inst.SetDirtyHook(a.requestCAPaintDirty)
+}
+
+// ---- RAF（requestAnimationFrame）帧调度 ----
+
+// drainRAF 在帧首执行所有已登记的「下一帧」回调。放在 Present/Draw 之前，
+// 于是回调里 ctx.fillRect / el.requestAnimationFrame 的效果本帧即可见。
+//
+// inRAF 置位期间抑制回调内部的重绘请求（见 requestCAPaintDirty）：本帧 Drain
+// 后紧接着就 Present，写回已包含在本次绘制里，无需再派发一帧——这也避免在
+// drawNowErr 持 commit gate 时因同步派发而递归重入。
+func (a *App) drainRAF(inst *gxscene.Instance) {
+	if inst == nil {
+		return
+	}
+	// 上一帧的预约已被本次绘制消费，释放去抖标志，使帧末能为下一帧重新预约。
+	// 必须在 drain 回调之前清：InlineDispatcher 下 RequestFrame 同步完成整帧，
+	// 帧末 scheduleRAFNext 就在同一调用栈内，标志此时须为 false。
+	a.rafPending.Store(false)
+	fns := inst.TakeRAF()
+	if len(fns) == 0 {
+		return
+	}
+	a.inRAF.Store(true)
+	for _, fn := range fns {
+		if fn == nil {
+			continue
+		}
+		func() {
+			// 单个回调 panic 不拖垮整帧（与浏览器 rAF 语义一致）。
+			defer func() { _ = recover() }()
+			fn()
+		}()
+	}
+	a.inRAF.Store(false)
+}
+
+// scheduleRAFNext 在帧末检查回调是否登记了下一帧，有则预约一帧。
+// 用 goroutine 异步派发：此时仍在 drawNowErr 的 commit gate 内，同步派发会让
+// InlineDispatcher 立即重入 drawNowErr；异步则等本帧解锁后再画下一帧。
+// rafPending 去抖，防止事件里高频登记 RAF 导致帧堆积。
+func (a *App) scheduleRAFNext(inst *gxscene.Instance) {
+	if inst == nil || a.closed.Load() || !inst.HasRAF() {
+		return
+	}
+	if !a.rafPending.CompareAndSwap(false, true) {
+		return
+	}
+	go func() {
+		if a.closed.Load() {
+			a.rafPending.Store(false)
+			return
+		}
+		a.dispatcher.RequestFrame()
+	}()
+}
+
+// requestCAPaintDirty 是命令式写回（ctx.fillRect / el.requestAnimationFrame）
+// 触发的重绘请求（注入到 sink 的 onDirty）。drain 期间抑制：本帧会画出写回结果。
+func (a *App) requestCAPaintDirty() {
+	if a.closed.Load() || a.inRAF.Load() {
+		return
+	}
+	a.dispatcher.RequestFrame()
 }
 
 // flushMeasures 在一帧 Present/Draw 成功后调用：把挂起的异步布局读取用最新
@@ -115,4 +181,15 @@ func (a *App) Measure(id gxscene.NodeID, cb func(w, h float32)) {
 	a.pendingMu.Lock()
 	a.pendingMeasures = append(a.pendingMeasures, measureReq{id: id, cb: cb})
 	a.pendingMu.Unlock()
+}
+
+// RequestAnimationFrame 登记一个下一帧回调（Web rAF 语义），App 级入口。
+// 等价于在任意拿得到 Element 的地方调 el.requestAnimationFrame——队列挂在
+// 场景树的共享 sink 上，回调在下一帧 Draw 之前执行，可再次登记形成动画循环。
+// Render 之前（inst 为 nil）为 no-op。
+func (a *App) RequestAnimationFrame(fn func()) {
+	if a == nil || fn == nil || a.inst == nil {
+		return
+	}
+	a.inst.RequestAnimationFrame(fn)
 }

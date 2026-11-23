@@ -101,6 +101,99 @@ type changeSink struct {
 	// 把 (NodeID, cb) 登记到这里，gxapp 在下一帧 Present/Draw 后统一回填。
 	// 由 gxapp 注入；未注入时 Element.Measure 直接以零值回调（不悬挂）。
 	afterDraw func(NodeID, func(w, h float32))
+	// onDirty 是命令式写回（如 CanvasContext 改了节点属性）后的重绘请求通道，
+	// 由 gxapp 注入为 app.requestDraw。纯 scene / headless 下为 nil，写回仍落到
+	// 节点与 Change 流，只是不主动请求帧（调用方可自行 Draw）。
+	onDirty func()
+	// rafs 是 requestAnimationFrame 登记的「下一帧」回调。挂 sink 上（而非注入的
+	// 宿主函数）是为绕过时序：ref 回调在 build 期触发、早于任何能力注入，此时
+	// 注册的 raf 也要能进队；gxapp 在每帧 Draw 前 takeRAF 取出执行。
+	rafs []func()
+}
+
+// addRAF 登记一个下一帧回调。
+func (s *changeSink) addRAF(fn func()) {
+	if s == nil || fn == nil {
+		return
+	}
+	s.mu.Lock()
+	s.rafs = append(s.rafs, fn)
+	s.mu.Unlock()
+}
+
+// takeRAF 取走并清空当前所有下一帧回调，保持登记顺序。
+func (s *changeSink) takeRAF() []func() {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	fns := s.rafs
+	s.rafs = nil
+	s.mu.Unlock()
+	return fns
+}
+
+// hasRAF 报告是否还有未执行的下一帧回调。gxapp 在 drain 后据此判断
+// 回调是否登记了下一帧（动画循环），从而决定是否预约再下一帧。
+func (s *changeSink) hasRAF() bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	has := len(s.rafs) > 0
+	s.mu.Unlock()
+	return has
+}
+
+// SetDirtyHook 注入命令式写回后的重绘请求回调（gxapp 用）。传 nil 清空。
+func (i *Instance) SetDirtyHook(fn func()) {
+	if i != nil {
+		i.changes.setDirtyHook(fn)
+	}
+}
+
+// RequestAnimationFrame 登记一个下一帧回调。回调在下一帧 Draw 之前执行，
+// 典型用途是动画：回调里更新画布/信号，再登记下一帧形成循环。
+// 可在 ref 回调（build 期）直接调用——队列挂 sink 上，不依赖能力注入时序。
+func (i *Instance) RequestAnimationFrame(fn func()) {
+	if i != nil {
+		i.changes.addRAF(fn)
+	}
+}
+
+// TakeRAF 取走当前所有下一帧回调（gxapp 每帧 Draw 前调用）。
+func (i *Instance) TakeRAF() []func() {
+	if i != nil {
+		return i.changes.takeRAF()
+	}
+	return nil
+}
+
+// HasRAF 报告是否还有未执行的下一帧回调（动画循环是否登记了下一帧）。
+func (i *Instance) HasRAF() bool {
+	return i != nil && i.changes.hasRAF()
+}
+
+func (s *changeSink) setDirtyHook(fn func()) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.onDirty = fn
+	s.mu.Unlock()
+}
+
+// dirty 在命令式写回后调用：通知宿主请求重绘。回调在锁外执行，避免重入。
+func (s *changeSink) dirty() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	fn := s.onDirty
+	s.mu.Unlock()
+	if fn != nil {
+		fn()
+	}
 }
 
 // SetMeasureHook 注入异步布局回填通道（gxapp 用）。传 nil 清空。

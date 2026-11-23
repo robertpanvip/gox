@@ -829,7 +829,7 @@ func (i *Instance) callRef(s *slot, v any) any {
 	if s.node == nil || v == nil {
 		return nil
 	}
-	elem := newElement(s.node.ID, i.changes)
+	elem := newElement(s.node.ID, i.changes, s.node, i)
 	switch fn := v.(type) {
 	case func(*Element):
 		if elem != nil {
