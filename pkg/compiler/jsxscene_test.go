@@ -989,3 +989,71 @@ func main() {
 		})
 	}
 }
+
+// Issue A1：<For> 渲染体里读"当前函数内"声明的 signal / computed 时，
+// 必须补写 ()（它们是 Signal[T] 函数）。根因是 render body 重新词法化后内部
+// JSX 的 Pos 是假坐标，覆盖了 jsxPos 锚点，导致绑定查询把函数内 signal 误判
+// 为局部遮蔽。修复用 jsxPosLocked 锁定外层真实坐标。
+func TestForBodyRewritesFunctionLocalSignals(t *testing.T) {
+	src := `package main
+type Row struct { id int; name string }
+func main() {
+    signal n = 3
+    let d = Signal.computed(func() int { return 7 })
+    rows := []Row{{1, "a"}}
+    _ = <ul><For each={rows} key={(r) => r.id}>{(r) => <li>{r.name} {n} {d}</li>}</For></ul>
+}
+`
+	res, err := CompileScene("for-local-sig.gx", src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	goSrc := res.GoSource
+	// 函数内 signal / computed 必须补 ()；item 字段 r.name 必须补 ()；key 的 r.id 正常。
+	for _, want := range []string{
+		"func() any{ return n() }",
+		"func() any{ return d() }",
+		"func() any{ return r().name }",
+		"func(r Row) any { return r.id }",
+	} {
+		if !strings.Contains(goSrc, want) {
+			t.Errorf("产物应包含 %q, got:\n%s", want, goSrc)
+		}
+	}
+	// 绝不能出现把 Signal 本体塞进文本的形态。
+	for _, bad := range []string{
+		"func() any{ return n }",
+		"func() any{ return d }",
+		"func() any{ return r.name }",
+	} {
+		if strings.Contains(goSrc, bad) {
+			t.Errorf("产物不应包含 %q, got:\n%s", bad, goSrc)
+		}
+	}
+}
+
+// A1 守护：包级 signal 在 For 里、if 块里函数内 signal 的改写不受本次修复影响。
+func TestForBodySignalRewriteNoRegression(t *testing.T) {
+	src := `package main
+type Row struct { id int; name string }
+signal total = 10
+func main() {
+    signal n = 1
+    rows := []Row{{1, "a"}}
+    _ = <ul><For each={rows}>{(r) => <li>{total} {n}</li>}</For></ul>
+    _ = <div>{n}</div>
+}
+`
+	res, err := CompileScene("for-regress.gx", src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 包级 signal（For 内）、函数内 signal（For 内 + 普通 JSX 内）都应补 ()。
+	count := strings.Count(res.GoSource, "func() any{ return n() }")
+	if count < 2 {
+		t.Errorf("函数内 signal 在 For 与普通 JSX 内都应补 (), got %d 处:\n%s", count, res.GoSource)
+	}
+	if !strings.Contains(res.GoSource, "func() any{ return total() }") {
+		t.Errorf("包级 signal 应补 (), got:\n%s", res.GoSource)
+	}
+}

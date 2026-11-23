@@ -47,6 +47,11 @@ type jsxSceneCtx struct {
 	// 该参数是 item getter（func() T），render body 里对它的读取须补写成 u()，
 	// 才能让子树 getter 登记对 item signal 的依赖。仅 render body 生成期间非空。
 	forItemParam string
+	// jsxPosLocked: 为真时 transformJSXScene 不更新 jsxPos。<For> render body 是
+	// 重新词法化的独立片段，其内部 JSX 的 Pos 是相对假坐标（Index 很小），若覆盖
+	// jsxPos 会让插值里的函数内 signal 绑定查询落空（A1：列表显示函数地址）。
+	// 生成 render body 期间锁定，强制用外层 <For> 的真实绝对坐标作锚点。
+	jsxPosLocked bool
 	// signalFields: struct signal 字段表（类型名 → signal 字段名集合）。
 	// item 逃逸检测用它区分：props 字段是 signal 字段时本身保鲜，无需回退值快照。
 	signalFields signalFieldTable
@@ -718,11 +723,19 @@ func forTokens(n *jsxNode, ctx *jsxSceneCtx) []Token {
 	// 非逃逸时设置 forItemParam 让插值里的 u.name → u().name；保存旧值以支持嵌套 For。
 	// 逃逸时保持 forItemParam 不变，u.name 保持值快照语义。
 	oldItemParam := ctx.forItemParam
+	oldLocked := ctx.jsxPosLocked
 	if !escaped {
 		ctx.forItemParam = paramName
 	}
 	bodyToks := New(rBody).AllTokens()
+	// rBody 来自重新词法化的片段，其内部 JSX 的 Pos 是相对假坐标（Index 很小）。
+	// 锁定 jsxPos 强制用外层 <For> 的真实绝对坐标作锚点，否则 {n}/{d} 等插值查
+	// 绑定表时落在文件开头，函数内 signal 被误判为局部遮蔽而不补 ()——列表里
+	// 显示成函数地址（A1）。item 参数 r 仍由 forItemParam 正常识别，不受影响。
+	// 保存/恢复旧锁值以支持嵌套 For（内层结束时不能解锁外层）。
+	ctx.jsxPosLocked = true
 	bodyToks = transformJSXScene(bodyToks, ctx)
+	ctx.jsxPosLocked = oldLocked
 	ctx.forItemParam = oldItemParam
 	for _, t := range bodyToks {
 		if t.Kind == EOF {
@@ -1036,7 +1049,11 @@ func transformJSXScene(in []Token, ctx *jsxSceneCtx) []Token {
 		t := in[i]
 		if t.Kind == JSX {
 			// 记录根 JSX token 的绝对位置，供内部节点（如嵌套 <For>）查询绑定表。
-			ctx.jsxPos = t.Pos
+			// 锁定期间（<For> render body 的重新词法化片段）保留外层锚点——内部
+			// JSX 的 Pos 是相对假坐标，覆盖后插值里的函数内 signal 绑定查询会落空。
+			if !ctx.jsxPosLocked {
+				ctx.jsxPos = t.Pos
+			}
 			parser := newJSXParser(t.Text, t.Pos)
 			node := parser.parseElement()
 			out = append(out, genSceneExpr(node, ctx)...)
