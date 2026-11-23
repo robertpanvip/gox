@@ -28,6 +28,20 @@ type layoutBox struct {
 // layoutCache 把一次布局的结果按节点缓存，供 painter 绘制时 O(1) 查询。
 type layoutCache map[*gxscene.Node]layoutBox
 
+// measuredFromLayout 把一次布局结果导出为回流尺寸（后端 → Host → 组件）。
+// 用节点稳定 ID 作键，W/H 取 Yoga 算出的最终布局宽高。节点未分配 ID（NoNode）
+// 的跳过——它们通常是模板骨架，且无法被组件按 ID 订阅。
+func measuredFromLayout(cache layoutCache) []gxscene.Measured {
+	out := make([]gxscene.Measured, 0, len(cache))
+	for n, box := range cache {
+		if n == nil || n.ID == gxscene.NoNode {
+			continue
+		}
+		out = append(out, gxscene.Measured{ID: n.ID, W: float64(box.W), H: float64(box.H)})
+	}
+	return out
+}
+
 // clipRect 从 layoutBox 提取裁剪矩形。
 func (b layoutBox) clipRect() layoutBox {
 	return layoutBox{X: b.ClipX, Y: b.ClipY, W: b.ClipW, H: b.ClipH, HasClip: b.HasClip}

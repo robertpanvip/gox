@@ -32,6 +32,8 @@ import "C"
 import (
 	"encoding/json"
 	"unsafe"
+
+	gxscene "github.com/robertpanvip/gox/runtime/scene"
 )
 
 //export goEventBridge
@@ -39,6 +41,13 @@ func goEventBridge(jsonPtr *C.char, ctx unsafe.Pointer) {
 	s := C.GoString(jsonPtr)
 	var ev inputEvent
 	if err := json.Unmarshal([]byte(s), &ev); err != nil {
+		return
+	}
+	// 布局回流事件：不进业务 events 通道，直接发布到 scene 回流总线。
+	// 回调会写 signal → requestDraw，经 UIExecutorDispatcher 投递到 UI 线程，
+	// 不会在本回调（Rust 事件线程）里重入 Draw。
+	if ev.Kind == "measured" {
+		publishMeasuredWire(ev.Text)
 		return
 	}
 	windowsMu.Lock()
@@ -50,6 +59,32 @@ func goEventBridge(jsonPtr *C.char, ctx unsafe.Pointer) {
 		default: // 满则丢弃，不阻塞 Rust 事件循环
 		}
 	}
+}
+
+// publishMeasuredWire 解析 Rust 的 [[id, w, h], ...] 并发布到 scene 回流总线。
+func publishMeasuredWire(text string) {
+	var rows [][3]any
+	if err := json.Unmarshal([]byte(text), &rows); err != nil {
+		return
+	}
+	ms := make([]gxscene.Measured, 0, len(rows))
+	for _, r := range rows {
+		id, ok := r[0].(string)
+		if !ok || id == "" {
+			continue
+		}
+		w, wok := r[1].(float64)
+		h, hok := r[2].(float64)
+		if !wok || !hok {
+			continue
+		}
+		ms = append(ms, gxscene.Measured{
+			ID: gxscene.ParseNodeID(id),
+			W:  w,
+			H:  h,
+		})
+	}
+	gxscene.PublishMeasured(ms)
 }
 
 // ---- C 调用的 Go 封装（window.go 只用这些，不直接 import "C"）----

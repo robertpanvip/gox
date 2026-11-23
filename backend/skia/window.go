@@ -88,13 +88,14 @@ func (w *Window) Open(cfg gxapp.WindowConfig) error {
 // 经帧缓存编排：内容无变化时整帧复用，有变化时只重绘脏矩形区域。
 func (w *Window) Draw(root *gxscene.Node) error {
 	w.mu.Lock()
-	defer w.mu.Unlock()
 	if w.canvas.IsNil() {
+		w.mu.Unlock()
 		return fmt.Errorf("skia: 未 Open，无法 Draw")
 	}
 	w.log = nil
 	w.hits = nil
 	if root == nil {
+		w.mu.Unlock()
 		return nil
 	}
 
@@ -108,6 +109,12 @@ func (w *Window) Draw(root *gxscene.Node) error {
 		w.log, w.hits = renderCached(&w.cache, w.canvas, root, float32(w.width), float32(w.height), w.fonts)
 	}
 	w.frames++
+	// 快照回流数据，锁外投递：PublishMeasured 的回调会写 signal → 触发重绘，
+	// 若在锁内执行会重入 Draw 自锁（InlineDispatcher 同步执行）。
+	measured := append([]gxscene.Measured(nil), w.cache.lastMeasured...)
+	w.mu.Unlock()
+
+	gxscene.PublishMeasured(measured)
 	return nil
 }
 
@@ -189,6 +196,8 @@ func PaintTo(canvas sk.Canvas, width, height float32, root *gxscene.Node, fonts 
 	p := &painter{canvas: canvas, width: width, height: height, fonts: fonts, log: &log, hits: &hits}
 	canvas.Clear(sk.ColorSetARGB(255, 255, 255, 255))
 	p.paintFrame(root, width, height)
+	// 回流实测尺寸（无窗口锁，可同步投递）。
+	gxscene.PublishMeasured(measuredFromLayout(p.layout))
 	return log, hits
 }
 
@@ -202,5 +211,8 @@ func PaintToCached(cache *FrameCache, canvas sk.Canvas, width, height float32, r
 	if cache == nil {
 		return PaintTo(canvas, width, height, root, fonts)
 	}
-	return renderCached(cache, canvas, root, width, height, fonts)
+	log, hits := renderCached(cache, canvas, root, width, height, fonts)
+	// 回流实测尺寸（无窗口锁，可同步投递）。
+	gxscene.PublishMeasured(cache.lastMeasured)
+	return log, hits
 }

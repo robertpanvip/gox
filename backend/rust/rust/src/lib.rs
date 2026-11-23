@@ -256,6 +256,20 @@ impl winit::application::ApplicationHandler for WinitApp<'_> {
                 }
                 let t_pre_render = if self.probe { Some(std::time::Instant::now()) } else { None };
                 renderer.render();
+                // 回流实测尺寸：把本帧布局结果经事件回调送回 Host，供虚拟列表按
+                // node_id 订阅并修正 offsets/锚定。text 承载紧凑 JSON 数组。
+                let measured = renderer.take_measured();
+                if !measured.is_empty() {
+                    let ev = protocol::InputEvent {
+                        kind: "measured".into(),
+                        node_id: String::new(),
+                        event: String::new(),
+                        text: serde_json::to_string(&measured).unwrap_or_default(),
+                        x: 0.0,
+                        y: 0.0,
+                    };
+                    fire(&self.cb, &self.cb_ctx, &ev.to_json());
+                }
                 if self.probe && !self.first_frame_done {
                     self.first_frame_done = true;
                     let t_first = std::time::Instant::now();

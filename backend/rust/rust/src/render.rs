@@ -373,6 +373,9 @@ fn scrollbar_geometry(
 struct DisplayList {
     shapes: Vec<ShapeDraw>,
     texts: Vec<TextDraw>,
+    /// 布局回流：每个节点的 (id, w, h)，emit 时按 Taffy 结果收集，
+    /// 渲染后经 eventCb 送回 Host，供虚拟列表等组件按 node_id 订阅实测高度。
+    measured: Vec<(String, f32, f32)>,
     /// 需要显示滚动条的容器几何（由 emit 计算内容高度后生成）
     scrollbars: Vec<ScrollBar>,
     /// (x, y, w, h, node_id, event, is_overlay, clip)
@@ -383,7 +386,7 @@ struct DisplayList {
 
 impl DisplayList {
     fn new() -> Self {
-        DisplayList { shapes: vec![], texts: vec![], scrollbars: vec![], hitboxes: vec![], inputs: vec![] }
+        DisplayList { shapes: vec![], texts: vec![], measured: vec![], scrollbars: vec![], hitboxes: vec![], inputs: vec![] }
     }
     /// 把镜像场景树编译成绘制指令。
     /// 布局交给 Taffy 0.5（完整 Flexbox 引擎）——
@@ -615,6 +618,12 @@ impl DisplayList {
                 w = avail_w; h = avail_h; // 遮罩覆盖整个画布
             }
 
+            // 回流实测尺寸：按稳定 node.id 上报最终布局宽高。虚拟列表等组件
+            // 按 item 根节点 ID 订阅，据此修正 offsets 与锚定（对齐 virtua）。
+            if !node.id.is_empty() {
+                dl.measured.push((node.id.clone(), w, h));
+            }
+
             // overflow 容器：本节点矩形成为子树的新裁剪边界；子树坐标减 scroll 偏移。
             let st = crate::style::parse_style(node);
             let my_clip = if node.typ == NodeType::Div && st.overflow != crate::style::Overflow::Visible {
@@ -768,6 +777,8 @@ pub struct Renderer {
     bg: (u8, u8, u8),
     /// 最近一次 DisplayList（供命中测试）
     display: DisplayList,
+    /// 最近一次布局导出的实测尺寸，待渲染后经 eventCb 回传 Host（回流）。
+    pending_measured: Vec<(String, f32, f32)>,
     /// transition 插值引擎（跨帧持有动画状态）
     animator: crate::style::Animator,
     /// 动画时钟原点
@@ -935,6 +946,7 @@ struct VSOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f };
             scene: None,
             bg: (11, 16, 32),
             display: DisplayList::new(),
+            pending_measured: vec![],
             animator: crate::style::Animator::new(),
             anim_origin: std::time::Instant::now(),
             scrollbar_alpha: 0.0,
@@ -985,6 +997,11 @@ struct VSOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f };
 
     pub fn cursor(&self) -> (f32, f32) {
         self.cursor
+    }
+
+    /// 取走本帧布局导出的实测尺寸（回流到 Host）。取后清空，避免重复回传。
+    pub fn take_measured(&mut self) -> Vec<(String, f32, f32)> {
+        std::mem::take(&mut self.pending_measured)
     }
 
     /// 按 object-fit 把图片绘制进 (rx,ry,rw,rh)，radius>0 时用圆角 Mask 裁剪。
@@ -1187,6 +1204,8 @@ struct VSOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f };
             self.scrollbar_alpha = target_alpha;
 
             self.display = dl.clone();
+            // 导出本帧实测尺寸供回流（无变化帧沿用上一帧，PublishMeasured 会去重）。
+            self.pending_measured = dl.measured.clone();
             self.paint_shapes(&dl, bg);
 
             // 字形增量复用（按稳定 node_id）：
@@ -1420,6 +1439,15 @@ mod scrollbar_tests {
             typ: NodeType::Div, kind: "div".into(), id: "vp".into(), text: String::new(),
             props, events: vec![], children: kids,
         }
+    }
+
+    #[test]
+    fn from_scene_collects_measured() {
+        let dl = DisplayList::from_scene(&overflow_scene(0.0), 800.0, 600.0);
+        // 回流应覆盖容器 + 5 个 item（非空 id 的节点）。
+        assert_eq!(dl.measured.len(), 6, "应为 vp + 5 items 收集实测尺寸: {:?}", dl.measured);
+        let item0 = dl.measured.iter().find(|(id, _, _)| id == "item0").expect("item0 应在回流里");
+        assert!((item0.2 - 100.0).abs() < 0.5, "item0 实测高度应约 100，实际 {}", item0.2);
     }
 
     #[test]

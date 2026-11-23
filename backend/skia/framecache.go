@@ -159,6 +159,11 @@ type FrameCache struct {
 	hits    []HitBox    // 上一帧命中盒（整帧复用时返回）
 	paints  int         // 实际发生重绘的帧数（观测指标）
 	reuses  int         // 整帧复用的帧数（观测指标）
+
+	// lastMeasured 是最近一次真实布局导出的尺寸回流（node ID → W/H）。
+	// 由 renderCached 在布局后填入，Window.Draw 在释放 canvas 锁后投递给 Host，
+	// 避免 PublishMeasured 回调写 signal → 重入 Draw 造成锁互等。
+	lastMeasured []gxscene.Measured
 }
 
 // shouldReuse 判断本帧能否整体复用上一帧：根/尺寸不变且内容快照一致。
@@ -344,6 +349,8 @@ func renderCached(c *FrameCache, canvas sk.Canvas, root *gxscene.Node, w, h floa
 
 	// 有变化：全量重算布局（flex 局部变化会影响兄弟，无法只算子树）。
 	newLayout := computeLayout(root, w, h, skiaFontMeasurer())
+	// 导出本帧实测尺寸供组件回流（整帧复用帧沿用上一帧值，无需重发）。
+	c.lastMeasured = measuredFromLayout(newLayout)
 
 	p := &painter{canvas: canvas, width: w, height: h, fonts: fonts, log: &log, hits: &hits, layout: newLayout}
 

@@ -296,7 +296,26 @@ Host 是变化驱动的（signal→effect→Draw），无变化时不会请求�
 - 内部维护前缀和 `offsets[i] = 前 i 项累计高度`，用二分查找把 `scrollTop` 映射到 item 索引；spacer 高度 = 可见首项之前的累计高度 `offsets[first]`。
 - `scrollTop` 与 `height(i)` 依赖的数据每次求值时重算 offsets（O(n)，count 通常几千可忽略），保证数据变化即时生效。
 - 未提供 `height` 时完全退回原等高路径，零开销、向后兼容（Table 等现有调用方不受影响）。
-- 高度来源当前为**显式 `height(i)`**（精确、无跳动）。后端测量回填的钩子（`x-measure`）留待后续版本：打通"后端布局实测 → 事件回流 → offsets 修正"闭环后才能支持不传 height 的自动测量模式。
+- **两种高度来源**：传 `height(i)` 走显式模式（精确、零回流）；不传则启用**自动测量**——由后端把每项真实高度回流，调用方无需预知内容高度（多行文本/图片）。
+
+**布局回流协议（Backend → Host → Component，additive）**：自动测量的数据通道。
+
+- 类型 `gxscene.Measured{ID, W, H}` + 总线（`runtime/scene/measure.go`）：后端布局后 `PublishMeasured([]Measured)`，组件按 `NodeID` `SubscribeMeasured`。0.5px 内去重，尺寸稳定后自然停——这是防环收敛条件。
+- **Skia**（`backend/skia`）：`renderCached` 从 `layoutCache` 导出 `(node.ID, W, H)`，`Window.Draw` 在释放 canvas 锁后投递（回调会写 signal 触发重绘，锁内会自锁）；`PaintTo`/`PaintToCached` 同步投递。
+- **Rust**（`backend/rust`）：`emit()` 按 Taffy 结果收集 `(node.id, w, h)` 到 `DisplayList.measured`，`render()` 后经 `eventCb` 以 `kind="measured"`、`text=[[id,w,h],...]` 回传；Go 侧 `goEventBridge` 识别该 kind，直接 `PublishMeasured`（走 UIExecutor 投递，不重入 Draw）。
+- **虚拟列表消费**：`render(index)` 里订阅该项根节点 ID（For 的 per-item Owner 下 `signal.OnCleanup` 负责滚出窗口时退订）；实测高度写入 `measured[index]` → offsets 重算 → 版本 signal 驱动窗口重绘。
+
+**锚定补偿（对齐 `virtua/src/core/store.ts` 的 `ACTION_ITEM_RESIZE`）**：
+
+```
+anchor := 当前视口顶部项;  oldOff := offsets[anchor]
+measured[index] = 真实高度   // → offsets 重算
+jump += offsets[anchor] - oldOff   // 视口上方项变高 → 补偿，视觉不动
+```
+
+- 只有落在锚点之前的项变高才改变 `offsets[anchor]`，offset 差天然表达了 virtua 的 `shouldKeep` 判定。
+- `jump` 经可选 `on-scroll: func(float64)` 写回外部 `scrollTop` 并清零（等价于 virtua 的 `_flushJump`），避免回顶时残留偏移；未提供时退化为内部累积，回顶可能有少量偏差（已知边界）。
+- `resetMeasurements` 仅测试用；生产环境由各订阅者退订逐项清理。
 
 **苹果风格滚动条（Rust 后端）**：`overflow: scroll/auto` 容器在内容高度超过视口时显示 overlay 滚动条：
 
