@@ -169,6 +169,10 @@ StringPool 编码与 v1 相同（`u16 长度 + 字节`）。
 - **回退路径**：仅当 Change.Value 既非 `*Node`、又无法从 root 按 id 定位子树时才回退 GRX1 全量（防御性，正常 host 变更不触发）。
 - **事件回传**：Rust → Go 仍走 JSON（`InputEvent`，事件低频，JSON 的解析开销可忽略）。
 
+### 样式属性（零协议改动）
+
+所有样式都走 Props 全量透传，新属性无需改本协议编码。`position:absolute`/inset、`overflow`/`scroll-top`（虚拟滚动容器）、`transition`（后端有状态插值）、`box-shadow`、`transform`、`opacity` 的完整语义与两端一致性约定见 [docs/STYLE.md](../../docs/STYLE.md)。
+
 ### C ABI（不变）
 
 两个协议共用同一入口，Rust 通过 magic 自动分辨 v1/v2：

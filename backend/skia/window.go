@@ -3,6 +3,7 @@ package skia
 import (
 	"fmt"
 	"sync"
+	"time"
 
 	sk "github.com/pekim/go-skia"
 	gxapp "github.com/robertpanvip/gox/runtime/app"
@@ -36,6 +37,8 @@ type Window struct {
 	log DrawLog
 	// hits 记录最近一帧每个节点的屏幕矩形，供真实窗口后端命中测试。
 	hits []HitBox
+	// anim 是 transition 插值引擎；跨帧持有动画状态。
+	anim *Animator
 }
 
 var _ gxapp.Window = (*Window)(nil) // 编译期断言：满足 host 后端契约
@@ -74,6 +77,7 @@ func (w *Window) Open(cfg gxapp.WindowConfig) error {
 	w.cfg = cfg
 	w.fonts = make(map[int]sk.Font)
 	w.log = nil
+	w.anim = NewAnimator()
 	return nil
 }
 
@@ -99,7 +103,14 @@ func (w *Window) Draw(root *gxscene.Node) error {
 		hits:   &w.hits,
 	}
 	w.canvas.Clear(sk.ColorSetARGB(255, 255, 255, 255))
-	p.paintFrame(root, float32(w.width), float32(w.height))
+	// transition：应用本帧动画覆盖（临时写 props），绘制后恢复，避免污染 host 树。
+	if w.anim != nil {
+		restore := w.anim.apply(root, time.Now())
+		p.paintFrame(root, float32(w.width), float32(w.height))
+		restore()
+	} else {
+		p.paintFrame(root, float32(w.width), float32(w.height))
+	}
 	w.frames++
 	return nil
 }

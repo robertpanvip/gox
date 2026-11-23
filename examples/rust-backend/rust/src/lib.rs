@@ -16,6 +16,7 @@ mod binprotocol;
 mod protocol;
 mod render;
 mod scene;
+mod style;
 
 use render::Renderer;
 use std::ffi::CString;

@@ -504,6 +504,17 @@ func Col(props gxscene.Props) *gxscene.Instance {
 	return flexBox(props, "column")
 }
 
+// flexStyleKeys 是 Col/Row 额外透传给后端的通用样式属性（静态值）。
+// 这样预制容器也能用 bg / shadow / absolute / overflow 等新样式，
+// 而不必为每个属性改组件 API——属性名与后端 style.go 约定一致。
+var flexStyleKeys = []string{
+	"bg", "background", "height", "padding", "border-radius", "border", "border-width",
+	"color", "font-size", "weight", "opacity",
+	"box-shadow", "transition", "transform",
+	"position", "top", "right", "bottom", "left",
+	"overflow", "scroll-top", "scroll-left", "flex-wrap", "align-content", "row-gap", "column-gap",
+}
+
 func flexBox(props gxscene.Props, dir string) *gxscene.Instance {
 	gap := gxscene.Get[string](props, "gap")
 	align := gxscene.Get[string](props, "align")
@@ -524,8 +535,34 @@ func flexBox(props gxscene.Props, dir string) *gxscene.Instance {
 	if w := width(); w != "" {
 		ops = append(ops, attr("width", w))
 	}
+	// 透传其它静态样式属性（值转字符串；getter 在组件构建期求值一次）。
+	for _, k := range flexStyleKeys {
+		if v, ok := props[k]; ok {
+			if s, ok := propToStyleString(v); ok && s != "" {
+				ops = append(ops, attr(k, s))
+			}
+		}
+	}
 	ops = append(ops, dynChild(0), closeEl())
 	return gxscene.Render(gxscene.Template{Ops: ops, N: 1},
 		func() any { return children() },
 	)
+}
+
+// propToStyleString 把静态标量转成样式字符串；getter/复合类型跳过。
+func propToStyleString(v any) (string, bool) {
+	switch x := v.(type) {
+	case string:
+		return x, true
+	case int:
+		return fmt.Sprintf("%d", x), true
+	case int64:
+		return fmt.Sprintf("%d", x), true
+	case float64:
+		return strconv.FormatFloat(x, 'g', -1, 64), true
+	case float32:
+		return strconv.FormatFloat(float64(x), 'g', -1, 32), true
+	default:
+		return "", false
+	}
 }

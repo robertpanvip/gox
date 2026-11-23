@@ -16,12 +16,33 @@ import (
 // 不碰核心的前提下，把纵向流式布局替换成完整的 Flexbox 引擎。
 
 // layoutBox 是一个节点经 Yoga 计算出的绝对矩形（相对画布左上角，左上角原点）。
+// X/Y 已包含祖先 overflow 容器的滚动偏移（子节点坐标 = 原坐标 - scroll）。
+// Clip* 是继承到的最近 overflow 裁剪矩形，HasClip=false 表示不裁剪。
 type layoutBox struct {
-	X, Y, W, H float32
+	X, Y, W, H         float32
+	ClipX, ClipY       float32
+	ClipW, ClipH       float32
+	HasClip            bool
 }
 
 // layoutCache 把一次布局的结果按节点缓存，供 painter 绘制时 O(1) 查询。
 type layoutCache map[*gxscene.Node]layoutBox
+
+// clipRect 从 layoutBox 提取裁剪矩形。
+func (b layoutBox) clipRect() layoutBox {
+	return layoutBox{X: b.ClipX, Y: b.ClipY, W: b.ClipW, H: b.ClipH, HasClip: b.HasClip}
+}
+
+// contains 报告点是否落在（可能被裁剪的）矩形内。
+func (b layoutBox) visibleContains(px, py float32) bool {
+	if px < b.X || px > b.X+b.W || py < b.Y || py > b.Y+b.H {
+		return false
+	}
+	if b.HasClip && (px < b.ClipX || px > b.ClipX+b.ClipW || py < b.ClipY || py > b.ClipY+b.ClipH) {
+		return false
+	}
+	return true
+}
 
 // fontMeasurer 抽象文本测宽，便于测试注入；生产实现走 Skia Font.MeasureText。
 type fontMeasurer func(text string, fontSize int, bold bool) (width float32)
@@ -36,6 +57,25 @@ func skiaMeasureFunc(text string, fontSize int, bold bool, measure fontMeasurer)
 		return yoga.Size{Width: w, Height: h}
 	}
 }
+
+// setYogaInset 把四边 inset 映射到 Yoga Edge。NaN(auto) 跳过。
+// absolute 节点未设置的边保持 auto（由 Yoga 按内容/静态位置推断）。
+func setYogaInset(yn *yoga.Node, in edges) {
+	if !isNaN(in[0]) {
+		yn.SetPosition(yoga.EdgeTop, in[0])
+	}
+	if !isNaN(in[1]) {
+		yn.SetPosition(yoga.EdgeRight, in[1])
+	}
+	if !isNaN(in[2]) {
+		yn.SetPosition(yoga.EdgeBottom, in[2])
+	}
+	if !isNaN(in[3]) {
+		yn.SetPosition(yoga.EdgeLeft, in[3])
+	}
+}
+
+func isNaN(v float32) bool { return v != v }
 
 // yogaDirection 把后端的 flex-direction 语义映射到 Yoga 枚举。
 // 默认（含未识别值）回落到 column，兼容历史纵向布局。
@@ -151,6 +191,15 @@ func buildYogaTree(n *gxscene.Node, measure fontMeasurer, inherited textStyle) (
 	default:
 		// 元素容器：按样式设置 flex 属性。
 		s := parseStyle(n.Props)
+		// absolute 脱离父 flex 流：
+		//  - 浮层/遮罩（gx-role）由第二遍按锚点矩形单独定位，此处只声明 absolute；
+		//  - 通用 position:absolute 用 top/right/bottom/left inset，相对直接父节点 content box。
+		// 两者不冲突：浮层优先走锚点逻辑，inset 作为其"未命中锚点"时的回落。
+		if isOverlay(n) || s.position == positionAbsolute {
+			yn.SetPositionType(yoga.PositionTypeAbsolute)
+			// inset：Yoga 的 Edge 语义与 CSS 一致。NaN(auto) 不设置。
+			setYogaInset(yn, s.inset)
+		}
 		yn.SetFlexDirection(yogaDirection(s.direction))
 		yn.SetJustifyContent(yogaJustify(s.justify))
 		yn.SetAlignItems(yogaAlign(s.align))
@@ -209,29 +258,119 @@ func computeLayout(root *gxscene.Node, availW, availH float32, measure fontMeasu
 	yn.CalculateLayout(availW, availH, yoga.DirectionLTR)
 
 	// Yoga 的 LayoutLeft/Top 是相对父节点的坐标；painter 需要画布绝对坐标。
-	// 递归累加父偏移，把相对坐标换算成绝对坐标后回填缓存。
-	var walk func(scene *gxscene.Node, yn *yoga.Node, ox, oy float32)
-	walk = func(scene *gxscene.Node, yn *yoga.Node, ox, oy float32) {
+	// 递归累加父偏移换算成绝对坐标。overflow 容器：其子树坐标减去 scroll 偏移，
+	// 并把容器矩形作为裁剪矩形向下传递（绘制 clip 与命中共用）。
+	var walk func(scene *gxscene.Node, yn *yoga.Node, ox, oy float32, clip layoutBox)
+	walk = func(scene *gxscene.Node, yn *yoga.Node, ox, oy float32, clip layoutBox) {
 		if scene == nil || yn == nil {
 			return
 		}
 		ax := ox + yn.LayoutLeft()
 		ay := oy + yn.LayoutTop()
-		cache[scene] = layoutBox{
-			X: ax, Y: ay,
-			W: yn.LayoutWidth(),
-			H: yn.LayoutHeight(),
+		box := layoutBox{
+			X: ax, Y: ay, W: yn.LayoutWidth(), H: yn.LayoutHeight(),
 		}
+		// 继承祖先裁剪矩形。
+		if clip.HasClip {
+			box.ClipX, box.ClipY, box.ClipW, box.ClipH, box.HasClip =
+				clip.X, clip.Y, clip.W, clip.H, true
+		}
+
+		childOx, childOy := ax, ay
+		childClip := box.clipRect()
+		if scene.Type == gxscene.NodeDiv {
+			s := parseStyle(scene.Props)
+			if s.overflow != overflowVisible {
+				// 容器自身被祖先裁剪（上面已继承）；它同时成为子树的新裁剪边界。
+				box.HasClip = true
+				box.ClipX, box.ClipY, box.ClipW, box.ClipH = ax, ay, box.W, box.H
+				childClip = box.clipRect()
+				// 滚动偏移：子树坐标整体反向平移。
+				childOx -= s.scrollLeft
+				childOy -= s.scrollTop
+			}
+		}
+		cache[scene] = box
+
 		// 文本节点在 buildYogaTree 里没有建 yoga 子节点，跳过其 children。
 		if scene.Type == gxscene.NodeText {
 			return
 		}
 		for i, c := range scene.Children {
-			walk(c, yn.ChildAt(i), ax, ay)
+			walk(c, yn.ChildAt(i), childOx, childOy, childClip)
 		}
 	}
-	walk(root, yn, 0, 0)
+	walk(root, yn, 0, 0, layoutBox{})
+
+	// 第二遍：浮层定位。主树里浮层已设 absolute（不占流），但 Yoga 给它们的
+	// 坐标是相对父节点的初始值，不符合"贴锚点"语义。这里重新按锚点矩形计算：
+	//   1) 收集锚点（gx-anchor-id）与浮层（gx-role=popover/scrim）；
+	//   2) 浮层自身内容尺寸从主布局结果读（absolute 节点已被 Yoga 测量）；
+	//   3) 按 placement + offset 算出绝对坐标，回填浮层及其整棵子树。
+	layoutOverlays(root, cache, measure, availW, availH)
 	return cache
+}
+
+// layoutOverlays 对每棵浮层子树做二次定位，结果写回 cache。
+func layoutOverlays(root *gxscene.Node, cache layoutCache, measure fontMeasurer, availW, availH float32) {
+	anchors := make(map[string]*gxscene.Node)
+	collectAnchors(root, anchors)
+	var overlays []*gxscene.Node
+	collectOverlays(root, &overlays)
+
+	for _, ov := range overlays {
+		box := cache[ov] // absolute 节点在主布局中已被测量尺寸
+		if isScrim(ov) {
+			// 遮罩铺满画布，层级由绘制顺序保证（在浮层之前、普通内容之后）。
+			cache[ov] = layoutBox{X: 0, Y: 0, W: availW, H: availH}
+			continue
+		}
+		if !isPopover(ov) {
+			continue
+		}
+		var x, y float32
+		if anchorID, ok := ov.Props[propGxAnchor].(string); ok {
+			if anchor := anchors[anchorID]; anchor != nil {
+				if ab, hit := cache[anchor]; hit {
+					offset := float32(6)
+					if v, ok := propNum(ov.Props[propOffset]); ok && v >= 0 {
+						offset = float32(v)
+					}
+					p := parsePlacement(propStr(ov.Props, propPlacement))
+					x, y = placeOverlay(ab, box.W, box.H, p, offset, availW, availH)
+				}
+			}
+		}
+		// 回填浮层根坐标，并把整棵子树的坐标平移 (dx,dy)。
+		dx, dy := x-box.X, y-box.Y
+		shiftSubtree(ov, cache, dx, dy)
+	}
+}
+
+// shiftSubtree 把节点及其所有后代在 cache 中的坐标平移 (dx,dy)。
+func shiftSubtree(n *gxscene.Node, cache layoutCache, dx, dy float32) {
+	if n == nil {
+		return
+	}
+	if b, ok := cache[n]; ok {
+		b.X += dx
+		b.Y += dy
+		cache[n] = b
+	}
+	for _, c := range n.Children {
+		shiftSubtree(c, cache, dx, dy)
+	}
+}
+
+// propStr 取字符串属性（便捷函数，overlay 定位用）。
+func propStr(props map[string]any, key string) string {
+	if props == nil {
+		return ""
+	}
+	if v, ok := props[key].(string); ok {
+		return v
+	}
+	return ""
 }
 
 // skiaFontMeasurer 用真实 Skia 字体测量文本宽度（生产用的 fontMeasurer 实现）。

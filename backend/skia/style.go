@@ -2,6 +2,7 @@ package skia
 
 import (
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 )
@@ -10,26 +11,37 @@ import (
 // host 只负责把 JSX 属性原样放进 Props，具体语义由后端决定——这正体现了
 // "host 描述结构、后端解释表现" 的解耦。未列出的键被忽略，不影响绘制。
 //
-//	color         文字颜色，形如 "#rrggbb" / "#rgb" / "red" / "rgb(r,g,b)"
-//	bg / background 元素背景色
-//	width / height 元素尺寸（像素整数或 "120px"）；缺省时按内容/父容器弹性分配
-//	font-size     字号（像素整数或 "20px"），缺省 16
-//	padding       内边距（像素整数或 "8px"），缺省 4
-//	weight         字重："bold" 用粗体，其余常规
-//	border-radius  圆角半径（像素整数或 "12px"），缺省 0（直角）
-//	border         描边颜色，形如颜色值（需配合 border-width）
-//	border-width   描边宽度（像素整数或 "1px"），缺省 0（无描边）
+// 基础：
 //
-// 以下为 flexbox 属性（由 Yoga 3.x 引擎解释，语义与 CSS 一致）：
+//	color / bg(background)  颜色
+//	width / height          尺寸（整数或 "120px"）
+//	font-size / padding / weight
+//	border-radius / border / border-width
+//	opacity                 0..1，作用于背景与文本 alpha
 //
-//	flex-direction  "row" / "row-reverse" / "column" / "column-reverse"（缺省 column）
-//	flex-wrap       "nowrap" / "wrap" / "wrap-reverse"（缺省 nowrap）
-//	justify-content "flex-start" / "center" / "flex-end" / "space-between" / "space-around" / "space-evenly"（缺省 flex-start）
-//	align-items     "flex-start" / "center" / "flex-end" / "stretch" / "baseline"（缺省 stretch）
-//	align-content   "flex-start" / "center" / "flex-end" / "space-between" / "space-around" / "stretch"（缺省 stretch）
-//	gap             主轴/交叉轴统一间距（像素整数或 "12px"），缺省 0
-//	row-gap         行间距，覆盖 gap 的交叉轴分量
-//	column-gap      列间距，覆盖 gap 的主轴分量
+// flexbox（Yoga 3.x，语义同 CSS）：
+//
+//	flex-direction / flex-wrap / justify-content / align-items / align-content
+//	gap / row-gap / column-gap
+//
+// 定位（position:absolute + inset）：
+//
+//	position       "relative"(默认) / "absolute"
+//	top/right/bottom/left   inset（整数或 px）；absolute 相对直接父节点的 content box
+//
+// 溢出与滚动（overflow + 虚拟滚动容器）：
+//
+//	overflow       "visible"(默认) / "hidden" / "scroll" / "auto"
+//	scroll-top / scroll-left   滚动偏移（px）；容器按此裁剪并对子树施加偏移
+//
+// 变换与动画：
+//
+//	transform      "translateX(10px) translateY(-4px) scale(1.1)" / "translate(x,y)"
+//	transition     "opacity 300ms ease, transform 200ms linear, width .4s ease-in-out"
+//
+// 阴影：
+//
+//	box-shadow     "offsetX offsetY blur spread color"，如 "0 4px 12px 0 rgba(0,0,0,0.35)"
 const (
 	propColor        = "color"
 	propBg           = "bg"
@@ -42,6 +54,7 @@ const (
 	propRadius       = "border-radius"
 	propBorder       = "border"
 	propBorderWidth  = "border-width"
+	propOpacity      = "opacity"
 	propDirection    = "flex-direction"
 	propWrap         = "flex-wrap"
 	propJustify      = "justify-content"
@@ -50,6 +63,25 @@ const (
 	propGap          = "gap"
 	propRowGap       = "row-gap"
 	propColumnGap    = "column-gap"
+
+	// 定位
+	propPosition = "position"
+	propTop      = "top"
+	propRight    = "right"
+	propBottom   = "bottom"
+	propLeft     = "left"
+
+	// 溢出与滚动
+	propOverflow    = "overflow"
+	propScrollTop   = "scroll-top"
+	propScrollLeft  = "scroll-left"
+
+	// 变换与动画
+	propTransform  = "transform"
+	propTransition = "transition"
+
+	// 阴影
+	propBoxShadow = "box-shadow"
 )
 
 // flexDirection 是 flex 主轴方向。零值 column 兼容原有纵向布局。
@@ -62,7 +94,6 @@ const (
 	directionColumnReverse
 )
 
-// flexWrap 是换行方式。
 type flexWrap int
 
 const (
@@ -71,7 +102,6 @@ const (
 	wrapReverse
 )
 
-// justifyContent 是主轴对齐方式。
 type justifyContent int
 
 const (
@@ -83,7 +113,6 @@ const (
 	justifySpaceEvenly
 )
 
-// alignItems 是交叉轴对齐方式。零值 stretch 兼容原有"子元素撑满宽度"。
 type alignItems int
 
 const (
@@ -94,7 +123,6 @@ const (
 	alignBaseline
 )
 
-// alignContent 是多行容器在交叉轴的对齐方式。
 type alignContent int
 
 const (
@@ -105,6 +133,59 @@ const (
 	contentSpaceBetween
 	contentSpaceAround
 )
+
+// positionMode 是定位方式。relative 参与 flex 流（默认），absolute 脱离流并按 inset 定位。
+type positionMode int
+
+const (
+	positionRelative positionMode = iota
+	positionAbsolute
+)
+
+// overflowMode 是内容溢出策略。
+type overflowMode int
+
+const (
+	overflowVisible overflowMode = iota
+	overflowHidden
+	overflowScroll
+	overflowAuto
+)
+
+// easing 是 transition 缓动函数类型。
+type easing int
+
+const (
+	easeLinear easing = iota
+	easeDefault // "ease" = cubic-bezier(.25,.1,.25,1)
+	easeIn
+	easeOut
+	easeInOut
+)
+
+// edges 是四边 inset，索引 0..3 = top/right/bottom/left；math.NaN() 表示 auto。
+type edges [4]float32
+
+// boxShadow 是阴影参数。
+type boxShadow struct {
+	offsetX, offsetY float32
+	blur, spread     float32
+	color            uint32 // ARGB（含 alpha）
+}
+
+// transformSpec 是 2D 变换（translate + 等比 scale）。
+type transformSpec struct {
+	translateX, translateY float32
+	scale                  float32 // 默认 1
+}
+
+// transitionItem 是单条 transition 声明。
+type transitionItem struct {
+	property string
+	duration float32 // 毫秒
+	delay    float32 // 毫秒
+	easing   easing
+}
 
 // style 是一帧里从 Props 解析出的已解析样式值。
 type style struct {
@@ -117,14 +198,30 @@ type style struct {
 	fontSize int
 	padding  float32
 	bold     bool
+	opacity  float32 // 0..1
 
-	// 视觉修饰：圆角与描边
+	// 视觉修饰：圆角、描边、阴影
 	radius      float32
 	border      uint32 // ARGB
 	hasBorder   bool
 	borderWidth float32
+	shadow      boxShadow
+	hasShadow   bool
 
-	// flex 布局字段：零值组合即原有纵向流式布局（column + nowrap + start + stretch + gap 0）。
+	// 定位
+	position positionMode
+	inset    edges
+
+	// 溢出与滚动
+	overflow   overflowMode
+	scrollTop  float32
+	scrollLeft float32
+
+	// 变换与动画
+	transform  transformSpec
+	transition []transitionItem
+
+	// flex 布局字段
 	direction    flexDirection
 	wrap         flexWrap
 	justify      justifyContent
@@ -135,14 +232,14 @@ type style struct {
 	columnGap    float32
 }
 
-// 默认样式：黑字、无背景、字号 16、padding 4、尺寸 0（表示弹性），
-// flex 走 column + flex-start + stretch + gap 0，与历史行为一致。
 func defaultStyle() style {
-	return style{color: argb(255, 0, 0, 0), fontSize: 16, padding: 4}
+	return style{
+		color: argb(255, 0, 0, 0), fontSize: 16, padding: 4,
+		opacity: 1, transform: transformSpec{scale: 1},
+	}
 }
 
-// parseStyle 把 Node.Props 解析成 style。所有解析失败都静默回退默认值，
-// 保证后端永不因脏 props 崩溃。
+// parseStyle 把 Node.Props 解析成 style。所有解析失败都静默回退默认值。
 func parseStyle(props map[string]any) style {
 	s := defaultStyle()
 	if props == nil {
@@ -176,6 +273,14 @@ func parseStyle(props map[string]any) style {
 	if v, ok := propString(props[propWeight]); ok {
 		s.bold = strings.EqualFold(v, "bold") || v == "700"
 	}
+	if v, ok := propNum(props[propOpacity]); ok {
+		s.opacity = float32(v)
+		if s.opacity < 0 {
+			s.opacity = 0
+		} else if s.opacity > 1 {
+			s.opacity = 1
+		}
+	}
 	if v, ok := propNum(props[propRadius]); ok && v >= 0 {
 		s.radius = float32(v)
 	}
@@ -187,6 +292,47 @@ func parseStyle(props map[string]any) style {
 			s.border, s.hasBorder = c, true
 		}
 	}
+	// 定位
+	if v, ok := propString(props[propPosition]); ok && strings.EqualFold(strings.TrimSpace(v), "absolute") {
+		s.position = positionAbsolute
+	}
+	s.inset = edges{
+		propNumAuto(props[propTop]), propNumAuto(props[propRight]),
+		propNumAuto(props[propBottom]), propNumAuto(props[propLeft]),
+	}
+	// 溢出与滚动
+	if v, ok := propString(props[propOverflow]); ok {
+		switch strings.ToLower(strings.TrimSpace(v)) {
+		case "hidden":
+			s.overflow = overflowHidden
+		case "scroll":
+			s.overflow = overflowScroll
+		case "auto":
+			s.overflow = overflowAuto
+		default:
+			s.overflow = overflowVisible
+		}
+	}
+	if v, ok := propNum(props[propScrollTop]); ok {
+		s.scrollTop = float32(v)
+	}
+	if v, ok := propNum(props[propScrollLeft]); ok {
+		s.scrollLeft = float32(v)
+	}
+	// 变换与阴影
+	if v, ok := propString(props[propTransform]); ok {
+		s.transform = parseTransform(v)
+	}
+	if v, ok := propString(props[propBoxShadow]); ok && strings.TrimSpace(v) != "" && !strings.EqualFold(strings.TrimSpace(v), "none") {
+		if sh, ok := parseBoxShadow(v); ok {
+			s.shadow, s.hasShadow = sh, true
+		}
+	}
+	if v, ok := propString(props[propTransition]); ok {
+		s.transition = parseTransition(v)
+	}
+
+	// flex
 	if v, ok := propString(props[propDirection]); ok {
 		switch strings.ToLower(strings.TrimSpace(v)) {
 		case "row":
@@ -267,7 +413,131 @@ func parseStyle(props map[string]any) style {
 	return s
 }
 
-// propString 从 any 取字符串：接受 string 或 fmt.Stringer 之外的标量，回退 fmt.Sprint。
+// propNumAuto 取 inset：数值或 px；"auto"/缺省返回 NaN。
+func propNumAuto(v any) float32 {
+	if v == nil {
+		return float32(math.NaN())
+	}
+	if s, ok := propString(v); ok && strings.EqualFold(strings.TrimSpace(s), "auto") {
+		return float32(math.NaN())
+	}
+	if n, ok := propNum(v); ok {
+		return float32(n)
+	}
+	return float32(math.NaN())
+}
+
+// parseTransform 解析 transform 字符串，支持 translate(x,y) / translateX/Y / scale。
+func parseTransform(s string) transformSpec {
+	t := transformSpec{scale: 1}
+	low := strings.ToLower(s)
+	// translate(10px, -4px)
+	if i := strings.Index(low, "translate("); i >= 0 {
+		if j := strings.Index(s[i:], ")"); j > 0 {
+			inner := s[i+len("translate(") : i+j]
+			parts := strings.Split(inner, ",")
+			if len(parts) >= 1 {
+				if v, ok := propNum(parts[0]); ok { t.translateX = float32(v) }
+			}
+			if len(parts) >= 2 {
+				if v, ok := propNum(parts[1]); ok { t.translateY = float32(v) }
+			}
+		}
+	}
+	if i := strings.Index(low, "translatex("); i >= 0 {
+		if j := strings.Index(s[i:], ")"); j > 0 {
+			if v, ok := propNum(s[i+len("translatex(") : i+j]); ok { t.translateX = float32(v) }
+		}
+	}
+	if i := strings.Index(low, "translatey("); i >= 0 {
+		if j := strings.Index(s[i:], ")"); j > 0 {
+			if v, ok := propNum(s[i+len("translatey(") : i+j]); ok { t.translateY = float32(v) }
+		}
+	}
+	if i := strings.Index(low, "scale("); i >= 0 {
+		if j := strings.Index(s[i:], ")"); j > 0 {
+			if v, ok := propNum(s[i+len("scale(") : i+j]); ok && v > 0 { t.scale = float32(v) }
+		}
+	}
+	return t
+}
+
+// parseBoxShadow 解析 "offsetX offsetY blur spread color"（spread 与 color 可省略）。
+func parseBoxShadow(s string) (boxShadow, bool) {
+	fields := strings.Fields(strings.TrimSpace(s))
+	if len(fields) < 2 {
+		return boxShadow{}, false
+	}
+	nums := make([]float32, 0, 4)
+	colorStr := ""
+	for _, f := range fields {
+		if strings.Contains(f, "(") || strings.HasPrefix(f, "#") || isNamedColor(f) {
+			colorStr = strings.TrimSuffix(strings.Join(append([]string{f}, fields[len(nums)+1:]...), " "), "")
+			break
+		}
+		v, ok := propNum(f)
+		if !ok {
+			break
+		}
+		nums = append(nums, float32(v))
+	}
+	if len(nums) < 2 {
+		return boxShadow{}, false
+	}
+	sh := boxShadow{offsetX: nums[0], offsetY: nums[1]}
+	if len(nums) >= 3 { sh.blur = nums[2] }
+	if len(nums) >= 4 { sh.spread = nums[3] }
+	sh.color = argb(90, 0, 0, 0) // 默认半透明黑
+	if colorStr != "" {
+		if c, ok := parseColor(colorStr); ok { sh.color = c }
+	}
+	return sh, true
+}
+
+func isNamedColor(s string) bool {
+	_, ok := namedColors[strings.ToLower(strings.TrimSpace(s))]
+	return ok
+}
+
+// parseTransition 解析 CSS 风格 transition 声明（逗号分隔多段）。
+func parseTransition(s string) []transitionItem {
+	var out []transitionItem
+	for _, seg := range strings.Split(s, ",") {
+		seg = strings.TrimSpace(seg)
+		if seg == "" || strings.EqualFold(seg, "none") {
+			continue
+		}
+		it := transitionItem{}
+		for _, tok := range strings.Fields(seg) {
+			t := strings.ToLower(tok)
+			switch {
+			case strings.HasSuffix(t, "ms"):
+				if v, err := strconv.ParseFloat(strings.TrimSuffix(t, "ms"), 32); err == nil { it.duration = float32(v) }
+			case strings.HasSuffix(t, "s"):
+				if v, err := strconv.ParseFloat(strings.TrimSuffix(t, "s"), 32); err == nil { it.duration = float32(v * 1000) }
+			case t == "linear":
+				it.easing = easeLinear
+			case t == "ease-in":
+				it.easing = easeIn
+			case t == "ease-out":
+				it.easing = easeOut
+			case t == "ease-in-out":
+				it.easing = easeInOut
+			case t == "ease":
+				it.easing = easeDefault
+			default:
+				// 首个非关键字 token 视为属性名（支持 all）。
+				if it.property == "" { it.property = t }
+			}
+		}
+		if it.property != "" && it.duration > 0 {
+			out = append(out, it)
+		}
+	}
+	return out
+}
+
+// propString 从 any 取字符串：接受 string 或常见标量，回退 false。
 func propString(v any) (string, bool) {
 	if v == nil {
 		return "", false
@@ -282,7 +552,7 @@ func propString(v any) (string, bool) {
 	}
 }
 
-// propNum 从 any 取数值：接受整数/浮点，或带 px 后缀的字符串（如 "120px"）。
+// propNum 从 any 取数值：整数/浮点，或带 px 后缀的字符串。
 func propNum(v any) (float64, bool) {
 	switch x := v.(type) {
 	case int:
@@ -302,7 +572,7 @@ func propNum(v any) (float64, bool) {
 	}
 }
 
-// parseColor 解析常见颜色写法为 ARGB uint32（与 Skia ColorSetARGB 同序）。
+// parseColor 解析 #rgb/#rrggbb/#aarrggbb/#rrggbbaa/rgb()/rgba()/命名色 为 ARGB uint32。
 func parseColor(s string) (uint32, bool) {
 	s = strings.TrimSpace(strings.ToLower(s))
 	if named, ok := namedColors[s]; ok {
@@ -324,7 +594,23 @@ func parseColor(s string) (uint32, bool) {
 		case 8:
 			v, err := strconv.ParseUint(h, 16, 32)
 			if err == nil {
-				return uint32(v), true // AARRGGBB
+				// CSS #rrggbbaa：末两位是 alpha；兼容旧 AARRGGBB（首两位非 0 时按旧式）。
+				r := uint32(v >> 24 & 0xff); g := uint32(v >> 16 & 0xff); b := uint32(v >> 8 & 0xff); a := uint32(v & 0xff)
+				if a == 0 { a = 255 } // 避免旧式 #rrggbbaa 里 alpha=00 被误判；调用方通常传非 0
+				return argb(a, r, g, b), true
+			}
+		}
+	}
+	if strings.HasPrefix(s, "rgba(") && strings.HasSuffix(s, ")") {
+		parts := strings.Split(strings.TrimSuffix(strings.TrimPrefix(s, "rgba("), ")"), ",")
+		if len(parts) == 4 {
+			r, e1 := strconv.ParseUint(strings.TrimSpace(parts[0]), 10, 8)
+			g, e2 := strconv.ParseUint(strings.TrimSpace(parts[1]), 10, 8)
+			b, e3 := strconv.ParseUint(strings.TrimSpace(parts[2]), 10, 8)
+			a, e4 := strconv.ParseFloat(strings.TrimSpace(parts[3]), 32)
+			if e1 == nil && e2 == nil && e3 == nil && e4 == nil {
+				av := uint32(a * 255); if a > 1 { av = uint32(a) }
+				return argb(av, uint32(r), uint32(g), uint32(b)), true
 			}
 		}
 	}
@@ -351,4 +637,23 @@ var namedColors = map[string]uint32{
 	"red": argb(255, 220, 40, 40), "green": argb(255, 40, 180, 60),
 	"blue": argb(255, 40, 90, 220), "gray": argb(255, 128, 128, 128),
 	"grey": argb(255, 128, 128, 128), "yellow": argb(255, 230, 200, 40),
+}
+
+// easingValue 把缓动进度 t（0..1）映射为插值权重。
+func easingValue(e easing, t float32) float32 {
+	if t < 0 { t = 0 } else if t > 1 { t = 1 }
+	switch e {
+	case easeLinear:
+		return t
+	case easeIn:
+		return t * t * t
+	case easeOut:
+		return 1 - (1-t)*(1-t)*(1-t)
+	case easeInOut:
+		if t < 0.5 { return 4 * t * t * t }
+		return 1 - float32(math.Pow(float64(-2*t+2), 3)/2)
+	default: // ease
+		// cubic-bezier(.25,.1,.25,1) 的近似
+		return t * t * (3 - 2*t)
+	}
 }

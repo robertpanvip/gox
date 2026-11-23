@@ -297,7 +297,9 @@ func (f *For) Resolve() *Instance {
 		// 列表项 ID 按「本列表唯一前缀 + key」派生：同 key 重排/增删时 ID 不变，
 		// 不同列表即使同 key 也不撞车（各自的 idBase 不同）。
 		itemID := f.idBase + "/[" + fmt.Sprint(e.key) + "]"
-		entry := &forEntry{key: e.key, value: e.value, node: &Node{Kind: "#frag", Props: map[string]any{}, ID: itemID, dirty: true}}
+		// Type 必须为 NodeFragment：零值是 NodeText，会让后端把透明包装当空文本跳过，
+		// 导致整棵列表项子树不被绘制（Kind="#frag" 只标 Kind，不决定渲染语义）。
+		entry := &forEntry{key: e.key, value: e.value, node: &Node{Kind: "#frag", Type: NodeFragment, Props: map[string]any{}, ID: itemID, dirty: true}}
 		f.entries[e.key] = entry
 		f.buildEntry(entry)
 	}
@@ -313,7 +315,7 @@ func (f *For) Resolve() *Instance {
 	}
 
 	// 组装根子树（透明容器），供 mountBranch 类似的嫁接待用。
-	root := &Node{Kind: "#root", Props: map[string]any{}, ID: f.idBase + "/root", dirty: true}
+	root := &Node{Kind: "#root", Type: NodeFragment, Props: map[string]any{}, ID: f.idBase + "/root", dirty: true}
 	for _, c := range children {
 		c.parent = root
 		root.Children = append(root.Children, c)

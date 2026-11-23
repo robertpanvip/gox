@@ -75,6 +75,8 @@ _ = w.DrawLog() // 最近一帧的绘制指令（观测面）
 
 未列出的属性被忽略。这些是后端与业务之间的约定，**不属于 host 协议**——换后端时样式约定可完全不同。
 
+高级样式（`position:absolute` + inset、`overflow` + 虚拟滚动、`transition` 动画、`box-shadow`、`transform`、`opacity`）的完整约定见 [docs/STYLE.md](../../docs/STYLE.md)，两个后端语义一致。
+
 ## 切到独立仓库
 
 1. 把本 `backend/skia/` 目录整体移到新仓库 `gox-skia-backend`。

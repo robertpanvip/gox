@@ -21,8 +21,127 @@ use wgpu::{
 };
 use winit::window::Window;
 
+// 文本测量上下文：继承后的字号 + 文本内容。Taffy 在布局期回调测宽。
+#[derive(Clone)]
+struct TextMeasure { text: String, size: f32 }
+
+fn measure_text(
+    known: taffy::geometry::Size<Option<f32>>,
+    _avail: taffy::geometry::Size<taffy::style::AvailableSpace>,
+    ctx: Option<&mut TextMeasure>,
+) -> taffy::geometry::Size<f32> {
+    if let taffy::geometry::Size { width: Some(w), height: Some(h) } = known {
+        return taffy::geometry::Size { width: w, height: h };
+    }
+    let Some(c) = ctx else { return taffy::geometry::Size::ZERO; };
+    // CJK/全角按 1em，ASCII 按 0.56em，行高 1.35em。
+    let w = c.text.chars()
+        .map(|ch| if ch.is_ascii() { 0.56 } else { 1.0 })
+        .sum::<f32>() * c.size;
+    taffy::geometry::Size { width: w, height: c.size * 1.35 }
+}
+
+// ---------- 浮层（popover/dropdown/select）协议辅助 ----------
+// 与 Skia 后端 backend/skia/overlay.go 完全一致的语义：所有约定走 props 全量透传，
+// gx-role=popover/scrim 标记浮层，gx-anchor 引用锚点 id，gx-placement/gx-offset 定位。
+
+fn gx_role(n: &crate::scene::SceneNode) -> &str {
+    n.props.get("gx-role").map(|s| s.trim().to_ascii_lowercase())
+        .map(|s| match s.as_str() { "popover" => "popover", "scrim" => "scrim", _ => "" })
+        .unwrap_or("")
+}
+fn is_overlay(n: &crate::scene::SceneNode) -> bool {
+    matches!(gx_role(n), "popover" | "scrim")
+}
+fn is_popover(n: &crate::scene::SceneNode) -> bool { gx_role(n) == "popover" }
+fn is_scrim(n: &crate::scene::SceneNode) -> bool { gx_role(n) == "scrim" }
+
+/// 浮层定位结果：side(bottom/top) + align(start/center/end)。
+fn parse_placement(s: &str) -> (&'static str, &'static str) {
+    let lower = s.trim().to_ascii_lowercase();
+    let parts: Vec<&str> = lower.split('-').collect();
+    let side = match parts.first().copied() { Some("top") => "top", _ => "bottom" };
+    let align = match parts.get(1).copied() {
+        Some("center") => "center", Some("end") => "end", _ => "start",
+    };
+    (side, align)
+}
+
+/// 计算浮层左上角绝对坐标，空间不足时翻转（与 Skia placeOverlay 对齐）。
+fn place_overlay(
+    ax: f32, ay: f32, aw: f32, ah: f32,
+    pw: f32, ph: f32, placement: &str, offset: f32,
+    avail_w: f32, avail_h: f32,
+) -> (f32, f32) {
+    let (side, align) = parse_placement(placement);
+    let below = ay + ah + offset + ph <= avail_h;
+    let above = ay - offset - ph >= 0.0;
+    let side = if side == "bottom" && !below && above { "top" }
+               else if side == "top" && !above && below { "bottom" }
+               else { side };
+    let mut y = if side == "top" { ay - offset - ph } else { ay + ah + offset };
+    if y < 0.0 { y = 0.0; }
+    if y + ph > avail_h && ph <= avail_h { y = avail_h - ph; }
+
+    let end_x = ax + aw - pw;
+    let mut x = match align {
+        "center" => ax + (aw - pw) / 2.0,
+        "end" => end_x,
+        _ => ax,
+    };
+    if x < 0.0 {
+        if align == "end" && ax >= 0.0 { x = ax; } else { x = 0.0; }
+    } else if x + pw > avail_w {
+        if align == "start" && end_x >= 0.0 { x = end_x; } else { x = avail_w - pw; }
+    }
+    (x, y)
+}
+
+/// 展开一个节点的可见子节点（Fragment 透明摊平），与 build/emit 顺序一致。
+fn flat_children<'a>(n: &'a crate::scene::SceneNode, out: &mut Vec<&'a crate::scene::SceneNode>) {
+    for c in &n.children {
+        if c.typ == NodeType::Fragment { flat_children(c, out); } else { out.push(c); }
+    }
+}
+
 fn align_up(v: u32, a: u32) -> u32 {
     (v + a - 1) / a * a
+}
+
+/// box-shadow 的多层半透明圆角矩形近似（与 Skia 端 paintShadow 同算法）。
+fn paint_shadow_tiny(
+    pm: &mut tiny_skia::Pixmap,
+    s: &ShapeDraw,
+    sh: &crate::style::BoxShadow,
+) {
+    use tiny_skia::{Color, FillRule, Paint, Transform};
+    if sh.blur <= 0.0 && sh.spread <= 0.0 && sh.offset_x == 0.0 && sh.offset_y == 0.0 {
+        return;
+    }
+    let base_a = if sh.color.3 > 0 { sh.color.3 as f32 } else { 90.0 };
+    const LAYERS: i32 = 6;
+    for i in (1..=LAYERS).rev() {
+        let t = i as f32 / LAYERS as f32;
+        let expand = sh.spread + sh.blur * t;
+        let x = s.x + sh.offset_x - expand;
+        let y = s.y + sh.offset_y - expand;
+        let w = s.w + 2.0 * expand;
+        let h = s.h.max(1.0) + 2.0 * expand;
+        if w <= 0.0 || h <= 0.0 { continue; }
+        let a = (base_a * (1.0 - t) / LAYERS as f32 * 1.8).clamp(0.0, 255.0) as u8;
+        if let Some(path) = round_rect_path(x, y, w, h, s.radius + expand) {
+            let mut p = Paint::default();
+            p.set_color(Color::from_rgba8(sh.color.0, sh.color.1, sh.color.2, a));
+            p.anti_alias = true;
+            // 阴影也受祖先 overflow 裁剪：用交集矩形限制绘制范围。
+            if let Some((cx, cy, cw, ch)) = s.clip {
+                let ix = x.max(cx); let iy = y.max(cy);
+                let ir = (x + w).min(cx + cw); let ib = (y + h).min(cy + ch);
+                if ir <= ix || ib <= iy { continue; }
+            }
+            pm.fill_path(&path, &p, FillRule::Winding, Transform::identity(), None);
+        }
+    }
 }
 
 fn round_rect_path(x: f32, y: f32, w: f32, h: f32, r: f32) -> Option<tiny_skia::Path> {
@@ -71,6 +190,45 @@ fn parse_px(s: &str) -> Option<f32> {
 
 // ---------- DisplayList ----------
 
+/// 裁剪矩形（画布绝对坐标）；None 表示不裁剪。
+type ClipRect = Option<(f32, f32, f32, f32)>; // x, y, w, h
+
+/// 两个裁剪矩形求交；None 视作无限大。
+fn clip_intersect(a: ClipRect, b: ClipRect) -> ClipRect {
+    match (a, b) {
+        (None, x) | (x, None) => x,
+        (Some((ax, ay, aw, ah)), Some((bx, by, bw, bh))) => {
+            let x = ax.max(bx);
+            let y = ay.max(by);
+            let r = (ax + aw).min(bx + bw);
+            let bot = (ay + ah).min(by + bh);
+            if r > x && bot > y { Some((x, y, r - x, bot - y)) } else { Some((x, y, 0.0, 0.0)) }
+        }
+    }
+}
+
+/// 矩形是否被裁剪完全剔除。
+fn clip_rejects(c: ClipRect, x: f32, y: f32, w: f32, h: f32) -> bool {
+    match c {
+        None => false,
+        Some((cx, cy, cw, ch)) => x > cx + cw || x + w < cx || y > cy + ch || y + h < cy,
+    }
+}
+
+/// 矩形与裁剪矩形求交，返回交集 (x,y,w,h)；完全在外返回 None。
+fn clip_rect_xywh(c: ClipRect, x: f32, y: f32, w: f32, h: f32) -> Option<(f32, f32, f32, f32)> {
+    match c {
+        None => Some((x, y, w, h)),
+        Some((cx, cy, cw, ch)) => {
+            let nx = x.max(cx);
+            let ny = y.max(cy);
+            let nr = (x + w).min(cx + cw);
+            let nb = (y + h).min(cy + ch);
+            if nr > nx && nb > ny { Some((nx, ny, nr - nx, nb - ny)) } else { None }
+        }
+    }
+}
+
 #[derive(Clone)]
 struct TextDraw {
     text: String,
@@ -78,6 +236,7 @@ struct TextDraw {
     y: f32,
     size: f32,
     color: (u8, u8, u8),
+    clip: ClipRect,
 }
 
 #[derive(Clone)]
@@ -90,14 +249,16 @@ struct ShapeDraw {
     bg_present: bool,
     radius: f32,
     border: Option<((u8, u8, u8), f32)>,
+    shadow: Option<crate::style::BoxShadow>,
+    clip: ClipRect,
 }
 
 #[derive(Clone)]
 struct DisplayList {
     shapes: Vec<ShapeDraw>,
     texts: Vec<TextDraw>,
-    /// (x, y, w, h, node_id, event)
-    hitboxes: Vec<(f32, f32, f32, f32, String, String)>,
+    /// (x, y, w, h, node_id, event, is_overlay, clip)
+    hitboxes: Vec<(f32, f32, f32, f32, String, String, bool, ClipRect)>,
     /// (x, y, w, h, node_id)
     inputs: Vec<(f32, f32, f32, f32, String)>,
 }
@@ -116,26 +277,6 @@ impl DisplayList {
 
         let mut dl = DisplayList::new();
         let mut taffy: TaffyTree<TextMeasure> = TaffyTree::new();
-
-        // 文本测量上下文：继承后的字号 + 文本内容。Taffy 在布局期回调测宽。
-        #[derive(Clone)]
-        struct TextMeasure { text: String, size: f32 }
-
-        fn measure_text(
-            known: taffy::geometry::Size<Option<f32>>,
-            _avail: taffy::geometry::Size<taffy::style::AvailableSpace>,
-            ctx: Option<&mut TextMeasure>,
-        ) -> taffy::geometry::Size<f32> {
-            if let taffy::geometry::Size { width: Some(w), height: Some(h) } = known {
-                return taffy::geometry::Size { width: w, height: h };
-            }
-            let Some(c) = ctx else { return taffy::geometry::Size::ZERO; };
-            // CJK/全角按 1em，ASCII 按 0.56em，行高 1.35em。
-            let w = c.text.chars()
-                .map(|ch| if ch.is_ascii() { 0.56 } else { 1.0 })
-                .sum::<f32>() * c.size;
-            taffy::geometry::Size { width: w, height: c.size * 1.35 }
-        }
 
         fn dir_of(s: &str) -> FlexDirection {
             match s {
@@ -193,7 +334,12 @@ impl DisplayList {
 
             let pad = p("padding").and_then(parse_px).unwrap_or(0.0);
             let gap = p("gap").or_else(|| p("column-gap")).and_then(parse_px).unwrap_or(0.0);
+            // absolute：浮层/遮罩（gx-role）或显式 position:absolute 都脱离父 flex 流。
+            // 浮层位置由第二遍按锚点矩形单独计算；通用 absolute 用 inset 由 Taffy 定位。
+            let st = crate::style::parse_style(node);
+            let is_abs = is_overlay(node) || st.position == crate::style::Position::Absolute;
             let mut style = Style {
+                position: if is_abs { Position::Absolute } else { Position::Relative },
                 flex_direction: dir_of(p("flex-direction").unwrap_or("column")),
                 padding: Rect {
                     left: length(pad), right: length(pad),
@@ -204,6 +350,14 @@ impl DisplayList {
                 justify_content: justify_of(p("justify-content")),
                 ..Default::default()
             };
+            // inset：top/right/bottom/left（NaN=auto 跳过）。与 Skia 语义一致。
+            if is_abs {
+                let i = st.inset;
+                if !i[0].is_nan() { style.inset.top = length(i[0]); }
+                if !i[1].is_nan() { style.inset.right = length(i[1]); }
+                if !i[2].is_nan() { style.inset.bottom = length(i[2]); }
+                if !i[3].is_nan() { style.inset.left = length(i[3]); }
+            }
             // 显式宽高；根节点即使未声明也填满窗口。
             let exp_w = p("width").and_then(parse_px);
             let exp_h = p("height").and_then(parse_px);
@@ -235,7 +389,63 @@ impl DisplayList {
             |known, avail, _id, mctx, _style| measure_text(known, avail, mctx),
         ).expect("taffy compute_layout");
 
-        // 第二遍：按同样的摊平顺序遍历，把布局结果转成绘制指令（父先子后）。
+        // ---- 浮层第二遍布局 ----
+        // 预遍历收集锚点矩形与浮层信息（坐标累加方式与 build/emit 完全一致）。
+        struct OverlayInfo<'a> {
+            node: &'a crate::scene::SceneNode,
+            tnode: taffy::NodeId,
+            x: f32, y: f32, w: f32, h: f32, // 主布局里的初始矩形（浮层的 size 有效，location 待覆盖）
+        }
+        fn scan<'a>(
+            node: &'a crate::scene::SceneNode, tnode: taffy::NodeId, ctx: &BuildCtx,
+            ox: f32, oy: f32,
+            anchors: &mut std::collections::HashMap<String, (f32, f32, f32, f32)>,
+            overlays: &mut Vec<OverlayInfo<'a>>,
+        ) {
+            let lay = ctx.taffy.layout(tnode).unwrap();
+            let x = ox + lay.location.x;
+            let y = oy + lay.location.y;
+            let w = lay.size.width;
+            let h = lay.size.height;
+            if let Some(id) = node.props.get("gx-anchor-id") {
+                anchors.insert(id.clone(), (x, y, w, h));
+            }
+            if is_overlay(node) {
+                overlays.push(OverlayInfo { node, tnode, x, y, w, h });
+            }
+            let mut kids: Vec<&crate::scene::SceneNode> = Vec::new();
+            flat_children(node, &mut kids);
+            for (i, c) in kids.iter().enumerate() {
+                let child_tnode = ctx.taffy.child_at_index(tnode, i).unwrap();
+                scan(c, child_tnode, ctx, x, y, anchors, overlays);
+            }
+        }
+        let mut anchors = std::collections::HashMap::new();
+        let mut overlays: Vec<OverlayInfo> = Vec::new();
+        scan(root, root_node, &ctx, 0.0, 0.0, &mut anchors, &mut overlays);
+
+        // 计算每个浮层的目标绝对左上角，按 node.id 索引（emit 时套用）。
+        let mut overrides: std::collections::HashMap<String, (f32, f32)> = std::collections::HashMap::new();
+        for ov in &overlays {
+            if is_scrim(ov.node) {
+                overrides.insert(ov.node.id.clone(), (0.0, 0.0)); // 遮罩铺满，尺寸在 emit 时按画布覆盖
+                continue;
+            }
+            if !is_popover(ov.node) { continue; }
+            let mut target = (ov.x, ov.y);
+            if let Some(anchor_id) = ov.node.props.get("gx-anchor") {
+                if let Some(&(ax, ay, aw, ah)) = anchors.get(anchor_id) {
+                    let offset = ov.node.props.get("gx-offset")
+                        .and_then(|s| parse_px(s.as_str())).unwrap_or(6.0);
+                    let placement = ov.node.props.get("gx-placement")
+                        .map(|s| s.as_str()).unwrap_or("bottom-start");
+                    target = place_overlay(ax, ay, aw, ah, ov.w, ov.h, placement, offset, avail_w, avail_h);
+                }
+            }
+            overrides.insert(ov.node.id.clone(), target);
+        }
+
+        // ---- emit：主树（跳过浮层）→ 遮罩 → 浮层，保证绘制层级 ----
         fn emit(
             node: &crate::scene::SceneNode,
             tnode: taffy::NodeId,
@@ -244,24 +454,45 @@ impl DisplayList {
             inherited_color: (u8, u8, u8),
             inherited_size: f32,
             ox: f32, oy: f32,
+            overrides: &std::collections::HashMap<String, (f32, f32)>,
+            avail_w: f32, avail_h: f32,
+            skip_overlays: bool,
+            parent_clip: ClipRect,
         ) {
+            // 主树遍历时跳过浮层子树（它们由后续的遮罩/浮层遍单独绘制，保证层级）。
+            if skip_overlays && is_overlay(node) {
+                return;
+            }
             let p = |k: &str| node.props.get(k).map(|s| s.as_str());
             let color = p("color").map(parse_color).unwrap_or(inherited_color);
             let size = p("font-size").and_then(parse_px).unwrap_or(inherited_size);
             let lay = ctx.taffy.layout(tnode).expect("taffy layout");
-            // Taffy location 相对父节点；递归累加得到绝对坐标。
-            let x = ox + lay.location.x;
-            let y = oy + lay.location.y;
-            let w = lay.size.width;
-            let h = lay.size.height;
+            // 浮层根用第二遍算出的目标坐标；其余节点沿用 Taffy 相对坐标累加。
+            let (x, y) = overrides.get(&node.id).copied()
+                .unwrap_or((ox + lay.location.x, oy + lay.location.y));
+            let mut w = lay.size.width;
+            let mut h = lay.size.height;
+            if is_scrim(node) {
+                w = avail_w; h = avail_h; // 遮罩覆盖整个画布
+            }
+
+            // overflow 容器：本节点矩形成为子树的新裁剪边界；子树坐标减 scroll 偏移。
+            let st = crate::style::parse_style(node);
+            let my_clip = if node.typ == NodeType::Div && st.overflow != crate::style::Overflow::Visible {
+                clip_intersect(parent_clip, Some((x, y, w, h)))
+            } else {
+                parent_clip
+            };
+            let child_ox = x - st.scroll_left;
+            let child_oy = y - st.scroll_top;
 
             if node.typ == NodeType::Text {
                 // y 是 Taffy 算出的文本行盒顶部；glyphon 会用 Buffer 的 Metrics
                 // (font_size, line_height=1.35×size) 自行处理行盒内基线，故这里不加
                 // 任何 size 比例的魔法偏移——否则紧凑容器（如 Input 高 20px）里文字会偏下。
-                dl.texts.push(TextDraw {
-                    text: node.text.clone(), x, y, size, color,
-                });
+                if !clip_rejects(my_clip, x, y, size * 4.0, size * 1.35) {
+                    dl.texts.push(TextDraw { text: node.text.clone(), x, y, size, color, clip: my_clip });
+                }
                 return;
             }
 
@@ -272,42 +503,63 @@ impl DisplayList {
                     let bw = p("border-width").and_then(parse_px).unwrap_or(1.0);
                     (parse_color(c), bw)
                 });
-                dl.shapes.push(ShapeDraw {
-                    x, y, w, h,
-                    bg: bg.unwrap_or((0, 0, 0)), bg_present: bg.is_some(), radius, border,
-                });
+                if !clip_rejects(my_clip, x, y, w, h) {
+                    dl.shapes.push(ShapeDraw {
+                        x, y, w, h,
+                        bg: bg.unwrap_or((0, 0, 0)), bg_present: bg.is_some(), radius, border,
+                        shadow: st.shadow.clone(),
+                        clip: my_clip,
+                    });
+                }
                 if let Some(ev) = node.events.iter().find(|e| e.starts_with("on")) {
-                    dl.hitboxes.push((x, y, w, h, node.id.clone(), ev.clone()));
+                    dl.hitboxes.push((x, y, w, h, node.id.clone(), ev.clone(), is_overlay(node), my_clip));
                 }
                 if node.props.contains_key("gx-input-id") {
                     dl.inputs.push((x, y, w, h, node.id.clone()));
                 }
             }
 
-            // 与 build 完全一致的摊平顺序，保证 layout 节点索引对齐。
             let mut kids: Vec<&crate::scene::SceneNode> = Vec::new();
-            fn flatten<'a>(n: &'a crate::scene::SceneNode, out: &mut Vec<&'a crate::scene::SceneNode>) {
-                for c in &n.children {
-                    if c.typ == NodeType::Fragment { flatten(c, out); } else { out.push(c); }
-                }
-            }
-            flatten(node, &mut kids);
+            flat_children(node, &mut kids);
             for (i, c) in kids.iter().enumerate() {
                 let child_tnode = ctx.taffy.child_at_index(tnode, i).expect("taffy child");
-                emit(c, child_tnode, ctx, dl, color, size, x, y);
+                emit(c, child_tnode, ctx, dl, color, size, child_ox, child_oy, overrides, avail_w, avail_h, skip_overlays, my_clip);
             }
         }
 
-        emit(root, root_node, &ctx, &mut dl, (226, 232, 240), 16.0, 0.0, 0.0);
+        // 第一遍：主树，跳过浮层子树。
+        emit(root, root_node, &ctx, &mut dl, (226, 232, 240), 16.0, 0.0, 0.0,
+            &overrides, avail_w, avail_h, true, None);
+        // 第二遍：遮罩（拦截外部点击）。
+        for ov in overlays.iter().filter(|o| is_scrim(o.node)) {
+            emit(ov.node, ov.tnode, &ctx, &mut dl, (226, 232, 240), 16.0, 0.0, 0.0,
+                &overrides, avail_w, avail_h, false, None);
+        }
+        // 第三遍：浮层内容（最上层）。
+        for ov in overlays.iter().filter(|o| is_popover(o.node)) {
+            emit(ov.node, ov.tnode, &ctx, &mut dl, (226, 232, 240), 16.0, 0.0, 0.0,
+                &overrides, avail_w, avail_h, false, None);
+        }
         dl
     }
 
-    /// 命中测试：面积最小的包含点 (x,y) 的 hitbox 优先。
-    fn hit(&self, x: f32, y: f32) -> Option<&(f32, f32, f32, f32, String, String)> {
-        self.hitboxes
-            .iter()
-            .filter(|(bx, by, bw, bh, _, _)| x >= *bx && x <= bx + bw && y >= *by && y <= by + bh)
-            .min_by(|a, b| (a.2 * a.3).partial_cmp(&(b.2 * b.3)).unwrap_or(std::cmp::Ordering::Equal))
+    /// 命中测试：浮层/遮罩优先于普通内容；同级内面积最小的包含点命中。
+    fn hit(&self, x: f32, y: f32) -> Option<&(f32, f32, f32, f32, String, String, bool, ClipRect)> {
+        type Hit<'a> = &'a (f32, f32, f32, f32, String, String, bool, ClipRect);
+        fn min_area<'a, I: Iterator<Item = Hit<'a>>>(items: I) -> Option<Hit<'a>> {
+            items.min_by(|a, b| (a.2 * a.3).partial_cmp(&(b.2 * b.3)).unwrap_or(std::cmp::Ordering::Equal))
+        }
+        let contains = |h: &Hit<'_>| {
+            if !(x >= h.0 && x <= h.0 + h.2 && y >= h.1 && y <= h.1 + h.3) { return false; }
+            // 祖先 overflow 裁剪：点必须落在裁剪矩形内。
+            match h.7 {
+                None => true,
+                Some((cx, cy, cw, ch)) => x >= cx && x <= cx + cw && y >= cy && y <= cy + ch,
+            }
+        };
+        // 浮层优先（popover 内容不该被底层小按钮抢走命中）。
+        min_area(self.hitboxes.iter().filter(|h| h.6 && contains(h)))
+            .or_else(|| min_area(self.hitboxes.iter().filter(|h| !h.6 && contains(h))))
     }
 }
 
@@ -338,6 +590,10 @@ pub struct Renderer {
     bg: (u8, u8, u8),
     /// 最近一次 DisplayList（供命中测试）
     display: DisplayList,
+    /// transition 插值引擎（跨帧持有动画状态）
+    animator: crate::style::Animator,
+    /// 动画时钟原点
+    anim_origin: std::time::Instant,
     /// 最近光标位置（MouseInput 事件不带坐标）
     cursor: (f32, f32),
     window: std::sync::Arc<Window>,
@@ -488,6 +744,8 @@ struct VSOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f };
             scene: None,
             bg: (11, 16, 32),
             display: DisplayList::new(),
+            animator: crate::style::Animator::new(),
+            anim_origin: std::time::Instant::now(),
             cursor: (0.0, 0.0),
             window,
         }
@@ -536,7 +794,19 @@ struct VSOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f };
             if s.w <= 0.0 || s.h <= 0.0 {
                 continue;
             }
-            if let Some(path) = round_rect_path(s.x, s.y, s.w, s.h, s.radius) {
+            // 与祖先 overflow 裁剪矩形求交；完全在外则跳过。
+            let (rx, ry, rw, rh) = match clip_rect_xywh(s.clip, s.x, s.y, s.w, s.h) {
+                Some(v) => v,
+                None => continue,
+            };
+            if rw <= 0.0 || rh <= 0.0 {
+                continue;
+            }
+            // box-shadow：多层半透明圆角矩形近似（与 Skia 端同算法）。
+            if let Some(sh) = &s.shadow {
+                paint_shadow_tiny(&mut pm, s, sh);
+            }
+            if let Some(path) = round_rect_path(rx, ry, rw, rh, s.radius) {
                 if s.bg_present {
                     let mut p = Paint::default();
                     p.set_color(Color::from_rgba8(s.bg.0, s.bg.1, s.bg.2, 255));
@@ -571,7 +841,11 @@ struct VSOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f };
 
     pub fn render(&mut self) {
         let Some(scene) = self.scene.as_ref() else { return; };
-        let dl = DisplayList::from_scene(scene, self.width as f32, self.height as f32);
+        // transition：按当前时间推进动画，得到本帧属性被覆盖的场景树副本。
+        let now_ms = self.anim_origin.elapsed().as_millis();
+        self.animator.set_now(now_ms);
+        let animated = self.animator.apply(scene);
+        let dl = DisplayList::from_scene(&animated, self.width as f32, self.height as f32);
         let bg = self.bg;
         self.display = dl.clone();
         self.paint_shapes(&dl, bg);
@@ -587,14 +861,24 @@ struct VSOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f };
             buffers.push(b);
         }
         self.viewport.update(&self.queue, Resolution { width: self.config.width, height: self.config.height });
-        let areas: Vec<TextArea> = dl.texts.iter().zip(buffers.iter()).map(|(t, b)| TextArea {
-            buffer: b,
-            left: t.x,
-            top: t.y,
-            scale: 1.0,
-            bounds: TextBounds { left: -20, top: -20, right: 720, bottom: self.height as i32 },
-            default_color: Color::rgb(t.color.0, t.color.1, t.color.2),
-            custom_glyphs: &[],
+        let areas: Vec<TextArea> = dl.texts.iter().zip(buffers.iter()).map(|(t, b)| {
+            // 有 overflow 裁剪祖先时，用 clip 矩形收紧 glyphon 的可视边界。
+            let bounds = match t.clip {
+                Some((cx, cy, cw, ch)) => TextBounds {
+                    left: (cx - t.x - 20.0) as i32, top: (cy - t.y - 20.0) as i32,
+                    right: (cx + cw - t.x) as i32, bottom: (cy + ch - t.y) as i32,
+                },
+                None => TextBounds { left: -20, top: -20, right: 720, bottom: self.height as i32 },
+            };
+            TextArea {
+                buffer: b,
+                left: t.x,
+                top: t.y,
+                scale: 1.0,
+                bounds,
+                default_color: Color::rgb(t.color.0, t.color.1, t.color.2),
+                custom_glyphs: &[],
+            }
         }).collect();
         self.text_renderer.prepare(
             &self.device, &self.queue, &mut self.font_system, &mut self.atlas,
@@ -628,7 +912,7 @@ struct VSOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f };
 
     /// 点击命中 → 生成 click 事件 JSON
     pub fn hit_click(&self, x: f32, y: f32) -> Option<InputEvent> {
-        self.display.hit(x, y).map(|(_, _, _, _, id, ev)| InputEvent {
+        self.display.hit(x, y).map(|(_, _, _, _, id, ev, _, _)| InputEvent {
             kind: "click".into(),
             node_id: id.clone(),
             event: ev.clone(),
@@ -690,4 +974,64 @@ pub fn bench_frame(buf: &[u8], width: f32, height: f32, iters: u32) -> Option<u6
     // 防止编译器优化掉结果。
     std::hint::black_box(sink);
     Some(ns)
+}
+
+#[cfg(test)]
+mod overlay_tests {
+    use super::*;
+
+    #[test]
+    fn place_bottom_start() {
+        let (x, y) = place_overlay(100.0, 200.0, 80.0, 30.0, 120.0, 60.0, "bottom-start", 8.0, 800.0, 600.0);
+        assert_eq!(x, 100.0);
+        assert_eq!(y, 238.0); // 200+30+8
+    }
+
+    #[test]
+    fn place_bottom_center() {
+        let (x, _y) = place_overlay(100.0, 200.0, 100.0, 30.0, 120.0, 60.0, "bottom-center", 8.0, 800.0, 600.0);
+        assert_eq!(x, 90.0); // 100 + (100-120)/2
+    }
+
+    #[test]
+    fn place_flip_to_top() {
+        // 锚点靠近底部，下方放不下 → 翻到 top。
+        let (x, y) = place_overlay(100.0, 520.0, 80.0, 30.0, 120.0, 60.0, "bottom-start", 8.0, 800.0, 600.0);
+        assert_eq!(x, 100.0);
+        assert_eq!(y, 452.0); // 520 - 8 - 60
+    }
+
+    #[test]
+    fn place_end_align() {
+        let (x, _) = place_overlay(100.0, 200.0, 100.0, 30.0, 60.0, 60.0, "bottom-end", 8.0, 800.0, 600.0);
+        assert_eq!(x, 140.0); // 100+100-60
+    }
+}
+
+#[cfg(test)]
+mod clip_tests {
+    use super::*;
+
+    #[test]
+    fn intersect_clips() {
+        let a = Some((0.0, 0.0, 100.0, 50.0));
+        let b = Some((20.0, 10.0, 60.0, 60.0));
+        assert_eq!(clip_intersect(a, b), Some((20.0, 10.0, 60.0, 40.0)));
+    }
+
+    #[test]
+    fn intersect_with_none() {
+        let a = Some((0.0, 0.0, 100.0, 50.0));
+        assert_eq!(clip_intersect(a, None), a);
+        assert_eq!(clip_intersect(None, a), a);
+    }
+
+    #[test]
+    fn reject_and_rect() {
+        let c = Some((0.0, 0.0, 100.0, 50.0));
+        assert!(clip_rejects(c, 0.0, -40.0, 100.0, 30.0)); // 滚出上方
+        assert!(!clip_rejects(c, 0.0, 40.0, 100.0, 30.0)); // 部分在内
+        assert_eq!(clip_rect_xywh(c, 0.0, 40.0, 100.0, 30.0), Some((0.0, 40.0, 100.0, 10.0)));
+        assert_eq!(clip_rect_xywh(c, 0.0, -40.0, 100.0, 30.0), None);
+    }
 }
