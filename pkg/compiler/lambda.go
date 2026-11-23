@@ -263,7 +263,7 @@ func inferLambdaTypes(toks []Token, l *lambdaExpr, an *Analysis, b *Bindings, si
 		l.bodyResult = ctxResult
 		return
 	}
-	l.bodyResult = inferExprType(toks, l.bodyFrom, l.bodyTo, l.params, sigTypes)
+	l.bodyResult = inferExprType(toks, l.bodyFrom, l.bodyTo, l.params, sigTypes, b)
 	if l.bodyResult == "" {
 		l.bodyResult = "any"
 	}
@@ -640,7 +640,9 @@ func signalGetterResultType(toks []Token, start, end int, params []lambdaParam, 
 }
 
 // inferExprType 推断 [start,end) 表达式的结果类型。
-func inferExprType(toks []Token, start, end int, params []lambdaParam, sigTypes map[string]string) string {
+// b 可选（可变参数）：提供时额外识别「本文件函数调用」「struct 字段访问」
+// 两类本可静态确定的 body，避免 lambda 返回类型无谓降级 any。
+func inferExprType(toks []Token, start, end int, params []lambdaParam, sigTypes map[string]string, b ...*Bindings) string {
 	if start >= end {
 		return ""
 	}
@@ -721,6 +723,55 @@ func inferExprType(toks []Token, start, end int, params []lambdaParam, sigTypes 
 	for i := start; i < end; i++ {
 		if lt := literalType(toks[i]); lt != "" {
 			return lt
+		}
+	}
+	// 绑定辅助推断：本文件函数调用 / struct 字段访问。
+	// 这两类 body 在 GX 组件里极常见（x => makeCell(x)、p => p.Name），
+	// 类型其实完全静态可知；此前一律降级 any，导致 lambda 结果类型失真。
+	if len(b) > 0 && b[0] != nil {
+		if t := inferExprTypeFromBindings(toks, start, end, params, b[0]); t != "" {
+			return t
+		}
+	}
+	return ""
+}
+
+// inferExprTypeFromBindings 从函数签名表与 struct 字段声明推断表达式类型。
+// 只认两种确定形态，跨包/未知一律放弃（交回调用方降级 any，不误报）：
+//  1. `ident(args...)` —— 本文件具名函数调用，取首个返回类型；
+//  2. `ident.Field`    —— 已知类型的 lambda 参数/变量的字段访问，取字段声明类型。
+func inferExprTypeFromBindings(toks []Token, start, end int, params []lambdaParam, b *Bindings) string {
+	first := nextSigIn(toks, start, end)
+	if first < 0 || toks[first].Kind != Ident || isGoKeyword(toks[first].Text) {
+		return ""
+	}
+
+	// 形态 1：函数调用 ident(...)。calledFuncResult 只认起始调用且返回类型已知。
+	if t := calledFuncResult(toks, first, end, b); t != "" {
+		return t
+	}
+
+	// 形态 2：字段访问 recv.Field。recv 必须是本 lambda 里已知类型的参数。
+	dot := nextSigIn(toks, first+1, end)
+	if dot < 0 || toks[dot].Text != "." {
+		return ""
+	}
+	field := nextSigIn(toks, dot+1, end)
+	if field < 0 || toks[field].Kind != Ident {
+		return ""
+	}
+	// 要求 Field 是 body 的最后一个有效 token，避免 `p.Age + 1` 这类复合表达式
+	// 被误判成单字段访问（其类型应由顶层算术逻辑决定）。
+	if nxt := nextSigIn(toks, field+1, end); nxt >= 0 {
+		return ""
+	}
+	recvName := toks[first].Text
+	for _, p := range params {
+		if p.name == recvName && p.typeText != "" {
+			recvType := strings.TrimSpace(strings.TrimPrefix(p.typeText, "*"))
+			if t := structFieldTypeFromToks(toks, recvType, toks[field].Text); t != "" {
+				return t
+			}
 		}
 	}
 	return ""

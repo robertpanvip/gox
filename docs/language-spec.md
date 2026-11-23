@@ -151,7 +151,9 @@ labels := nums.map(fn).filter(keep).reduce(0, add)
 
 ## 8. Lambda 表达式
 
-`x => x+1` → `func(x int) int { return x+1 }`。类型来源优先级：参数显式标注 → 上下文函数类型 → 集合回调元素类型 → 表达式反推（数值→int、比较→bool、len→int、字符串→string）；推断不出降级 `any`。仅支持单表达式 body，多语句用原生 func 字面量。
+`x => x+1` → `func(x int) int { return x+1 }`。类型来源优先级：参数显式标注 → 上下文函数类型 → 集合回调元素类型 → 表达式反推（数值→int、比较→bool、len→int、字符串→string）→ 绑定推断（body 是**本文件函数调用**取函数返回类型、是**已知类型参数的字段访问** `p.Field` 取字段声明类型）；推断不出降级 `any`。仅支持单表达式 body，多语句用原生 func 字面量。
+
+跨包函数调用（如 `strconv.Itoa(x)`）、方法调用（`p.Get()`）等签名不在本文件 token 流中的形态仍保守降级 `any`——不猜类型，避免猜错生成非法 Go（与对象字面量"右侧推断不出一律放过"原则一致）。这类场景若需要精确返回类型，直接用原生 func 字面量 `func(x int) string { return strconv.Itoa(x) }`，或把 lambda 放进有显式签名的上下文（函数实参 / `var f func(int) string = ...`）。
 
 ## 9. 对象字面量
 
