@@ -2,8 +2,6 @@ package gxscene
 
 import (
 	"sync"
-
-	"github.com/robertpanvip/gox/runtime/signal"
 )
 
 // Branch 是一个条件分支控制器，对应 JSX 里的 if/else 区域。
@@ -23,7 +21,7 @@ type Branch struct {
 	builders []func() *Instance
 	idx      int
 	cur      *Instance
-	owner    *signal.Owner
+	owner    Owner
 	disposed bool
 	init     bool        // 是否已完成首次求值（idx 初始为 0，需要区分「从未求值」）
 	sink     *changeSink // 所属实例树的变更缓冲，传给各分支子实例
@@ -96,7 +94,7 @@ func (b *Branch) Resolve() *Instance {
 	if sel >= 0 && sel < len(b.builders) && b.builders[sel] != nil {
 		// 在新 Owner 下构建并接线子树：子树内的插值 Effect 归属该 Owner，
 		// 分支再次切换/销毁时随之级联清理。
-		b.owner = signal.CreateRoot(func(o *signal.Owner) {
+		b.owner = Reactive().Root(func(o Owner) {
 			cur = b.builders[sel]()
 			if cur != nil {
 				if b.sink != nil {
@@ -117,7 +115,7 @@ func (b *Branch) Resolve() *Instance {
 						cur.bindStructure(b.bctx)
 					})
 				} else {
-					cur.BindReactive(signal.Effect)
+					cur.BindReactive(Reactive().Effect)
 				}
 			}
 		})

@@ -1,8 +1,9 @@
 package gxapp
 
 import (
-	"runtime"
 	"sync"
+
+	"github.com/robertpanvip/gox/runtime/signal"
 )
 
 // FrameDispatcher 决定「帧重绘请求」在哪个线程/goroutine 上执行。
@@ -138,33 +139,8 @@ func (d *QueueDispatcher) Close() {
 
 // CurrentGoid 返回当前 goroutine id。真实后端创建 QueueDispatcher 时用它捕获 UI
 // 线程 id；测试也可据此验证 Draw 是否发生在预期线程。
-func CurrentGoid() uint64 { return signalGoid() }
+// 实现复用 signal 包的 goid（TX.1：goid 获取全仓集中一处）。
+func CurrentGoid() uint64 { return signal.Goid() }
 
 // currentGoid 返回当前 goroutine id（包内使用的简写）。
-func currentGoid() uint64 { return signalGoid() }
-
-// signalGoid 由 signal 包导出的 goid 包装（见 signal/goid.go）。
-// 用变量而非直接调用便于未来替换实现（TX.1）。
-var signalGoid = func() uint64 {
-	return goroutineIDFromStack()
-}
-
-// goroutineIDFromStack 从 runtime.Stack 首行解析 goroutine id。
-// 与 signal.goid 同源；这里独立一份避免 signal 导出内部实现（TX.1 会集中到一处）。
-func goroutineIDFromStack() uint64 {
-	var buf [64]byte
-	n := runtime.Stack(buf[:], false)
-	const prefix = "goroutine "
-	if n < len(prefix) || string(buf[:len(prefix)]) != prefix {
-		return 0
-	}
-	var id uint64
-	for i := len(prefix); i < n; i++ {
-		c := buf[i]
-		if c < '0' || c > '9' {
-			break
-		}
-		id = id*10 + uint64(c-'0')
-	}
-	return id
-}
+func currentGoid() uint64 { return signal.Goid() }
