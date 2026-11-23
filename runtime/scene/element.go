@@ -27,6 +27,9 @@ type hostCaps struct {
 	focus func(NodeID) bool
 	// measure 同步读取布局；ok=false 表示后端没有该节点的布局（headless / 未布局）。
 	measure func(NodeID) (w, h float32, ok bool)
+	// computedStyle 读后端权威计算样式（含默认值/继承/动画插值）；state 为规整后的
+	// 伪状态名（"" 表示基础样式）。返回 nil 表示后端放弃、由 Element 回退到 Props。
+	computedStyle func(NodeID, string) map[string]string
 }
 
 // SetElementCaps 由 gxapp 在 Render 拿到实例后调用，把窗口后端能力注入整棵共享树。
@@ -36,7 +39,20 @@ func (i *Instance) SetElementCaps(focus func(NodeID) bool, measure func(NodeID) 
 		return
 	}
 	i.changes.mu.Lock()
-	i.changes.caps = hostCaps{focus: focus, measure: measure}
+	// 保留可能已单独注入的计算样式能力（SetComputedStyleCap），只更新 focus/measure。
+	i.changes.caps.focus = focus
+	i.changes.caps.measure = measure
+	i.changes.mu.Unlock()
+}
+
+// SetComputedStyleCap 单独注入计算样式能力，避免改动既有 SetElementCaps 的签名。
+// fn 返回 nil 表示放弃，Element.GetComputedStyle 回退到节点 Props。传 nil 清空。
+func (i *Instance) SetComputedStyleCap(fn func(NodeID, string) map[string]string) {
+	if i == nil || i.changes == nil {
+		return
+	}
+	i.changes.mu.Lock()
+	i.changes.caps.computedStyle = fn
 	i.changes.mu.Unlock()
 }
 
@@ -45,7 +61,8 @@ func (i *Instance) SetElementCaps(focus func(NodeID) bool, measure func(NodeID) 
 // 它内部只保存节点身份（NodeID）与共享 sink，不向业务暴露 ID：
 //   - Focus()              请求后端把焦点移到该节点；
 //   - BoundingClientRect() 同步读最近一次布局矩形（无布局时返回零值）；
-//   - Measure(cb)          登记异步读布局：下一帧绘制后由 gxapp 用最新布局回填 cb。
+//   - Measure(cb)          登记异步读布局：下一帧绘制后由 gxapp 用最新布局回填 cb；
+//   - GetComputedStyle()   读计算样式快照（DOM 风格 getPropertyValue）。
 //
 // GX 侧按小写书写（el.focus() / el.boundingClientRect() / el.measure(...)），
 // 由编译器的 transformExternal 还原为上述首字母大写的方法。

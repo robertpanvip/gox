@@ -27,6 +27,102 @@ func newCapableWindow() *capableWindow {
 	return &capableWindow{measure: map[gxscene.NodeID]struct{ w, h float32 }{}}
 }
 
+// stylingWindow 是实现了可选 ComputedStyler 的测试窗口。
+type stylingWindow struct {
+	countingWindow
+	lastID    gxscene.NodeID
+	lastState string
+	values    map[string]string
+}
+
+func (w *stylingWindow) ComputedStyle(id gxscene.NodeID, state string) map[string]string {
+	w.lastID, w.lastState = id, state
+	return w.values
+}
+
+// TestRefElementComputedStyle 端到端验证：实现 ComputedStyler 后，ref 句柄的
+// el.getComputedStyle() 优先读后端权威值，并收到规整后的伪状态；后端放弃（nil）
+// 时回退到节点 Props 的声明样式。
+func TestRefElementComputedStyle(t *testing.T) {
+	win := &stylingWindow{values: map[string]string{"bg": "rgb(9,8,7)", "font-size": "16"}}
+	app, err := gxapp.OpenWith(gxapp.DefaultConfig(), win)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer app.Close()
+
+	var el *gxscene.Element
+	tpl := gxscene.Template{Ops: []gxscene.Op{
+		{Code: gxscene.OpElem, Arg: "div"},
+		{Code: gxscene.OpDynAttr, Key: "style", Slot: 0},
+		{Code: gxscene.OpRef, Slot: 1},
+		{Code: gxscene.OpClose},
+	}, N: 2}
+	st := gxscene.Style{"bg": "#fff", "color": "#000"}
+	if err := app.Render(func() any {
+		return gxscene.Render(tpl,
+			func() any { return st },
+			func() any { return func(e *gxscene.Element) { el = e } },
+		)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if el == nil {
+		t.Fatal("ref 未收到 Element 句柄")
+	}
+
+	// 能力命中：读后端值，state 规整为 hover。
+	cs := el.GetComputedStyle(":hover")
+	if got := cs.GetPropertyValue("bg"); got != "rgb(9,8,7)" {
+		t.Fatalf("应读后端权威值，got %q", got)
+	}
+	if win.lastState != "hover" {
+		t.Fatalf("后端应收到规整后的 state=hover，got %q", win.lastState)
+	}
+	if win.lastID == gxscene.NoNode {
+		t.Fatal("后端能力应收到已分配的节点 ID（非 NoNode）")
+	}
+
+	// 后端放弃：回退到 Props 声明值，仍可用。
+	win.values = nil
+	fallback := el.GetComputedStyle()
+	if got := fallback.GetPropertyValue("bg"); got != "#fff" {
+		t.Fatalf("后端放弃时应回退 Props，got %q", got)
+	}
+}
+
+// TestComputedStyleNoCapability 验证非 ComputedStyler 后端（含 headless）
+// 零改动：getComputedStyle 走 Props 回退，不 panic、不返回 nil。
+func TestComputedStyleNoCapability(t *testing.T) {
+	win := &countingWindow{}
+	app, err := gxapp.OpenWith(gxapp.DefaultConfig(), win)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer app.Close()
+
+	var el *gxscene.Element
+	tpl := gxscene.Template{Ops: []gxscene.Op{
+		{Code: gxscene.OpElem, Arg: "div"},
+		{Code: gxscene.OpDynAttr, Key: "style", Slot: 0},
+		{Code: gxscene.OpRef, Slot: 1},
+		{Code: gxscene.OpClose},
+	}, N: 2}
+	st := gxscene.Style{"bg": "#123456"}
+	if err := app.Render(func() any {
+		return gxscene.Render(tpl,
+			func() any { return st },
+			func() any { return func(e *gxscene.Element) { el = e } },
+		)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	cs := el.GetComputedStyle()
+	if cs == nil || cs.GetPropertyValue("bg") != "#123456" {
+		t.Fatalf("非 ComputedStyler 后端应回退 Props，got %+v", cs)
+	}
+}
+
 // TestMeasureBackfill 验证 App.Measure 登记的异步读取在下一帧 Draw 后回填真实布局。
 func TestMeasureBackfill(t *testing.T) {
 	win := newCapableWindow()

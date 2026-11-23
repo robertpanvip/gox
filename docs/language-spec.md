@@ -91,6 +91,7 @@ app.render(() =>
 | `el.focus()` | `Focus() bool` | 请求后端把焦点移到该节点；未实现焦点能力时返回 false |
 | `el.boundingClientRect()` | `BoundingClientRect() gxscene.Rect` | 同步读最近一次布局矩形；无布局返回零矩形（宽高 0） |
 | `el.measure(cb)` | `Measure(func(w, h float32))` | 登记异步读布局：下一帧绘制后由宿主回填 `cb`；无布局能力以 `(0,0)` 回填，不悬挂 |
+| `el.getComputedStyle(pseudo?)` | `GetComputedStyle(...string) *gxscene.ComputedStyle` | 读计算样式快照，用 `style.getPropertyValue("bg")` 取值；可选伪状态参数读 hover/active 覆盖值 |
 
 ```jsx
 import gxscene "github.com/robertpanvip/gox/runtime/scene"
@@ -115,6 +116,36 @@ func view() any {
 > 所以 `el.focus()` 不是把焦点写进某个全局变量，而是把「让这个节点获得焦点」的意图交给后端；具体如何落到平台控件由后端决定，host 核心与组件库都不感知。
 
 > 节点身份（`NodeID`）只在 host 与后端协议层流转，不通过 `ref` 暴露给业务代码；`Element` 是唯一对外的命令式句柄。
+
+#### `el.getComputedStyle()`：计算样式快照
+
+仿 Web `getComputedStyle`：`el.getComputedStyle()` 返回 `*gxscene.ComputedStyle`——一份 DOM 风格的只读样式快照，属性名即受限 CSS sheet 的白名单属性（`bg` / `color` / `padding` / `font-size` …），值是字符串。它不暴露 `NodeID` 或 `Props`，只用小写方法读数（编译器还原为大写）：
+
+| GX 写法 | Go 方法 | 语义 |
+|---|---|---|
+| `style.getPropertyValue(name)` | `GetPropertyValue(string) string` | 取值；属性不存在返回空串，名字大小写不敏感 |
+| `style.has(name)` | `Has(string) bool` | 该属性是否在快照中有值 |
+| `style.length()` | `Length() int` | 快照属性个数 |
+| `style.propertyNames()` | `PropertyNames() []string` | 所有属性名（小写、字典序） |
+
+```jsx
+func onMount(el *gxscene.Element) {
+    let cs = el.getComputedStyle()
+    let bg = cs.getPropertyValue("bg")          // "#3b82f6"
+    let hoverBg = el.getComputedStyle("hover").getPropertyValue("bg") // 读 &:hover 覆盖值
+}
+```
+
+- **快照语义**：每次调用生成一份独立快照，不随后续属性更新自动变化；要最新值再调一次。
+- **伪状态参数**：`getComputedStyle("hover")` / `":hover"` / `"&:hover"` 等价，在基础属性之上叠加对应 `&:hover` / `&:active` 子表的同名覆盖（与 `Style.Flatten` 同语义），非冲突属性保留。缺省为空读基础样式。
+- **两级数据源**：实现了可选契约 `gxapp.ComputedStyler` 的后端可提供**真正计算后**的值（含默认值、继承、命中伪状态、动画插值——绘制时实际采用的值），`getComputedStyle` 优先读它；后端返回 `nil` 表示放弃该节点/状态，回退到节点 `Props` 里已展平的声明样式。当前内置 Skia / Rust 后端**未实现**该契约，走 Props 回退——拿到的是声明样式而非含默认值的最终值，headless / 纯 scene 零改动。
+
+```go
+// 后端可选实现：返回 nil 表示放弃，framework 回退到 Props
+type ComputedStyler interface {
+    ComputedStyle(id gxscene.NodeID, state string) map[string]string
+}
+```
 
 #### `el.getContext()`：命令式 canvas 绘制
 

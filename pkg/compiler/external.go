@@ -339,5 +339,33 @@ func transformExternal(in []Token, scope *Scope, pubNames map[string]string, dia
 		// 左侧是变量：外部结构体字段/方法，机械 upperFirst
 		out[k].Text = upperFirst(sel)
 	}
+
+	// 链式调用/索引结果上的方法：`f().lowerMethod()` / `arr[0].lowerMethod()` /
+	// `el.getComputedStyle("hover").getPropertyValue("bg")`。上面主循环只以 Ident
+	// 为 selector 左锚点，覆盖不到 `)` / `]` / `}` 后紧跟的 `.method`——这类
+	// selector 右侧同样是外部方法，按 upperFirst 还原。仍先查自身 pub/private
+	// 保护，避免误伤同名私有成员。
+	for i := 0; i < len(out); i++ {
+		if out[i].Text != "." {
+			continue
+		}
+		lp := prevSig(out, i-1)
+		if lp < 0 || (out[lp].Text != ")" && out[lp].Text != "]" && out[lp].Text != "}") {
+			continue
+		}
+		k := nextSig(out, i+1)
+		if k < 0 || out[k].Kind != Ident || !isLowerStart(out[k].Text) {
+			continue
+		}
+		sel := out[k].Text
+		if real, ok := pubNames[sel]; ok {
+			out[k].Text = real
+			continue
+		}
+		if scope.IsPrivateField(sel) {
+			continue
+		}
+		out[k].Text = upperFirst(sel)
+	}
 	return out
 }

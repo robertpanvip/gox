@@ -28,6 +28,21 @@ type Measurer interface {
 	Measure(id gxscene.NodeID) (w, h float32, ok bool)
 }
 
+// ComputedStyler 是可选的计算样式能力。后端实现后，ref 句柄的
+// el.getComputedStyle() 得以拿到该节点**真正计算后**的样式（含默认值、继承、
+// 伪状态命中、动画插值——即后端绘制时实际采用的值），而不是 host 节点 Props
+// 里仅有的声明值。
+//
+// state 为规整后的伪状态名（"" 基础样式 / "hover" / "active" / "focus" /
+// "disabled"）。返回 nil 表示放弃该节点（或该状态）——Element 会回退到读取
+// 节点 Props 的展平声明样式，故后端可只覆盖自己真正计算过的属性。
+//
+// 实现是可选的：未实现的后端（含 headless、当前 Skia/Rust）零改动，
+// getComputedStyle 走 Props 回退，返回声明样式快照。
+type ComputedStyler interface {
+	ComputedStyle(id gxscene.NodeID, state string) map[string]string
+}
+
 // ---- App 侧：把后端能力适配进场景树 ----
 
 // measureReq 是一条待回填的异步布局读取请求。
@@ -56,6 +71,14 @@ func (a *App) installElementCaps(inst *gxscene.Instance) {
 		measure = func(id gxscene.NodeID) (float32, float32, bool) {
 			return a.win.(Measurer).Measure(id)
 		}
+	}
+
+	// 计算样式能力（可选）：注入后 el.getComputedStyle 优先读后端权威值。
+	// 与 Focuser/Measurer 一样按窗口动态类型探测，未实现则保持 nil 走 Props 回退。
+	if _, ok := a.win.(ComputedStyler); ok {
+		inst.SetComputedStyleCap(func(id gxscene.NodeID, state string) map[string]string {
+			return a.win.(ComputedStyler).ComputedStyle(id, state)
+		})
 	}
 
 	// 异步回填钩子：Element.Measure 同步拿不到布局时把请求挂到这里。

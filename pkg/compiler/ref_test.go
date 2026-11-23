@@ -72,6 +72,61 @@ func view() any {
 	}
 }
 
+// TestComputedStyleLowercaseRestored 验证 GX 侧按规范小写书写计算样式调用
+// （el.getComputedStyle() / style.getPropertyValue() / style.propertyNames()），
+// 完整管线经 transformExternal 还原为首字母大写的 Go 方法；伪状态字符串参数原样保留。
+func TestComputedStyleLowercaseRestored(t *testing.T) {
+	res, err := Compile(`computed_style_lower.gx`, `package main
+import gxscene "github.com/robertpanvip/gox/runtime/scene"
+
+func onMount(el *gxscene.Element) {
+	style := el.getComputedStyle()
+	bg := style.getPropertyValue("bg")
+	has := style.has("color")
+	n := style.length()
+	names := style.propertyNames()
+	hov := el.getComputedStyle("hover")
+	hoverBg := hov.getPropertyValue("bg")
+	// 链式：调用/索引结果上的小写方法也要还原（transformExternal 的 )/]/} 锚点）。
+	chain := el.getComputedStyle("hover").getPropertyValue("bg")
+	_ = chain
+	_, _, _, _, _, _ = bg, has, n, names, hov, hoverBg
+}
+
+func view() any {
+	return <div ref={onMount}>hi</div>
+}
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := res.GoSource
+	for _, want := range []string{
+		"el.GetComputedStyle()",
+		"style.GetPropertyValue(\"bg\")",
+		"style.Has(\"color\")",
+		"style.Length()",
+		"style.PropertyNames()",
+		"el.GetComputedStyle(\"hover\")",
+		"hov.GetPropertyValue(\"bg\")",
+		"el.GetComputedStyle(\"hover\").GetPropertyValue(\"bg\")",
+		"gxscene.OpRef",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("产物应包含 %q, got:\n%s", want, out)
+		}
+	}
+	for _, bad := range []string{
+		"el.getComputedStyle(",
+		"style.getPropertyValue(",
+		"style.propertyNames(",
+	} {
+		if strings.Contains(out, bad) {
+			t.Errorf("小写方法名应被还原，却残留 %q, got:\n%s", bad, out)
+		}
+	}
+}
+
 // TestRefAnySignature 验证未注解的 func(any) 形态回调同样被接受（兼容 GX 侧
 // 不写参数类型的高级用法），且 ref 插槽编号与其它动态插槽连续。
 func TestRefAnySignature(t *testing.T) {
