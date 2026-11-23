@@ -395,6 +395,19 @@ func walkScene(n *jsxNode, ops *[]sceneOp, getters *[]sceneGetter, slotCounter *
 	*ops = append(*ops, sceneOp{code: "OpElem", argQuote: strconv.Quote(n.name), slot: -1})
 
 	for _, a := range n.attrs {
+		// A2/A3：class/style 传对象字面量（class={{ active: true }}）不是 GX/后端
+		// 支持的写法——对象会被降级成匿名 struct 塞进属性值，静默错值（后端拿到
+		// 无意义的 struct）。给出带坐标的诊断，提示改用条件表达式或静态拼接。
+		if (a.name == "class" || a.name == "style") && a.kind == attrExpr && isObjectLitText(a.value) {
+			ctx.reportAttrUnsupported(a.pos, a.name,
+				a.name+" 不支持对象字面量；请用条件表达式（cond ? \"a\" : \"b\"）或静态字符串拼接")
+		}
+		// B10：双引号字符串里的 ${...} 不会被 GX 模板串展开（模板串用反引号），
+		// 会原样进属性值且变量未被引用（declared and not used）。给明确诊断。
+		if a.kind == attrString && strings.Contains(a.value, "${") {
+			ctx.reportAttrUnsupported(a.pos, a.name,
+				"属性值里的 ${...} 插值需用反引号模板串（如 `a ${n}`），双引号不会插值")
+		}
 		// 事件属性 on*：无条件透传为 OpEvent，前端不设白名单、不校验事件名，
 		// 后端自定义事件（如 onFoo）同样原样进 Node.Handlers。静态字符串/bool 的
 		// on* 也放行（编译为常量 getter，后端按需解释）。
@@ -860,6 +873,26 @@ func (ctx *jsxSceneCtx) reportForNotList(n *jsxNode, collType string) {
 		Code:    "for-not-list",
 		Message: "<For> 需要列表，但 each 的类型 " + collType + " 不是列表；请先转成切片再用 <For> 渲染",
 	})
+}
+
+// reportAttrUnsupported 对不支持的属性写法追加带坐标的 GX 诊断（A2/A3/B10）。
+// 目的是把"编译通过 + 静默错值"变成带 GX 位置和修法的明确报错。
+func (ctx *jsxSceneCtx) reportAttrUnsupported(pos Pos, attr, msg string) {
+	if ctx == nil || ctx.diags == nil {
+		return
+	}
+	*ctx.diags = append(*ctx.diags, GXDiagnostic{
+		Pos:     pos,
+		Code:    "attr-unsupported",
+		Message: "属性 " + attr + "：" + msg,
+	})
+}
+
+// isObjectLitText 判断 readBraced 读出的表达式文本是否是一个对象字面量
+// （trim 后以 '{' 开头且以 '}' 结尾，如 "{ active: true, big: true }"）。
+func isObjectLitText(s string) bool {
+	t := strings.TrimSpace(s)
+	return len(t) >= 2 && t[0] == '{' && t[len(t)-1] == '}'
 }
 
 // indexedRoot 判断 each 表达式是否是「根标识符本身被索引」的形态（第十二轮 P1-A）。
