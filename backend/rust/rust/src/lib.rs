@@ -301,3 +301,113 @@ pub extern "C" fn gx_bench_frame(
     let slice = unsafe { std::slice::from_raw_parts(buf, len as usize) };
     render::bench_frame(slice, width, height, iters as u32).unwrap_or(0)
 }
+
+// ---- 镜像一致性探针（纯 CPU，不依赖窗口/GPU）----
+//
+// 供 Go 侧集成测试验证「Go Scene → 二进制帧 → Rust 镜像」端到端一致性：
+// 复用与 Renderer::apply_frame 完全相同的 GRX1/GRX2 消费逻辑，喂一串帧后
+// 可查询镜像节点数与规范化摘要，从而对 1000 节点增删/条件切换做断言。
+
+struct MirrorSession {
+    scene: Option<crate::scene::SceneNode>,
+    applied: u64,
+    failed: u64,
+}
+
+static MIRROR: std::sync::OnceLock<Mutex<MirrorSession>> = std::sync::OnceLock::new();
+
+fn mirror() -> &'static Mutex<MirrorSession> {
+    MIRROR.get_or_init(|| {
+        Mutex::new(MirrorSession { scene: None, applied: 0, failed: 0 })
+    })
+}
+
+/// 重置镜像会话（清空基线树与计数）。
+#[no_mangle]
+pub extern "C" fn gx_mirror_reset() {
+    let mut m = mirror().lock().unwrap();
+    m.scene = None;
+    m.applied = 0;
+    m.failed = 0;
+}
+
+/// 喂一帧到镜像：GRX1 全量重建，GRX2 增量打补丁（与 Renderer::apply_frame 同源）。
+/// 返回 0=成功应用，1=无基线时收到增量，2=无法解析。
+#[no_mangle]
+pub extern "C" fn gx_mirror_apply(buf: *const c_uchar, len: c_int) -> c_int {
+    if buf.is_null() || len <= 0 {
+        return 2;
+    }
+    let slice = unsafe { std::slice::from_raw_parts(buf, len as usize) };
+    let mut m = mirror().lock().unwrap();
+    if let Some(view) = crate::binprotocol::FrameView::parse(slice) {
+        if let Some(root) = crate::scene::SceneNode::from_frame(&view) {
+            m.scene = Some(root);
+            m.applied += 1;
+            return 0;
+        }
+        m.failed += 1;
+        return 2;
+    }
+    if let Some(delta) = crate::scene::DeltaView::parse(slice) {
+        if let Some(root) = m.scene.as_mut() {
+            delta.apply(root);
+            m.applied += 1;
+            return 0;
+        }
+        // 无基线收到增量：与真实 Renderer 一致，拒绝（应由 FullSync 全量恢复）。
+        m.failed += 1;
+        return 1;
+    }
+    m.failed += 1;
+    2
+}
+
+/// 返回镜像节点总数（含 root）。无镜像返回 0。
+#[no_mangle]
+pub extern "C" fn gx_mirror_node_count() -> c_int {
+    fn count(n: &crate::scene::SceneNode) -> i32 {
+        1 + n.children.iter().map(count).sum::<i32>()
+    }
+    let m = mirror().lock().unwrap();
+    m.scene.as_ref().map(count).unwrap_or(0)
+}
+
+/// 把镜像扁平化为 "id:text\n..." 写入调用方缓冲，返回写入字节数（不含结尾 0）。
+/// 缓冲不足时返回 -1。供 Go 侧做内容级一致性断言。
+#[no_mangle]
+pub extern "C" fn gx_mirror_dump(out: *mut c_char, cap: c_int) -> c_int {
+    if out.is_null() || cap <= 0 {
+        return -1;
+    }
+    let m = mirror().lock().unwrap();
+    let mut s = String::new();
+    fn walk(n: &crate::scene::SceneNode, s: &mut String) {
+        s.push_str(&n.id);
+        s.push(':');
+        s.push_str(&n.text);
+        s.push('\n');
+        for c in &n.children {
+            walk(c, s);
+        }
+    }
+    if let Some(root) = m.scene.as_ref() {
+        walk(root, &mut s);
+    }
+    let bytes = s.as_bytes();
+    if bytes.len() + 1 > cap as usize {
+        return -1;
+    }
+    unsafe {
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), out as *mut u8, bytes.len());
+        *out.add(bytes.len()) = 0;
+    }
+    bytes.len() as c_int
+}
+
+/// 返回成功/失败应用次数（编码为 applied<<32 | failed），供测试断言恢复路径。
+#[no_mangle]
+pub extern "C" fn gx_mirror_counts() -> u64 {
+    let m = mirror().lock().unwrap();
+    ((m.applied as u64) << 32) | (m.failed & 0xFFFF_FFFF)
+}

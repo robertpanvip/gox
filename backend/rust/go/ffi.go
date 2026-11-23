@@ -16,6 +16,13 @@ extern void        gx_window_close(void* handle);
 extern const char* gx_window_version();
 extern uint64_t    gx_bench_frame(const uint8_t* buf, int len, float width, float height, int iters);
 
+// 镜像一致性探针（纯 CPU，不依赖窗口/GPU）。
+extern void        gx_mirror_reset();
+extern int         gx_mirror_apply(const uint8_t* buf, int len);
+extern int         gx_mirror_node_count();
+extern int         gx_mirror_dump(char* out, int cap);
+extern uint64_t    gx_mirror_counts();
+
 // 定义在 bridge.c：把 Go 导出回调注册给 Rust。
 extern void install_event_cb(void* handle, void* ctx);
 */
@@ -84,4 +91,27 @@ func cBenchFrame(buf []byte, width, height float32, iters int) uint64 {
 		(*C.uint8_t)(unsafe.Pointer(&buf[0])), C.int(len(buf)),
 		C.float(width), C.float(height), C.int(iters),
 	))
+}
+
+// ---- 镜像一致性探针封装（测试用）----
+
+func mirrorReset() { C.gx_mirror_reset() }
+func mirrorApply(buf []byte) int {
+	if len(buf) == 0 {
+		return 2
+	}
+	return int(C.gx_mirror_apply((*C.uint8_t)(unsafe.Pointer(&buf[0])), C.int(len(buf))))
+}
+func mirrorNodeCount() int { return int(C.gx_mirror_node_count()) }
+func mirrorCounts() (applied, failed uint64) {
+	c := uint64(C.gx_mirror_counts())
+	return c >> 32, c & 0xFFFFFFFF
+}
+func mirrorDump() string {
+	buf := make([]byte, 1<<20) // 1MB 足够 1000 节点的 id:text 摘要
+	n := int(C.gx_mirror_dump((*C.char)(unsafe.Pointer(&buf[0])), C.int(len(buf))))
+	if n < 0 {
+		return ""
+	}
+	return string(buf[:n])
 }

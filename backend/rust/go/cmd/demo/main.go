@@ -7,11 +7,11 @@ import (
 	"fmt"
 	"time"
 
+	rb "github.com/robertpanvip/gox-backend-rust"
+	widgets "github.com/robertpanvip/gox-backend-skia/widgets"
 	gxapp "github.com/robertpanvip/gox/runtime/app"
 	gxscene "github.com/robertpanvip/gox/runtime/scene"
 	"github.com/robertpanvip/gox/runtime/signal"
-	rb "github.com/robertpanvip/gox/examples/rust-backend/go"
-	widgets "github.com/robertpanvip/gox-backend-skia/widgets"
 )
 
 // textNode 用 Template 造一个带样式的文本组件（host 没有独立 Text 构造函数）。
@@ -51,10 +51,15 @@ func main() {
 		}
 	}()
 
+	// 装配层注册后端并按名选择：核心 gxapp 不 import 本后端，依赖方向保持单向。
+	// （直接注入仍可用：gxapp.OpenWith(cfg, win)。）
 	win := rb.NewWindow()
-	app, err := gxapp.OpenWith(gxapp.WindowConfig{
-		Title: "PULSE Dashboard", Width: 760, Height: 560,
-	}, win)
+	gxapp.MustRegister("rust", func(cfg gxapp.WindowConfig) (gxapp.Window, error) {
+		return win, nil
+	})
+	app, err := gxapp.OpenBackend(gxapp.WindowConfig{
+		Title: "PULSE Dashboard", Width: 760, Height: 560, Backend: "rust",
+	})
 	if err != nil {
 		panic(err)
 	}

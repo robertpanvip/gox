@@ -1,4 +1,4 @@
-module github.com/robertpanvip/gox/examples/rust-backend/go
+module github.com/robertpanvip/gox-backend-rust
 
 go 1.27
 

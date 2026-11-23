@@ -85,7 +85,7 @@ CPU 前置管线 Rust 约快 2×。但两边的**实际光栅化/文本绘制**�
 
 ```bash
 # Rust 侧（解析→建树→Taffy 布局→指令，含 Go 编码输入）
-cd examples/rust-backend/go
+cd backend/rust/go
 GOWORK=off CGO_ENABLED=1 go test -run '^$' -bench BenchmarkRustParseLayout -benchtime=1s .
 
 # Go/Skia 侧（Yoga 布局）
@@ -93,12 +93,12 @@ cd backend/skia
 GOWORK=off go test -run '^$' -bench BenchmarkSkiaLayout -benchtime=1s .
 
 # Go 侧 GRX1 编码
-cd examples/rust-backend/go
+cd backend/rust/go
 GOWORK=off CGO_ENABLED=1 go test -run '^$' -bench BenchmarkGXEncode -benchtime=1s .
 ```
 
 基准源码：
-- `examples/rust-backend/go/bench_test.go`
+- `backend/rust/go/bench_test.go`
 - `backend/skia/bench_test.go`
 - Rust 纯 CPU 入口：`render.rs::bench_frame` + C ABI `gx_bench_frame`
 
@@ -180,7 +180,7 @@ GOWORK=off CGO_ENABLED=1 go test -run '^$' -bench BenchmarkGXEncode -benchtime=1
 ## 复现（补充部分）
 
 ```bash
-cd examples/rust-backend/rust
+cd backend/rust/rust
 
 # B: Rust 冷编译（独立 target 目录，不破坏现有库）
 CARGO_TARGET_DIR=/tmp/gx-clean-target bash -c 'rm -rf /tmp/gx-clean-target; \
@@ -195,11 +195,11 @@ GOWORK=off GOCACHE=/tmp/emptycache go build -o /tmp/demo2 .   # 冷缓存
 
 # A: 体积
 cd ../../../../   # 回到仓库根，或直接用绝对路径
-ls -l examples/rust-backend/rust/target/release/libgxbackend_rust.a
+ls -l backend/rust/rust/target/release/libgxbackend_rust.a
 strip -c /tmp/demo && ls -l /tmp/demo       # strip 前后
 
 # C: 启动时间（需 Xvfb + llvmpipe）
-cd examples/rust-backend/go
+cd backend/rust/go
 GOWORK=off CGO_ENABLED=1 go build -o /tmp/startupbench ./cmd/startupbench
 Xvfb :99 -screen 0 1280x800x24 & XPID=$!; sleep 1
 for i in 1 2 3 4 5; do

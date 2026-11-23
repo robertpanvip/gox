@@ -577,6 +577,9 @@ gox/
 │   ├── lsp/            LSP 协议 / server / 诊断 / 符号映射 / 重命名
 │   └── buildcheck/     真实 go build 检查（可取消 + LRU）
 ├── bindings/cabi/      C-ABI 共享库（供 IDEA 插件经 JNA 调用）
+├── backend/            可独立拆分的后端实现（统一契约 Contract + Adapter）
+│   ├── skia/           Go Backend（module gox-backend-skia）
+│   └── rust/           Rust Backend（Go Adapter + Rust Runtime + Wire 协议）
 ├── examples/           .gx 示例（含 jsxscene.gx）
 ├── testdata/           golden 产物 + LSP 端到端驱动脚本
 ├── docs/               设计与集成文档
@@ -589,7 +592,7 @@ gox/
 
 分层：`pkg` 是对外稳定 API，`internal` 仅供本仓库 cmd 使用；IDEA 插件等前端通过 `bindings/cabi` 或直接 import `pkg` 接入，不碰 `internal`。
 
-详细文档：[语言规范](docs/language-spec.md) · [架构](docs/architecture.md) · [后端接入（host + 协议）](docs/backend-integration.md) · [JNA 集成](docs/CABI.md)
+详细文档：[语言规范](docs/language-spec.md) · [架构](docs/architecture.md) · [后端架构（契约与拆分）](docs/backend-architecture.md) · [后端接入（host + 协议）](docs/backend-integration.md) · [JNA 集成](docs/CABI.md)
 
 ## 构建与使用
 

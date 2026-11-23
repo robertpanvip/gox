@@ -31,11 +31,16 @@ type Window struct {
 	handle unsafe.Pointer
 	cfg    gxapp.WindowConfig
 
-	hasBase    bool // Rust 侧是否已建立基线镜像树
-	events     chan inputEvent
-	dispatcher func(ev InputEvent)
-	mu         sync.Mutex
-	closed     bool
+	hasBase     bool   // Rust 侧是否已成功建立基线镜像树
+	lastVersion uint64 // 最近一次成功 Present 的 Frame.Version（丢帧检测）
+	events      chan inputEvent
+	dispatcher  func(ev InputEvent)
+	mu          sync.Mutex
+	closed      bool
+
+	// drawFn 仅供测试注入：模拟 cWindowDraw 的返回码与捕获发送字节。
+	// 生产环境为 nil，走真实 cgo 调用 cWindowDraw。
+	drawFn func(data []byte) int
 }
 
 // 编译期断言：本后端采用 Frame 契约。
@@ -60,6 +65,7 @@ func (w *Window) Open(cfg gxapp.WindowConfig) error {
 	w.cfg = cfg
 	w.handle = cWindowNew(cfg.Width, cfg.Height, cfg.Title)
 	if w.handle == nil {
+		runtime.UnlockOSThread() // 创建失败必须释放锁，否则该 OS 线程永久被占（评审 P0）
 		return fmt.Errorf("rustbackend: gx_window_new failed")
 	}
 	windowsMu.Lock()
@@ -79,6 +85,7 @@ func (w *Window) Open(cfg gxapp.WindowConfig) error {
 func (w *Window) BindApp(app *gxapp.App) {
 	w.mu.Lock()
 	w.hasBase = false // 重新建基线
+	w.lastVersion = 0 // 版本序列随新树重置
 	w.mu.Unlock()
 	if app != nil {
 		app.EnableChanges()
@@ -86,8 +93,13 @@ func (w *Window) BindApp(app *gxapp.App) {
 }
 
 // Present 实现 gxapp.FramePresenter：首帧全量快照，后续用 frame.Changes 发增量。
-// 后端不再反向访问 App——Changes 由 Host 随帧交付，Version 可用于去重/排序。
-// frame.FullSync=true（上次 Present 失败后的恢复帧）时忽略 Changes，用 Root 全量重建。
+// 后端不再反向访问 App——Changes 由 Host 随帧交付。
+//
+// 镜像一致性契约（Rust 后端评审 P0/P1）：
+//   - 只有 cWindowDraw 成功才推进 hasBase/lastVersion；失败立即回退 hasBase，
+//     下一帧用 Root 全量重建，杜绝「Go 以为有基线、Rust 实际没有」的永久错配。
+//   - Version 必须严格递增 1；跳号/回退/重复视为丢帧，强制全量同步。
+//   - 无变化且已有基线时不发送任何数据（避免空帧触发整棵树重序列化）。
 func (w *Window) Present(frame *gxapp.Frame) error {
 	if w.handle == nil || frame == nil || frame.Root == nil {
 		return nil
@@ -96,32 +108,58 @@ func (w *Window) Present(frame *gxapp.Frame) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
+	// 版本连续性：有基线时 Version 必须恰好 +1，否则镜像可能已失步，强制全量重建。
+	needFull := false
+	if w.hasBase && frame.Version > 0 && frame.Version != w.lastVersion+1 {
+		needFull = true
+	}
+	fullSync := frame.FullSync || needFull || !w.hasBase
+
+	// 无变化且基线完好且无需全量：不发数据。
+	// 注意仍要推进 lastVersion——Host 每帧都递增 Version，跳过会让下一帧被误判丢帧。
+	if w.hasBase && !fullSync && len(frame.Changes) == 0 {
+		w.lastVersion = frame.Version
+		return nil
+	}
+
 	var data []byte
 	var err error
-	if w.hasBase && !frame.FullSync && len(frame.Changes) > 0 {
+	if !fullSync && len(frame.Changes) > 0 {
 		if delta, ok := serializeDelta(frame.Changes, root, uint32(w.cfg.Width), uint32(w.cfg.Height)); ok {
 			data = delta
 		}
 	}
-	// 没有基线 / 无变化 / 有结构动作退化 → 发全量快照。
 	if data == nil {
 		data, err = serializeFrameBin(root, uint32(w.cfg.Width), uint32(w.cfg.Height))
 		if err != nil {
 			return fmt.Errorf("rustbackend: serialize frame: %w", err)
 		}
-		w.hasBase = true
 	}
-	if rc := cWindowDraw(w.handle, data); rc != 0 {
+
+	// 只有 draw 成功才确认基线；失败回退让下一帧全量重建。
+	if rc := w.draw(data); rc != 0 {
+		w.hasBase = false
 		return fmt.Errorf("rustbackend: gx_window_draw rc=%d", rc)
 	}
+	w.hasBase = true
+	w.lastVersion = frame.Version
 	return nil
+}
+
+// draw 是 cWindowDraw 的窄封装，仅为测试注入留钩子；生产路径零开销直通 cgo。
+func (w *Window) draw(data []byte) int {
+	if w.drawFn != nil {
+		return w.drawFn(data)
+	}
+	return cWindowDraw(w.handle, data)
 }
 
 // Draw 实现 gxapp.Window 的兼容路径：未走 Frame 契约时每帧发全量快照。
 // App 检测到本后端实现 FramePresenter 后会优先调用 Present，故正常路径不会到这里；
 // 保留它是为了满足 gxapp.Window 接口（需要一个 Draw 方法）。
 func (w *Window) Draw(root *gxscene.Node) error {
-	return w.Present(&gxapp.Frame{Root: root})
+	// 兼容路径无 Version/Changes 概念，强制全量快照（与旧行为一致）。
+	return w.Present(&gxapp.Frame{Root: root, FullSync: true})
 }
 
 // Run 实现 gxapp.Window：goroutine 跑 Rust 事件循环，本线程消费事件并分派。

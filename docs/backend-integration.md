@@ -192,7 +192,7 @@ func (w *Backend) Present(frame *gxapp.Frame) error {
     return nil
 }
 ```
-Rust 后端（`examples/rust-backend/go/window.go`）已采用此契约，移除了旧的 `BindApp` 反向引用。
+Rust 后端（`backend/rust/go/window.go`）已采用此契约，移除了旧的 `BindApp` 反向引用。
 
 底层增量流仍可独立使用（不实现 FramePresenter 时，或需要自行控制取变化时）：
 ```go
