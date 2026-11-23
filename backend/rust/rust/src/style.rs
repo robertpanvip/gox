@@ -275,35 +275,61 @@ fn overlay_pseudo(props: &mut std::collections::HashMap<String, String>, pseudo:
     changed
 }
 
-/// 按当前 hovered/active 节点生成一棵 props 被伪状态覆盖的临时树。
-/// active 优先级高于 hover（两者命中同一节点时后覆盖）。
-/// 未命中或节点无伪状态子表时返回clone（语义等价，调用方统一处理）。
+/// 判断节点是否禁用。props 由 host 原样透传，禁用标记兼容 bool 与字符串：
+/// "true"/"1" 视为禁用；其余（含缺省、"false"/"0"）视为启用。
+fn is_disabled(n: &SceneNode) -> bool {
+    match n.props.get("disabled").map(|s| s.trim().to_ascii_lowercase()) {
+        Some(v) => v == "true" || v == "1",
+        None => false,
+    }
+}
+
+/// 按当前交互状态生成一棵 props 被伪状态覆盖的临时树。
+///
+/// 覆盖顺序（后者覆盖前者同名属性）：
+///   hover → focus → active → disabled
+/// 即 active 强于 hover/focus，disabled 又强于三者（禁用态应盖过任何交互态）。
+/// 与 Animator::apply 同构：只克隆命中节点的 props，不污染常驻镜像树。
+///
+/// - hovered / active / focused 为当前命中的节点 ID（None 表示无此状态）。
+/// - disabled 是节点自身的持久属性（props["disabled"]），无需外部载体：
+///   即便鼠标悬停或聚焦，禁用节点的 &:disabled 都应生效并覆盖交互态。
+/// 未命中或节点无对应伪状态子表时返回 clone（语义等价，调用方统一处理）。
 pub fn apply_pseudo_state(
     root: &SceneNode,
     hovered: Option<&str>,
     active: Option<&str>,
+    focused: Option<&str>,
 ) -> SceneNode {
-    fn walk(n: &SceneNode, hovered: Option<&str>, active: Option<&str>) -> SceneNode {
+    fn walk(
+        n: &SceneNode,
+        hovered: Option<&str>,
+        active: Option<&str>,
+        focused: Option<&str>,
+    ) -> SceneNode {
         let mut out = n.clone();
         let id = n.id.as_str();
-        if Some(id) == hovered || Some(id) == active {
-            // hover 先、active 后：active 覆盖 hover 同名属性。
-            // focus/disabled 的状态载体（焦点/禁用）尚未接入，留作后续扩展点；
-            // 不能在此无条件套用，否则 hover 命中会让 focus 样式错误生效。
-            if Some(id) == hovered {
-                overlay_pseudo(&mut out.props, "&:hover");
-            }
-            if Some(id) == active {
-                overlay_pseudo(&mut out.props, "&:active");
-            }
+        // 交互态：hover 先、focus 次、active 后，逐级覆盖同名属性。
+        if Some(id) == hovered {
+            overlay_pseudo(&mut out.props, "&:hover");
+        }
+        if Some(id) == focused {
+            overlay_pseudo(&mut out.props, "&:focus");
+        }
+        if Some(id) == active {
+            overlay_pseudo(&mut out.props, "&:active");
+        }
+        // 禁用态优先级最高：盖过 hover/focus/active 的覆盖结果。
+        if is_disabled(n) {
+            overlay_pseudo(&mut out.props, "&:disabled");
         }
         for c in &mut out.children {
             let old = c.clone();
-            *c = walk(&old, hovered, active);
+            *c = walk(&old, hovered, active, focused);
         }
         out
     }
-    walk(root, hovered, active)
+    walk(root, hovered, active, focused)
 }
 
 // ---------- transition 插值引擎 ----------
@@ -409,11 +435,12 @@ mod tests {
     }
 
     #[test]
-    fn apply_pseudo_state_overlays_hover_and_active() {
+    fn apply_pseudo_state_overlays_hover_focus_active() {
         let mut n = node(&[]);
         n.id = "btn".into();
         n.props.insert("bg".into(), "#fff".into());
         n.props.insert("&:hover".into(), r##"{"bg":"#eee","color":"#333"}"##.into());
+        n.props.insert("&:focus".into(), r##"{"border":"#00f"}"##.into());
         n.props.insert("&:active".into(), r##"{"bg":"#ddd"}"##.into());
         let mut child = node(&[]);
         child.id = "label".into();
@@ -421,23 +448,60 @@ mod tests {
         n.children.push(child);
 
         // 无命中：原样
-        let plain = apply_pseudo_state(&n, None, None);
+        let plain = apply_pseudo_state(&n, None, None, None);
         assert_eq!(plain.props["bg"], "#fff");
         assert!(!plain.props.contains_key("color"));
 
         // hover：子表覆盖 bg + 新增 color
-        let hov = apply_pseudo_state(&n, Some("btn"), None);
+        let hov = apply_pseudo_state(&n, Some("btn"), None, None);
         assert_eq!(hov.props["bg"], "#eee");
         assert_eq!(hov.props["color"], "#333");
         assert_eq!(hov.children[0].props["bg"], "#000", "未命中子节点不受影响");
 
-        // hover + active：active 覆盖同名 bg
-        let act = apply_pseudo_state(&n, Some("btn"), Some("btn"));
+        // focus：只套 focus 子表
+        let foc = apply_pseudo_state(&n, None, None, Some("btn"));
+        assert_eq!(foc.props["bg"], "#fff", "focus 未声明 bg 应保留基础值");
+        assert_eq!(foc.props["border"], "#00f", "focus 子表新增 border");
+
+        // hover + focus + active：active 覆盖同名 bg，focus 的非冲突属性保留
+        let act = apply_pseudo_state(&n, Some("btn"), Some("btn"), Some("btn"));
         assert_eq!(act.props["bg"], "#ddd");
         assert_eq!(act.props["color"], "#333", "hover 的非冲突属性保留");
+        assert_eq!(act.props["border"], "#00f", "focus 的非冲突属性保留");
 
         // 原树不被污染
         assert_eq!(n.props["bg"], "#fff");
+    }
+
+    #[test]
+    fn apply_pseudo_state_disabled_overrides_and_is_idempotent() {
+        let mut n = node(&[]);
+        n.id = "btn".into();
+        n.props.insert("bg".into(), "#3b82f6".into());
+        n.props.insert("disabled".into(), "true".into());
+        n.props.insert("&:hover".into(), r##"{"bg":"#2563eb"}"##.into());
+        n.props.insert("&:active".into(), r##"{"bg":"#1d4ed8"}"##.into());
+        n.props.insert("&:focus".into(), r##"{"bg":"#60a5fa"}"##.into());
+        n.props.insert("&:disabled".into(), r##"{"bg":"#9ca3af","opacity":"0.6"}"##.into());
+
+        // 禁用是节点自身属性，无外部载体也应生效，且盖过任何交互态。
+        let dis = apply_pseudo_state(&n, Some("btn"), Some("btn"), Some("btn"));
+        assert_eq!(dis.props["bg"], "#9ca3af", "disabled 应盖过 hover/focus/active");
+        assert_eq!(dis.props["opacity"], "0.6", "disabled 子表新增属性");
+
+        // 字符串 "1" 同样识别为禁用。
+        n.props.insert("disabled".into(), "1".into());
+        let dis1 = apply_pseudo_state(&n, None, None, None);
+        assert_eq!(dis1.props["bg"], "#9ca3af");
+
+        // "false" / 缺省不禁用：交互态正常生效。
+        n.props.insert("disabled".into(), "false".into());
+        let en = apply_pseudo_state(&n, Some("btn"), None, None);
+        assert_eq!(en.props["bg"], "#2563eb", "启用时 hover 正常生效");
+
+        n.props.remove("disabled");
+        let en2 = apply_pseudo_state(&n, None, None, None);
+        assert_eq!(en2.props["bg"], "#3b82f6", "无 disabled 键时为基础值");
     }
 
     #[test]

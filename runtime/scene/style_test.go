@@ -102,6 +102,34 @@ func TestStyleParseStyle(t *testing.T) {
 	}
 }
 
+func TestStyleFocusDisabled(t *testing.T) {
+	s := Style{
+		"bg":         "#3b82f6",
+		"&:focus":    Style{"border": "#2563eb"},
+		"&:disabled": Style{"bg": "#9ca3af", "opacity": "0.6"},
+	}
+	if err := s.Validate(); err != nil {
+		t.Fatalf("focus/disabled 应通过校验: %v", err)
+	}
+	p := s.Props()
+	if _, ok := p[PseudoFocus]; !ok {
+		t.Error("focus 子表应编码进 props")
+	}
+	if _, ok := p[PseudoDisabled]; !ok {
+		t.Error("disabled 子表应编码进 props")
+	}
+	// Flatten 顺序：focus 先、disabled 后（后者覆盖同名 bg）。
+	both := s.Flatten("focus", "disabled")
+	if both["bg"] != "#9ca3af" || both["border"] != "#2563eb" || both["opacity"] != "0.6" {
+		t.Errorf("focus+disabled 展平错误: %v", both)
+	}
+	// ParseStyle 也能解析。
+	parsed, err := ParseStyle(`{"bg":"#fff","&:focus":{"border":"#00f"},"&:disabled":{"bg":"#999"}}`)
+	if err != nil || len(parsed) != 3 {
+		t.Errorf("ParseStyle focus/disabled 失败: %v %v", parsed, err)
+	}
+}
+
 func TestPseudoStateFromProps(t *testing.T) {
 	s := Style{"bg": "#fff", "&:hover": Style{"bg": "#eee"}}
 	sub, ok := PseudoStateFromProps(map[string]any(s.Props()), "hover")

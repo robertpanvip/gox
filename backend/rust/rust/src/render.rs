@@ -798,10 +798,11 @@ pub struct Renderer {
     cached_areas_dirty: bool,
     /// 最近光标位置（MouseInput 事件不带坐标）
     cursor: (f32, f32),
-    /// 当前 hover/active 命中的节点 ID（伪状态样式 &:hover/&:active 用）。
-    /// lib.rs 在 CursorMoved / MouseInput 事件里经 set_hover/set_active 更新。
+    /// 当前 hover/active/focused 命中的节点 ID（伪状态样式 &:hover/&:active/&:focus 用）。
+    /// lib.rs 在 CursorMoved / MouseInput 事件里经 set_hover/set_active/set_focused 更新。
     hovered_id: Option<String>,
     active_id: Option<String>,
+    focused_id: Option<String>,
     window: std::sync::Arc<Window>,
 }
 
@@ -962,6 +963,7 @@ struct VSOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f };
             cursor: (0.0, 0.0),
             hovered_id: None,
             active_id: None,
+            focused_id: None,
             window,
         }
     }
@@ -1033,6 +1035,18 @@ struct VSOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f };
             false
         } else {
             self.active_id = id;
+            self.frame_dirty = true;
+            true
+        }
+    }
+
+    /// 设置 focused 节点（点击输入框 / 失焦）；返回是否变化。
+    /// 变化置 frame_dirty，下一帧重算 &:focus 覆盖。
+    pub fn set_focused(&mut self, id: Option<String>) -> bool {
+        if self.focused_id == id {
+            false
+        } else {
+            self.focused_id = id;
             self.frame_dirty = true;
             true
         }
@@ -1210,12 +1224,13 @@ struct VSOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f };
         if need_rebuild {
             // —— 有变化 / 动画中：全量重算布局、背景光栅化、文本整形 ——
             let animated = self.animator.apply(scene);
-            // 伪状态样式：按当前 hover/active 命中把 &:hover/&:active 子表覆盖进
-            // 临时树（不改常驻镜像树）。hover 命中已由 hit_node_id 边沿检测维护。
+            // 伪状态样式：按当前 hover/focus/active 命中把对应子表覆盖进
+            // 临时树（不改常驻镜像树）。disabled 由节点自身属性判定、优先级最高。
             let styled = crate::style::apply_pseudo_state(
                 &animated,
                 self.hovered_id.as_deref(),
                 self.active_id.as_deref(),
+                self.focused_id.as_deref(),
             );
             let dl = DisplayList::from_scene(&styled, self.width as f32, self.height as f32);
             let bg = self.bg;

@@ -317,9 +317,18 @@ impl winit::application::ApplicationHandler for WinitApp<'_> {
                 if renderer.set_active(hit) {
                     renderer.window().request_redraw();
                 }
+                // focus 伪状态：点击输入框 → 该节点聚焦；点击其他区域 → 失焦（同浏览器）。
+                // 这与 host 侧 Input 的 focusToken signal 互补：后者驱动 IME/光标，
+                // 这里驱动 & 选择器的视觉样式；点击场景下两者指向同一节点。
+                // 边沿检测：仅焦点变化才重绘。
+                let input_ev = renderer.hit_input(x, y);
+                let focus_id = input_ev.as_ref().map(|e| e.node_id.clone());
+                if renderer.set_focused(focus_id) {
+                    renderer.window().request_redraw();
+                }
                 if let Some(ev) = renderer.hit_click(x, y) {
                     fire(&self.cb, &self.cb_ctx, &ev.to_json());
-                } else if let Some(ev) = renderer.hit_input(x, y) {
+                } else if let Some(ev) = input_ev {
                     fire(&self.cb, &self.cb_ctx, &ev.to_json());
                 }
             }

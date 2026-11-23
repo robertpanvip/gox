@@ -15,8 +15,10 @@ import (
 //
 //	gxscene.Style{
 //	    "bg": "#3b82f6", "color": "#fff", "padding": "11",
-//	    "&:hover":  gxscene.Style{"bg": "#2563eb"},
-//	    "&:active": gxscene.Style{"bg": "#1d4ed8", "transform": "scale(.98)"},
+//	    "&:hover":    gxscene.Style{"bg": "#2563eb"},
+//	    "&:focus":    gxscene.Style{"border": "#2563eb"},
+//	    "&:active":   gxscene.Style{"bg": "#1d4ed8", "transform": "scale(.98)"},
+//	    "&:disabled": gxscene.Style{"bg": "#9ca3af", "opacity": "0.6"},
 //	}
 //
 // JSON / GX 对象字面量同样用 "&:hover" 作为 key。伪状态只作用于本节点自身

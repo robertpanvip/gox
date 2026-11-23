@@ -244,10 +244,9 @@ func defaultStyle() style {
 // hover/active 样式：给定一个带 "&:hover" 子表的 props 与 state="hover"，
 // 返回的 style 反映子表覆盖后的值。state="" 时等价于 parseStyle。
 func parseStyleWithState(props map[string]any, state string) style {
-	if state != "" {
-		props = applyPseudoStyle(props, state)
-	}
-	return parseStyle(props)
+	// 无条件走 applyPseudoStyle：交互态由 state 指定，而 disabled 是节点自身属性、
+	// 与 state 无关（对齐 Rust——disabled 总被检查，无 state 也必须生效）。
+	return parseStyle(applyPseudoStyle(props, state))
 }
 
 // parseStyle 把 Node.Props 解析成 style。所有解析失败都静默回退默认值。
@@ -424,45 +423,78 @@ func parseStyle(props map[string]any) style {
 	return s
 }
 
-// applyPseudoStyle 按强制伪状态把子表覆盖进 props 的副本（headless 验证用）。
-// host 展平后 props 含 "&:hover"/"&:active" 的 JSON 串；本函数把它展开并覆盖
-// 同名普通属性，语义与 Rust 的 style::apply_pseudo_state 对齐。
-// Skia 无真实鼠标事件，此函数供测试/特殊宿主显式指定状态，不改动入参。
-func applyPseudoStyle(props map[string]any, state string) map[string]any {
-	out := make(map[string]any, len(props))
-	for k, v := range props {
-		out[k] = v
-	}
-	// 只认 &:hover / &:active（host 已把 $: 规整为 &:）。
-	var key string
-	switch state {
-	case "hover":
-		key = "&:hover"
-	case "active":
-		key = "&:active"
-	default:
-		return out
-	}
-	raw, ok := out[key]
+// overlayPseudoInto 把单个伪状态子表覆盖进 dst（原地）。子表在 host 展平后是
+// props[pseudoKey] 的 JSON 串；展开后覆盖同名普通属性。找不到/解析失败则无操作。
+func overlayPseudoInto(dst map[string]any, pseudoKey string) {
+	raw, ok := dst[pseudoKey]
 	if !ok {
-		return out
+		return
 	}
 	var obj map[string]any
 	switch x := raw.(type) {
 	case string:
 		if err := json.Unmarshal([]byte(x), &obj); err != nil {
-			return out
+			return
 		}
 	case map[string]any:
 		obj = x
 	default:
-		return out
+		return
 	}
 	for k, v := range obj {
 		switch x := v.(type) {
 		case string, float64, bool:
-			out[k] = x
+			dst[k] = x
 		}
+	}
+}
+
+// isDisabledProp 判断节点自身 disabled 属性。兼容 bool 与字符串 "true"/"1"
+// （与 Rust style::is_disabled 语义一致）。
+func isDisabledProp(props map[string]any) bool {
+	v, ok := props["disabled"]
+	if !ok {
+		return false
+	}
+	switch x := v.(type) {
+	case bool:
+		return x
+	case string:
+		s := strings.ToLower(strings.TrimSpace(x))
+		return s == "true" || s == "1"
+	default:
+		return false
+	}
+}
+
+// applyPseudoStyle 按当前状态把伪状态子表覆盖进 props 的副本（headless 验证用）。
+// host 展平后 props 含 "&:hover"/"&:focus"/"&:active"/"&:disabled" 的 JSON 串；
+// 本函数展开子表并覆盖同名普通属性，语义与 Rust 的 style::apply_pseudo_state 对齐。
+//
+// state 是显式指定的交互伪状态："hover"/"focus"/"active"（"" 表示无交互态）；
+// "disabled" 也可显式指定。此外节点自身 disabled 为真时，&:disabled 子表总会
+// 在最后叠加（优先级最高，盖过交互态）——与 Rust「disabled 由节点属性驱动、
+// 优先级最高」完全一致。Skia 无真实鼠标/焦点事件，此函数供测试/特殊宿主使用，
+// 不改动入参。
+func applyPseudoStyle(props map[string]any, state string) map[string]any {
+	out := make(map[string]any, len(props))
+	for k, v := range props {
+		out[k] = v
+	}
+	// 显式交互态（host 已把 $: 规整为 &:）。
+	switch state {
+	case "hover":
+		overlayPseudoInto(out, "&:hover")
+	case "focus":
+		overlayPseudoInto(out, "&:focus")
+	case "active":
+		overlayPseudoInto(out, "&:active")
+	case "disabled":
+		overlayPseudoInto(out, "&:disabled")
+	}
+	// 禁用由节点自身属性驱动，优先级最高，最后叠加。
+	if isDisabledProp(props) {
+		overlayPseudoInto(out, "&:disabled")
 	}
 	return out
 }
