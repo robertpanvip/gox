@@ -29,6 +29,7 @@ pub func f() {
     sub := xs[1:2]
     m := map[string]int{"a": 1}
     b := Box[int]{v: 3}
+    _ = xs.map(func(v int) int { return v }) // 触发按需提升
     fmt.println(xs, arr, x, sub, m, b)
 }
 `
@@ -49,7 +50,7 @@ type node struct{ n int }
 pub func f() {
     var grid [][]int
     var ptrs []*node
-    _ = grid
+    _ = grid.map(func(row []int) []int { return row }) // 触发按需提升
     _ = ptrs
 }
 `
@@ -67,7 +68,7 @@ import "time"
 
 pub func f() {
     var ts []time.Time
-    _ = ts
+    _ = ts.map(func(t time.Time) time.Time { return t }) // 触发按需提升
 }
 `
 	got := compileOK(t, "qual.gx", src)
@@ -89,7 +90,7 @@ pub func f() { println("no slice here") }
 func TestCustomModuleListImport(t *testing.T) {
 	src := `package main
 
-pub func f() { xs := []int{1}; _ = xs }
+pub func f() { xs := []int{1}; _ = xs.map(func(v int) int { return v }) }
 `
 	res, err := CompileWithModule("mod.gx", src, "example.com/myapp")
 	if err != nil {
@@ -108,7 +109,7 @@ func TestListImportNotDuplicated(t *testing.T) {
 
 import "github.com/robertpanvip/gox/runtime/list"
 
-pub func f() { xs := []int{1}; _ = xs }
+pub func f() { xs := []int{1}; _ = xs.map(func(v int) int { return v }) }
 `
 	got := compileOK(t, "dupimp.gx", src)
 	if n := strings.Count(got, `import "github.com/robertpanvip/gox/runtime/list"`); n != 1 {

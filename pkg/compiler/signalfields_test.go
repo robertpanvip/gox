@@ -518,6 +518,7 @@ func main() {
 	sig n = "x"
 	m := map[string]P{"k": {a: n}}
 	s := []P{{a: n}, {a: "lit"}}
+	_ = s.map(func(v P) P { return v }) // 触发按需提升
 	_, _ = m, s
 }
 `

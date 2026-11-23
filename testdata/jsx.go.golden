@@ -1,18 +1,16 @@
 package main
 
-import "github.com/robertpanvip/gox/runtime/list"
-
 import (
     "fmt"
     gxscene "github.com/robertpanvip/gox/runtime/scene"
 )
 
 // card 把标题与列表渲染成常驻场景树；JSX 被编译成 gxscene opcode 模板 + getter。
- func Card(title string, items list.List[string]) any {
+ func Card(title string, items []string) any {
     return gxscene.Render(gxscene.Template{Ops:[]gxscene.Op{gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpAttr,Arg:"card",Key:"class",},gxscene.Op{Code:gxscene.OpElem,Arg:"h1",},gxscene.Op{Code:gxscene.OpDynChild,Slot:0,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpElem,Arg:"ul",},gxscene.Op{Code:gxscene.OpDynChild,Slot:1,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpElem,Arg:"img",},gxscene.Op{Code:gxscene.OpAttr,Arg:"logo.png",Key:"src",},gxscene.Op{Code:gxscene.OpAttr,Arg:"true",Key:"alt",},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpClose,},},N:2,}, func() any{ return title }, func() any{ return items })
 }
 
 func main() {
-    view := Card("GX", list.List[string]{"a", "b"})
+    view := Card("GX", []string{"a", "b"})
     fmt.Println(view)
 }

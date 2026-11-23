@@ -201,16 +201,20 @@ GX 语法本是 Go 的超集——`.gx` 里既能写 JSX，也能直接写原生
 - **JSX 写法**（如 `card.gx`）：`pub func` + JSX + `gxscene.Get`。属性/文本/子节点编译成 `OpAttr`/`OpChildText`/`OpDynChild`+getter，事件 `onXxx={...}` 编译成 `OpEvent`，`if`/`<For>` 编译成 `OpBranch`/`OpFor`。适合纯展示/布局组件。
 - **原生 Go 写法**（其余大多数组件）：手写 `gxscene.Op` 数组 + 事件/focus/浮层等命令式逻辑，整段放进 `.gx` 原样透传。适合依赖 `Owner/CreateRoot`（Context/Theme Provider）、稳定 `*Branch` 对象（Tooltip/TimePicker/Select 浮层）、焦点状态机（Input）等 JSX 抽象层不覆盖的运行时底层能力。
 
-### `gx:nocollections` 文件级开关
+### 切片提升改为按需（默认行为）
 
-原生 Go 写法的组件在源码首部声明 `// gx:nocollections`，跳过两类会**误伤原生 Go** 的 desugar：
+全局切片提升 `[]T → list.List[T]` 只在源码**真正用到** `.map` / `.filter` / `.reduce` 链式调用时才发生；没有链式调用的源码保留原生 `[]T`，不污染函数签名/类型断言、不引入 `runtime/list` 依赖。这样写原生 Go 的组件天然不被提升，普通 GX 代码用到链式方法时行为不变。
+
+### `gx:nocollections` 原生 Go 模式开关
+
+手写 opcode 的组件在源码首部声明 `// gx:nocollections`，强制整段按原生 Go 透传——核心是跳过**对象字面量补全**：
 
 | 被跳过的变换 | 不跳过时的破坏 |
 |---|---|
-| 全局切片提升 `[]T → list.List[T]` | 污染函数签名/类型断言（`func() []any` 变 `func() list.List[any]` 导致类型不兼容），并引入 `runtime/list` 依赖 |
 | 裸对象字面量补全 | `[]gxscene.Op{{Code:...},...}` 里省略类型的元素被误判成 GX 对象字面量，补成 `struct{...}{...}` 后无法赋回 `[]Op` |
+| 集合变换（链式方法还原 / 切片提升 / 融合 / 接收者包装） | 兜底：即使源码出现链式调用也不 desugar |
 
-其余 GX 变换（JSX / `pub` / 小写符号还原 / import 注入等）照常进行。**该开关默认关闭**，普通 `.gx` 应用代码行为零变化，仍享受切片提升与集合链式方法。回归测试见 `pkg/compiler/nocollections_test.go`。
+其余 GX 变换（JSX / `pub` / 小写符号还原 / import 注入等）照常进行。**默认无此标记**，普通 `.gx` 应用行为零变化。回归测试见 `pkg/compiler/nocollections_test.go`。
 
 ## 验证
 

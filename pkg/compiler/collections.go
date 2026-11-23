@@ -44,11 +44,15 @@ func sceneImportPath(module string) string {
 	return module + "/runtime/scene"
 }
 
-// nocollectionsPragma 是文件级开关：源码任意注释行含此标记时，整条集合变换
-// （链式方法还原 + 全局切片提升 + MapFilter 融合 + 链式接收者包装）全部跳过。
-// 用途：组件库等「原生 Go + 手写 opcode」源码用 GX 承载时，保留 []T 原生语义，
-// 避免 list.List[T] 污染函数签名/类型断言并引入 runtime/list 依赖。默认无此标记，
-// 行为零变化。标记只是一条注释，会被 emit 原样保留进产物。
+// nocollectionsPragma 是文件级「原生 Go 模式」开关：源码任意注释行含此标记时，
+// 跳过集合变换，并（在 pipeline 中）跳过对象字面量补全。
+//
+// 切片提升本身已是按需的（见 hasChainMethodCalls：无 .map/.filter/.reduce 就不提升），
+// 因此组件库不写链式方法时本就不会被提升。此标记的核心作用是保护手写 opcode：
+// []gxscene.Op{{Code:...},...} 里的省略类型元素会被对象字面量变换误判成 GX 裸对象
+// 字面量、补成匿名 struct 而无法赋回 []Op。标记让这类源码整段按原生 Go 透传。
+// 同时兼作显式兜底——即使将来源码出现链式调用也强制不 desugar。
+// 默认无此标记，行为零变化。标记只是一条注释，会被 emit 原样保留进产物。
 const nocollectionsPragma = "gx:nocollections"
 
 // hasNoCollectionsPragma 检测源码是否声明跳过集合变换。
@@ -56,7 +60,36 @@ func hasNoCollectionsPragma(src string) bool {
 	return strings.Contains(src, nocollectionsPragma)
 }
 
+// hasChainMethodCalls 检测 token 流里是否存在「小写链式方法调用」xs.map(f)
+// / xs.filter(f) / xs.reduce(f)。只有真正用到链式方法时才需要把 []T 提升为
+// list.List[T]——否则提升只会污染函数签名/类型断言、凭空引入 runtime/list 依赖。
+// 注释与字符串里的 ".map" 不是 Ident/Operator 组合，天然不会误判。
+func hasChainMethodCalls(toks []Token) bool {
+	for i := 0; i < len(toks); i++ {
+		if toks[i].Kind != Operator || toks[i].Text != "." {
+			continue
+		}
+		j := nextSig(toks, i+1)
+		if j < 0 || j >= len(toks) || toks[j].Kind != Ident {
+			continue
+		}
+		if _, ok := chainMethods[toks[j].Text]; !ok {
+			continue
+		}
+		// 必须是调用形态 .map( ；单独的方法名/字段不计。
+		k := nextSig(toks, j+1)
+		if k >= 0 && k < len(toks) && toks[k].Text == "(" {
+			return true
+		}
+	}
+	return false
+}
+
 func transformCollections(in []Token, module string) []Token {
+	// 按需提升：源码没有链式方法调用时，整条集合变换是空操作，原生 []T 原样保留。
+	if !hasChainMethodCalls(in) {
+		return in
+	}
 	out := upperChainMethods(in)
 	out, _ = promoteAllSlices(out, "list")
 	out = fuseMapFilter(out)

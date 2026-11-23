@@ -61,7 +61,10 @@ func TestCollectionsPromoteComplexSliceTypes(t *testing.T) {
 func a(x []func(int) bool) {}
 func b(x []chan int) {}
 func c(x []struct{ Name string }) {}
-func main() {}
+func main() {
+	xs := []int{1}
+	_ = xs.map(func(v int) int { return v }) // 触发按需提升
+}
 `
 	res, err := CompileSource(src)
 	if err != nil {

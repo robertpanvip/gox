@@ -76,7 +76,7 @@ func main() {
 	fmt.Println(describe("hi"))
 	fmt.Println(statusActive.String())
 	xs := []int{1, 2, 3}
-	total := xs.Map(func(x int) int { return x * 2 }).Reduce(0, func(a int, b int) int { return a + b })
+	total := xs.map(func(x int) int { return x * 2 }).reduce(0, func(a int, b int) int { return a + b })
 	fmt.Println(total)
 }
 `
