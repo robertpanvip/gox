@@ -26,7 +26,7 @@ import (
 //	  }, N:1}, func() any { return title })
 
 // jsxSceneCtx 携带 JSX scene 转换所需的跨阶段信息：
-//   - sigs：signal 变量名集合（插值里读补 ()）
+//   - sigs：sig 变量名集合（插值里读补 ()）
 //   - comps：强类型组件契约表（组件名 → props 具名 struct 类型名）。
 //     命中契约的组件生成裸对象字面量 Card({...})，由管线第二次 objectlit
 //     从签名补全 Card(CardProps{...}) 并做字段校验；未命中的走老式
@@ -34,7 +34,7 @@ import (
 type jsxSceneCtx struct {
 	sigs  map[string]bool
 	comps map[string]string
-	// sigTypes: signal 变量声明类型（改写前收集，如 users→[]User），
+	// sigTypes: sig 变量声明类型（改写前收集，如 users→[]User），
 	// 供 <For> 在 render 参数无类型注解时从 each 推断元素类型。
 	sigTypes map[string]string
 	// bindings: 统一绑定表，回退查询普通变量/函数形参类型。
@@ -45,19 +45,19 @@ type jsxSceneCtx struct {
 	jsxPos Pos
 	// forItemParam: 当前正在生成的 <For> render lambda 的参数名（信号化模式）。
 	// 该参数是 item getter（func() T），render body 里对它的读取须补写成 u()，
-	// 才能让子树 getter 登记对 item signal 的依赖。仅 render body 生成期间非空。
+	// 才能让子树 getter 登记对 item sig 的依赖。仅 render body 生成期间非空。
 	forItemParam string
 	// jsxPosLocked: 为真时 transformJSXScene 不更新 jsxPos。<For> render body 是
 	// 重新词法化的独立片段，其内部 JSX 的 Pos 是相对假坐标（Index 很小），若覆盖
-	// jsxPos 会让插值里的函数内 signal 绑定查询落空（A1：列表显示函数地址）。
+	// jsxPos 会让插值里的函数内 sig 绑定查询落空（A1：列表显示函数地址）。
 	// 生成 render body 期间锁定，强制用外层 <For> 的真实绝对坐标作锚点。
 	jsxPosLocked bool
 	// forItemTypes: 当前各层 <For> render lambda 参数名 → 元素类型（B2）。
 	// 嵌套 For 的内层 each（如 r.cells）需要按外层 item 类型 r:Row 查字段类型，
 	// 否则退化成 []any。生成 render body 期间登记，退出恢复。
 	forItemTypes map[string]string
-	// signalFields: struct signal 字段表（类型名 → signal 字段名集合）。
-	// item 逃逸检测用它区分：props 字段是 signal 字段时本身保鲜，无需回退值快照。
+	// signalFields: struct sig 字段表（类型名 → sig 字段名集合）。
+	// item 逃逸检测用它区分：props 字段是 sig 字段时本身保鲜，无需回退值快照。
 	signalFields signalFieldTable
 	// diags: GX 语义诊断回投口（第十一轮 P3-F）。each 集合是 map 等非列表类型时
 	// 追加明确诊断，避免生成 []map[...]/[]rune 这类误导性错误信息。nil 表示不收集。
@@ -115,9 +115,9 @@ func compCallTokens(n *jsxNode, ctx *jsxSceneCtx) []Token {
 	return compCallProps(n, ctx)
 }
 
-// signalFieldPropTokens 为 props 的 signal 字段生成值 token，档位表见 signalfields.go
+// signalFieldPropTokens 为 props 的 sig 字段生成值 token，档位表见 signalfields.go
 // 文件顶部（单一事实来源），手写构造与 JSX 两处共用 buildSignalFieldValue。
-// 返回 (tokens, true) 表示已处理；(nil, false) 表示非 signal 字段，走常规路径。
+// 返回 (tokens, true) 表示已处理；(nil, false) 表示非 sig 字段，走常规路径。
 func signalFieldPropTokens(a jsxAttr, ctx *jsxSceneCtx, propsType string) ([]Token, bool) {
 	if propsType == "" || a.name == "" || !ctx.signalFields.has(propsType, a.name) {
 		return nil, false
@@ -137,20 +137,20 @@ func signalFieldPropTokens(a jsxAttr, ctx *jsxSceneCtx, propsType string) ([]Tok
 		}
 	}
 
-	// 改写后的表达式 token（signal→title()、item getter→u().name）。
+	// 改写后的表达式 token（sig→title()、item getter→u().name）。
 	vt := lexExprScene(a.value, a.pos, ctx)
 
-	// 透传档：表达式恰好是单个 signal 读。两种形态：
-	//   title()        —— signal 变量读，剥离 () 传 getter 本身；
+	// 透传档：表达式恰好是单个 sig 读。两种形态：
+	//   title()        —— sig 变量读，剥离 () 传 getter 本身；
 	//   title          —— 已是 getter（forItemParam），无调用括号；
-	//   other.name()   —— 别的 signal 字段读（selector），整体直通。
+	//   other.name()   —— 别的 sig 字段读（selector），整体直通。
 	if leaf, ok := pureSignalRead(a.value, vt, ctx); ok {
 		return leaf, true
 	}
 
-	// For item getter（u() 形式的 item signal）是 signal 读，但 forItemParam 不是
+	// For item getter（u() 形式的 item sig）是 sig 读，但 forItemParam 不是
 	// BkSignal 绑定，统一分档的 exprHasSignalRead 认不出——这里补判并强制走 Computed
-	// （档4），登记对 item signal 的依赖、item 变化时自动重算。
+	// （档4），登记对 item sig 的依赖、item 变化时自动重算。
 	if ctx.forItemParam != "" {
 		for k := 0; k+2 < len(vt); k++ {
 			if vt[k].Kind == Ident && vt[k].Text == ctx.forItemParam &&
@@ -230,12 +230,12 @@ func isPlainLiteralExpr(expr string) bool {
 	return false
 }
 
-// pureSignalRead 判断改写后的表达式是否为「单个 signal 读」，是则返回可透传的
+// pureSignalRead 判断改写后的表达式是否为「单个 sig 读」，是则返回可透传的
 // getter token。识别形态（vt 为 lexExprScene 改写后的 token）：
-//   - <sig>()        全局 signal/computed 读 → 剥离 () 传 getter（保鲜）；
+//   - <sig>()        全局 sig/computed 读 → 剥离 () 传 getter（保鲜）；
 //   - <itemGetter>   For item getter（无调用括号，forItemParam）→ 直通其本身；
-//   - recv.chain.field()  signal 字段链读 → 交 signalChainGetter 统一分档（第九轮）：
-//     中间有 signal 段生成读写 lambda / 裸 getter，单段链尾剥 () 裸透传。
+//   - recv.chain.field()  sig 字段链读 → 交 signalChainGetter 统一分档（第九轮）：
+//     中间有 sig 段生成读写 lambda / 裸 getter，单段链尾剥 () 裸透传。
 func pureSignalRead(expr string, vt []Token, ctx *jsxSceneCtx) ([]Token, bool) {
 	// 收集非空白 token
 	var s []Token
@@ -248,7 +248,7 @@ func pureSignalRead(expr string, vt []Token, ctx *jsxSceneCtx) ([]Token, bool) {
 		return nil, false
 	}
 
-	// 形态：<ident>() —— signal 变量读，剥离括号。
+	// 形态：<ident>() —— sig 变量读，剥离括号。
 	if len(s) == 3 && s[0].Kind == Ident && s[1].Text == "(" && s[2].Text == ")" {
 		if ctx.sigs[s[0].Text] {
 			return []Token{tokIdent(s[0].Text, s[0].Pos)}, true
@@ -258,7 +258,7 @@ func pureSignalRead(expr string, vt []Token, ctx *jsxSceneCtx) ([]Token, bool) {
 	if len(s) == 1 && s[0].Kind == Ident && ctx.forItemParam == s[0].Text {
 		return []Token{tokIdent(s[0].Text, s[0].Pos)}, true
 	}
-	// 形态：recv.chain.field() —— signal 字段链读，统一交 signalChainGetter 分档。
+	// 形态：recv.chain.field() —— sig 字段链读，统一交 signalChainGetter 分档。
 	// 第八轮 P1-1：旧实现只看末尾 4 个 token + hasField 按字段名全表匹配，
 	// 导致 p.a() + p.b() 这种派生表达式被误判为「单个 selector 读」。
 	// 第九轮：改走 signalChainGetter——它内部用「跳过已补 () 」的链解析走到真正
@@ -272,7 +272,7 @@ func pureSignalRead(expr string, vt []Token, ctx *jsxSceneCtx) ([]Token, bool) {
 }
 
 // compCallTyped 生成强类型契约组件调用：Card({ title: expr, ... })。
-// 例外：props 的 signal 字段走 signalFieldPropTokens 统一生成——signal 透传、
+// 例外：props 的 sig 字段走 signalFieldPropTokens 统一生成——sig 透传、
 // 字面量包 Signal.New、派生表达式包 Signal.Computed，语义与手写结构体赋值一致。
 func compCallTyped(n *jsxNode, ctx *jsxSceneCtx) []Token {
 	p := n.pos
@@ -570,11 +570,11 @@ func branchGetterTokens(c *jsxCond, ctx *jsxSceneCtx) []Token {
 // 组件 props（<Card name={u.name}/> / <Card u={u}/>）。
 //
 // 组件是值快照语义：slotComp 的 getter 只在挂载时调用一次，props 表达式里的
-// u().name 会被立即求值成死字符串；item signal 后续变化，子组件静默停在旧值
+// u().name 会被立即求值成死字符串；item sig 后续变化，子组件静默停在旧值
 // （静默功能回归）。这类场景必须回退到 ForGetterOf 值快照模式——整项重建时
-// 重新调用 render，props 才是新值，行为与 item signal 引入前一致。
+// 重新调用 render，props 才是新值，行为与 item sig 引入前一致。
 //
-// 只检测组件 props 这一处确定的逃逸点；直接插值 {u.name} 是 signal 模式的主路径，
+// 只检测组件 props 这一处确定的逃逸点；直接插值 {u.name} 是 sig 模式的主路径，
 // 不算逃逸。item 被赋给局部变量等更边缘的逃逸由文档约束（见 language-spec）。
 func itemEscapesIntoComponentProps(body, param string, ctx *jsxSceneCtx) bool {
 	if param == "" {
@@ -584,8 +584,8 @@ func itemEscapesIntoComponentProps(body, param string, ctx *jsxSceneCtx) bool {
 	return nodeHasItemInCompProps(root, param, ctx)
 }
 
-// nodeHasItemInCompProps 递归检查节点树：item 进入组件的「非 signal 字段」props 即逃逸。
-// signal 字段（struct signal name T）本身是 getter、值实时保鲜，item signal 能正常驱动，
+// nodeHasItemInCompProps 递归检查节点树：item 进入组件的「非 sig 字段」props 即逃逸。
+// sig 字段（struct sig name T）本身是 getter、值实时保鲜，item sig 能正常驱动，
 // 不算逃逸——否则与用户显式声明的响应式字段语义冲突。
 func nodeHasItemInCompProps(n *jsxNode, param string, ctx *jsxSceneCtx) bool {
 	if n == nil {
@@ -602,7 +602,7 @@ func nodeHasItemInCompProps(n *jsxNode, param string, ctx *jsxSceneCtx) bool {
 			if a.kind != attrExpr || !exprMentionsIdent(a.value, param) {
 				continue
 			}
-			// signal 字段保鲜，不需回退。
+			// sig 字段保鲜，不需回退。
 			if typeName != "" && ctx.signalFields.has(typeName, a.name) {
 				continue
 			}
@@ -654,7 +654,7 @@ func exprMentionsIdent(expr, name string) bool {
 //	    func(u User) *gxscene.Instance { return <li>..</li> },
 //	)
 //
-// 元素类型推断优先级：render 参数显式注解 > each 集合类型（signal 声明字面量 /
+// 元素类型推断优先级：render 参数显式注解 > each 集合类型（sig 声明字面量 /
 // 绑定表变量 / 函数返回值）> 降级 any。key lambda 的参数若不写类型，复用同一元素类型。
 func forTokens(n *jsxNode, ctx *jsxSceneCtx) []Token {
 	p := n.pos
@@ -710,8 +710,8 @@ func forTokens(n *jsxNode, ctx *jsxSceneCtx) []Token {
 	}
 
 	// 逃逸检测：item 传入组件 props 时，组件插槽只求值一次、props 是值快照，
-	// item signal 无法驱动它。回退到 ForGetterOf 值快照模式（整项重建），
-	// 保持与 item signal 引入前一致的行为——静默旧值比重建更危险。
+	// item sig 无法驱动它。回退到 ForGetterOf 值快照模式（整项重建），
+	// 保持与 item sig 引入前一致的行为——静默旧值比重建更危险。
 	escaped := itemEscapesIntoComponentProps(rBody, paramName, ctx)
 
 	factory := "ForGetterOfSignal"
@@ -732,7 +732,7 @@ func forTokens(n *jsxNode, ctx *jsxSceneCtx) []Token {
 	// `rows := Get[T](...)`），绑定表记的是解包后类型 []T，直接 return rows 会
 	// 返回函数值而非切片，go build 报 "cannot use rows (func() []T) as []T"。
 	// 这里对裸 getter 标识符补一次调用 rows()。已是调用的形态（rows()/f(x)）
-	// 与 signal 变量（走 sigs 改写）不受影响。
+	// 与 sig 变量（走 sigs 改写）不受影响。
 	if rootIdentOfExpr(strings.TrimSpace(eachExpr)) == strings.TrimSpace(eachExpr) &&
 		ctx.bindings != nil && isGetterVarFromToks(ctx.bindings.toks, strings.TrimSpace(eachExpr)) {
 		out = append(out, tokOp("(", p), tokOp(")", p))
@@ -756,7 +756,7 @@ func forTokens(n *jsxNode, ctx *jsxSceneCtx) []Token {
 		out = append(out, tokIdent("func", p), tokOp("(", p), tokIdent(kName, p), tokSpace(" ", p),
 			tokIdent(kType, p), tokOp(")", p), tokSpace(" ", p), tokIdent("any", p), tokSpace(" ", p),
 			tokOp("{", p), tokSpace(" ", p), tokIdent("return", p), tokSpace(" ", p))
-		// key body 是以 kName 为自由变量的表达式，需补 signal 读 ()。
+		// key body 是以 kName 为自由变量的表达式，需补 sig 读 ()。
 		bodyToks := New(kBody).AllTokens()
 		if len(ctx.sigs) > 0 {
 			bodyToks = rewriteJSXInterpSignals(bodyToks, ctx.sigs)
@@ -774,7 +774,7 @@ func forTokens(n *jsxNode, ctx *jsxSceneCtx) []Token {
 	out = append(out, tokOp(",", p))
 
 	// render 参数形态：
-	//   - 常规（信号化）：func(u func() T) *gxscene.Instance，renderBody 里 u.name → u().name 登记 item signal 依赖；
+	//   - 常规（信号化）：func(u func() T) *gxscene.Instance，renderBody 里 u.name → u().name 登记 item sig 依赖；
 	//   - 逃逸（item 进组件 props）：func(u T) *gxscene.Instance，值快照，整项重建时重跑 render 取新值。
 	out = append(out, tokIdent("func", p), tokOp("(", p), tokIdent(paramName, p), tokSpace(" ", p))
 	if !escaped {
@@ -794,7 +794,7 @@ func forTokens(n *jsxNode, ctx *jsxSceneCtx) []Token {
 		ctx.forItemParam = paramName
 	}
 	// B2：无论是否逃逸都要登记本层 item 参数类型。逃逸只改变读语义
-	// （值快照 ForGetterOf vs signal 化 ForGetterOfSignal），不改变 item 的静态
+	// （值快照 ForGetterOf vs sig 化 ForGetterOfSignal），不改变 item 的静态
 	// 类型；内层 <For each={r.cells}> 需按 r:Row 查字段推元素类型。
 	// 之前把它放进 !escaped 分支，r.cells 传给内层 For 被判逃逸后，r 未登记，
 	// 内层只能退化 any。
@@ -811,7 +811,7 @@ func forTokens(n *jsxNode, ctx *jsxSceneCtx) []Token {
 	bodyToks := New(rBody).AllTokens()
 	// rBody 来自重新词法化的片段，其内部 JSX 的 Pos 是相对假坐标（Index 很小）。
 	// 锁定 jsxPos 强制用外层 <For> 的真实绝对坐标作锚点，否则 {n}/{d} 等插值查
-	// 绑定表时落在文件开头，函数内 signal 被误判为局部遮蔽而不补 ()——列表里
+	// 绑定表时落在文件开头，函数内 sig 被误判为局部遮蔽而不补 ()——列表里
 	// 显示成函数地址（A1）。item 参数 r 仍由 forItemParam 正常识别，不受影响。
 	// 保存/恢复旧锁值以支持嵌套 For（内层结束时不能解锁外层）。
 	ctx.jsxPosLocked = true
@@ -862,11 +862,11 @@ func parseForLambda(src string) (forLambdaParam, string, bool) {
 // 供 render 参数无显式类型注解时实例化 ForGetterOf[T]。
 //
 // each 支持三种形态：
-//   - 裸标识符：users（signal 或普通变量）
-//   - signal 读调用：users()
+//   - 裸标识符：users（sig 或普通变量）
+//   - sig 读调用：users()
 //   - 函数调用：getUsers() / pkg.Items()
 //
-// 推断路径：取根标识符 → 先查 sigTypes（signal 声明原始类型），
+// 推断路径：取根标识符 → 先查 sigTypes（sig 声明原始类型），
 // 再查 bindings（普通变量 / 函数形参 / 函数返回值）→ sliceElemType 提取元素。
 // 无法判定时返回 ""，调用方降级为 any。
 func (ctx *jsxSceneCtx) inferForElemType(eachExpr string, pos Pos) string {
@@ -1324,18 +1324,18 @@ func sceneOpTokens(op sceneOp, p Pos) []Token {
 func tokNumber(s string, p Pos) Token { return Token{Kind: Number, Text: s, Pos: p, IsGen: true} }
 
 // lexExprScene 把 {expr} 内源码词法化；若含嵌套 JSX 则递归走 scene 转换。
-// sigs 非空时对插值里的 signal 变量补读调用（{count} → count()），
+// sigs 非空时对插值里的 sig 变量补读调用（{count} → count()），
 // 弥补 transformSignals 无法穿透 JSX 整体 token 的盲区。
 func lexExprScene(expr string, base Pos, ctx *jsxSceneCtx) []Token {
 	toks := New(expr).AllTokens()
-	// 需要补写 () 的名字集合：全局 signal + 当前 <For> 的 item getter 参数。
+	// 需要补写 () 的名字集合：全局 sig + 当前 <For> 的 item getter 参数。
 	// item 参数（信号化模式）是 func() T，读它必须写成 u() 才能让子树 getter
-	// 登记对 item signal 的依赖——这是 For item signal 根治方案在编译器的落点。
+	// 登记对 item sig 的依赖——这是 For item sig 根治方案在编译器的落点。
 	needRewrite := len(ctx.sigs) > 0 || ctx.forItemParam != ""
 	if needRewrite {
-		// 按 JSX 根位置解析绑定：被局部变量遮蔽的同名 signal 不应改写（{count}
+		// 按 JSX 根位置解析绑定：被局部变量遮蔽的同名 sig 不应改写（{count}
 		// 在 count := 3 作用域内读的是局部变量）。sigs 是全局名字集合，需先按
-		// bindings+jsxPos 过滤出该位置真正指向 signal 的名字，再交回形态改写逻辑。
+		// bindings+jsxPos 过滤出该位置真正指向 sig 的名字，再交回形态改写逻辑。
 		effective := ctx.sigs
 		if ctx.bindings != nil {
 			effective = make(map[string]bool, len(ctx.sigs))
@@ -1360,8 +1360,8 @@ func lexExprScene(expr string, base Pos, ctx *jsxSceneCtx) []Token {
 		}
 		toks = rewriteJSXInterpSignals(toks, effective)
 	}
-	// signal 字段 selector 读补 ()（如组件内 {p.name} → p.name()）。
-	// 与 rewriteJSXInterpSignals 独立：后者只认全局 signal 名，不管 signal 字段。
+	// sig 字段 selector 读补 ()（如组件内 {p.name} → p.name()）。
+	// 与 rewriteJSXInterpSignals 独立：后者只认全局 sig 名，不管 sig 字段。
 	toks = rewriteJSXSignalFieldSelectors(toks, ctx.bindings, ctx.signalFields, ctx.jsxPos)
 	// 对象字面量自动推断：{ { name: "x", age: 1 } } → struct{ name string; age int }{...}。
 	// 插值片段无期望类型上下文，走匿名 struct 推断路径。
@@ -1458,7 +1458,7 @@ func transformJSXScene(in []Token, ctx *jsxSceneCtx) []Token {
 		if t.Kind == JSX {
 			// 记录根 JSX token 的绝对位置，供内部节点（如嵌套 <For>）查询绑定表。
 			// 锁定期间（<For> render body 的重新词法化片段）保留外层锚点——内部
-			// JSX 的 Pos 是相对假坐标，覆盖后插值里的函数内 signal 绑定查询会落空。
+			// JSX 的 Pos 是相对假坐标，覆盖后插值里的函数内 sig 绑定查询会落空。
 			if !ctx.jsxPosLocked {
 				ctx.jsxPos = t.Pos
 			}

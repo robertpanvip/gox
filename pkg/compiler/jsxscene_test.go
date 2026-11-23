@@ -132,13 +132,13 @@ func main() { _ = <ul><li>a</li><li>b</li></ul> }
 	}
 }
 
-// 以下用例走完整管线（CompileScene），验证 signal 语法糖与 JSX 插值交汇：
-// transformSignals 无法穿透 JSX 整体 token，插值里的 signal 读应由 JSX 转换补 ()。
+// 以下用例走完整管线（CompileScene），验证 sig 语法糖与 JSX 插值交汇：
+// transformSignals 无法穿透 JSX 整体 token，插值里的 sig 读应由 JSX 转换补 ()。
 
 func TestJSXSceneSignalInterpolation(t *testing.T) {
 	res, err := CompileScene("sig.gx", `package main
 func main() {
-	signal count = 0
+	sig count = 0
 	_ = <div><span>{count}</span></div>
 }
 `)
@@ -148,23 +148,23 @@ func main() {
 	out := res.GoSource
 	for _, want := range []string{
 		"var count = Signal.New(0)",
-		"func() any{ return count() }", // 关键：插值里的 signal 读补全 ()
+		"func() any{ return count() }", // 关键：插值里的 sig 读补全 ()
 		"gxscene.OpDynChild",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("产物应包含 %q, got:\n%s", want, out)
 		}
 	}
-	// 不应把 signal 函数对象本身当值（return count 缺 ()）
+	// 不应把 sig 函数对象本身当值（return count 缺 ()）
 	if strings.Contains(out, "func() any{ return count }") {
-		t.Errorf("signal 插值漏了读调用 (), got:\n%s", out)
+		t.Errorf("sig 插值漏了读调用 (), got:\n%s", out)
 	}
 }
 
 func TestJSXSceneSignalAttrAndComputed(t *testing.T) {
 	res, err := CompileScene("sig.gx", `package main
 func main() {
-	signal title = "hi"
+	sig title = "hi"
 	let upper = Signal.computed(func() string { return title() })
 	_ = <a href={title}>{upper}</a>
 }
@@ -174,8 +174,8 @@ func main() {
 	}
 	out := res.GoSource
 	for _, want := range []string{
-		"func() any{ return title() }", // 动态属性里的 signal 读
-		"func() any{ return upper() }", // 派生 signal 插值读
+		"func() any{ return title() }", // 动态属性里的 sig 读
+		"func() any{ return upper() }", // 派生 sig 插值读
 		"Signal.Computed",
 	} {
 		if !strings.Contains(out, want) {
@@ -187,7 +187,7 @@ func main() {
 func TestJSXSceneSignalInCompositeProps(t *testing.T) {
 	res, err := CompileScene("sig.gx", `package main
 func main() {
-	signal n = 1
+	sig n = 1
 	_ = <Card count={n}/>
 }
 `)
@@ -196,7 +196,7 @@ func main() {
 	}
 	out := res.GoSource
 	if !strings.Contains(out, `"count":func() any{ return n() }`) {
-		t.Errorf("组件属性里的 signal 读应补全 (), got:\n%s", out)
+		t.Errorf("组件属性里的 sig 读应补全 (), got:\n%s", out)
 	}
 }
 
@@ -233,7 +233,7 @@ func main() {
 }
 
 // For item 逃逸检测：item 传给组件 props 时，必须回退到值快照 ForGetterOf，
-// 而非信号化 ForGetterOfSignal——组件 props 是挂载时求值一次的值快照，item signal
+// 而非信号化 ForGetterOfSignal——组件 props 是挂载时求值一次的值快照，item sig
 // 无法驱动它，否则 item 变化后子组件静默停在旧值。
 func TestJSXSceneForItemEscapesIntoCompProps(t *testing.T) {
 	src := `package main
@@ -242,7 +242,7 @@ type User struct { id int; name string }
 type CardProps struct { name string }
 func Card(props CardProps) *gxscene.Instance { return nil }
 func main() {
-	signal users = []User{{1,"Tom"}}
+	sig users = []User{{1,"Tom"}}
 	_ = <ul><For each={users} key={(u) => u.id}>{(u User) => <li><Card name={u.name}/></li>}</For></ul>
 }
 `
@@ -265,16 +265,16 @@ func main() {
 	}
 }
 
-// struct signal 字段的 props 本身保鲜（getter），item 传入时不应回退值快照：
-// 显式声明响应式字段的用户应享受 item signal 零重建，而非被强制整项重建。
+// struct sig 字段的 props 本身保鲜（getter），item 传入时不应回退值快照：
+// 显式声明响应式字段的用户应享受 item sig 零重建，而非被强制整项重建。
 func TestJSXSceneForItemIntoSignalFieldStaysSignal(t *testing.T) {
 	src := `package main
 import gxscene "github.com/robertpanvip/gox/runtime/scene"
 type User struct { id int; name string }
-type CardProps struct { signal name string }
+type CardProps struct { sig name string }
 func Card(props CardProps) *gxscene.Instance { return nil }
 func main() {
-	signal users = []User{{1,"Tom"}}
+	sig users = []User{{1,"Tom"}}
 	_ = <ul><For each={users} key={(u) => u.id}>{(u User) => <li><Card name={u.name}/></li>}</For></ul>
 }
 `
@@ -284,23 +284,23 @@ func main() {
 	}
 	out := res.GoSource
 	if !strings.Contains(out, "gxscene.ForGetterOfSignal[User]") {
-		t.Errorf("item 进 signal 字段 props 应保持 ForGetterOfSignal（保鲜）, got:\n%s", out)
+		t.Errorf("item 进 sig 字段 props 应保持 ForGetterOfSignal（保鲜）, got:\n%s", out)
 	}
 	if strings.Contains(out, "gxscene.ForGetterOf[") {
-		t.Errorf("signal 字段场景不应回退值快照 ForGetterOf, got:\n%s", out)
+		t.Errorf("sig 字段场景不应回退值快照 ForGetterOf, got:\n%s", out)
 	}
 	if !strings.Contains(out, "func(u func() User) *gxscene.Instance") {
 		t.Errorf("render 应保持 getter 参数 func(u func() User), got:\n%s", out)
 	}
 }
 
-// 直接插值（不经过组件边界）仍应走信号化，保持 item signal 零重建。
+// 直接插值（不经过组件边界）仍应走信号化，保持 item sig 零重建。
 func TestJSXSceneForDirectInterpStaysSignal(t *testing.T) {
 	res, err := CompileScene("for-direct.gx", `package main
 import gxscene "github.com/robertpanvip/gox/runtime/scene"
 type User struct { id int; name string }
 func main() {
-	signal users = []User{{1,"Tom"}}
+	sig users = []User{{1,"Tom"}}
 	_ = <ul><For each={users} key={(u) => u.id}>{(u User) => <li>{u.name}</li>}</For></ul>
 }
 `)
@@ -312,7 +312,7 @@ func main() {
 		t.Errorf("直接插值应走 ForGetterOfSignal, got:\n%s", out)
 	}
 	if !strings.Contains(out, "u().name") {
-		t.Errorf("直接插值应改写为 u().name 登记 item signal 依赖, got:\n%s", out)
+		t.Errorf("直接插值应改写为 u().name 登记 item sig 依赖, got:\n%s", out)
 	}
 }
 
@@ -372,8 +372,8 @@ func main() {
 func TestJSXSceneConditional(t *testing.T) {
 	res, err := CompileScene("cond.gx", `package main
 func main() {
-	signal visible = true
-	signal count = 10
+	sig visible = true
+	sig count = 10
 	_ = <div>
 		if visible {
 			<span>{count}</span>
@@ -392,7 +392,7 @@ func main() {
 		"gxscene.BranchGetter",
 		"if visible()", "return 0", "return 1",
 		`Arg:"span"`, `Arg:"b"`, `Arg:"Hidden"`,
-		"func() any{ return count() }", // 分支内 signal 读补 ()
+		"func() any{ return count() }", // 分支内 sig 读补 ()
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("条件分支产物应包含 %q, got:\n%s", want, out)
@@ -403,7 +403,7 @@ func main() {
 func TestJSXSceneConditionalElseIf(t *testing.T) {
 	res, err := CompileScene("cond.gx", `package main
 func main() {
-	signal n = 1
+	sig n = 1
 	_ = <div>
 		if n == 1 {
 			<span>one</span>
@@ -432,14 +432,14 @@ func main() {
 	}
 }
 
-// Keyed For（item signal 根治）：JSX <For> 编译成 OpFor + ForGetterOfSignal[T]，
+// Keyed For（item sig 根治）：JSX <For> 编译成 OpFor + ForGetterOfSignal[T]，
 // render 参数是 item getter func() T，插值 u.name 改写为 u().name 登记依赖。
 func TestJSXSceneFor(t *testing.T) {
 	res, err := CompileScene("for.gx", `package main
 import gxscene "github.com/robertpanvip/gox/runtime/scene"
 type User struct { id int; name string }
 func main() {
-	signal users = []User{{1,"Tom"}}
+	sig users = []User{{1,"Tom"}}
 	_ = <ul><For each={users} key={(u) => u.id}>{(u User) => <li>{u.name}</li>}</For></ul>
 }
 `)
@@ -468,7 +468,7 @@ func TestJSXSceneForInferElemType(t *testing.T) {
 import gxscene "github.com/robertpanvip/gox/runtime/scene"
 type User struct { id int; name string }
 func main() {
-	signal users = []User{{1,"Tom"}}
+	sig users = []User{{1,"Tom"}}
 	_ = <ul><For each={users} key={(u) => u.id}>{(u) => <li>{u.name}</li>}</For></ul>
 }
 `)
@@ -477,7 +477,7 @@ func main() {
 	}
 	out := res.GoSource
 	for _, want := range []string{
-		"gxscene.ForGetterOfSignal[User]", // 关键：从 signal users 推断出 User，而非 any
+		"gxscene.ForGetterOfSignal[User]", // 关键：从 sig users 推断出 User，而非 any
 		"func() []User", "users()",
 		"func(u User) any", "u.id",
 		"func(u func() User) *gxscene.Instance",
@@ -491,7 +491,7 @@ func main() {
 	}
 }
 
-// 普通变量（非 signal）也应能从 each 推断元素类型，走 bindings 查询路径。
+// 普通变量（非 sig）也应能从 each 推断元素类型，走 bindings 查询路径。
 func TestJSXSceneForInferFromPlainVar(t *testing.T) {
 	res, err := CompileScene("for.gx", `package main
 import gxscene "github.com/robertpanvip/gox/runtime/scene"
@@ -519,7 +519,7 @@ func TestJSXSceneForExplicitTypeWins(t *testing.T) {
 import gxscene "github.com/robertpanvip/gox/runtime/scene"
 type User struct { id int; name string }
 func main() {
-	signal users = []User{{1,"Tom"}}
+	sig users = []User{{1,"Tom"}}
 	_ = <ul><For each={users} key={(u) => u.id}>{(u User) => <li>{u.name}</li>}</For></ul>
 }
 `)
@@ -845,14 +845,14 @@ func main() {}
 	}
 }
 
-// Issue #2 回归：JSX 属性值内嵌 lambda 中的 signal 复合赋值/简单赋值，
-// RHS 的裸 signal 读必须与顶层闭包一致递归补 ()，否则生成 Signal[T] 与
+// Issue #2 回归：JSX 属性值内嵌 lambda 中的 sig 复合赋值/简单赋值，
+// RHS 的裸 sig 读必须与顶层闭包一致递归补 ()，否则生成 Signal[T] 与
 // 标量相加的类型错误（load(load + 1)）。
 func TestJSXSceneLambdaSignalCompoundRHS(t *testing.T) {
 	res, err := CompileScene("iss2.gx", `package main
 import gxscene "github.com/robertpanvip/gox/runtime/scene"
-signal load = 42
-signal other = 8
+sig load = 42
+sig other = 8
 func main() {
 	let inc = func() { load = load + 1 } // 顶层闭包对照
 	_ = <div>
@@ -873,7 +873,7 @@ func main() {
 	}
 	// 顶层闭包与 JSX lambda 的空白排版不同（前者-token 带空格），去空格后统一比对。
 	compact := strings.ReplaceAll(strings.ReplaceAll(out, " ", ""), "\t", "")
-	// JSX prop 内 lambda：三种赋值的 RHS 都必须递归补 ()，绝不能出现裸 signal 相加/赋值。
+	// JSX prop 内 lambda：三种赋值的 RHS 都必须递归补 ()，绝不能出现裸 sig 相加/赋值。
 	for _, bad := range []string{"load(load+1)", "load(other)", "load(load+other)"} {
 		if strings.Contains(compact, bad) {
 			t.Errorf("JSX lambda RHS 漏了读调用 %q, got:\n%s", bad, out)
@@ -990,15 +990,15 @@ func main() {
 	}
 }
 
-// Issue A1：<For> 渲染体里读"当前函数内"声明的 signal / computed 时，
+// Issue A1：<For> 渲染体里读"当前函数内"声明的 sig / computed 时，
 // 必须补写 ()（它们是 Signal[T] 函数）。根因是 render body 重新词法化后内部
-// JSX 的 Pos 是假坐标，覆盖了 jsxPos 锚点，导致绑定查询把函数内 signal 误判
+// JSX 的 Pos 是假坐标，覆盖了 jsxPos 锚点，导致绑定查询把函数内 sig 误判
 // 为局部遮蔽。修复用 jsxPosLocked 锁定外层真实坐标。
 func TestForBodyRewritesFunctionLocalSignals(t *testing.T) {
 	src := `package main
 type Row struct { id int; name string }
 func main() {
-    signal n = 3
+    sig n = 3
     let d = Signal.computed(func() int { return 7 })
     rows := []Row{{1, "a"}}
     _ = <ul><For each={rows} key={(r) => r.id}>{(r) => <li>{r.name} {n} {d}</li>}</For></ul>
@@ -1009,7 +1009,7 @@ func main() {
 		t.Fatal(err)
 	}
 	goSrc := res.GoSource
-	// 函数内 signal / computed 必须补 ()；item 字段 r.name 必须补 ()；key 的 r.id 正常。
+	// 函数内 sig / computed 必须补 ()；item 字段 r.name 必须补 ()；key 的 r.id 正常。
 	for _, want := range []string{
 		"func() any{ return n() }",
 		"func() any{ return d() }",
@@ -1032,13 +1032,13 @@ func main() {
 	}
 }
 
-// A1 守护：包级 signal 在 For 里、if 块里函数内 signal 的改写不受本次修复影响。
+// A1 守护：包级 sig 在 For 里、if 块里函数内 sig 的改写不受本次修复影响。
 func TestForBodySignalRewriteNoRegression(t *testing.T) {
 	src := `package main
 type Row struct { id int; name string }
-signal total = 10
+sig total = 10
 func main() {
-    signal n = 1
+    sig n = 1
     rows := []Row{{1, "a"}}
     _ = <ul><For each={rows}>{(r) => <li>{total} {n}</li>}</For></ul>
     _ = <div>{n}</div>
@@ -1048,12 +1048,12 @@ func main() {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// 包级 signal（For 内）、函数内 signal（For 内 + 普通 JSX 内）都应补 ()。
+	// 包级 sig（For 内）、函数内 sig（For 内 + 普通 JSX 内）都应补 ()。
 	count := strings.Count(res.GoSource, "func() any{ return n() }")
 	if count < 2 {
-		t.Errorf("函数内 signal 在 For 与普通 JSX 内都应补 (), got %d 处:\n%s", count, res.GoSource)
+		t.Errorf("函数内 sig 在 For 与普通 JSX 内都应补 (), got %d 处:\n%s", count, res.GoSource)
 	}
 	if !strings.Contains(res.GoSource, "func() any{ return total() }") {
-		t.Errorf("包级 signal 应补 (), got:\n%s", res.GoSource)
+		t.Errorf("包级 sig 应补 (), got:\n%s", res.GoSource)
 	}
 }

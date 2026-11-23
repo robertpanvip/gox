@@ -39,26 +39,26 @@ func TestLambdaBlockBodyStillWorks(t *testing.T) {
 	}
 }
 
-// B7：位置简写 P{v}（P 唯一字段是 signal 字段）时，signal 变量 v 应传 getter
+// B7：位置简写 P{v}（P 唯一字段是 sig 字段）时，sig 变量 v 应传 getter
 // 本身（P{v}），不是读出的值（P{v()}）。多字段布局简写保持原样（显式键可用）。
 func TestStructSignalFieldShorthand(t *testing.T) {
-	src := "package main\ntype P struct { signal a string }\nfunc main() { signal v = \"x\"; p := P{v}; _ = p }\n"
+	src := "package main\ntype P struct { sig a string }\nfunc main() { sig v = \"x\"; p := P{v}; _ = p }\n"
 	res, err := CompileScene("b7.gx", src)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(res.GoSource, "p := P{v}") {
-		t.Errorf("单字段 signal 简写应传 getter 本身 P{v}, got:\n%s", res.GoSource)
+		t.Errorf("单字段 sig 简写应传 getter 本身 P{v}, got:\n%s", res.GoSource)
 	}
 	if strings.Contains(res.GoSource, "P{v()}") {
-		t.Errorf("不应把 signal getter 读成值 P{v()}, got:\n%s", res.GoSource)
+		t.Errorf("不应把 sig getter 读成值 P{v()}, got:\n%s", res.GoSource)
 	}
 }
 
-// B4：signal 持有复合值的字段深写（s.n = 2）产出带坐标、带修法的 GX 诊断，
+// B4：sig 持有复合值的字段深写（s.n = 2）产出带坐标、带修法的 GX 诊断，
 // 把 Go 的 "cannot assign to s().n" 变成明确的 GX 提示。
 func TestSignalDeepWriteDiagnostic(t *testing.T) {
-	src := "package main\ntype S struct { n int }\nfunc main() { signal s = S{n:1}; s.n = 2 }\n"
+	src := "package main\ntype S struct { n int }\nfunc main() { sig s = S{n:1}; s.n = 2 }\n"
 	res, err := CompileScene("b4.gx", src)
 	if err != nil {
 		t.Fatal(err)
@@ -77,16 +77,16 @@ func TestSignalDeepWriteDiagnostic(t *testing.T) {
 	}
 }
 
-// 守护：signal 字段自身的写（p.name = v，p 非 signal 变量）不应误报 B4。
+// 守护：sig 字段自身的写（p.name = v，p 非 sig 变量）不应误报 B4。
 func TestSignalFieldWriteNoDeepWriteDiag(t *testing.T) {
-	src := "package main\ntype P struct { signal name string }\nfunc main() { p := P{name: \"a\"}; p.name = \"b\"; _ = p }\n"
+	src := "package main\ntype P struct { sig name string }\nfunc main() { p := P{name: \"a\"}; p.name = \"b\"; _ = p }\n"
 	res, err := CompileScene("b4-ok.gx", src)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, d := range res.Analysis.Diagnostics() {
 		if d.Code == "signal-deep-write" {
-			t.Errorf("signal 字段写不应误报 signal-deep-write: %s", d.Message)
+			t.Errorf("sig 字段写不应误报 signal-deep-write: %s", d.Message)
 		}
 	}
 }

@@ -29,10 +29,10 @@ func TestDefectMatrixDiagnostics(t *testing.T) {
 		{"A4-For-empty", "package main\nfunc main(){ rows:=[]int{1}; _ = <ul><For each={rows} empty={<li>x</li>}>{(r)=><li>{r}</li>}</For></ul> }\n", "attr-unsupported"},
 		{"A5-bind前缀", "package main\nfunc main(){ n:=\"x\"; _ = <input bind:value={n}/> }\n", "attr-unknown"},
 		{"A6-JSX控制语句", "package main\nfunc main(){ rows:=[]int{1}; _ = <ul> for _, r := range rows { <li>{r}</li> } </ul> }\n", "jsx-control-statement"},
-		{"B6-事件箭头赋值", "package main\nfunc main(){ signal n = 0; _ = <button onClick={() => n = n + 1}>a</button> }\n", "event-arrow-statement"},
+		{"B6-事件箭头赋值", "package main\nfunc main(){ sig n = 0; _ = <button onClick={() => n = n + 1}>a</button> }\n", "event-arrow-statement"},
 		{"B9-多根", "package main\nfunc C(){}\nfunc main(){ _ = C() }\n", ""}, // 见专门测试：多根需组件上下文
-		{"B4-signal深写", "package main\nfunc main(){ signal s = P{a:1}; s().a = 2; _ = s() }\n", "signal-deep-write"},
-		{"C2-切片元素字段深写", "package main\ntype Row struct{ name string }\nfunc main(){ signal rows = []Row{{name:\"a\"}}; rows[0].name = \"b\"; _ = rows() }\n", "signal-deep-write"},
+		{"B4-sig深写", "package main\nfunc main(){ sig s = P{a:1}; s().a = 2; _ = s() }\n", "signal-deep-write"},
+		{"C2-切片元素字段深写", "package main\ntype Row struct{ name string }\nfunc main(){ sig rows = []Row{{name:\"a\"}}; rows[0].name = \"b\"; _ = rows() }\n", "signal-deep-write"},
 	}
 	for _, c := range cases {
 		if c.code == "" {

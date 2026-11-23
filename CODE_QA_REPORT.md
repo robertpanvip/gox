@@ -7,7 +7,7 @@
 - **【实测】** = 我在 `/tmp` 副本编译 `Compile`/`CompileStage` 观察生成代码，或用 `go build` / `go test -race` 复现，原仓库未改动
 - **【审查】** = 代码路径确认存在问题，但受时序/环境限制未稳定复现
 
-静态工具结果：`go vet ./...` 零告警；`go test -race ./...` 全绿（但 signal 的逻辑竞态 race detector 检测不到，见 H-10）；无真实 `panic()` 调用；无遗留 TODO。
+静态工具结果：`go vet ./...` 零告警；`go test -race ./...` 全绿（但 sig 的逻辑竞态 race detector 检测不到，见 H-10）；无真实 `panic()` 调用；无遗留 TODO。
 
 ---
 
@@ -24,7 +24,7 @@
 |---|---|---|---|
 | H-1 | `lambda.go:544-585` | 嵌套 lambda 用替换前旧下标从后往前替换，内层展开后外层区间错位，生成 `func(x any) any {return (y => y + x)} {return y + x})`（`=>` 残留、片段重复） | 【实测】 |
 | H-2 | `lambda.go:304-334` | 函数实参 `apply(x => x)` / 赋值 `var f func(int) int = x => x` 未从上下文推断类型，降级 `func(x any) any`，与期望签名不符 → go build 类型错误 | 【实测】 |
-| H-3 | `signal.go:108-129,186-203,216-231` | 赋值/声明/复合赋值右侧的 signal 读取未改写：`signal b = a` → `Signal.New(a)`（应 `a()`）；`a += b` → `a(a() + b)`（应 `b()`） | 【实测】 |
+| H-3 | `signal.go:108-129,186-203,216-231` | 赋值/声明/复合赋值右侧的 sig 读取未改写：`sig b = a` → `Signal.New(a)`（应 `a()`）；`a += b` → `a(a() + b)`（应 `b()`） | 【实测】 |
 | H-4 | `scope.go:245-274` + `external.go:164-168` | `collectStructFields` 每行只收第一个标识符，`type T struct { a, b int }` 的 `b` 漏保护，`x.b` → `x.B` 误大写 → go build 失败 | 【实测】 |
 | H-5 | `importmanager.go:119-141` + `collections.go:243-270` | 局部变量名恰好是占位别名时遮蔽导入：`list := "hi"` 后集合链式生成 `xs := list.List[int]{...}`，`list.List` 被局部变量遮蔽 | 【实测】 |
 | H-6 | `pipeline.go:157-187` | `CompileStage(src,"all")` 中 `toks, defaultDefs := ...` 的 `:=` 使 `toks` 被 shadow，所有 transform 改的是局部副本，`all` 阶段完全不转译、原样输出（CLI `gox all` 及调试 API 受影响） | 【实测】 |
@@ -40,7 +40,7 @@
 | M-1 | `lambda.go:590-598` | `tokenizeTypeText` 用 `New(text).AllTokens()`，生成 token 的 Pos 是片段局部坐标（1:1 起），未设为 lambda 位置 → sourcemap 回投到第 1 行 |
 | M-2 | `unionguard.go:59-85` | 匿名函数 `func(v int\|string)` 的联合参数不收集运行时守卫，擦除为 any 后无入口校验 |
 | M-3 | `analysis.go:69-83` | `Type.Accepts` 中 `value == ""`（推断失败）一律 `return true`，本应报"无法确认类型"却静默放过 |
-| M-4 | `signal.go:108-129,131-147` | `signal x` 缺 `=` 时未校验，`eq` 指向后续语句，吞掉后续代码生成 `Signal.New(main(){...})` |
+| M-4 | `signal.go:108-129,131-147` | `sig x` 缺 `=` 时未校验，`eq` 指向后续语句，吞掉后续代码生成 `Signal.New(main(){...})` |
 | M-5 | `pub.go:148-166` | `restoreRefs` 全局替换无作用域概念，局部变量与 pub 名同名被误大写：`pub var foo; func f(){ foo:=2 }` → `Foo:=2` |
 | M-6 | `destructure.go:275-292` | 复杂右值被拼进每个字段声明重复求值：`var {a,b}=mk()` → `mk()` 调用两次，副作用重复 |
 | M-7 | `enum.go:156-168` | 位标志 `enum F { read = 1<<iota; write }` 的 `String()` 用 `Contains("<<")` 跳过所有标志 case，`FRead.String()` 返回 "1" 而非 "read" |
@@ -57,7 +57,7 @@
 | L-3 | `analysis.go:748-761` | `a, b := ...` 只收集紧邻 `:=` 的最后一个变量符号 |
 | L-4 | `lexer.go:139-152,155-178` | 未闭合块注释/字符串静默吞到 EOF，无原生诊断 |
 | L-5 | `analysis.go:513-554` | 分组 `type (...)` 只按换行分段，同行分号分隔的别名解析失败 |
-| L-6 | `signal.go:280-317` | `inDeclZone` 漏判 `func f(a, b int)` 中逗号前的首个参数，同名 signal 参数被误改写 |
+| L-6 | `signal.go:280-317` | `inDeclZone` 漏判 `func f(a, b int)` 中逗号前的首个参数，同名 sig 参数被误改写 |
 | L-7 | `scope.go:124-175` | `Scope.private` 文件级全局，不区分作用域，某函数私有名保护全文件同名外部 selector |
 | L-8 | `enum.go:252-264`、`jsx.go` | enum/JSX 生成代码 sourcemap 坐标为粗粒度单点，诊断回投到元素起始行 |
 | L-9 | `vdom/runtime.go:277-287,344-366,130-173` | 类型化 nil `*VNode` 解引用崩溃；重复 key 未处理；组件调用失败路径不缓存、多返回值只取第一个 |
@@ -70,13 +70,13 @@
 
 ## 确认无问题的模块
 
-`token.go`（UTF-8/rune 正确）、`union.go`、`typeguard.go`、`template.go` 解析、`defaults.go`、`objectlit.go`、`collections.go` 融合逻辑、`importmanager.go` 别名复用、`external.go` 判定本身、signal 闭包捕获与 selector 排除、`runtime/list.go`、`internal/buildcheck.go` 并发设计、`check/rules.go`、`cmd/*`。畸形输入批量测试未发现 panic。
+`token.go`（UTF-8/rune 正确）、`union.go`、`typeguard.go`、`template.go` 解析、`defaults.go`、`objectlit.go`、`collections.go` 融合逻辑、`importmanager.go` 别名复用、`external.go` 判定本身、sig 闭包捕获与 selector 排除、`runtime/list.go`、`internal/buildcheck.go` 并发设计、`check/rules.go`、`cmd/*`。畸形输入批量测试未发现 panic。
 
 ## 修复优先级建议
 
-1. **立即**：B-1（enum）、B-2（signal 栈溢出）、H-6（all 阶段，一行改动）、H-10（LSP 崩溃）
-2. **本轮**：H-1/H-2/H-4/H-5（生成非法代码，均无上下文推断或替换区间问题）、H-3（signal 语义）
-3. **下轮**：H-8/H-9/H-10（signal 并发重构，工作量最大）、M 组
+1. **立即**：B-1（enum）、B-2（sig 栈溢出）、H-6（all 阶段，一行改动）、H-10（LSP 崩溃）
+2. **本轮**：H-1/H-2/H-4/H-5（生成非法代码，均无上下文推断或替换区间问题）、H-3（sig 语义）
+3. **下轮**：H-8/H-9/H-10（sig 并发重构，工作量最大）、M 组
 4. **有空**：L 组 + 统一用 go1.27 gofmt 格式化 14 个文件
 
 ---
@@ -95,22 +95,22 @@
 | B-2 | ✅ | computed 增加 `computing` 重入检测，循环依赖改为可 recover 的 panic |
 | H-1 | ✅ | `tokenizeTypeText` 过滤 AllTokens 的 EOF 并修正 Pos；transformLambdas 改为最内层优先迭代替换。回归 `TestNestedLambda` |
 | H-2 | ✅ | `inferContextFuncType` 支持函数实参/赋值场景的类型推断；`parseSigParams` 按深度切分嵌套函数类型参数。回归 `TestLambdaContextFuncArg*` |
-| H-3 | ✅ | signal 声明/简单赋值/复合赋值右侧表达式经 `rewriteSignalReads` 递归改写。回归 `TestSignalRHSReads` |
+| H-3 | ✅ | sig 声明/简单赋值/复合赋值右侧表达式经 `rewriteSignalReads` 递归改写。回归 `TestSignalRHSReads` |
 | H-4 | ✅ | `collectStructFields` 收集逗号分隔的全部字段名并跳过嵌套深度。回归 `TestStructSharedFieldNamesProtected` |
 | H-5 | ✅ | `ImportManager` 把用户源码标识符登记为已占用名，运行时占位别名冲突时自动重命名（list2）。回归 `TestImportAliasNotShadowedByLocal` |
 | H-6 | ✅ | `CompileStage(src,"all")` 消除 `toks` shadow，case 内直接 emit 返回 |
 | H-7 | ✅ | `collectGuards` 对链首非守卫的 else-if 守卫作为独立链起点处理。回归 `TestElseIfGuardWithNonGuardHead` |
-| H-8 | ✅ | signal 观察者栈按 goroutine id 隔离（observers map），并发 withObserver 不再互相覆盖。回归 `TestConcurrentEffectsIsolatedDeps` |
+| H-8 | ✅ | sig 观察者栈按 goroutine id 隔离（observers map），并发 withObserver 不再互相覆盖。回归 `TestConcurrentEffectsIsolatedDeps` |
 | H-9 | ✅ | computed 结果在锁内写回，computing 带 goroutine 归属 + Cond 等待，并发读只重算一次。回归 `TestComputedConcurrentReadComputesOnce` |
 | H-10 | ✅ | LSP `Content-Length` 校验 Atoi 错误与负值，不再 `make([]byte,-1)` panic |
 | M-1 | ✅ | 同 H-1：tokenizeTypeText 修正生成 token 的 Pos 为 lambda 位置 |
 | M-2 | ✅ | `collectUnionGuards` 正确定位匿名函数参数括号并插入守卫。回归 `TestAnonFuncUnionParamGuard` |
 | M-3 | ✅ | `Type.Accepts` 对空值返回 false（不再静默放过），any 仍接受一切 |
-| M-4 | ✅ | `signal x` 缺 `=` 时降级为 `var x any`，不吞后续语句。回归 `TestSignalNoInitNotSwallowNext` |
+| M-4 | ✅ | `sig x` 缺 `=` 时降级为 `var x any`，不吞后续语句。回归 `TestSignalNoInitNotSwallowNext` |
 | M-5 | ✅ | `restoreRefs` 用局部遮蔽区间跳过与 pub 同名的局部变量。回归 `TestRestoreRefsSkipsLocalShadow` |
 | M-6 | ✅ | 复杂解构右值只求值一次（临时变量），简单标识符保持原样。回归 `TestDestructureUnknownTypeLenient` |
 | M-7 | ✅ | 位标志 String 保留标志成员 case（golden 已同步） |
-| M-10 | ✅ | signal withObserver 用 defer 恢复观察者栈，回调 panic 不污染 |
+| M-10 | ✅ | sig withObserver 用 defer 恢复观察者栈，回调 panic 不污染 |
 | L-6 | ✅ | `inDeclZone` 放宽到名字后跟逗号/右括号，`func f(a, b int)` 首参不再误改写。回归 `TestSignalParamFirstInGroup` |
 | L-11 | ✅ | 全仓用 go1.27 gofmt 格式化（含报告列出的 14 个文件） |
 
@@ -142,7 +142,7 @@
 
 | ID | 结论 | 修复要点 | 回归测试 |
 |---|---|---|---|
-| P1-1 | ✅ 真 bug | signal 名被函数参数 / 局部变量遮蔽时被误改写为 `count()`（真实 `go build` 报 `cannot call count (int)`）。新增 `collectSignalShadows` 做轻量作用域区间分析，遮蔽区内的同名标识符保持原样 | `TestSignalNameShadowedByParam` / `TestSignalNameShadowedByLocal` |
+| P1-1 | ✅ 真 bug | sig 名被函数参数 / 局部变量遮蔽时被误改写为 `count()`（真实 `go build` 报 `cannot call count (int)`）。新增 `collectSignalShadows` 做轻量作用域区间分析，遮蔽区内的同名标识符保持原样 | `TestSignalNameShadowedByParam` / `TestSignalNameShadowedByLocal` |
 | P1-2 | ✅ 真 bug | computed 的 f() 锁外计算期间源被写并标脏，旧结果写回时冲掉 dirty。改为版本号机制（node.version），写回前比对版本，变化则丢弃旧结果重试至稳定 | `TestComputedNoStaleOnConcurrentWrite` |
 | P1-3 | ✅ 真 bug | 观察者栈用共享 `node.prev`，两个 goroutine 同时执行同一节点互相覆盖；effect 回调并发执行引发用户数据竞争。改为按 goroutine 的独立栈切片；effect 经 `scheduleEffect` 串行调度并合并重复请求 | `TestEffectSerialUnderConcurrentWrites` / `TestNestedComputedConcurrentRead` |
 

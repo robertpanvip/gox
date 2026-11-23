@@ -5,12 +5,12 @@ import (
 	"strings"
 )
 
-// signalfields.go — struct signal 字段（语言特性）。
+// signalfields.go — struct sig 字段（语言特性）。
 //
 // GX 写法：
 //
 //	type CardProps struct {
-//	    signal name string   // 响应式字段：编译器生成 getter 字段
+//	    sig name string   // 响应式字段：编译器生成 getter 字段
 //	    age int              // 普通字段
 //	}
 //
@@ -23,29 +23,29 @@ import (
 //
 // 配套读写改写（持有该 struct 类型的地方）：
 //
-//	p := CardProps{name: Signal.New("x")}  // 对象字面量里 signal 字段自动包 Signal.New
+//	p := CardProps{name: Signal.New("x")}  // 对象字面量里 sig 字段自动包 Signal.New
 //	println(p.name())                      // 读：p.name → p.name()
 //	p.name("y")                            // 写：p.name = "y" → p.name("y")
 //
 // 这样字段值可由外部 Signal 驱动，组件/持有者读到的是实时值而非一次性快照。
 //
-// 关键点：降级必须在 Bind（绑定表构建）之前完成——否则 struct 里的 `signal`
-// 关键字会被局部 signal 逻辑误判为 `signal name = expr` 声明（旧行为生成非法
+// 关键点：降级必须在 Bind（绑定表构建）之前完成——否则 struct 里的 `sig`
+// 关键字会被局部 sig 逻辑误判为 `sig name = expr` 声明（旧行为生成非法
 // 的 `var name any string`）。降级后所有下游（Bindings/scope/objectlit/pub/
 // external）看到的都是标准 Go 的 `Signal.Signal[T]` 字段，天然享受既有保护。
 //
 // ============================================================================
-// signal 字段构造值 / JSX signal prop 的档位表（本文件是单一事实来源）
+// sig 字段构造值 / JSX sig prop 的档位表（本文件是单一事实来源）
 // ============================================================================
 // Signal[T] = func(...T) T，读写一体。生成物必须满足：读登记依赖、写真正生效。
-// 凡是「忽略参数的 func(...T) T」都不是合法 signal——这是分档的硬判据。
-// 值表达式 E（signal 字段的值 / signal prop 的值）按来源分档：
+// 凡是「忽略参数的 func(...T) T」都不是合法 sig——这是分档的硬判据。
+// 值表达式 E（sig 字段的值 / sig prop 的值）按来源分档：
 //
-//  档1 透传  E 本身是 signal（变量/字段/链读）        → 传 getter 本身，零开销
-//           （链中间含 signal 段时走读写合一 lambda，见 signalChainGetter）；
+//  档1 透传  E 本身是 sig（变量/字段/链读）        → 传 getter 本身，零开销
+//           （链中间含 sig 段时走读写合一 lambda，见 signalChainGetter）；
 //  档2 字面量 E 是常量（数字/字符串/bool/nil）        → Signal.New(E)，可写、不缓存依赖；
 //  档3 构造  E 是复合字面量构造（如 Leaf{v:"a"}）     → Signal.New(E)，一次构造、可写、可响应；
-//  档4 派生  E 含 signal 读（如 p.a + p.b）           → Signal.Computed(func() T { return E })，
+//  档4 派生  E 含 sig 读（如 p.a + p.b）           → Signal.Computed(func() T { return E })，
 //           登记依赖，只读（Computed 语义本就只读）；
 //  档5 裸变量 E 是单个普通变量/字段（如 v、q.title）  → Signal.LockedGetterShared(key,get,set)：
 //           get 读跟随 E 最新值、set 写落回 E；按 E 根标识符的声明位置生成 key，
@@ -53,16 +53,16 @@ import (
 //           竞态（第十轮 P1-2），也消除多字段/多实例各持一把锁彼此不互斥的竞态
 //           （第十一轮 N-3）。跟随语义不变，不登记依赖、UI 不自动刷新；source
 //           变量在别处被直接写入时仍需用户自行同步。
-//  档6 其它  普通表达式（无 signal 读、非上述形态）    → Signal.New(E) 快照，绝不生成
-//           忽略参数的假 signal。
+//  档6 其它  普通表达式（无 sig 读、非上述形态）    → Signal.New(E) 快照，绝不生成
+//           忽略参数的假 sig。
 //
 // 实现入口：手写构造 wrapLitSeg → buildSignalFieldValue；JSX signalFieldPropTokens
 // 先判透传/字面量，其余交 buildSignalFieldValue。两处共用同一分档，杜绝判据分裂。
 
-// signalFieldTable 记录 struct 字段元数据，供所有「signal 字段读」判定共用
+// signalFieldTable 记录 struct 字段元数据，供所有「sig 字段读」判定共用
 // （第八轮主线：统一判据入口）。两张表：
-//   - sig：type → signal 字段名 → 字段类型文本（如 "string"），供 JSX props
-//     生成 Signal.Computed(func() T {...}) 及判断"是否 signal 字段"；
+//   - sig：type → sig 字段名 → 字段类型文本（如 "string"），供 JSX props
+//     生成 Signal.Computed(func() T {...}) 及判断"是否 sig 字段"；
 //   - all：type → 所有字段名 → 字段类型文本（含普通字段），供链式 selector
 //     沿链传播 receiver 类型——判断 t.mid.in.v 时逐级求 mid/in 的类型，
 //     最终用 v 的直接 receiver 类型查 sig，取代按字段名全局猜测（P1-3）。
@@ -71,22 +71,22 @@ type signalFieldTable struct {
 	all map[string]map[string]string
 }
 
-// signalFieldDecl 描述一处 `signal name TYPE` 字段声明在 token 流中的位置。
+// signalFieldDecl 描述一处 `sig name TYPE` 字段声明在 token 流中的位置。
 type signalFieldDecl struct {
 	typeName string // struct 类型名
 	field    string // 字段名
 	typeText string // 字段类型文本（如 "string"），JSX Computed 包装需要
-	sigIdx   int    // `signal` token 下标
+	sigIdx   int    // `sig` token 下标
 	nameIdx  int    // 字段名 token 下标
 	typeFrom int    // 类型起始下标
 	typeTo   int    // 类型结束下标（开区间）
 }
 
 // collectSignalFieldDecls 扫描原始 token 流里的 `type X struct { ... }`，
-// 找出其中形如 `signal name TYPE` 的字段声明。
+// 找出其中形如 `sig name TYPE` 的字段声明。
 //
-// 用 splitStructFields 切字段段（换行/分号分隔），每段首 token 是 `signal`
-// 且第二个有效 token 是标识符（字段名）、其后是类型，即识别为 signal 字段。
+// 用 splitStructFields 切字段段（换行/分号分隔），每段首 token 是 `sig`
+// 且第二个有效 token 是标识符（字段名）、其后是类型，即识别为 sig 字段。
 func collectSignalFieldDecls(toks []Token) []signalFieldDecl {
 	var out []signalFieldDecl
 	for i := 0; i < len(toks); i++ {
@@ -112,7 +112,7 @@ func collectSignalFieldDecls(toks []Token) []signalFieldDecl {
 		}
 		for _, seg := range splitStructFields(toks, open+1, close) {
 			first := nextSigIn(toks, seg[0], seg[1])
-			if first < 0 || !toks[first].is("signal") {
+			if first < 0 || !toks[first].is("sig") {
 				continue
 			}
 			nameIdx := nextSigIn(toks, first+1, seg[1])
@@ -121,7 +121,7 @@ func collectSignalFieldDecls(toks []Token) []signalFieldDecl {
 			}
 			typeFrom := nextSigIn(toks, nameIdx+1, seg[1])
 			if typeFrom < 0 {
-				continue // `signal name` 无类型：不降级，交 Go 报错
+				continue // `sig name` 无类型：不降级，交 Go 报错
 			}
 			typeTo := typeRangeEndIn(toks, typeFrom, seg[1])
 			if typeTo <= typeFrom {
@@ -151,7 +151,7 @@ func typeRangeEndIn(toks []Token, start, limit int) int {
 	return end
 }
 
-// buildSignalFieldTable 从 token 流构建字段元数据表：sig（signal 字段）+ all（所有字段类型）。
+// buildSignalFieldTable 从 token 流构建字段元数据表：sig（sig 字段）+ all（所有字段类型）。
 // all 表从每个 `type X struct {...}` 的全部字段收集，用于链式 selector 沿链传播类型。
 func buildSignalFieldTable(toks []Token, decls []signalFieldDecl) signalFieldTable {
 	tbl := signalFieldTable{
@@ -164,7 +164,7 @@ func buildSignalFieldTable(toks []Token, decls []signalFieldDecl) signalFieldTab
 		}
 		tbl.sig[d.typeName][d.field] = d.typeText
 	}
-	// 收集所有 struct 字段类型（含普通字段）。signal 字段降级后类型是
+	// 收集所有 struct 字段类型（含普通字段）。sig 字段降级后类型是
 	// Signal.Signal[T]，普通字段是其声明类型——沿链传播时据此逐级求 receiver 类型。
 	for i := 0; i < len(toks); i++ {
 		if !toks[i].is("type") {
@@ -195,7 +195,7 @@ func buildSignalFieldTable(toks []Token, decls []signalFieldDecl) signalFieldTab
 			if first < 0 || toks[first].Kind != Ident || isGoKeyword(toks[first].Text) {
 				continue
 			}
-			if toks[first].is("signal") {
+			if toks[first].is("sig") {
 				first = nextSigIn(toks, first+1, seg[1])
 				if first < 0 || toks[first].Kind != Ident {
 					continue
@@ -216,16 +216,16 @@ func buildSignalFieldTable(toks []Token, decls []signalFieldDecl) signalFieldTab
 	return tbl
 }
 
-// hasSignalFields 报告表里是否有任何 signal 字段（供管线早退）。
+// hasSignalFields 报告表里是否有任何 sig 字段（供管线早退）。
 func (t signalFieldTable) hasSignalFields() bool { return len(t.sig) > 0 }
 
-// has 判断 typeName 的 field 是否是 signal 字段。
+// has 判断 typeName 的 field 是否是 sig 字段。
 func (t signalFieldTable) has(typeName, field string) bool {
 	_, ok := t.sig[typeName][field]
 	return ok
 }
 
-// fieldType 返回 typeName.field 的字段类型文本；非 signal 字段返回空串。
+// fieldType 返回 typeName.field 的字段类型文本；非 sig 字段返回空串。
 func (t signalFieldTable) fieldType(typeName, field string) string {
 	return t.sig[typeName][field]
 }
@@ -236,7 +236,7 @@ func (t signalFieldTable) fieldTypeOf(typeName, field string) string {
 	return t.all[typeName][field]
 }
 
-// downgradeSignalFields 把 `signal name TYPE` 降级为 `name Signal.Signal[TYPE]`。
+// downgradeSignalFields 把 `sig name TYPE` 降级为 `name Signal.Signal[TYPE]`。
 // 从后往前替换，避免下标漂移。Signal token 标记 IsGen 由 ReconcileImports 注入 import。
 func downgradeSignalFields(toks []Token, decls []signalFieldDecl) []Token {
 	if len(decls) == 0 {
@@ -268,7 +268,7 @@ func downgradeSignalFields(toks []Token, decls []signalFieldDecl) []Token {
 // recvTypeAt 返回 selector 左侧 receiver 在 recvPos 处的推断类型名。
 // receiver 可能是局部变量 / 函数参数 / 方法接收者，都由 Bindings 统一解析。
 // 指针 receiver（*CardProps，如指针 props 组件）剥去前导 '*' 返回基类型名——
-// signal 字段表按基类型名登记，解包 p.name → p.name() 对指针同样成立（第七轮 §6a）。
+// sig 字段表按基类型名登记，解包 p.name → p.name() 对指针同样成立（第七轮 §6a）。
 func recvTypeAt(b *Bindings, recvName string, recvPos Pos) string {
 	if b == nil {
 		return ""
@@ -279,8 +279,8 @@ func recvTypeAt(b *Bindings, recvName string, recvPos Pos) string {
 	return ""
 }
 
-// signalSelector 是「一处 signal 字段 selector 读」的解析结果，由统一入口
-// resolveSignalSel 产出。所有需要判断 signal 字段读的 transform 都应消费它，
+// signalSelector 是「一处 sig 字段 selector 读」的解析结果，由统一入口
+// resolveSignalSel 产出。所有需要判断 sig 字段读的 transform 都应消费它，
 // 避免各处自拟判据（第八轮主线：判据分裂是 4 个 P1 的共同根因）。
 type signalSelector struct {
 	field    string // 链尾字段名（如 name）
@@ -290,7 +290,7 @@ type signalSelector struct {
 	whole    bool   // [recvIdx, fieldIdx] 是否恰为完整 selector（无多余 token）
 }
 
-// resolveSignalSel 是 selector 「是否 signal 字段读」的统一判定入口。
+// resolveSignalSel 是 selector 「是否 sig 字段读」的统一判定入口。
 //
 // 输入 i 为 receiver 链首标识符下标（如 p.a 的 p、t.mid.in.v 的 t、getP().a 的
 // getP）。向右解析完整的 '.' 字段链，取链尾字段名；判据分两级：
@@ -298,8 +298,8 @@ type signalSelector struct {
 //  1. 二段式 recv.field：按 recvPos 处 receiver 的推断类型 + tbl.has(type, field)
 //     精确判定（支持 *T 剥指针）；
 //  2. 链式 / 非标识符 receiver（t.mid.in.v、getP().a）：链首类型无法沿字段链传播时，
-//     退化为「链尾字段名在唯一一个已声明类型上是 signal 字段」判定——即只有恰好
-//     一个 struct 声明了该名字的 signal 字段才命中；多类型同名则放弃（宁可少补，
+//     退化为「链尾字段名在唯一一个已声明类型上是 sig 字段」判定——即只有恰好
+//     一个 struct 声明了该名字的 sig 字段才命中；多类型同名则放弃（宁可少补，
 //     不误伤普通字段）。这是前几轮报告建议的限定场景方案。
 //
 // 硬规则：绝不使用全表按名匹配（hasField）——它会让任意同名普通字段被误判。
@@ -352,34 +352,34 @@ func resolveSignalSel(toks []Token, i int, recvPos Pos, b *Bindings, tbl signalF
 	return signalSelector{field: lastField, fieldIdx: lastFieldIdx, recvIdx: i, recvType: tailRecv, whole: !callRecv}, true
 }
 
-// signalChain 描述一条 selector 链上所有 signal 字段段的解析结果。
-// segs 是链上所有「signal 字段」的 token 下标（读时需在其后补 ()）；链上每段
-// 都按「进入该段前的 receiver 真实类型」判定，中间段是 signal 也会被识别。
+// signalChain 描述一条 selector 链上所有 sig 字段段的解析结果。
+// segs 是链上所有「sig 字段」的 token 下标（读时需在其后补 ()）；链上每段
+// 都按「进入该段前的 receiver 真实类型」判定，中间段是 sig 也会被识别。
 type signalChain struct {
-	segs         []int  // 链上所有 signal 字段的下标（按从左到右）
+	segs         []int  // 链上所有 sig 字段的下标（按从左到右）
 	tailIdx      int    // 链尾字段名下标
-	tailIsSig    bool   // 链尾字段是不是 signal
+	tailIsSig    bool   // 链尾字段是不是 sig
 	chainStart   int    // 链首 receiver 下标（ident 或调用结果 ')'）
 	callRecv     bool   // 链首是否为调用结果（getP().a）
 	recvIdx      int    // 链首 ident 下标
 	fieldCount   int    // 链上字段段总数
-	tailRecvType string // 进入链尾字段前的 receiver 类型（求链尾 signal 字段元素类型 T）
+	tailRecvType string // 进入链尾字段前的 receiver 类型（求链尾 sig 字段元素类型 T）
 	tailField    string // 链尾字段名
 }
 
 // resolveSignalChain 沿链逐段解析：从 i 处的 receiver 出发，沿 '.' 字段链走到尾，
-// 逐段按 receiver 真实类型判断该字段是不是 signal 字段，收集所有 signal 段下标。
-// 这是"链条中每一段是 signal 就加括号"规则的统一实现（第八轮用户补充）。
+// 逐段按 receiver 真实类型判断该字段是不是 sig 字段，收集所有 sig 段下标。
+// 这是"链条中每一段是 sig 就加括号"规则的统一实现（第八轮用户补充）。
 //
-// 类型沿链传播：每段 field 的声明类型从 tbl.all 取（signal 字段降级后是
+// 类型沿链传播：每段 field 的声明类型从 tbl.all 取（sig 字段降级后是
 // Signal.Signal[T]），bareFieldType 剥出元素类型 T 作为下一段的 receiver 类型；
-// 任一段类型无法解析则停止传播（后续段不再判为 signal，保守不补）。
-// resolveSignalChainEx 沿链解析 signal 字段链。
+// 任一段类型无法解析则停止传播（后续段不再判为 sig，保守不补）。
+// resolveSignalChainEx 沿链解析 sig 字段链。
 // skipCalls=true 时，沿链解析会跳过每段后已有的 '()'——两种情形都需要：
-//   - 透传档处理的是改写后的 token（signal 段已是 b() 形态）；
-//   - 读写改写档处理用户源码，中间 signal 段可能已显式写成 b()（m.leaf().v）。
+//   - 透传档处理的是改写后的 token（sig 段已是 b() 形态）；
+//   - 读写改写档处理用户源码，中间 sig 段可能已显式写成 b()（m.leaf().v）。
 //
-// 两者若不跳过都会在 '(' 处断链，把中间 signal 段误判为链尾、走不到真正的链尾。
+// 两者若不跳过都会在 '(' 处断链，把中间 sig 段误判为链尾、走不到真正的链尾。
 // 输出侧（emitChain / JSX selector）对"段后已有 ()"不重复补，故跳过安全。
 func resolveSignalChainEx(toks []Token, i int, recvPos Pos, b *Bindings, tbl signalFieldTable, limit int, skipCalls bool) (signalChain, bool) {
 	if !tbl.hasSignalFields() || i < 0 || i >= len(toks) || toks[i].Kind != Ident || isGoKeyword(toks[i].Text) {
@@ -469,13 +469,13 @@ func resolveSignalChainEx(toks []Token, i int, recvPos Pos, b *Bindings, tbl sig
 		chain.tailField = field
 		chain.tailRecvType = curType // 进入链尾字段前的 receiver 类型
 		chain.fieldCount++
-		// 传播到下一段：signal 字段用其信号元素类型，普通字段用声明类型。
+		// 传播到下一段：sig 字段用其信号元素类型，普通字段用声明类型。
 		ft := tbl.fieldTypeOf(curType, field)
 		if ft == "" && isSig {
 			ft = tbl.fieldType(curType, field)
 		}
 		// 第十二轮 P2-D：普通字段若是容器（s.m map[string]P / s.ps []P），
-		// 保留完整容器类型供随后的 [...] 推进；不能像 signal 字段那样 bare 掉
+		// 保留完整容器类型供随后的 [...] 推进；不能像 sig 字段那样 bare 掉
 		// （bareFieldType 对 map[...] 返回空，会让链断裂、s.m["k"].a 静默漏改）。
 		curType = chainFieldType(ft)
 		if curType == "" {
@@ -484,7 +484,7 @@ func resolveSignalChainEx(toks []Token, i int, recvPos Pos, b *Bindings, tbl sig
 			break
 		}
 		cur = k
-		// skipCalls：段后若是已补的 '()'（signal 段读），跳过它再找下一个 '.'，
+		// skipCalls：段后若是已补的 '()'（sig 段读），跳过它再找下一个 '.'，
 		// 使 o.mid.b().c 能走到真正的链尾 c 而非停在中间段 b。
 		if skipCalls {
 			if lp := nextSigIn(toks, k+1, limit); lp >= 0 && toks[lp].Text == "(" {
@@ -555,16 +555,16 @@ func receiverTypeBeforeTail(toks []Token, i, start int, callRecv bool, recvPos P
 }
 
 // bareFieldType 把字段声明类型文本归一为「可作 receiver 的具名类型」：
-//   - Signal.Signal[T] → T（signal 字段读出来的是 T）
+//   - Signal.Signal[T] → T（sig 字段读出来的是 T）
 //   - *T → T；去掉可能的包前缀（pkg.T → T，具名类型在 signalFieldTable 按基名登记）
 //
 // 无法归一（如 int/string 等内建类型、匿名 struct）返回空串。
 // chainFieldType 供 selector 链传播字段类型（第十二轮 P2-D）：
 //   - 容器类型（map[K]V / []T / [N]T / list.List[T]）原样保留，供随后 [...] 推进；
-//   - 其它字段沿用 bareFieldType（signal/list 剥元素、指针/包名剥前缀）。
+//   - 其它字段沿用 bareFieldType（sig/list 剥元素、指针/包名剥前缀）。
 //
 // 不这样做的话，bareFieldType("map[string]P") 返回空（"其它泛型不作为 receiver"），
-// 使 s.m["k"].a 的类型链在 .m 处断裂、链尾 a 的 signal 字段读被静默漏改。
+// 使 s.m["k"].a 的类型链在 .m 处断裂、链尾 a 的 sig 字段读被静默漏改。
 func chainFieldType(ft string) string {
 	t := strings.TrimSpace(ft)
 	if strings.HasPrefix(t, "map[") || strings.HasPrefix(t, "list.List[") || strings.HasPrefix(t, "List[") {
@@ -812,7 +812,7 @@ func isBuiltinType(t string) bool {
 	return false
 }
 
-// isSignalSelector 判断位置 i 处的二段式 `recv . field` 是否是 signal 字段读。
+// isSignalSelector 判断位置 i 处的二段式 `recv . field` 是否是 sig 字段读。
 // 统一入口 resolveSignalSel 的薄包装，保留给 rewriteSignalFieldRefs 使用。
 func isSignalSelector(toks []Token, i int, b *Bindings, tbl signalFieldTable) (field string, ok bool, fieldIdx int) {
 	sel, ok := resolveSignalSel(toks, i, toks[i].Pos, b, tbl, 0)
@@ -822,11 +822,11 @@ func isSignalSelector(toks []Token, i int, b *Bindings, tbl signalFieldTable) (f
 	return sel.field, true, sel.fieldIdx
 }
 
-// silentIndexedSignalField 检测「索引元素的 signal 字段读未被改写」的静默漏改
+// silentIndexedSignalField 检测「索引元素的 sig 字段读未被改写」的静默漏改
 // 场景（第十二轮 §4.5 立规矩，第十三轮 P1-A 收窄判据）。只在极窄窗口报警：
 //   - 链首标识符后有索引 '['（x[i].f），且链能走到一个尾字段名 f；
-//   - x 的容器元素类型可推断，且该元素类型确实声明了 signal 字段 f；
-//   - 正常类型路径没能把 f 识别为 signal 字段（调用方在 !ok 分支调用本函数）。
+//   - x 的容器元素类型可推断，且该元素类型确实声明了 sig 字段 f；
+//   - 正常类型路径没能把 f 识别为 sig 字段（调用方在 !ok 分支调用本函数）。
 //
 // 返回 (字段名, 是否命中)。命中即应报"无法推断索引元素类型"诊断，而非静默让
 // Go 打印 Signal 函数地址。
@@ -869,9 +869,9 @@ func silentIndexedSignalField(toks []Token, i, limit int, tbl signalFieldTable, 
 	if !hasIndex || lastField == "" {
 		return "", false
 	}
-	// 第十三轮 P1-A：元素类型必须可推断，且该类型确实把 lastField 声明为 signal
+	// 第十三轮 P1-A：元素类型必须可推断，且该类型确实把 lastField 声明为 sig
 	// 字段。旧判据只比「字段名唯一命中」不看类型，导致 Row.title（普通字段）与
-	// Item.title（signal 字段）撞名时误报、阻断构建。推不出就沉默，不猜。
+	// Item.title（sig 字段）撞名时误报、阻断构建。推不出就沉默，不猜。
 	et := ""
 	if b != nil {
 		et = containerElemTypeFromBinding(b, toks[i].Text, toks[i].Pos)
@@ -892,7 +892,7 @@ func silentIndexedSignalField(toks []Token, i, limit int, tbl signalFieldTable, 
 	return lastField, true
 }
 
-// rewriteSignalFieldRefs 对持有 signal 字段 struct 的 selector 做读写解包：
+// rewriteSignalFieldRefs 对持有 sig 字段 struct 的 selector 做读写解包：
 //   - 读 `p.name` → `p.name()`
 //   - 写 `p.name = expr` → `p.name(expr)`
 //   - 复合写 `p.name += expr` → `p.name(p.name() + expr)`
@@ -901,10 +901,10 @@ func silentIndexedSignalField(toks []Token, i, limit int, tbl signalFieldTable, 
 // 判定基于 receiver 的推断类型 + signalFieldTable；普通字段、外部包符号、
 // 已是调用 `p.name(...)` 都不改。this transform 在 transformSignals 之后、
 // external 之前运行——此时字段仍是小写、类型已是 Signal.Signal[T]。
-// checkSignalValueDeepWrite 检测 signal 持有复合值时的字段深写：`signal s = S{...}; s.n = 2`
+// checkSignalValueDeepWrite 检测 sig 持有复合值时的字段深写：`sig s = S{...}; s.n = 2`
 // 会被改写为 `s().n = 2`，Go 报 "cannot assign to s().n"，信息不指向 GX 写法。
-// 给带坐标的诊断，提示整体替换 signal。signal 字段自身的写（p.name = v，p 是普通
-// struct 变量、name 是 signal 字段）不在此列——p 不是 signal 变量，不会命中。
+// 给带坐标的诊断，提示整体替换 sig。sig 字段自身的写（p.name = v，p 是普通
+// struct 变量、name 是 sig 字段）不在此列——p 不是 sig 变量，不会命中。
 func checkSignalValueDeepWrite(toks []Token, b *Bindings, diags *[]GXDiagnostic) {
 	if b == nil || diags == nil {
 		return
@@ -913,9 +913,9 @@ func checkSignalValueDeepWrite(toks []Token, b *Bindings, diags *[]GXDiagnostic)
 		if toks[i].Text != "." {
 			continue
 		}
-		// '.' 前是赋值目标链，往左剥掉所有索引 [...]，直到 signal 读调用 s()。
+		// '.' 前是赋值目标链，往左剥掉所有索引 [...]，直到 sig 读调用 s()。
 		// 无索引：s().n = 2        （B4，原有逻辑）
-		// 带索引：rows()[0].name = "b"（C2，值变了但 signal 未写、UI 不刷新）
+		// 带索引：rows()[0].name = "b"（C2，值变了但 sig 未写、UI 不刷新）
 		j := prevSig(toks, i-1)
 		if j < 0 {
 			continue
@@ -962,10 +962,10 @@ func checkSignalValueDeepWrite(toks []Token, b *Bindings, diags *[]GXDiagnostic)
 		}
 		msg := ""
 		if indexed {
-			// C2：切片元素字段赋值编译得过、值也变了，但没有 signal 写、slot 不刷新。
-			msg = "signal 持有的切片元素字段直接赋值不会触发刷新（" + exprText(toks, id, op) + "）；请整体替换后重新赋值 signal，如 " + toks[id].Text + "(新切片)"
+			// C2：切片元素字段赋值编译得过、值也变了，但没有 sig 写、slot 不刷新。
+			msg = "sig 持有的切片元素字段直接赋值不会触发刷新（" + exprText(toks, id, op) + "）；请整体替换后重新赋值 sig，如 " + toks[id].Text + "(新切片)"
 		} else {
-			msg = "signal 持有的复合值不支持字段直接赋值（" + toks[id].Text + "." + toks[field].Text + " = ...）；请整体替换 signal，如 " + toks[id].Text + "(新值)"
+			msg = "sig 持有的复合值不支持字段直接赋值（" + toks[id].Text + "." + toks[field].Text + " = ...）；请整体替换 sig，如 " + toks[id].Text + "(新值)"
 		}
 		*diags = append(*diags, GXDiagnostic{
 			Pos:     toks[i].Pos,
@@ -977,13 +977,13 @@ func checkSignalValueDeepWrite(toks []Token, b *Bindings, diags *[]GXDiagnostic)
 }
 
 func rewriteSignalFieldRefs(toks []Token, b *Bindings, tbl signalFieldTable, diags *[]GXDiagnostic) []Token {
-	// B4：signal 持有复合值的字段深写（s.n = 2）——即使本文件无 signal 字段表也要报。
+	// B4：sig 持有复合值的字段深写（s.n = 2）——即使本文件无 sig 字段表也要报。
 	checkSignalValueDeepWrite(toks, b, diags)
 	if !tbl.hasSignalFields() {
 		return toks
 	}
 	out := make([]Token, 0, len(toks))
-	// isSigSeg 判断 k 是否是链上的 signal 字段段。
+	// isSigSeg 判断 k 是否是链上的 sig 字段段。
 	isSigSeg := func(segs []int, k int) bool {
 		for _, s := range segs {
 			if s == k {
@@ -992,10 +992,10 @@ func rewriteSignalFieldRefs(toks []Token, b *Bindings, tbl signalFieldTable, dia
 		}
 		return false
 	}
-	// emitChain 原样输出 [from,to]，在 segs 中每个「尚未被调用」的 signal 段后补 ()。
+	// emitChain 原样输出 [from,to]，在 segs 中每个「尚未被调用」的 sig 段后补 ()。
 	// writeIdx >= 0 时该段是写目标：不补 ()，由调用方在函数体外追加写载荷。
 	// 段后已是 '('（用户已显式写调用式，如 o.mid.b.v() 的 v）→ 该段不重复补，
-	// 但链上其它 signal 段（如 b）仍要补——这是"逐段判断"规则的关键。
+	// 但链上其它 sig 段（如 b）仍要补——这是"逐段判断"规则的关键。
 	emitChain := func(from, to int, segs []int, writeIdx int) {
 		for k := from; k <= to; k++ {
 			out = append(out, toks[k])
@@ -1010,20 +1010,20 @@ func rewriteSignalFieldRefs(toks []Token, b *Bindings, tbl signalFieldTable, dia
 	}
 	for i := 0; i < len(toks); i++ {
 		t := toks[i]
-		// skipCalls=true：中间 signal 段用户可能已显式写调用括号（m.leaf().v），
+		// skipCalls=true：中间 sig 段用户可能已显式写调用括号（m.leaf().v），
 		// 不跳过就会在 leaf() 的 '(' 处断链、走不到链尾 v，写操作漏改写。
 		// emitChain 对"段后已有 ()"不重复补，故跳过是安全的。
 		chain, ok := resolveSignalChainEx(toks, i, toks[i].Pos, b, tbl, 0, true)
 		if !ok || len(chain.segs) == 0 {
 			// 第十二轮 §4.5 立规矩：索引链元素类型推不出、链尾字段名唯一命中
-			// signal 字段时，不能静默输出裸 selector（Go 会打印 Signal 函数地址），
+			// sig 字段时，不能静默输出裸 selector（Go 会打印 Signal 函数地址），
 			// 报明确诊断让用户显式标注或改用切片变量。
 			if diags != nil {
 				if field, hit := silentIndexedSignalField(toks, i, 0, tbl, b); hit {
 					*diags = append(*diags, GXDiagnostic{
 						Pos:     toks[i].Pos,
 						Code:    "signal-field-index-unknown",
-						Message: "无法推断索引元素的类型，字段 " + field + " 是 signal 字段但读未被改写；请显式标注元素类型或改用切片变量",
+						Message: "无法推断索引元素的类型，字段 " + field + " 是 sig 字段但读未被改写；请显式标注元素类型或改用切片变量",
 					})
 				}
 			}
@@ -1031,8 +1031,8 @@ func rewriteSignalFieldRefs(toks []Token, b *Bindings, tbl signalFieldTable, dia
 			continue
 		}
 		fieldIdx := chain.tailIdx
-		// 若链上所有 signal 段后都已是 '('（用户已显式写全调用式，如 p.name()），
-		// 整条链无需改动。否则继续——中间 signal 段可能仍缺 ()（如 o.mid.b.v() 的 b）。
+		// 若链上所有 sig 段后都已是 '('（用户已显式写全调用式，如 p.name()），
+		// 整条链无需改动。否则继续——中间 sig 段可能仍缺 ()（如 o.mid.b.v() 的 b）。
 		allCalled := true
 		for _, s := range chain.segs {
 			n := nextSig(toks, s+1)
@@ -1057,15 +1057,15 @@ func rewriteSignalFieldRefs(toks []Token, b *Bindings, tbl signalFieldTable, dia
 		}
 
 		if op == "" || !chain.tailIsSig {
-			// 纯读，或链尾不是 signal（链式中间段是 signal 也要补 ()）：
-			// 对整个链的每个 signal 段补 ()，消费整条链。
+			// 纯读，或链尾不是 sig（链式中间段是 sig 也要补 ()）：
+			// 对整个链的每个 sig 段补 ()，消费整条链。
 			emitChain(i, fieldIdx, chain.segs, -1)
 			i = fieldIdx
 			continue
 		}
 
-		// 写 / 复合写：链尾是 signal（写目标），整体消费 `recv.chain op expr`。
-		// 中间 signal 段仍补 ()，链尾作为写目标不补、改写成 p.name(...)。
+		// 写 / 复合写：链尾是 sig（写目标），整体消费 `recv.chain op expr`。
+		// 中间 sig 段仍补 ()，链尾作为写目标不补、改写成 p.name(...)。
 		end := opIdx + 1
 		if op != "++" && op != "--" {
 			end = signalExprEnd(toks, opIdx+1)
@@ -1081,7 +1081,7 @@ func rewriteSignalFieldRefs(toks []Token, b *Bindings, tbl signalFieldTable, dia
 				binop = "-"
 			}
 			// p.name(p.name() + 1)：读回整条链。链尾由下面的 tokOp("()") 补，
-			// 中间的 signal 段由 emitChain 补（writeIdx=fieldIdx 让链尾不重复补）。
+			// 中间的 sig 段由 emitChain 补（writeIdx=fieldIdx 让链尾不重复补）。
 			emitChain(i, fieldIdx, chain.segs, fieldIdx)
 			out = append(out, tokOp("()", p), tokSpace(" ", p), tokOp(binop, p), tokSpace(" ", p), tokOp("1", p))
 		case isAssignOp(op):
@@ -1104,25 +1104,25 @@ func rewriteSignalFieldRefs(toks []Token, b *Bindings, tbl signalFieldTable, dia
 
 // ---------- 构造包装 ----------
 
-// signalPassthrough 描述一个「已是 signal、构造时直通」的值表达式区间。
+// signalPassthrough 描述一个「已是 sig、构造时直通」的值表达式区间。
 type signalPassthrough struct {
 	from, to int      // 直通 token 区间（开区间）；gen 为空时有效
 	gen      []Token  // 非空时直接用作载荷（读写 lambda / 裸 getter），忽略 from/to
 }
 
-// signalExprPassthrough 判断 [from,to) 的值表达式是否已是 signal，返回直通区间。
+// signalExprPassthrough 判断 [from,to) 的值表达式是否已是 sig，返回直通区间。
 //
-// 关键场景（保鲜语义）：源 signal 变量 src 传给 signal 字段时，transformSignals
+// 关键场景（保鲜语义）：源 sig 变量 src 传给 sig 字段时，transformSignals
 // 会先把读取 src 改写成 src()；此时必须「剥离 ()、传 getter 本身」，否则
 // Signal.New(src()) 只是把当前值快照一遍，src 后续变化不再反映到字段。
 //
 // 识别四种形态：
-//   - sigVar() 且 sigVar 是 signal/computed 绑定 → 直通 sigVar（剥离 ()）；
-//   - sigVar 裸标识符且是 signal/computed 绑定 → 直通 sigVar；
-//   - recv.field() 且 field 是 receiver 类型上的 signal 字段 → 直通 recv.field（剥离 ()）；
+//   - sigVar() 且 sigVar 是 sig/computed 绑定 → 直通 sigVar（剥离 ()）；
+//   - sigVar 裸标识符且是 sig/computed 绑定 → 直通 sigVar；
+//   - recv.field() 且 field 是 receiver 类型上的 sig 字段 → 直通 recv.field（剥离 ()）；
 //   - Signal.New(...) / Signal.Computed(...) 等 Signal.xxx 调用 → 整段原样直通。
 //
-// 前置：本函数须在 rewriteSignalFieldRefs 之后运行——此时 signal 字段读已被改写成
+// 前置：本函数须在 rewriteSignalFieldRefs 之后运行——此时 sig 字段读已被改写成
 // 调用式 p.a()，本函数剥离 () 还原 getter 本身；若在之前运行只会看到裸 p.a，
 // 直通后会被随后的 rewrite 改成 p.a()（快照，静默冻结，第六轮遗留缺陷）。
 func signalExprPassthrough(toks []Token, from, to int, b *Bindings, tbl signalFieldTable) (signalPassthrough, bool) {
@@ -1132,11 +1132,11 @@ func signalExprPassthrough(toks []Token, from, to int, b *Bindings, tbl signalFi
 	}
 	t := toks[first]
 
-	// recv.chain.field() → signal 字段链透传（第九轮统一入口 signalChainGetter）。
-	// 形态：[receiver 链] . field ( )，signal 段已被改写补上 ()。分三档：
-	//   中间有 signal 段 + 链尾 signal → 读写合一 lambda（重新走链保鲜）；
-	//   中间有 signal 段 + 链尾普通   → 裸 getter；
-	//   单段链尾 signal                → 剥 () 裸透传（沿用旧行为，零开销）。
+	// recv.chain.field() → sig 字段链透传（第九轮统一入口 signalChainGetter）。
+	// 形态：[receiver 链] . field ( )，sig 段已被改写补上 ()。分三档：
+	//   中间有 sig 段 + 链尾 sig → 读写合一 lambda（重新走链保鲜）；
+	//   中间有 sig 段 + 链尾普通   → 裸 getter；
+	//   单段链尾 sig                → 剥 () 裸透传（沿用旧行为，零开销）。
 	// 与 JSX 侧 pureSignalRead 共用 signalChainGetter 判据，避免判据分裂。
 	if t.Kind == Ident {
 		if gen, ok := signalChainGetter(toks, first, to, b, tbl, t.Pos); ok {
@@ -1181,11 +1181,11 @@ func signalExprPassthrough(toks []Token, from, to int, b *Bindings, tbl signalFi
 	return signalPassthrough{}, false
 }
 
-// exprHasSignalRead 判断 [from,to) 是否读取了任何 signal（signal 变量或 signal 字段），
-// 用统一入口 resolveSignalSel 判定 selector、用 Bindings 判定 signal 变量。
+// exprHasSignalRead 判断 [from,to) 是否读取了任何 sig（sig 变量或 sig 字段），
+// 用统一入口 resolveSignalSel 判定 selector、用 Bindings 判定 sig 变量。
 // 用途：区分「纯普通变量/普通字段」（用裸 getter 每次读最新）与
-// 「含 signal 读的派生表达式」（用 Signal.Computed 登记依赖并缓存）——
-// Computed 只在其依赖的 signal 变化时重算，若表达式里没有 signal 读，
+// 「含 sig 读的派生表达式」（用 Signal.Computed 登记依赖并缓存）——
+// Computed 只在其依赖的 sig 变化时重算，若表达式里没有 sig 读，
 // 它会把首值永久缓存，普通变量后续改动就反映不出来（第八轮用户诉求）。
 func exprHasSignalRead(toks []Token, from, to int, b *Bindings, tbl signalFieldTable, posOverride Pos) bool {
 	posAt := func(t Token) Pos {
@@ -1198,7 +1198,7 @@ func exprHasSignalRead(toks []Token, from, to int, b *Bindings, tbl signalFieldT
 		if toks[i].Kind != Ident {
 			continue
 		}
-		// signal 变量读 ident()
+		// sig 变量读 ident()
 		if b != nil {
 			lp := nextSigIn(toks, i+1, to)
 			if lp >= 0 && toks[lp].Text == "(" {
@@ -1208,7 +1208,7 @@ func exprHasSignalRead(toks []Token, from, to int, b *Bindings, tbl signalFieldT
 				}
 			}
 		}
-		// signal 字段 selector 读 recv.field()（调用式，field 后跟 '('）
+		// sig 字段 selector 读 recv.field()（调用式，field 后跟 '('）
 		if sel, ok := resolveSignalSel(toks, i, posAt(toks[i]), b, tbl, to); ok {
 			after := nextSigIn(toks, sel.fieldIdx+1, to)
 			if after >= 0 && toks[after].Text == "(" {
@@ -1241,8 +1241,8 @@ func signalComputedCall(T string, p Pos, expr []Token) []Token {
 // signalGetterCall 生成裸 getter `func(...T) T { return <expr> }` token 序列。
 // 用于「纯普通变量/普通字段」表达式：Signal[T] 底层是 func(...T) T，函数字面量
 // 可直接赋值；每次读都重新求值，普通变量后续改动能反映——这正是用户诉求
-// （普通变量用函数返回，不感知 signal 差异）。与 Computed 的区别：不缓存、不登记
-// 依赖，适合没有 signal 读的表达式（这类表达式本就无依赖可登记）。
+// （普通变量用函数返回，不感知 sig 差异）。与 Computed 的区别：不缓存、不登记
+// 依赖，适合没有 sig 读的表达式（这类表达式本就无依赖可登记）。
 func signalGetterCall(T string, p Pos, expr []Token) []Token {
 	out := []Token{
 		tokIdent("func", p), tokOp("(", p), tokOp("...", p),
@@ -1270,10 +1270,10 @@ func signalGetterCall(T string, p Pos, expr []Token) []Token {
 //	    return <chain>()
 //	}
 //
-// <chain> 是已改写的链 token（signal 段已带 ()），链尾是 signal 字段：最后一段
+// <chain> 是已改写的链 token（sig 段已带 ()），链尾是 sig 字段：最后一段
 // 形如 .c，读分支补 ()、写分支补 (arg...)。lambda 整体是 func(...T) T，可直接
-// 赋给 Signal[T]。中间 signal 段（如 b()）在每次调用时重新求值，故 receiver 随
-// 中间 signal 变化而保鲜——这是相对「剥 () 裸透传」的关键修正。
+// 赋给 Signal[T]。中间 sig 段（如 b()）在每次调用时重新求值，故 receiver 随
+// 中间 sig 变化而保鲜——这是相对「剥 () 裸透传」的关键修正。
 func signalRWGetterCall(T string, p Pos, chain []Token) []Token {
 	out := []Token{
 		tokIdent("func", p), tokOp("(", p), tokIdent("arg", p), tokSpace(" ", p), tokOp("...", p),
@@ -1301,18 +1301,18 @@ func signalRWGetterCall(T string, p Pos, chain []Token) []Token {
 	return out
 }
 
-// signalChainGetter 把一段「已改写的 signal 字段链读」转成可透传的 getter。
-// toks[from:to] 应形如 o.mid.b().c() 或 p.name()（signal 段已被改写补上 ()）。
+// signalChainGetter 把一段「已改写的 sig 字段链读」转成可透传的 getter。
+// toks[from:to] 应形如 o.mid.b().c() 或 p.name()（sig 段已被改写补上 ()）。
 // 返回三档（第九轮规则）：
 //
-//  1. 链中间有 signal 段 + 链尾是 signal → 读写合一 lambda（signalRWGetterCall），
-//     每次读写重新走整条链，中间 signal 变化保鲜；
-//  2. 链中间有 signal 段 + 链尾是普通字段 → 裸 getter func(...T) T { return chain }，
+//  1. 链中间有 sig 段 + 链尾是 sig → 读写合一 lambda（signalRWGetterCall），
+//     每次读写重新走整条链，中间 sig 变化保鲜；
+//  2. 链中间有 sig 段 + 链尾是普通字段 → 裸 getter func(...T) T { return chain }，
 //     不生成写分支（用调用点类型参数 T 构造）；
-//  3. 无中间 signal 段（单段链尾 signal）→ 剥掉链尾 () 直接透传 getter 本身，
+//  3. 无中间 sig 段（单段链尾 sig）→ 剥掉链尾 () 直接透传 getter 本身，
 //     零开销（p.name 本身已是 Signal[T]）。
 //
-// ok=false 表示这段不是「链中间含 signal 的链读」或无法可靠判定，调用方按原逻辑处理。
+// ok=false 表示这段不是「链中间含 sig 的链读」或无法可靠判定，调用方按原逻辑处理。
 //
 // recvPos 为 Bindings 查询锚点（手写用 token.Pos，JSX 用 ctx.jsxPos）；limit 为扫描右界。
 func signalChainGetter(toks []Token, from, to int, b *Bindings, tbl signalFieldTable, recvPos Pos) ([]Token, bool) {
@@ -1331,11 +1331,11 @@ func signalChainGetter(toks []Token, from, to int, b *Bindings, tbl signalFieldT
 	}
 	// 完整性校验：[first,to) 去空白/注释后必须恰好是「标识符 → (.字段 [()])*」，
 	// 不能夹带运算符/字面量，否则 p.a() + p.b() 之类派生表达式会被误判成链读。
-	// 同时判定链尾是否带 ()（signal 字段被改写补括号；普通字段没有）。
+	// 同时判定链尾是否带 ()（sig 字段被改写补括号；普通字段没有）。
 	if !isWholeSignalChain(toks, first, to, chain) {
 		return nil, false
 	}
-	// 中间 signal 段 = segs 中除链尾以外的段。
+	// 中间 sig 段 = segs 中除链尾以外的段。
 	midSig := false
 	for _, s := range chain.segs {
 		if s != chain.tailIdx {
@@ -1343,7 +1343,7 @@ func signalChainGetter(toks []Token, from, to int, b *Bindings, tbl signalFieldT
 			break
 		}
 	}
-	// 单段链（仅链尾 signal）：剥掉链尾 () 裸透传，保持零开销。
+	// 单段链（仅链尾 sig）：剥掉链尾 () 裸透传，保持零开销。
 	if !midSig {
 		// 定位链尾字段后的 ()，剥掉它返回链前缀。
 		lp := nextSigIn(toks, chain.tailIdx+1, to)
@@ -1353,13 +1353,13 @@ func signalChainGetter(toks []Token, from, to int, b *Bindings, tbl signalFieldT
 		return nil, false
 	}
 
-	// 链中间有 signal 段：构造链 token（去括号、仅保留字段与 '.'，每段 signal 后补 ()）。
-	// 方案：取 [first, tailIdx] 的字段结构，对其中每个 signal 段补 ()，普通字段保持。
+	// 链中间有 sig 段：构造链 token（去括号、仅保留字段与 '.'，每段 sig 后补 ()）。
+	// 方案：取 [first, tailIdx] 的字段结构，对其中每个 sig 段补 ()，普通字段保持。
 	chainToks := buildRewrittenChainTokens(toks, first, chain, to)
 	p := toks[first].Pos
 
 	if !chain.tailIsSig {
-		// 链尾普通字段 + 中间 signal：裸 getter，无写分支。T 由调用点类型参数提供，
+		// 链尾普通字段 + 中间 sig：裸 getter，无写分支。T 由调用点类型参数提供，
 		// 这里从链尾字段的声明类型推导（普通字段类型即其本身）。
 		T := chain.tailDeclType(tbl)
 		if T == "" {
@@ -1368,7 +1368,7 @@ func signalChainGetter(toks []Token, from, to int, b *Bindings, tbl signalFieldT
 		return signalGetterCall(T, p, chainToks), true
 	}
 
-	// 链尾 signal + 中间 signal：读写合一 lambda。T = 链尾 signal 字段的元素类型。
+	// 链尾 sig + 中间 sig：读写合一 lambda。T = 链尾 sig 字段的元素类型。
 	T := chain.tailElementType(tbl)
 	if T == "" {
 		T = anyTypeText
@@ -1380,7 +1380,7 @@ const anyTypeText = "any"
 
 // isWholeSignalChain 校验 [from,to) 去空白/注释后恰好是一条 selector 链：
 // ident (. field [()])* ——链首标识符，其后每段是 '.' + 字段名，字段名后可跟一对
-// 空调用括号 ()（signal 段被改写补括号的形态）。任何运算符、字面量、非空调用参数
+// 空调用括号 ()（sig 段被改写补括号的形态）。任何运算符、字面量、非空调用参数
 // 都判定失败，确保 p.a() + p.b() 之类派生表达式不被 signalChainGetter 误吞。
 //
 // chain 提供已解析的字段下标，用于核对每段位置；同时要求 to 之前的所有有效 token
@@ -1450,7 +1450,7 @@ func isWholeSignalChain(toks []Token, from, to int, chain signalChain) bool {
 }
 
 // buildRewrittenChainTokens 重建一条可读的链 token 序列：
-// 取链首到链尾的字段与 '.'，对每个 signal 段补 ()（若原 token 已有则不重复）。
+// 取链首到链尾的字段与 '.'，对每个 sig 段补 ()（若原 token 已有则不重复）。
 // 用于把改写后的链规范化后嵌入 getter / lambda 体。
 func buildRewrittenChainTokens(toks []Token, first int, chain signalChain, to int) []Token {
 	out := make([]Token, 0, chain.tailIdx-first+4)
@@ -1464,7 +1464,7 @@ func buildRewrittenChainTokens(toks []Token, first int, chain signalChain, to in
 			continue
 		}
 		out = append(out, t)
-		// signal 段后补 ()；若后面已是 '(' 则不重复。
+		// sig 段后补 ()；若后面已是 '(' 则不重复。
 		if sigSet[k] {
 			n := nextSigIn(toks, k+1, to)
 			if n < 0 || toks[n].Text != "(" {
@@ -1483,7 +1483,7 @@ func (c signalChain) tailDeclType(tbl signalFieldTable) string {
 	return ""
 }
 
-// tailElementType 返回链尾 signal 字段的元素类型 T。
+// tailElementType 返回链尾 sig 字段的元素类型 T。
 // 注意：fieldType 返回的是字段声明文本（如 "string"、"*User"），本身就是信号元素类型，
 // 不能再走 bareFieldType——后者会把 string/int 等内建类型剥成空串。
 // 仅当 fieldType 未命中（退化取 all 表的 Signal.Signal[T]）时才需剥一层。
@@ -1501,7 +1501,7 @@ type compositeLitInfo struct {
 	close    int
 }
 
-// wrapSignalFieldLiterals 对具名 struct 复合字面量里的 signal 字段值自动包装三档
+// wrapSignalFieldLiterals 对具名 struct 复合字面量里的 sig 字段值自动包装三档
 // （透传 getter / 字面量 Signal.New / 派生 Signal.Computed），只对命中字段动手。
 //
 // 递归下降实现（第七轮 §5）：早期版本用「收集全局替换 + 原始下标从后往前应用」，
@@ -1544,7 +1544,7 @@ func wrapLitsInRange(toks []Token, from, to int, b *Bindings, tbl signalFieldTab
 			out = append(out, body...)
 			changed = changed || ch
 		} else {
-			// 本类型无 signal 字段：body 里仍可能有别的具名字面量，递归下探。
+			// 本类型无 sig 字段：body 里仍可能有别的具名字面量，递归下探。
 			body, ch := wrapLitsInRange(toks, lit.open+1, lit.close, b, tbl)
 			out = append(out, body...)
 			changed = changed || ch
@@ -1556,7 +1556,7 @@ func wrapLitsInRange(toks []Token, from, to int, b *Bindings, tbl signalFieldTab
 	return out, changed
 }
 
-// wrapLitBody 处理一个已知含 signal 字段的具名字面量的 body（open+1 .. close），
+// wrapLitBody 处理一个已知含 sig 字段的具名字面量的 body（open+1 .. close），
 // 返回处理后的 token 切片。段间的 ','/空白 原样保留；每个字段段的值先递归处理
 // 嵌套字面量，再做三档判定（见 wrapLitSeg）。
 func wrapLitBody(toks []Token, lit compositeLitInfo, b *Bindings, tbl signalFieldTable) ([]Token, bool) {
@@ -1581,10 +1581,10 @@ func wrapLitBody(toks []Token, lit compositeLitInfo, b *Bindings, tbl signalFiel
 }
 
 // wrapLitSeg 处理单个字段段 [s,e)（`field : value`）：先递归处理 value 内部嵌套
-// 字面量得到 newVal，再按三档生成载荷；非 signal 字段只递归下探、原样搬运。
-// stripSoleSignalShorthand 处理 `P{v}` 位置简写（P 唯一字段是 signal 字段）：
-// 段 [s,e) 去空白后若恰是 `Ident ( )` 且 Ident 是 signal 读，则剥掉 () 保留
-// getter 本身，使 P{v()} → P{v}（signal 字段需要 Signal[T] 而非读出的 T）。
+// 字面量得到 newVal，再按三档生成载荷；非 sig 字段只递归下探、原样搬运。
+// stripSoleSignalShorthand 处理 `P{v}` 位置简写（P 唯一字段是 sig 字段）：
+// 段 [s,e) 去空白后若恰是 `Ident ( )` 且 Ident 是 sig 读，则剥掉 () 保留
+// getter 本身，使 P{v()} → P{v}（sig 字段需要 Signal[T] 而非读出的 T）。
 // 非该形态返回 (nil, false)。
 func stripSoleSignalShorthand(toks []Token, s, e int, b *Bindings) ([]Token, bool) {
 	idx := -1
@@ -1596,7 +1596,7 @@ func stripSoleSignalShorthand(toks []Token, s, e int, b *Bindings) ([]Token, boo
 			idx = k
 			continue
 		}
-		// 首个有效 token 后只允许 '(' ')'（signal 读调用）或空白。
+		// 首个有效 token 后只允许 '(' ')'（sig 读调用）或空白。
 		if toks[k].Text != "(" && toks[k].Text != ")" {
 			return nil, false
 		}
@@ -1630,9 +1630,9 @@ func wrapLitSeg(toks []Token, typeName string, seg [2]int, b *Bindings, tbl sign
 		}
 	}
 	if colon < 0 {
-		// B7：位置简写 `P{v}`（P 只有一个字段且是 signal 字段）——transformSignals
-		// 已把 signal 变量 v 补成 v()（string），但 signal 字段要的是 getter 本身
-		// （Signal[string]）。仅当类型恰有一个字段且它是 signal 字段时安全剥 ()。
+		// B7：位置简写 `P{v}`（P 只有一个字段且是 sig 字段）——transformSignals
+		// 已把 sig 变量 v 补成 v()（string），但 sig 字段要的是 getter 本身
+		// （Signal[string]）。仅当类型恰有一个字段且它是 sig 字段时安全剥 ()。
 		// 多字段布局简写无法确定 v 落在哪个位置，保持原样（显式键 P{a: v} 可用）。
 		if len(tbl.all[typeName]) == 1 && len(tbl.sig[typeName]) == 1 {
 			if stripped, ok := stripSoleSignalShorthand(toks, s, e, b); ok {
@@ -1643,7 +1643,7 @@ func wrapLitSeg(toks []Token, typeName string, seg [2]int, b *Bindings, tbl sign
 	}
 	nameIdx := nextSigIn(toks, s, colon)
 	if nameIdx < 0 || toks[nameIdx].Kind != Ident || !tbl.has(typeName, toks[nameIdx].Text) {
-		return wrapLitsInRange(toks, s, e, b, tbl) // 非 signal 字段
+		return wrapLitsInRange(toks, s, e, b, tbl) // 非 sig 字段
 	}
 	field := toks[nameIdx].Text
 	p := toks[nameIdx].Pos
@@ -1660,7 +1660,7 @@ func wrapLitSeg(toks []Token, typeName string, seg [2]int, b *Bindings, tbl sign
 	// 形态判定基于 newVal（递归已把内部嵌套字面量就地替换），下标 0..len。
 	if pass, ok := signalExprPassthrough(newVal, 0, len(newVal), b, tbl); ok {
 		if len(pass.gen) > 0 {
-			// 第九轮：链中间含 signal 段的链读生成读写 lambda / 裸 getter。
+			// 第九轮：链中间含 sig 段的链读生成读写 lambda / 裸 getter。
 			// 生成 token 无对应的原始区间，直接追加；尾随注释从段尾补回。
 			out = append(out, pass.gen...)
 			for k := 0; k < len(newVal); k++ {
@@ -1691,15 +1691,15 @@ func wrapLitSeg(toks []Token, typeName string, seg [2]int, b *Bindings, tbl sign
 	for ve > vs && (newVal[ve-1].Kind == Space || newVal[ve-1].Kind == Newline) {
 		ve--
 	}
-	// signal 字段值统一分档（档位表见文件顶部，JSX / 手写两处共用同一入口）。
-	// 透传档已在上面认领；其余交 buildSignalFieldValue，杜绝忽略参数的假 signal。
+	// sig 字段值统一分档（档位表见文件顶部，JSX / 手写两处共用同一入口）。
+	// 透传档已在上面认领；其余交 buildSignalFieldValue，杜绝忽略参数的假 sig。
 	T := tbl.fieldType(typeName, field)
 	out = append(out, buildSignalFieldValue(T, p, newVal, vs, ve, b, tbl, toks[valFrom].Pos)...)
 	return out, true
 }
 
 // tokensArePlainLiteral 判断 token 区间是否为纯字面量常量（数字/字符串/rune/bool/nil，
-// 可带前置一元 '-'/'+'）。这类值不会变化，构造 signal 字段时用 Signal.New 即可；
+// 可带前置一元 '-'/'+'）。这类值不会变化，构造 sig 字段时用 Signal.New 即可；
 // 其余（变量、字段 selector、函数调用）一律用 Computed 包成函数保鲜。
 func tokensArePlainLiteral(toks []Token) bool {
 	var s []Token
@@ -1729,26 +1729,26 @@ func tokensArePlainLiteral(toks []Token) bool {
 	return false
 }
 
-// sigValueTier 是 signal 字段构造值的语义档位（见文件顶部档位表）。
+// sigValueTier 是 sig 字段构造值的语义档位（见文件顶部档位表）。
 // 单一事实来源：JSX 侧与手写侧共用 classifySigValue + buildSignalFieldValue。
 type sigValueTier int
 
 const (
-	sigValPassthrough sigValueTier = iota // 已是 signal，透传（调用方先判）
+	sigValPassthrough sigValueTier = iota // 已是 sig，透传（调用方先判）
 	sigValLiteral                         // 纯字面量常量 → Signal.New
 	sigValComposite                       // 复合字面量构造 → Signal.New（一次构造）
-	sigValDerived                         // 含 signal 读 → Signal.Computed（只读）
+	sigValDerived                         // 含 sig 读 → Signal.Computed（只读）
 	sigValPlainVar                        // 单个普通变量/selector → Signal.LockedGetter（跟随+加锁）
-	sigValSnapshot                        // 其它表达式 → Signal.New 快照（绝不假 signal）
+	sigValSnapshot                        // 其它表达式 → Signal.New 快照（绝不假 sig）
 )
 
 // classifySigValue 对 [from,to) 的值表达式分档。调用方须先排除透传档
-// （signalExprPassthrough / pureSignalRead 已认领的「本身是 signal」形态）。
+// （signalExprPassthrough / pureSignalRead 已认领的「本身是 sig」形态）。
 //
 // 判定顺序（先具体后泛化）：
 //  1. 纯字面量常量 → 档2；
 //  2. 复合字面量构造（以 '}' 结尾）→ 档3；
-//  3. 含 signal 读 → 档4；
+//  3. 含 sig 读 → 档4；
 //  4. 单个可赋值变量/selector → 档5；
 //  5. 其它 → 档6 快照。
 func classifySigValue(toks []Token, from, to int, b *Bindings, tbl signalFieldTable, pos Pos) sigValueTier {
@@ -1901,11 +1901,11 @@ func signalLockedGetterCall(T string, p Pos, key string, ref []Token) []Token {
 	return out
 }
 
-// buildSignalFieldValue 是 signal 字段构造值的统一生成入口（JSX / 手写共用）。
-// 调用方须先排除透传档（本身是 signal 的形态）。expr 是值表达式 token 区间
+// buildSignalFieldValue 是 sig 字段构造值的统一生成入口（JSX / 手写共用）。
+// 调用方须先排除透传档（本身是 sig 的形态）。expr 是值表达式 token 区间
 // [from,to)，已去掉首尾空白；T 是字段元素类型；pos 是 Bindings 查询锚点。
 //
-// 按 classifySigValue 分档生成，杜绝「忽略参数的假 signal」。
+// 按 classifySigValue 分档生成，杜绝「忽略参数的假 sig」。
 func buildSignalFieldValue(T string, p Pos, toks []Token, from, to int, b *Bindings, tbl signalFieldTable, pos Pos) []Token {
 	tier := classifySigValue(toks, from, to, b, tbl, pos)
 	expr := toks[from:to]
@@ -1914,14 +1914,14 @@ func buildSignalFieldValue(T string, p Pos, toks []Token, from, to int, b *Bindi
 		// 档2：常量——Signal.New 一次构造，可写、读登记依赖。
 		return signalNewCall(expr...)
 	case sigValComposite:
-		// 档3：复合构造——Signal.New 一次构造。先递归包装 expr 内部的 signal 字段
+		// 档3：复合构造——Signal.New 一次构造。先递归包装 expr 内部的 sig 字段
 		// 字面量（第十轮 P2-2）：JSX props 里的复合字面量是 transformJSXScene 产物，
-		// 晚于全局 wrapSignalFieldLiterals pass，内层 signal 字段（如 Leaf{v:"a"} 的
+		// 晚于全局 wrapSignalFieldLiterals pass，内层 sig 字段（如 Leaf{v:"a"} 的
 		// v）不会被外层包到——这里补一次递归包装，手写路径内层已包过则不会重复包。
 		wrapped, _ := wrapLitsInRange(toks, from, to, b, tbl)
 		return signalNewCall(wrapped...)
 	case sigValDerived:
-		// 档4：含 signal 读——Computed 登记依赖，只读。
+		// 档4：含 sig 读——Computed 登记依赖，只读。
 		return signalComputedCall(T, p, expr)
 	case sigValPlainVar:
 		// 档5：单个普通变量/selector——Signal.LockedGetterShared，跟随语义不变。
@@ -1935,7 +1935,7 @@ func buildSignalFieldValue(T string, p Pos, toks []Token, from, to int, b *Bindi
 	case sigValSnapshot:
 		fallthrough
 	default:
-		// 档6：确无写目标——Signal.New 快照。绝不生成忽略参数的假 signal。
+		// 档6：确无写目标——Signal.New 快照。绝不生成忽略参数的假 sig。
 		return signalNewCall(expr...)
 	}
 }
@@ -1961,23 +1961,23 @@ func namedLitAt(toks []Token, i, to int) (compositeLitInfo, bool) {
 	return compositeLitInfo{typeName: toks[i].Text, open: open, close: close}, true
 }
 
-// hasSignalFieldsOf 判断某 typeName 是否有 signal 字段。
+// hasSignalFieldsOf 判断某 typeName 是否有 sig 字段。
 func (t signalFieldTable) hasSignalFieldsOf(typeName string) bool {
 	return len(t.sig[typeName]) > 0
 }
 
-// rewriteJSXSignalFieldSelectors 在 JSX 插值 token 里给「signal 字段 selector 读」
+// rewriteJSXSignalFieldSelectors 在 JSX 插值 token 里给「sig 字段 selector 读」
 // 补上调用括号：p.name → p.name()。JSX 生成的 token 是 transform 新产物，没经过
 // rewriteSignalFieldRefs，故需在此补——否则 {p.name} 会把 Signal 函数当值插入界面。
 //
-// 识别 X.field：field 是 receiver 推断类型上的 signal 字段、field 后不是 '('、
+// 识别 X.field：field 是 receiver 推断类型上的 sig 字段、field 后不是 '('、
 // 且 receiver X 不是紧邻 ')' 的调用结果（排除 For item getter `u().name` 这类普通字段读取）。
 //
 // 第六轮 P2 修复：早期版本用 tbl.hasField(field) 全文件按字段名猜测，导致同文件
-// 里任意 struct 只要声明过 `signal name`，普通 `User.name` 也会被补成 u.name()
+// 里任意 struct 只要声明过 `sig name`，普通 `User.name` 也会被补成 u.name()
 // （硬编译错误：string is not a function）。现改为 receiver 类型限定——只有 receiver
-// 的推断类型确为某 struct、且该字段在该类型上是 signal 字段时才补 ()，兑现
-// language-spec §11.1「同名但非 signal 的字段不受影响」的承诺。
+// 的推断类型确为某 struct、且该字段在该类型上是 sig 字段时才补 ()，兑现
+// language-spec §11.1「同名但非 sig 的字段不受影响」的承诺。
 //
 // pos 是 JSX 在原始源码中的绝对位置：插值 token 的 Pos 是相对表达式的偏移，
 // 不能用于 bindings 查询；以 JSX 根位置为锚点解析 receiver 绑定与 isSignalRefAt 一致。
@@ -1992,12 +1992,12 @@ func rewriteJSXSignalFieldSelectors(toks []Token, b *Bindings, tbl signalFieldTa
 		if t.Kind != Ident {
 			continue
 		}
-		// For item getter u() 后跟普通字段 → 不是 signal 字段链，跳过。
+		// For item getter u() 后跟普通字段 → 不是 sig 字段链，跳过。
 		// （u 是 lambda 参数，resolveSignalChain 推不出类型本就不会命中；此处显式排除更稳。）
 		if prev := prevSig(toks, i-1); prev >= 0 && toks[prev].Text == ")" {
 			continue
 		}
-		// skipCalls=true：与手写改写路径一致，跳过中间 signal 段已有的 () 走到
+		// skipCalls=true：与手写改写路径一致，跳过中间 sig 段已有的 () 走到
 		// 真正链尾；输出仍逐 token 原样，已有 () 不重复补。
 		chain, ok := resolveSignalChainEx(toks, i, pos, b, tbl, 0, true)
 		if !ok || len(chain.segs) == 0 {

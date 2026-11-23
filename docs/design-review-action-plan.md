@@ -14,7 +14,7 @@
 
 **评审已过时的两点**：
 
-1. 报告说"最新提交 e8bbd7a，编译器仍在密集修正"，基线之后已补：B2 嵌套 For 元素类型、B3 getter 变量自动调用、B11 零 props 组件、C2 signal 切片元素深写诊断。报告"不支持语法应明确报错"的方向，现已扩展到 C 组。
+1. 报告说"最新提交 e8bbd7a，编译器仍在密集修正"，基线之后已补：B2 嵌套 For 元素类型、B3 getter 变量自动调用、B11 零 props 组件、C2 sig 切片元素深写诊断。报告"不支持语法应明确报错"的方向，现已扩展到 C 组。
 2. 报告问题 2 说 scene 用 `Computation` 类型别名解耦——现状如此，且 scene 内部已进一步细分出 `BindStructural` / `bindLeaves` / `bindCtx` 三套接线路径，比报告描述的更细。
 
 ## 1. 五个问题核实对照
@@ -36,16 +36,16 @@
 
 | ID | 任务 | 优先级 | 依赖 | 已有基础 | 验收标准 |
 | --- | --- | --- | --- | --- | --- |
-| T1.1 | App 叶子接线从"聚合 Effect + 全树 Update"切换为"每插槽 Effect + SetPart"，与结构接线分工 | P1 | — | `BindReactive`/`bindLeaves`/`SetPart`、`bindCtx` 已实现 | 单 signal 变化只重求值依赖它的 getter；`app_test.go` 新增"只写 1 个节点、其余 getter 未求值"断言（如计数器探针） |
-| T1.2 | 帧合并：多个 signal 同帧变化只 Draw 一次，保留"一帧一致性" | P1 | T1.1 | `Batch` 已合并写入为一帧 | 批次内改 N 个 signal，`countingWindow.DrawCount` 只 +1；现有 `TestBatchAddWithIfDrawsOneFrame` 扩展覆盖叶子路径 |
+| T1.1 | App 叶子接线从"聚合 Effect + 全树 Update"切换为"每插槽 Effect + SetPart"，与结构接线分工 | P1 | — | `BindReactive`/`bindLeaves`/`SetPart`、`bindCtx` 已实现 | 单 sig 变化只重求值依赖它的 getter；`app_test.go` 新增"只写 1 个节点、其余 getter 未求值"断言（如计数器探针） |
+| T1.2 | 帧合并：多个 sig 同帧变化只 Draw 一次，保留"一帧一致性" | P1 | T1.1 | `Batch` 已合并写入为一帧 | 批次内改 N 个 sig，`countingWindow.DrawCount` 只 +1；现有 `TestBatchAddWithIfDrawsOneFrame` 扩展覆盖叶子路径 |
 | T1.3 | 明确 `Batch` / `Computation.Dispose` 并发语义，补生命周期并发测试 | P1 | T1.1 | Owner/Cleanup 压力测试已有 | 新增"Effect 运行中被 Dispose""后台 goroutine 并发写 + Batch"测试，无 panic、无泄漏（`-race`） |
-| T1.4 | Signal↔Scene 解耦为 `ReactiveAdapter{Effect func(func()) Computation}` | P2 | —（可与 T1.1 并行） | `Computation` 类型别名已消除签名硬依赖 | scene 包不再 import signal 包（或仅 test）；替换注入实现可跑通现有 scene 测试 |
+| T1.4 | Signal↔Scene 解耦为 `ReactiveAdapter{Effect func(func()) Computation}` | P2 | —（可与 T1.1 并行） | `Computation` 类型别名已消除签名硬依赖 | scene 包不再 import Signal 包（或仅 test）；替换注入实现可跑通现有 scene 测试 |
 
 ### 阶段二：完善 GUI Runtime（"第二阶段"）
 
 | ID | 任务 | 优先级 | 依赖 | 已有基础 | 验收标准 |
 | --- | --- | --- | --- | --- | --- |
-| T2.1 | App 层 UI Dispatcher：帧请求入队，UI 线程统一 Draw；Signal 回调不直接碰窗口 | P1 | T1.2 | `Batch` 帧合并已就绪 | 后台 goroutine 写 signal 不触发非 UI 线程 Draw（用记录线程 id 的 mock window 验证） |
+| T2.1 | App 层 UI Dispatcher：帧请求入队，UI 线程统一 Draw；Signal 回调不直接碰窗口 | P1 | T1.2 | `Batch` 帧合并已就绪 | 后台 goroutine 写 sig 不触发非 UI 线程 Draw（用记录线程 id 的 mock window 验证） |
 | T2.2 | Draw/Update 错误显式报告，替换 `_ = a.Draw()` 忽略 | P2 | — | `Window.Draw` 已返回 error | `Draw` 失败可被 `App` 查询或回调上报；新增错误注入测试 |
 | T2.3 | Node 属性协议规范：通用/布局/文本/事件/后端扩展五类字段的类型与语义 | P2 | — | `ID`/`Layout`/`SyntheticEvent` 已是扩展基础 | 产出 `docs/node-protocol.md`，明确 px 与百分比、class/style 类型、文本字体行高对齐 |
 | T2.4 | 用真实 GUI 后端（Skia 分支）验证协议与调度 | P2 | T2.1, T2.3 | `feat/skia-backend` 已移植 issue#1 根因修复、已去协议层 workaround | 组件库 demo 跑通，blink 翻转无结构动作（回归既有 `dynchildren_test` 语义） |
@@ -55,7 +55,7 @@
 | ID | 任务 | 优先级 | 依赖 | 已有基础 | 验收标准 |
 | --- | --- | --- | --- | --- | --- |
 | T3.1 | 明确并收敛 `Symbol`/`Type`/`Expression` 三概念，Transform 统一消费 | P1 | — | 统一 Bindings、表达式 AST、`Pos.Offset` | 至少 2 个 Transform 不再各自扫 token 判断变量身份 |
-| T3.2 | `jsxSceneCtx` 状态去重，消除 `bindings`/`sigs`/`sigTypes`/`signalFields` 冗余来源 | P2 | T3.1 | 缺陷清单 B1/B2 已暴露多源推断不一致 | JSX 场景不再独立维护 signal 识别规则；B1/B2 回归测试全绿 |
+| T3.2 | `jsxSceneCtx` 状态去重，消除 `bindings`/`sigs`/`sigTypes`/`signalFields` 冗余来源 | P2 | T3.1 | 缺陷清单 B1/B2 已暴露多源推断不一致 | JSX 场景不再独立维护 sig 识别规则；B1/B2 回归测试全绿 |
 | T3.3 | 建立语法特性交互测试矩阵（Signal×JSX×For×Lambda×对象字面量） | P1 | — | 已有批次 1-8 的分散回归测试 | 矩阵覆盖缺陷清单 A/B/C 全部条目，CI 可跑 |
 | T3.4 | 统一诊断与错误恢复机制 | P2 | T3.1 | A2/A3/B6/B9/A6/C2 已改为带坐标诊断 | 所有 `GXDiagnostic` 走统一格式与回投，新增一条诊断的样板清晰 |
 
@@ -65,7 +65,7 @@
 | --- | --- | --- | --- | --- |
 | T4.1 | LSP 类型提示 | P2 | T3.1 | hover 显示 GX 推导类型 |
 | T4.2 | JSX 组件补全 | P2 | T3.1 | 输入 `<` 列出组件与 props |
-| T4.3 | Signal 类型提示 | P2 | T3.2 | `signal` 变量 hover 显示 `Signal[T]` |
+| T4.3 | Signal 类型提示 | P2 | T3.2 | `sig` 变量 hover 显示 `Signal[T]` |
 | T4.4 | 编译错误精确回投 | P2 | T3.4 | go build 错误映射到 .gx 正确行列（已有 project 模式基础） |
 | T4.5 | 调试与性能分析工具 | P2 | T1.2 | 可观测 getter 重求值次数、写入节点数 |
 

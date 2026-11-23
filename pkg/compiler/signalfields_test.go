@@ -7,11 +7,11 @@ import (
 )
 
 func TestSignalFieldDeclDesugar(t *testing.T) {
-	// struct 内 signal 字段 → Signal.Signal[T] 字段，普通字段不变，注入 import。
+	// struct 内 sig 字段 → Signal.Signal[T] 字段，普通字段不变，注入 import。
 	src := `package main
 type CardProps struct {
-    signal name string
-    signal count int
+    sig name string
+    sig count int
     age int
 }
 func main() { _ = CardProps{} }
@@ -23,15 +23,15 @@ func main() { _ = CardProps{} }
 		`age int`,
 		`import Signal "github.com/robertpanvip/gox/runtime/signal"`,
 	)
-	if strings.Contains(got, "var name any") || strings.Contains(got, "signal name") {
-		t.Errorf("signal 字段不应残留旧降级形态:\n%s", got)
+	if strings.Contains(got, "var name any") || strings.Contains(got, "sig name") {
+		t.Errorf("sig 字段不应残留旧降级形态:\n%s", got)
 	}
 }
 
 func TestSignalFieldReadRewrite(t *testing.T) {
 	// 读 p.name → p.name()
 	src := `package main
-type CardProps struct { signal name string }
+type CardProps struct { sig name string }
 func main() { p := CardProps{name: "x"}; println(p.name) }
 `
 	got := compileOK(t, "sf2.gx", src)
@@ -44,7 +44,7 @@ func main() { p := CardProps{name: "x"}; println(p.name) }
 func TestSignalFieldWriteRewrite(t *testing.T) {
 	// 写 p.name = expr → p.name(expr)
 	src := `package main
-type CardProps struct { signal name string }
+type CardProps struct { sig name string }
 func main() { p := CardProps{name: "x"}; p.name = "y" }
 `
 	got := compileOK(t, "sf3.gx", src)
@@ -60,7 +60,7 @@ func main() { p := CardProps{name: "x"}; p.name = "y" }
 func TestSignalFieldCompoundAndIncDec(t *testing.T) {
 	// 复合写与自增：c.n += 2 → c.n(c.n() + 2)，c.n++ → c.n(c.n() + 1)
 	src := `package main
-type Counter struct { signal n int }
+type Counter struct { sig n int }
 func main() { c := Counter{n: 1}; c.n += 2; c.n++ }
 `
 	got := compileOK(t, "sf4.gx", src)
@@ -71,7 +71,7 @@ func main() { c := Counter{n: 1}; c.n += 2; c.n++ }
 func TestSignalFieldConstructWrap(t *testing.T) {
 	// 构造位置：字面量值包 Signal.New，普通字段不动。
 	src := `package main
-type CardProps struct { signal name string; age int }
+type CardProps struct { sig name string; age int }
 func main() { p := CardProps{name: "x", age: 3}; _ = p }
 `
 	got := compileOK(t, "sf5.gx", src)
@@ -82,23 +82,23 @@ func main() { p := CardProps{name: "x", age: 3}; _ = p }
 }
 
 func TestSignalFieldPassthroughKeepsLiveSignal(t *testing.T) {
-	// 保鲜关键：signal 变量 src 传给 signal 字段时，传 getter 本身（src），
+	// 保鲜关键：sig 变量 src 传给 sig 字段时，传 getter 本身（src），
 	// 不能是 Signal.New(src())（那会快照当前值、断开后续更新）。
 	src := `package main
-type CardProps struct { signal name string }
-func main() { signal src = "x"; p := CardProps{name: src}; _ = p }
+type CardProps struct { sig name string }
+func main() { sig src = "x"; p := CardProps{name: src}; _ = p }
 `
 	got := compileOK(t, "sf6.gx", src)
 	containsAll(t, got, `var src = Signal.New("x")`, `name: src`)
 	if strings.Contains(got, `name: Signal.New(src())`) || strings.Contains(got, `name: src()`) {
-		t.Errorf("signal 变量应直通 getter 本身（保鲜），产物: %s", got)
+		t.Errorf("sig 变量应直通 getter 本身（保鲜），产物: %s", got)
 	}
 }
 
 func TestSignalFieldParamReceiver(t *testing.T) {
 	// 函数参数（组件函数）receiver 也能解包 —— 组件值保鲜的核心场景。
 	src := `package main
-type CardProps struct { signal name string }
+type CardProps struct { sig name string }
 func show(p CardProps) string { return p.name }
 func main() { _ = show }
 `
@@ -107,7 +107,7 @@ func main() { _ = show }
 }
 
 func TestSignalFieldDoesNotTouchPlainFields(t *testing.T) {
-	// 无 signal 字段的 struct：所有字段/读写保持原样（零回归）。
+	// 无 sig 字段的 struct：所有字段/读写保持原样（零回归）。
 	src := `package main
 type Point struct { x int; y int }
 func main() { p := Point{x: 1, y: 2}; println(p.x, p.y) }
@@ -115,14 +115,14 @@ func main() { p := Point{x: 1, y: 2}; println(p.x, p.y) }
 	got := compileOK(t, "sf8.gx", src)
 	containsAll(t, got, `x int`, `p.x`, `p.y`)
 	if strings.Contains(got, "Signal") {
-		t.Errorf("无 signal 字段不应注入 Signal: %s", got)
+		t.Errorf("无 sig 字段不应注入 Signal: %s", got)
 	}
 }
 
 func TestSignalFieldSelectorShadowNotTouched(t *testing.T) {
-	// 不同 struct 有同名普通字段：不属于 signal 字段表，不得误改。
+	// 不同 struct 有同名普通字段：不属于 sig 字段表，不得误改。
 	src := `package main
-type Box struct { signal value int }
+type Box struct { sig value int }
 type Other struct { value int }
 func main() {
     b := Box{value: 1}
@@ -138,11 +138,11 @@ func main() {
 }
 
 func TestSignalFieldWithLocalSignalCoexist(t *testing.T) {
-	// struct signal 字段与局部 signal 变量共存，互不干扰。
+	// struct sig 字段与局部 sig 变量共存，互不干扰。
 	src := `package main
-type Box struct { signal value int }
+type Box struct { sig value int }
 func main() {
-    signal local = 5
+    sig local = 5
     b := Box{value: 1}
     b.value = local
     println(b.value, local)
@@ -151,7 +151,7 @@ func main() {
 	got := compileOK(t, "sf10.gx", src)
 	containsAll(t, got, `var local = Signal.New(5)`, `value: Signal.New(1)`, `b.value(`)
 	if !strings.Contains(got, `local()`) {
-		t.Errorf("局部 signal 读取应改写为 local(): %s", got)
+		t.Errorf("局部 sig 读取应改写为 local(): %s", got)
 	}
 }
 
@@ -160,7 +160,7 @@ func TestSignalFieldConstructLiteralNoSwallowedBrace(t *testing.T) {
 	// （曾因 prevSigIn 边界越界导致产物多一个 '}'）。底层 API 已禁止手写，故用
 	// 字面量触发同一生成形态，继续守住这条边界。
 	src := `package main
-type CardProps struct { signal name string }
+type CardProps struct { sig name string }
 func main() { p := CardProps{name: "x"}; println(p.name) }
 `
 	got := compileOK(t, "sf11.gx", src)
@@ -171,17 +171,17 @@ func main() { p := CardProps{name: "x"}; println(p.name) }
 	}
 }
 
-// ===== 第五轮：signal 字段 + JSX 统一语义回归 =====
+// ===== 第五轮：sig 字段 + JSX 统一语义回归 =====
 
-// 2.1：组件体内 JSX 插值读 signal 字段 p.name 必须补 ()，
+// 2.1：组件体内 JSX 插值读 sig 字段 p.name 必须补 ()，
 // 否则把 Signal 函数当值插入界面（编译通过但显示函数地址）。
 func TestSignalFieldJSXSelectorReadAddsCall(t *testing.T) {
 	src := `package main
 import gxscene "github.com/robertpanvip/gox/runtime/scene"
-type CardProps struct { signal name string }
+type CardProps struct { sig name string }
 func Card(p CardProps) *gxscene.Instance { return <div>{p.name}</div> }
 func main() {
-	signal s = "x"
+	sig s = "x"
 	_ = <div><Card name={s}/></div>
 }
 `
@@ -189,29 +189,29 @@ func main() {
 	containsAll(t, got, `return p.name()`, `Card(CardProps{name:s,})`)
 }
 
-// 2.2：signal 变量传给 signal 字段 → 直通 getter（保鲜），不再生成 title() 非法 Go。
+// 2.2：sig 变量传给 sig 字段 → 直通 getter（保鲜），不再生成 title() 非法 Go。
 func TestSignalFieldJSXPropPassthrough(t *testing.T) {
 	src := `package main
 import gxscene "github.com/robertpanvip/gox/runtime/scene"
-type CardProps struct { signal name string }
+type CardProps struct { sig name string }
 func Card(p CardProps) *gxscene.Instance { return nil }
 func main() {
-	signal title = "hello"
+	sig title = "hello"
 	_ = <div><Card name={title}/></div>
 }
 `
 	got := compileOK(t, "sfjsx_pass.gx", src)
 	containsAll(t, got, `Card(CardProps{name:title,})`)
 	if strings.Contains(got, "name:title()") {
-		t.Errorf("signal 应透传 getter 而非求值:\n%s", got)
+		t.Errorf("sig 应透传 getter 而非求值:\n%s", got)
 	}
 }
 
-// 2.3：字面量传给 signal 字段 → 自动包 Signal.New，不再编译期类型错。
+// 2.3：字面量传给 sig 字段 → 自动包 Signal.New，不再编译期类型错。
 func TestSignalFieldJSXPropLiteralWrapped(t *testing.T) {
 	src := `package main
 import gxscene "github.com/robertpanvip/gox/runtime/scene"
-type CardProps struct { signal name string }
+type CardProps struct { sig name string }
 func Card(p CardProps) *gxscene.Instance { return nil }
 func main() { _ = <div><Card name="lit"/></div> }
 `
@@ -219,16 +219,16 @@ func main() { _ = <div><Card name="lit"/></div> }
 	containsAll(t, got, `Card(CardProps{name:Signal.New("lit"),})`)
 }
 
-// 2.5/2.6：<For> item 派生态传给 signal 字段 → 包 Signal.Computed(func() T {...})
+// 2.5/2.6：<For> item 派生态传给 sig 字段 → 包 Signal.Computed(func() T {...})
 // 保鲜，且该 For 仍走 ForGetterOfSignal 零重建（逃逸豁免语义成立）。
 func TestSignalFieldJSXForItemDerivedComputed(t *testing.T) {
 	src := `package main
 import gxscene "github.com/robertpanvip/gox/runtime/scene"
 type User struct { id int; name string }
-type CardProps struct { signal name string }
+type CardProps struct { sig name string }
 func Card(p CardProps) *gxscene.Instance { return nil }
 func main() {
-	signal users = []User{{1,"Tom"}}
+	sig users = []User{{1,"Tom"}}
 	_ = <ul><For each={users} key={(u) => u.id}>{(u User) => <li><Card name={u.name}/></li>}</For></ul>
 }
 `
@@ -239,13 +239,13 @@ func main() {
 	)
 }
 
-// signal 字段之间透传：一个 signal 字段传给另一个组件的 signal 字段 →
+// sig 字段之间透传：一个 sig 字段传给另一个组件的 sig 字段 →
 // 直通 getter（不 New、不 Computed），与手写结构体赋值语义一致（用户要求）。
 func TestSignalFieldJSXFieldToFieldPassthrough(t *testing.T) {
 	src := `package main
 import gxscene "github.com/robertpanvip/gox/runtime/scene"
-type CardProps struct { signal name string }
-type WrapProps struct { signal inner string }
+type CardProps struct { sig name string }
+type WrapProps struct { sig inner string }
 func Card(p CardProps) *gxscene.Instance { return <div>{p.name}</div> }
 func Wrap(p WrapProps) *gxscene.Instance { return <div><Card name={p.inner}/></div> }
 func main() { _ = <Wrap inner="hello"/> }
@@ -259,12 +259,12 @@ func main() { _ = <Wrap inner="hello"/> }
 }
 
 // 第六轮 P2 回归：JSX selector 补 () 必须按 receiver 推断类型判定，不能全文件
-// 按字段名猜。同文件里 CardProps 有 signal name、User 有普通 name 时，
+// 按字段名猜。同文件里 CardProps 有 sig name、User 有普通 name 时，
 // {u.name} 不得被补成 u.name()（那是硬编译错误：string is not a function）。
 func TestJSXSelectorNotTouchSameNamePlainField(t *testing.T) {
 	src := `package main
 import gxscene "github.com/robertpanvip/gox/runtime/scene"
-type CardProps struct { signal name string }
+type CardProps struct { sig name string }
 type User struct { id int; name string }
 func main() {
 	u := User{1, "plain"}
@@ -278,14 +278,14 @@ func main() {
 	containsAll(t, got, `return u.name`)
 }
 
-// 二级 selector 同样按 receiver 类型判定：signal 字段结构体嵌套的普通结构体
-// 同名字段不得误补；而真正的 signal 字段 selector 仍要补 ()。
+// 二级 selector 同样按 receiver 类型判定：sig 字段结构体嵌套的普通结构体
+// 同名字段不得误补；而真正的 sig 字段 selector 仍要补 ()。
 func TestJSXSelectorNestedFieldByReceiverType(t *testing.T) {
 	src := `package main
 import gxscene "github.com/robertpanvip/gox/runtime/scene"
 type Addr struct { city string }
 type User struct { addr Addr }
-type CardProps struct { signal name string }
+type CardProps struct { sig name string }
 func Card(p CardProps) *gxscene.Instance { return <div>{p.name}</div> }
 func main() {
 	u := User{Addr{"SZ"}}
@@ -299,15 +299,15 @@ func main() {
 	containsAll(t, got, `return p.name()`)
 }
 
-// 第六轮 P2b 回归：手写结构体构造里的派生表达式（含 signal 变量读取）必须包
+// 第六轮 P2b 回归：手写结构体构造里的派生表达式（含 sig 变量读取）必须包
 // Signal.Computed 保鲜，与 JSX 侧 signalFieldPropTokens 语义一致。旧产物是
 // Signal.New(fmt.Sprint(n()))（快照，n 后续变化不反映到字段）。
 func TestSignalFieldHandwrittenDerivedUsesComputed(t *testing.T) {
 	src := `package main
 import "fmt"
-type CardProps struct { signal name string }
+type CardProps struct { sig name string }
 func main() {
-	signal n = 1
+	sig n = 1
 	p := CardProps{name: fmt.Sprint(n())}
 	_ = p
 }
@@ -320,11 +320,11 @@ func main() {
 }
 
 // 第七轮 §6a 回归：指针 props 组件（func Card(p *CardProps)）必须可用——
-// 调用点生成 &CardProps{...}（而非匿名 struct），组件体内 signal 字段读补 ()。
+// 调用点生成 &CardProps{...}（而非匿名 struct），组件体内 sig 字段读补 ()。
 func TestPointerPropsComponent(t *testing.T) {
 	src := `package main
 import gxscene "github.com/robertpanvip/gox/runtime/scene"
-type CardProps struct { signal name string }
+type CardProps struct { sig name string }
 func Card(p *CardProps) *gxscene.Instance { return <div>{p.name}</div> }
 func main() { _ = <Card name="x"/> }
 `
@@ -338,15 +338,15 @@ func main() { _ = <Card name="x"/> }
 	}
 }
 
-// 第七轮 §5 回归：嵌套 signal 字段复合字面量必须生成合法 Go。
+// 第七轮 §5 回归：嵌套 sig 字段复合字面量必须生成合法 Go。
 // 早期「全局替换 + 原始下标从后往前应用」在嵌套时外层端点错位，吞掉 ','/'}' 生成
 // 非法代码。递归下降重写后，内层先就地处理，外层载荷基于已处理结果构造。
 func TestSignalFieldNestedCompositeLiteralValid(t *testing.T) {
 	src := `package main
-type Inner struct { signal v string }
-type Outer struct { signal inner Inner; signal other string }
+type Inner struct { sig v string }
+type Outer struct { sig inner Inner; sig other string }
 func main() {
-	signal n = "x"
+	sig n = "x"
 	p := Outer{inner: Inner{v: n}, other: n}
 	_ = p
 }
@@ -361,11 +361,11 @@ func main() {
 // 三层嵌套 + 混合字段，进一步压测递归下标的正确性。
 func TestSignalFieldDeepNestedCompositeLiteralValid(t *testing.T) {
 	src := `package main
-type L3 struct { signal v string; plain int }
-type L2 struct { signal inner L3; tag string }
-type L1 struct { signal child L2; signal title string }
+type L3 struct { sig v string; plain int }
+type L2 struct { sig inner L3; tag string }
+type L1 struct { sig child L2; sig title string }
 func main() {
-	signal n = "x"
+	sig n = "x"
 	p := L1{child: L2{inner: L3{v: n, plain: 1}, tag: "t"}, title: n}
 	_ = p
 }
@@ -375,12 +375,12 @@ func main() {
 }
 
 // 第七轮 §4 回归：手写字段间赋值 p.a → q.a 必须直通裸 getter（保鲜），
-// 不能包 Signal.New(p.a())（那会静默冻结，源 signal 后续变化不反映到字段）。
+// 不能包 Signal.New(p.a())（那会静默冻结，源 sig 后续变化不反映到字段）。
 // 与 JSX 侧 TestSignalFieldJSXFieldToFieldPassthrough 对齐。
 func TestSignalFieldHandwrittenFieldToFieldPassthrough(t *testing.T) {
 	src := `package main
-type P struct { signal a string }
-type Q struct { signal a string }
+type P struct { sig a string }
+type Q struct { sig a string }
 func f(p P) Q { return Q{a: p.a} }
 `
 	got := compileOK(t, "sfhw_ff.gx", src)
@@ -393,7 +393,7 @@ func f(p P) Q { return Q{a: p.a} }
 // 字面量/普通常量表达式仍是 Signal.New 快照（与 JSX isPlainLiteralExpr 档一致）。
 func TestSignalFieldHandwrittenLiteralStaysNew(t *testing.T) {
 	src := `package main
-type CardProps struct { signal name string }
+type CardProps struct { sig name string }
 func main() {
 	p := CardProps{name: "lit"}
 	_ = p
@@ -405,12 +405,12 @@ func main() {
 
 // ============ 第八轮回归 ============
 
-// P1-1/P1-2 邻居用例：派生表达式里出现两个 signal 字段读，必须整体包 Computed，
+// P1-1/P1-2 邻居用例：派生表达式里出现两个 sig 字段读，必须整体包 Computed，
 // 且两个字段读都补 ()——不能只根据末尾 token 判定导致 p.b 丢 ()、也不能走 New 快照。
 func TestSignalFieldTwoSignalReadsDerived(t *testing.T) {
 	src := `package main
-type P struct { signal a string; signal b string }
-type Q struct { signal v string }
+type P struct { sig a string; sig b string }
+type Q struct { sig v string }
 func main() {
 	p := P{a: "x", b: "y"}
 	q := Q{v: p.a + p.b}
@@ -425,10 +425,10 @@ func main() {
 }
 
 // P1-3 邻居：链式 receiver + 同名字段不同类型——链尾按真实 receiver 类型判定，
-// 链上普通字段不补 ()，链尾 signal 字段补 ()；同名非 signal 字段不被误伤。
+// 链上普通字段不补 ()，链尾 sig 字段补 ()；同名非 sig 字段不被误伤。
 func TestSignalFieldChainReceiverTyped(t *testing.T) {
 	src := `package main
-type Inner struct { signal v string }
+type Inner struct { sig v string }
 type Mid struct { in Inner }
 type Outer struct { mid Mid; v string }
 func main() {
@@ -443,12 +443,12 @@ func main() {
 	}
 }
 
-// 第十轮 P1-2：普通变量 / 普通字段作为 signal 字段的值 → Signal.LockedGetter，
+// 第十轮 P1-2：普通变量 / 普通字段作为 sig 字段的值 → Signal.LockedGetter，
 // 读跟随、写落回变量（跟随语义不变），外层实例级互斥锁消除裸变量访问竞态。
 func TestSignalFieldPlainVarUsesGetter(t *testing.T) {
 	src := `package main
 type Q struct { title string }
-type P struct { signal a string; signal b string }
+type P struct { sig a string; sig b string }
 func main() {
 	plain := "x"
 	q := Q{title: "y"}
@@ -470,12 +470,12 @@ func main() {
 	}
 }
 
-// 普通变量 vs signal 读分档：字面量 New、signal 派生 Computed、普通变量 LockedGetter。
+// 普通变量 vs sig 读分档：字面量 New、sig 派生 Computed、普通变量 LockedGetter。
 func TestSignalFieldThreeTiersCoexist(t *testing.T) {
 	src := `package main
-type P struct { signal a string; signal b string; signal c string }
+type P struct { sig a string; sig b string; sig c string }
 func main() {
-	signal n = "n"
+	sig n = "n"
 	plain := "p"
 	p := P{a: "lit", b: n + "!", c: plain}
 	_ = p
@@ -493,13 +493,13 @@ func main() {
 	)
 }
 
-// P2-1 邻居：&{...} 省略类型名 + 取址，指针 props 补全单个 &、signal 字段透传 getter。
+// P2-1 邻居：&{...} 省略类型名 + 取址，指针 props 补全单个 &、sig 字段透传 getter。
 func TestSignalFieldAddrOmittedTypeLit(t *testing.T) {
 	src := `package main
-type CardProps struct { signal name string; title string }
+type CardProps struct { sig name string; title string }
 func Card(p *CardProps) { println(p.name(), p.title) }
 func main() {
-	signal n = "nn"
+	sig n = "nn"
 	Card(&{name: n, title: "t"})
 }
 `
@@ -510,12 +510,12 @@ func main() {
 	}
 }
 
-// P2-2 邻居：map value / slice 元素字面量的期望类型下推 + signal 字段包装。
+// P2-2 邻居：map value / slice 元素字面量的期望类型下推 + sig 字段包装。
 func TestSignalFieldContainerElemExpectedType(t *testing.T) {
 	src := `package main
-type P struct { signal a string }
+type P struct { sig a string }
 func main() {
-	signal n = "x"
+	sig n = "x"
 	m := map[string]P{"k": {a: n}}
 	s := []P{{a: n}, {a: "lit"}}
 	_, _ = m, s
@@ -535,10 +535,10 @@ func main() {
 // P2-3 邻居：显式类型名的指针 props 补全 &。
 func TestSignalFieldPtrExplicitLitGetsAmp(t *testing.T) {
 	src := `package main
-type CardProps struct { signal name string }
+type CardProps struct { sig name string }
 func Card(p *CardProps) { println(p.name()) }
 func main() {
-	signal n = "nn"
+	sig n = "nn"
 	Card(CardProps{name: n})
 }
 `
@@ -549,9 +549,9 @@ func main() {
 // P3-1 邻居：普通变量直通档保留尾随注释。
 func TestSignalFieldPassthroughKeepsTrailingComment(t *testing.T) {
 	src := `package main
-type P struct { signal a string }
+type P struct { sig a string }
 func main() {
-	signal src = "x"
+	sig src = "x"
 	p := P{a: src /* note */}
 	_ = p
 }
@@ -560,12 +560,12 @@ func main() {
 	containsAll(t, got, `p := P{a: src /* note */}`)
 }
 
-// 第八轮用户补充：链条 a.b.c 的"中间段" b 若是 signal 也要加括号。
-// 旧实现只判链尾，导致 o.mid.b.c（b 是 signal）生成非法 Go。
+// 第八轮用户补充：链条 a.b.c 的"中间段" b 若是 sig 也要加括号。
+// 旧实现只判链尾，导致 o.mid.b.c（b 是 sig）生成非法 Go。
 func TestSignalFieldChainMiddleSegmentSignal(t *testing.T) {
 	src := `package main
-type Inner struct { c string; signal d string }
-type Mid struct { signal b Inner }
+type Inner struct { c string; sig d string }
+type Mid struct { sig b Inner }
 type Outer struct { mid Mid; v string }
 func main() {
 	o := Outer{mid: Mid{b: Inner{c: "x", d: "y"}}, v: "plain"}
@@ -575,18 +575,18 @@ func main() {
 	got := compileOK(t, "sf8_mid.gx", src)
 	containsAll(t, got, `println(o.mid.b().c, o.mid.b().d(), o.v)`)
 	if strings.Contains(got, `o.mid.b.c`) {
-		t.Errorf("中间 signal 段 b 必须补 ():\n%s", got)
+		t.Errorf("中间 sig 段 b 必须补 ():\n%s", got)
 	}
 	if strings.Contains(got, `o.v()`) {
 		t.Errorf("普通字段 o.v 不得补 ():\n%s", got)
 	}
 }
 
-// 链式两段都是 signal + 已是调用式：每段各补一次，不重复补（防 c.n()()）。
+// 链式两段都是 sig + 已是调用式：每段各补一次，不重复补（防 c.n()()）。
 func TestSignalFieldChainTwoSignalNoDoubleCall(t *testing.T) {
 	src := `package main
-type Leaf struct { signal v string }
-type Mid struct { signal b Leaf }
+type Leaf struct { sig v string }
+type Mid struct { sig b Leaf }
 type Outer struct { mid Mid }
 func main() {
 	o := Outer{mid: Mid{b: Leaf{v: "hi"}}}
@@ -603,16 +603,16 @@ func main() {
 	}
 }
 
-// ============ 第九轮回归：链中间含 signal 段作为表达式 → 读写合一 getter ============
+// ============ 第九轮回归：链中间含 sig 段作为表达式 → 读写合一 getter ============
 
-// 链中间有 signal 段 + 链尾 signal（手写结构体字段值）：必须生成读写合一 lambda，
-// 每次读写重新走链——旧的「剥 () 裸透传」会把中间 signal 段的 receiver 固定，b 变化后腐烂。
+// 链中间有 sig 段 + 链尾 sig（手写结构体字段值）：必须生成读写合一 lambda，
+// 每次读写重新走链——旧的「剥 () 裸透传」会把中间 sig 段的 receiver 固定，b 变化后腐烂。
 func TestSignalFieldChainRWGetterHandwritten(t *testing.T) {
 	src := `package main
-type Leaf struct { signal c string }
-type Mid struct { signal b Leaf }
+type Leaf struct { sig c string }
+type Mid struct { sig b Leaf }
 type Outer struct { mid Mid }
-type Q struct { signal v string }
+type Q struct { sig v string }
 func main() {
 	o := Outer{mid: Mid{b: Leaf{c: "x"}}}
 	q := Q{v: o.mid.b.c}
@@ -628,14 +628,14 @@ func main() {
 	)
 }
 
-// 同上，JSX signal prop 走同一入口，产物一致（判据不分裂）。
+// 同上，JSX sig prop 走同一入口，产物一致（判据不分裂）。
 func TestSignalFieldChainRWGetterJSX(t *testing.T) {
 	src := `package main
 import gxscene "github.com/robertpanvip/gox/runtime/scene"
-type Leaf struct { signal c string }
-type Mid struct { signal b Leaf }
+type Leaf struct { sig c string }
+type Mid struct { sig b Leaf }
 type Outer struct { mid Mid }
-type CardProps struct { signal title string }
+type CardProps struct { sig title string }
 func Card(p CardProps) *gxscene.Instance { return <div>{p.title}</div> }
 func main() {
 	o := Outer{mid: Mid{b: Leaf{c: "x"}}}
@@ -652,13 +652,13 @@ func main() {
 	)
 }
 
-// 链中间有 signal 段 + 链尾普通字段：退回裸 getter（无写分支），不生成 Computed 快照。
+// 链中间有 sig 段 + 链尾普通字段：退回裸 getter（无写分支），不生成 Computed 快照。
 func TestSignalFieldChainGetterTailPlain(t *testing.T) {
 	src := `package main
 type Leaf struct { c string }
-type Mid struct { signal b Leaf }
+type Mid struct { sig b Leaf }
 type Outer struct { mid Mid }
-type Q struct { signal v string }
+type Q struct { sig v string }
 func main() {
 	o := Outer{mid: Mid{b: Leaf{c: "x"}}}
 	q := Q{v: o.mid.b.c}
@@ -672,11 +672,11 @@ func main() {
 	}
 }
 
-// 单段链（仅链尾 signal）保持裸透传、零开销，不包 lambda。
+// 单段链（仅链尾 sig）保持裸透传、零开销，不包 lambda。
 func TestSignalFieldChainSingleStillPassthrough(t *testing.T) {
 	src := `package main
-type Leaf struct { signal c string }
-type Q struct { signal v string }
+type Leaf struct { sig c string }
+type Q struct { sig v string }
 func main() {
 	o := Leaf{c: "x"}
 	q := Q{v: o.c}
@@ -690,13 +690,13 @@ func main() {
 	}
 }
 
-// 派生表达式里即使含链式 signal 读，也不得被误判成单条链读（完整性校验）。
+// 派生表达式里即使含链式 sig 读，也不得被误判成单条链读（完整性校验）。
 func TestSignalFieldChainGetterRejectsDerivedExpr(t *testing.T) {
 	src := `package main
-type Leaf struct { signal c string }
-type Mid struct { signal b Leaf }
+type Leaf struct { sig c string }
+type Mid struct { sig b Leaf }
 type Outer struct { mid Mid }
-type Q struct { signal v string }
+type Q struct { sig v string }
 func main() {
 	o := Outer{mid: Mid{b: Leaf{c: "x"}}}
 	q := Q{v: o.mid.b().c() + "!"}
@@ -712,12 +712,12 @@ func main() {
 
 // ==================== 第十轮评审回归 ====================
 
-// P1-A：signal 字段值是结构体构造时必须 Signal.New（一次构造、可写），
+// P1-A：sig 字段值是结构体构造时必须 Signal.New（一次构造、可写），
 // 不能包成忽略参数的裸 getter（写入丢失、依赖链断、每次读重建）。
 func TestR10StructLitUsesNewNotBareGetter(t *testing.T) {
 	src := `package main
-type Leaf struct { signal v string }
-type Mid struct { signal leaf Leaf }
+type Leaf struct { sig v string }
+type Mid struct { sig leaf Leaf }
 func main() {
 	m := Mid{leaf: Leaf{v: "a"}}
 	_ = m
@@ -730,11 +730,11 @@ func main() {
 	}
 }
 
-// 第十轮 P1-2：普通变量构造的 signal 字段用 Signal.LockedGetter——跟随+写落回变量，
+// 第十轮 P1-2：普通变量构造的 sig 字段用 Signal.LockedGetter——跟随+写落回变量，
 // 外层实例级互斥锁消除裸变量读写竞态。
 func TestR10PlainVarGetterWritable(t *testing.T) {
 	src := `package main
-type P struct { signal a string }
+type P struct { sig a string }
 func main() {
 	v := "one"
 	p := P{a: v}
@@ -763,13 +763,13 @@ func main() {
 	_ = compileOK(t, "r10_local.gx", src)
 }
 
-// P2-B：从 map/slice 索引取值后读 signal 字段必须补 ()。
+// P2-B：从 map/slice 索引取值后读 sig 字段必须补 ()。
 func TestR10IndexReceiverRead(t *testing.T) {
 	src := `package main
 import "fmt"
-type P struct { signal a string }
+type P struct { sig a string }
 func main() {
-	signal n = "x"
+	sig n = "x"
 	m := map[string]P{"k": {a: n}}
 	s := []P{{a: n}}
 	fmt.Println(m["k"].a, s[0].a)
@@ -782,9 +782,9 @@ func main() {
 // P2-C：嵌套容器 map[string][]P 的元素补全为具名 P，不退化匿名 struct。
 func TestR10NestedContainerElemType(t *testing.T) {
 	src := `package main
-type P struct { signal a string }
+type P struct { sig a string }
 func main() {
-	signal n = "x"
+	sig n = "x"
 	m := map[string][]P{"k": {{a: n}}}
 	_ = m
 }
@@ -796,10 +796,10 @@ func main() {
 	}
 }
 
-// P2-D：&{...} 内层省略类型字面量补全为具名类型 + signal 字段包 New。
+// P2-D：&{...} 内层省略类型字面量补全为具名类型 + sig 字段包 New。
 func TestR10AddrLitNestedFieldType(t *testing.T) {
 	src := `package main
-type Inner struct { signal v string }
+type Inner struct { sig v string }
 type Out struct { inner Inner }
 func Card(p *Out) {}
 func main() { Card(&{inner: {v: "x"}}) }
@@ -808,12 +808,12 @@ func main() { Card(&{inner: {v: "x"}}) }
 	containsAll(t, got, `&Out{inner: Inner{v: Signal.New("x")}}`)
 }
 
-// 第十一轮：中间 signal 段用户显式写调用括号（m.leaf().v）时，读写改写必须
+// 第十一轮：中间 sig 段用户显式写调用括号（m.leaf().v）时，读写改写必须
 // 跳过该括号走到真正链尾，而不是在 '(' 处断链漏改写。与裸写 m.leaf.v 产物一致。
 func TestR11ExplicitParenMiddleSegment(t *testing.T) {
 	write := `package main
-type Leaf struct { signal v string }
-type Mid struct { signal leaf Leaf }
+type Leaf struct { sig v string }
+type Mid struct { sig leaf Leaf }
 func main() {
 	m := Mid{leaf: Leaf{v: "a"}}
 	m.leaf().v = "c"
@@ -824,8 +824,8 @@ func main() {
 	containsAll(t, got, `m.leaf().v( "c")`)
 
 	bare := `package main
-type Leaf struct { signal v string }
-type Mid struct { signal leaf Leaf }
+type Leaf struct { sig v string }
+type Mid struct { sig leaf Leaf }
 func main() {
 	m := Mid{leaf: Leaf{v: "a"}}
 	m.leaf.v = "c"
@@ -838,8 +838,8 @@ func main() {
 	}
 
 	compound := `package main
-type Leaf struct { signal n int }
-type Mid struct { signal leaf Leaf }
+type Leaf struct { sig n int }
+type Mid struct { sig leaf Leaf }
 func main() {
 	m := Mid{leaf: Leaf{n: 1}}
 	m.leaf().n += 2
@@ -857,9 +857,9 @@ func main() {
 func TestR11JSXExplicitParenMiddleSegment(t *testing.T) {
 	src := `package main
 import gxscene "github.com/robertpanvip/gox/runtime/scene"
-type Leaf struct { signal v string }
-type Mid struct { signal leaf Leaf }
-type CardProps struct { signal title string }
+type Leaf struct { sig v string }
+type Mid struct { sig leaf Leaf }
+type CardProps struct { sig title string }
 func Card(p CardProps) *gxscene.Instance { return <div>{p.title}</div> }
 func main() {
 	m := Mid{leaf: Leaf{v: "a"}}
@@ -875,12 +875,12 @@ func main() {
 	)
 }
 
-// 第十轮 P1-3：工厂函数返回的 struct，其 signal 字段读写必须正确改写。
-// p := makeP() 时 Bindings 用 FuncResult 回填 p 的类型为 P，p.a 才能识别为 signal 字段。
+// 第十轮 P1-3：工厂函数返回的 struct，其 sig 字段读写必须正确改写。
+// p := makeP() 时 Bindings 用 FuncResult 回填 p 的类型为 P，p.a 才能识别为 sig 字段。
 func TestR11FactoryResultTypeBackfill(t *testing.T) {
 	src := `package main
 import "fmt"
-type P struct { signal a string }
+type P struct { sig a string }
 func makeP(v string) P { return P{a: v} }
 func makeP2(v string) *P { return &P{a: v} }
 func main() {
@@ -900,9 +900,9 @@ func main() {
 func TestR11MultiLevelIndexChain(t *testing.T) {
 	src := `package main
 import "fmt"
-type P struct { signal a string }
+type P struct { sig a string }
 func main() {
-	signal n = "x"
+	sig n = "x"
 	m := map[string][][]P{"k": {{{a: n}}}}
 	s := [][]P{{{a: n}}}
 	fmt.Println(m["k"][0][0].a, s[0][0].a)
@@ -912,12 +912,12 @@ func main() {
 	containsAll(t, got, `m["k"][0][0].a()`, `s[0][0].a()`)
 }
 
-// 第十轮 P1-5：JSX props 里索引 receiver m["k"].v 必须作为 signal 透传（不双重包装）。
+// 第十轮 P1-5：JSX props 里索引 receiver m["k"].v 必须作为 sig 透传（不双重包装）。
 func TestR11JSXIndexReceiver(t *testing.T) {
 	src := `package main
 import gxscene "github.com/robertpanvip/gox/runtime/scene"
-type P struct { signal v string }
-type CardProps struct { signal v string }
+type P struct { sig v string }
+type CardProps struct { sig v string }
 func Card(props CardProps) *gxscene.Instance { return nil }
 func main() {
 	m := map[string]P{"k": P{v: "x"}}
@@ -927,7 +927,7 @@ func main() {
 	res, err := CompileScene("r11_jsx_index.gx", src)
 	if err != nil { t.Fatal(err) }
 	out := res.GoSource
-	// 透传档：m["k"].v 本身是 signal，应作为 getter 透传，不得双重包 Signal.New。
+	// 透传档：m["k"].v 本身是 sig，应作为 getter 透传，不得双重包 Signal.New。
 	if strings.Contains(out, `Signal.New(m["k"].v)`) {
 		t.Errorf("索引 receiver 被双重包装：\n%s", out)
 	}
@@ -938,8 +938,8 @@ func main() {
 func TestR11JSXMultiLevelIndexReceiver(t *testing.T) {
 	src := `package main
 import gxscene "github.com/robertpanvip/gox/runtime/scene"
-type P struct { signal v string }
-type CardProps struct { signal v string }
+type P struct { sig v string }
+type CardProps struct { sig v string }
 func Card(props CardProps) *gxscene.Instance { return nil }
 func main() {
 	m := map[string][][]P{"k": {{{v: "x"}}}}
@@ -955,11 +955,11 @@ func main() {
 	containsAll(t, out, `m["k"][0][0].v`)
 }
 
-// 第十轮 P2-1：signal 字段值是省略类型的复合字面量，须剥 Signal[...] 取元素类型补全。
+// 第十轮 P2-1：sig 字段值是省略类型的复合字面量，须剥 Signal[...] 取元素类型补全。
 func TestR11SignalFieldOmittedInnerType(t *testing.T) {
 	src := `package main
-type Inner struct { signal v string }
-type Out struct { signal inner Inner }
+type Inner struct { sig v string }
+type Out struct { sig inner Inner }
 func main() {
 	o := Out{inner: {v: "x"}}
 	_ = o
@@ -968,17 +968,17 @@ func main() {
 	got := compileOK(t, "r11_sig_inner.gx", src)
 	// 不得生成 Signal.Signal[Inner]{V:"x"} 这种非法复合字面量。
 	if strings.Contains(got, `Signal.Signal[Inner]{`) || strings.Contains(got, `Signal[Inner]{`) {
-		t.Errorf("signal 字段内层省略类型未剥包装：\n%s", got)
+		t.Errorf("sig 字段内层省略类型未剥包装：\n%s", got)
 	}
 	containsAll(t, got, `Signal.New(Inner{v: Signal.New("x")})`)
 }
 
-// 第十轮 P2-2：JSX props 传复合字面量，内层 signal 字段必须递归包装。
+// 第十轮 P2-2：JSX props 传复合字面量，内层 sig 字段必须递归包装。
 func TestR11JSXCompositePropInnerWrap(t *testing.T) {
 	src := `package main
 import gxscene "github.com/robertpanvip/gox/runtime/scene"
-type Leaf struct { signal v string }
-type CardProps struct { signal label Leaf }
+type Leaf struct { sig v string }
+type CardProps struct { sig label Leaf }
 func Card(props CardProps) *gxscene.Instance { return nil }
 func main() {
 	_ = <div><Card label={Leaf{v: "a"}}/></div>
@@ -994,7 +994,7 @@ func main() {
 // 第十轮 P3：三元 ?: 不支持，应在编译期报清晰诊断而非生成非法 Go。
 func TestR11TernaryRejected(t *testing.T) {
 	src := `package main
-type P struct { signal a string }
+type P struct { sig a string }
 func main() {
 	flag := true
 	p := P{a: flag ? "y" : "n"}
@@ -1017,7 +1017,7 @@ func main() {
 func TestR12RepeatedMapIndexReadAndWrite(t *testing.T) {
 	src := `package main
 import "fmt"
-type P struct { signal a string }
+type P struct { sig a string }
 func main() {
 	m := map[string]P{"k": {a: "x"}}
 	fmt.Println(m["k"].a)
@@ -1040,7 +1040,7 @@ func main() {
 func TestR12RepeatedNestedMapIndexRead(t *testing.T) {
 	src := `package main
 import "fmt"
-type P struct { signal a string }
+type P struct { sig a string }
 func main() {
 	m := map[string][][]P{"k": {{{a: "x"}}}}
 	fmt.Println(m["k"][0][0].a)
@@ -1057,7 +1057,7 @@ func main() {
 // 否则运行时各持一把锁，同实例多字段/跨实例并发仍 race。
 func TestR12SharedLockKeySameVariable(t *testing.T) {
 	src := `package main
-type P struct { signal a string; signal b string }
+type P struct { sig a string; sig b string }
 func main() {
 	v := "x"
 	p1 := P{a: v, b: v}
@@ -1081,7 +1081,7 @@ func main() {
 // 第十一轮 N-3：不同变量必须生成不同 key，避免无关变量被强制串行化。
 func TestR12SharedLockKeyDistinctVariables(t *testing.T) {
 	src := `package main
-type P struct { signal a string; signal b string }
+type P struct { sig a string; sig b string }
 func main() {
 	v := "x"
 	w := "y"
@@ -1113,12 +1113,12 @@ func extractLockKeys(t *testing.T, goSrc string) []string {
 	return keys
 }
 
-// 第十二轮 P2-D：结构体字段容器 s.m["k"] / s.ps[0] 的 signal 字段读必须改写。
+// 第十二轮 P2-D：结构体字段容器 s.m["k"] / s.ps[0] 的 sig 字段读必须改写。
 // 旧实现在 .m 段用 bareFieldType("map[string]P") 得空串，类型链断裂，链尾 a 漏改。
 func TestR12StructFieldContainerIndex(t *testing.T) {
 	src := `package main
 import "fmt"
-type P struct { signal a string }
+type P struct { sig a string }
 type S struct { m map[string]P; ps []P }
 func main() {
 	s := S{m: map[string]P{"k": {a: "x"}}, ps: []P{{a: "p"}}}
@@ -1137,10 +1137,10 @@ func main() {
 }
 
 // 第十二轮 §4.5 立规矩：silentIndexedSignalField 的判据正确性——
-// 含索引 + 链尾字段名唯一命中 signal 字段 → 报；普通字段名/多类型同名 → 不报。
+// 含索引 + 链尾字段名唯一命中 sig 字段 → 报；普通字段名/多类型同名 → 不报。
 func TestR12SilentIndexedSignalFieldDetect(t *testing.T) {
 	src := `package main
-type P struct { signal a string; b int }
+type P struct { sig a string; b int }
 type Q struct { a int }
 func main() {
 	m := map[string]P{"k": {a: "x", b: 1}}
@@ -1169,11 +1169,11 @@ func main() {
 	}
 	field, hit := silentIndexedSignalField(toks, mIdx, 0, tbl, nil)
 	if !hit || field != "a" {
-		t.Errorf("m[\"k\"].a 应命中 signal 字段 a，got field=%q hit=%v", field, hit)
+		t.Errorf("m[\"k\"].a 应命中 sig 字段 a，got field=%q hit=%v", field, hit)
 	}
-	// 用独立源码验证普通字段 b 不触发（b 不是任何类型的 signal 字段）。
+	// 用独立源码验证普通字段 b 不触发（b 不是任何类型的 sig 字段）。
 	src2 := `package main
-type P struct { signal a string; b int }
+type P struct { sig a string; b int }
 func main() {
 	m := map[string]P{"k": {b: 1}}
 	_ = m["k"].b
@@ -1191,17 +1191,17 @@ func main() {
 	}
 	_, hit2 := silentIndexedSignalField(toks2, m2, 0, tbl2, nil)
 	if hit2 {
-		t.Error("普通字段 b 不应命中 signal 字段检测")
+		t.Error("普通字段 b 不应命中 sig 字段检测")
 	}
 }
 
-// 第十三轮 P1-A：诊断按「元素类型确为 signal 字段的 owner」判定，不再按字段名
-// 唯一命中。普通字段与别处 signal 字段撞名不得误报（否则项目模式构建被阻断）；
-// 真阳性（map 元素类型的 signal 字段读未改写）仍须命中。
+// 第十三轮 P1-A：诊断按「元素类型确为 sig 字段的 owner」判定，不再按字段名
+// 唯一命中。普通字段与别处 sig 字段撞名不得误报（否则项目模式构建被阻断）；
+// 真阳性（map 元素类型的 sig 字段读未改写）仍须命中。
 func TestR13SilentIndexedFieldNoFalsePositive(t *testing.T) {
-	// 误报场景：Item.title 是 signal 字段，Row.title 是普通字段——撞名不应报错。
+	// 误报场景：Item.title 是 sig 字段，Row.title 是普通字段——撞名不应报错。
 	srcFalse := `package main
-type Item struct { signal title string }
+type Item struct { sig title string }
 type Row  struct { title string }
 func main() {
 	rows := []Row{{title: "t"}}
@@ -1221,7 +1221,7 @@ func main() {
 
 	// 元素类型可推断时，正常路径应直接改写成 a()，不挂诊断（无需沉默兜底）。
 	srcOK := `package main
-type P struct { signal a string }
+type P struct { sig a string }
 func main() {
 	m := map[string]P{"k": {a: "x"}}
 	_ = m["k"].a
@@ -1235,7 +1235,7 @@ func main() {
 		t.Errorf("类型可推断且已改写时不应挂诊断:\n%+v", res2.Analysis.Diagnostics())
 	}
 	if !strings.Contains(res2.GoSource, `m["k"].a()`) {
-		t.Errorf("map 元素 signal 字段应被正常改写为 a(), got:\n%s", res2.GoSource)
+		t.Errorf("map 元素 sig 字段应被正常改写为 a(), got:\n%s", res2.GoSource)
 	}
 }
 
@@ -1244,7 +1244,7 @@ func TestR13SilentIndexedFieldUnknownTypeStaysSilent(t *testing.T) {
 	// rows 声明为函数参数且无元素类型信息时，回退用不到声明、Binding.Type 也为空，
 	// silentIndexedSignalField 应返回 false（宁可沉默也不误报）。
 	src := `package main
-type P struct { signal x string }
+type P struct { sig x string }
 func main() {
 	rows := getRows()
 	_ = rows[0].x
@@ -1266,4 +1266,58 @@ func getRows() []any { return nil }
 	if _, hit := silentIndexedSignalField(toks, idx, 0, tbl, nil); hit {
 		t.Error("元素类型推不出时应保持沉默，不得按字段名撞车命中")
 	}
+}
+
+// ===== sig 字段核心语义规则（三条）的集中回归 =====
+// 规则见 docs/language-spec.md §11.1 的规则引用块：
+//  1. 谁被 sig 修饰谁响应式（读补 ()、写转发）；
+//  2. 语义沿 struct 嵌套访问链逐段保留（每个 sig 段各补一次 ()）；
+//  3. 不自动传染给普通字段 / 同名的非 sig 字段（一律按普通 Go 字段读）。
+func TestSignalFieldSemanticRules(t *testing.T) {
+	src := `package main
+type Leaf struct { sig v string; plain string }
+type Mid struct { sig mid Leaf; tag string }
+type Other struct { v string }
+type Root struct { root Mid; v string; other Other }
+func main() {
+	r := Root{}
+	println(r.root.mid.v)
+	println(r.root.mid.plain)
+	println(r.root.tag)
+	println(r.v)
+	println(r.other.v)
+	r.v = "x"
+	l := Leaf{}
+	l.v = "y"
+	l.plain = "z"
+}
+`
+	got := compileOK(t, "sf_rules.gx", src)
+
+	// 规则 1 + 2：sig 段的读与写都响应式，嵌套链上每个 sig 段各补一次 ()。
+	gotCompact := strings.Join(strings.Fields(got), "")
+	containsAll(t, got,
+		`r.root.mid().v()`, // 链上 mid(sig)、v(sig) 各补 ()；root 普通段不补
+	)
+	containsAll(t, gotCompact,
+		`l.v("y")`, // sig 字段写 → 转发给 getter
+	)
+
+	// 规则 3：普通字段、同名但非 sig 的字段，都不补 ()、写保持普通赋值。
+	for _, bad := range []string{
+		`r.root()`,       // root 是普通字段
+		`r.root.mid.plain()`, // 链尾 plain 是普通字段
+		`r.root.tag()`,   // tag 是普通字段
+		`r.v()`,          // Root.v 是普通字段（与 Leaf.v 同名）
+		`r.other.v()`,    // Other.v 是普通字段（与 Leaf.v 同名）
+		`l.plain("z")`,   // 普通字段写不应转发
+		`r.v("x")`,       // 普通字段写不应转发
+	} {
+		if strings.Contains(got, bad) {
+			t.Errorf("普通/非 sig 字段被误加响应式语义 %q：\n%s", bad, got)
+		}
+	}
+
+	// 规则 1（写）：普通字段写仍是标准 Go 赋值，sig 字段写是调用式。
+	containsAll(t, got, `r.v = "x"`, `l.plain = "z"`)
 }

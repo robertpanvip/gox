@@ -11,7 +11,7 @@
 
 | 条目 | 问题 | 处理 | 回归测试 | 诊断码 / 产物 |
 |---|---|---|---|---|
-| A1 | `<For>` 渲染体内函数局部 signal 显示函数地址 | render body 转换期锁定 `jsxPos`，signal 裸读补 `()` | `TestForBodyRewritesFunctionLocalSignals` / `TestForBodySignalRewriteNoRegression` | 产物：`n()` |
+| A1 | `<For>` 渲染体内函数局部 sig 显示函数地址 | render body 转换期锁定 `jsxPos`，sig 裸读补 `()` | `TestForBodyRewritesFunctionLocalSignals` / `TestForBodySignalRewriteNoRegression` | 产物：`n()` |
 | A2 | `class` 对象语法 → `{true true}` | 诊断化 | `TestUnsupportedAttrDiagnostics` / `TestForEmptyAttrDiagnostic` | `attr-unsupported` |
 | A3 | `style` 对象语法 → `{red}` | 诊断化 | `TestUnsupportedAttrDiagnostics` | `attr-unsupported` |
 | A4 | `<For empty={...}>` 静默丢弃 | 报未知属性 + 条件分支修法 | `TestForEmptyAttrDiagnostic` | `attr-unsupported` |
@@ -26,9 +26,9 @@
 | B1 | `Get[[]Row]` 传 `<For>` 推成 `rune` | `genericCallTypeArg` 提取泛型实参 | `TestForEachGetGenericTypeArg` / `TestGenericCallTypeArgNoFalsePositive` | 产物：`Get[[]Row]` |
 | B2 | 嵌套 `<For>` 内层推成 `any` | 从外层 item 类型反查 struct 字段，逃逸也登记类型 | `TestB2NestedForElemType` | 产物：`ForGetterOfSignal[Cell]` |
 | B3 | `each={getter}` 不自动调用 | `funcLitResultType` + getter 变量补 `()` | `TestB3GetterVariableEach` | 产物：`return rows()` |
-| B4 | signal 持 struct 字段赋值编不过 | 深写诊断（整体替换修法） | `TestSignalDeepWriteDiagnostic` | `signal-deep-write` |
+| B4 | sig 持 struct 字段赋值编不过 | 深写诊断（整体替换修法） | `TestSignalDeepWriteDiagnostic` | `signal-deep-write` |
 | B6 | 事件箭头赋值产非法 Go | 诊断化 + func 字面量修法 | `TestEventArrowAssignDiagnostic` | `event-arrow-statement` |
-| B7 | signal 字段简写 `P{v}` 编不过 | `stripSoleSignalShorthand` | `TestStructSignalFieldShorthand` | 产物：`P{v()}` 形态 |
+| B7 | sig 字段简写 `P{v}` 编不过 | `stripSoleSignalShorthand` | `TestStructSignalFieldShorthand` | 产物：`P{v()}` 形态 |
 | B8 | computed 返回对象字面量产非法 Go | lambda body 对象字面量判定 | `TestComputedArrowObjectLiteral` / `TestLambdaBlockBodyStillWorks` | 产物：匿名 struct |
 | B9 | 组件多根 / `return if` 非法 Go | 诊断化 | `TestJSXMultiRootAndReturnIfDiagnostics` | `jsx-multi-root` / `jsx-return-if` |
 | B10 | 属性模板串不插值 | 诊断化（改反引号） | `TestUnsupportedAttrDiagnostics` | `attr-unsupported` |
@@ -39,12 +39,12 @@
 | 条目 | 问题 | 处理 | 回归测试 / 文档 |
 |---|---|---|---|
 | C1 | 列表项显示组件状态要手写 `()` | A1 修复后不再需要 | `TestForBodyRewritesFunctionLocalSignals` |
-| C2 | signal slice 改元素字段不刷新（唯一静默错值） | 带索引链深写诊断 | `TestC2SignalSliceElemDeepWriteDiag` + 2 守护 |
+| C2 | sig slice 改元素字段不刷新（唯一静默错值） | 带索引链深写诊断 | `TestC2SignalSliceElemDeepWriteDiag` + 2 守护 |
 | C3 | 嵌套列表两层类型注解 | B2 修复后内层可推断 | `TestB2NestedForElemType` |
 | C4 | 组件多根要包 div | B9 诊断化（明确修法） | `TestJSXMultiRootAndReturnIfDiagnostics` |
 | C5 | 事件只能写 func 字面量 | B6 诊断化 | `TestEventArrowAssignDiagnostic` |
 | C6 | props getter 只读（设计选择） | 文档说明绕法 | `docs/language-spec.md` §11 |
-| C7 | signal 作实参读成当前值（设计选择） | 文档说明 | `docs/language-spec.md` §11 |
+| C7 | sig 作实参读成当前值（设计选择） | 文档说明 | `docs/language-spec.md` §11 |
 
 ## T3.1/T3.2 收敛状态（已在基线达成）
 
@@ -53,10 +53,10 @@
 - `pkg/compiler/exprast.go`：表达式 AST 的标识符经 `ResolveAt` 解析，仅 `BkSignal`/`BkComputed` 进入引用判定（遮蔽天然排除）。
 - `pkg/compiler/signal.go`：`Signal` transform 用 `ResolveAt` 做遮蔽判断（P1-1 根治）。
 - `pkg/compiler/pub.go`：`restoreRefs` 遮蔽判断走 `ResolveAt`（M-5）。
-- `pkg/compiler/signalfields.go`：signal 字段引用统一 `ResolveAt`。
+- `pkg/compiler/signalfields.go`：sig 字段引用统一 `ResolveAt`。
 
 即"至少 2 个 Transform 不再各自扫 token 判断变量身份"的验收已满足（≥4 个）。`jsxSceneCtx`
-仍持 `bindings`/`sigs`/`sigTypes`/`signalFields` 多源，但 signal 识别规则已统一走 `Bindings`，
+仍持 `bindings`/`sigs`/`sigTypes`/`signalFields` 多源，但 sig 识别规则已统一走 `Bindings`，
 剩余字段是 JSX 场景特有的类型/位置信息，非重复来源。
 
 ## 运行

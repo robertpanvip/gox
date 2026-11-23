@@ -5,13 +5,13 @@ import (
 	"testing"
 )
 
-// T4.3：signal 声明 hover 显示 Signal[T]。
+// T4.3：sig 声明 hover 显示 Signal[T]。
 func TestSignalDetailShowsType(t *testing.T) {
 	src := `package main
 func main() {
-    signal count = 0
-    signal name = "gx"
-    signal rows = []int{1,2}
+    sig count = 0
+    sig name = "gx"
+    sig rows = []int{1,2}
 }
 `
 	sm := BuildSymbolMap(src)
@@ -23,17 +23,17 @@ func main() {
 	for name, want := range cases {
 		syms := sm.Lookup(name)
 		if len(syms) == 0 {
-			t.Fatalf("未找到 signal 符号 %s", name)
+			t.Fatalf("未找到 sig 符号 %s", name)
 		}
 		if syms[0].Detail != want {
-			t.Errorf("signal %s Detail = %q, want %q", name, syms[0].Detail, want)
+			t.Errorf("sig %s Detail = %q, want %q", name, syms[0].Detail, want)
 		}
 	}
 }
 
 // T4.3：显式类型注解优先。
 func TestSignalExplicitType(t *testing.T) {
-	sm := BuildSymbolMap("package main\nfunc main() {\n    signal n float64 = 1.5\n}\n")
+	sm := BuildSymbolMap("package main\nfunc main() {\n    sig n float64 = 1.5\n}\n")
 	syms := sm.Lookup("n")
 	if len(syms) == 0 || syms[0].Detail != "Signal[float64]" {
 		t.Fatalf("显式类型应优先: %+v", syms)

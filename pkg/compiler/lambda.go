@@ -602,9 +602,9 @@ func inferParamTypeFromBody(toks []Token, l *lambdaExpr, name string) string {
 	return ""
 }
 
-// signalGetterResultType 判断 [start,end) 是否为「signal getter 单点调用」形态
+// signalGetterResultType 判断 [start,end) 是否为「sig getter 单点调用」形态
 // （即 body 恰好是 `name()`，例如 `() => count()` 的 body），若是则返回该
-// signal 的声明类型（如 count → int）。这是 SolidJS 风格 `computed(() => count())`
+// sig 的声明类型（如 count → int）。这是 SolidJS 风格 `computed(() => count())`
 // 正确推断返回类型的关键：改写后 count 的读是 count()，单点调用时 inferExprType
 // 的通用规则（字面量/比较/算术）都不命中，只能靠改写前采集的 sigTypes 反查。
 //
@@ -630,7 +630,7 @@ func signalGetterResultType(toks []Token, start, end int, params []lambdaParam, 
 	if nextSigIn(toks, close+1, end) >= 0 {
 		return "" // ')' 后还有 token，不是单点调用
 	}
-	// 不能是 lambda 参数名（参数类型另有来源），只查 signal 声明类型表。
+	// 不能是 lambda 参数名（参数类型另有来源），只查 sig 声明类型表。
 	for _, p := range params {
 		if p.name == name {
 			return ""
@@ -644,7 +644,7 @@ func inferExprType(toks []Token, start, end int, params []lambdaParam, sigTypes 
 	if start >= end {
 		return ""
 	}
-	// 单点 signal getter 调用（computed(() => count())）优先：从改写前采集的
+	// 单点 sig getter 调用（computed(() => count())）优先：从改写前采集的
 	// 声明类型表反查，避免降级 any。
 	if t := signalGetterResultType(toks, start, end, params, sigTypes); t != "" {
 		return t
@@ -776,8 +776,8 @@ func literalType(t Token) string {
 // 然后重新 detect。这样下标始终基于最新 token 流，且内层先被转成 func 字面量后，
 // 外层 body 里嵌的就是已转换的结果——避免嵌套 lambda 用旧下标替换导致区间错位、
 // 内层 => 残留的 bug。
-// sigTypes 为可选参数（signal 声明类型表，来自 collectSignalTypes），用于在 lambda
-// body 是单点 signal getter 调用时推断返回类型（SolidJS 风格 computed(() => count())）。
+// sigTypes 为可选参数（sig 声明类型表，来自 collectSignalTypes），用于在 lambda
+// body 是单点 sig getter 调用时推断返回类型（SolidJS 风格 computed(() => count())）。
 // 省略时该推断路径关闭，其它规则照常工作——保持既有调用点兼容。
 func transformLambdas(in []Token, an *Analysis, b *Bindings, sigTypes ...map[string]string) []Token {
 	var st map[string]string

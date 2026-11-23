@@ -32,11 +32,11 @@ var (
 	reVar    = regexp.MustCompile(`^\s*(?:pub\s+)?(?:var|const)\s+([a-zA-Z_][\w]*)`)
 	reAssign = regexp.MustCompile(`^\s*([a-zA-Z_][\w]*)\s*:=`)
 	reMember = regexp.MustCompile(`^\s*([a-zA-Z_][\w]*)`)
-	// T4.3：signal 声明 signal name [Type] = expr；Type 可省略（从 expr 推断）。
-	reSignal = regexp.MustCompile(`^\s*signal\s+([a-zA-Z_][\w]*)(\s+[\w\[\]]+)?\s*=`)
+	// T4.3：sig 声明 sig name [Type] = expr；Type 可省略（从 expr 推断）。
+	reSignal = regexp.MustCompile(`^\s*sig\s+([a-zA-Z_][\w]*)(\s+[\w\[\]]+)?\s*=`)
 )
 
-// inferLitType 从简单字面量/构造式推断类型文本，供 signal hover 显示 Signal[T]（T4.3）。
+// inferLitType 从简单字面量/构造式推断类型文本，供 sig hover 显示 Signal[T]（T4.3）。
 // 只做高置信推断，推不出返回 ""（hover 显示 Signal 即可，不瞎猜）。
 func inferLitType(expr string) string {
 	e := strings.TrimSpace(expr)
@@ -171,7 +171,7 @@ func BuildSymbolMap(src string) *SymbolMap {
 			add(name, 5, i, col+strings.Index(trimmed, name), "type", "类型 "+name)
 			continue
 		}
-		// T4.3：signal 声明——Detail 带 Signal[T]，hover 直接展示响应式类型。
+		// T4.3：sig 声明——Detail 带 Signal[T]，hover 直接展示响应式类型。
 		if r := reSignal.FindStringSubmatch(line); r != nil {
 			name := r[1]
 			typ := strings.TrimSpace(r[2])
@@ -185,7 +185,7 @@ func BuildSymbolMap(src string) *SymbolMap {
 			if typ != "" {
 				detail = "Signal[" + typ + "]"
 			}
-			add(name, 13, i, col+strings.Index(line, name), detail, "signal "+name)
+			add(name, 13, i, col+strings.Index(line, name), detail, "sig "+name)
 			continue
 		}
 		if r := reVar.FindStringSubmatch(trimmed); r != nil {

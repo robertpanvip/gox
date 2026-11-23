@@ -194,14 +194,14 @@ func main() {
 }
 
 // TestLambdaComputedGetterArrow 验证 SolidJS 风格：computed 的箭头函数 body 是
-// 单点 signal getter 调用时，从改写前采集的 signal 声明类型反查返回类型，
+// 单点 sig getter 调用时，从改写前采集的 sig 声明类型反查返回类型，
 // 不降级 any。这是 computed(() => count()) 正确工作的关键。
 func TestLambdaComputedGetterArrow(t *testing.T) {
 	src := `package main
 func main() {
-	signal count = 0
-	signal name = "gx"
-	signal ok = true
+	sig count = 0
+	sig name = "gx"
+	sig ok = true
 	_ = Signal.computed(() => count())
 	_ = Signal.computed(() => name())
 	_ = Signal.computed(() => ok())
@@ -218,7 +218,7 @@ func main() {
 	if strings.Contains(got, `func() any {return count()}`) ||
 		strings.Contains(got, `func() any {return name()}`) ||
 		strings.Contains(got, `func() any {return ok()}`) {
-		t.Fatalf("单点 signal getter 不应降级 any:\n%s", got)
+		t.Fatalf("单点 sig getter 不应降级 any:\n%s", got)
 	}
 }
 
@@ -227,7 +227,7 @@ func main() {
 func TestLambdaBlockBody(t *testing.T) {
 	src := `package main
 func main() {
-	signal count = 0
+	sig count = 0
 	Signal.batch(() => { count = 5; println("batch", count()) })
 	Signal.effect(() => {
 		println("eff", count())

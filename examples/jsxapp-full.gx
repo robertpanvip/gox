@@ -3,7 +3,7 @@
 //
 // 这个例子把前面所有的点串起来：
 //   1. 复合组件：大写标签 = 组件；Props getter-map 让数据在组件树里保鲜
-//   2. 响应式：signal + Signal.computed，signal 沿 Props getter 传到叶子插槽
+//   2. 响应式：sig + Signal.computed，sig 沿 Props getter 传到叶子插槽
 //   3. 应用入口：gxapp.open(cfg) 返回 App，app.render(() => <App/>) 收建树函数
 //      （源码小写，编译器还原为 gxapp.Open / App.Render）；根 Owner + 响应式在内部接好
 // 写入 count=5 后，count 与 doubled 两行自动刷新到新帧，组件不重建。
@@ -26,7 +26,7 @@ pub func Stat(props gxscene.Props) *gxscene.Instance {
 
 // Dashboard 是中间组件：把上层传来的 getter 原样转发给两个 Stat。
 // count()/doubled() 在 Props getter 里读取——app.render 内部建立的聚合 effect
-// 重跑时会读到 signal 并登记依赖，因此 signal 变化能穿透组件树命中叶子插槽。
+// 重跑时会读到 sig 并登记依赖，因此 sig 变化能穿透组件树命中叶子插槽。
 pub func Dashboard(props gxscene.Props) *gxscene.Instance {
     count   := gxscene.Get[int](props, "count")
     doubled := gxscene.Get[int](props, "doubled")
@@ -38,8 +38,8 @@ pub func Dashboard(props gxscene.Props) *gxscene.Instance {
 }
 
 func main() {
-    // signal 源 + computed 派生（源码小写 computed，编译器还原为 Computed）
-    signal count = 0
+    // sig 源 + computed 派生（源码小写 computed，编译器还原为 Computed）
+    sig count = 0
     let doubled = Signal.computed(() => count * 2)
 
     // 应用入口：open 只传配置（裸对象字面量，编译器从签名推断为 WindowConfig），
@@ -53,7 +53,7 @@ func main() {
     defer app.close()
 
     // 组合根视图（SolidJS 风格建树函数）：count/doubled 在插值里读，编成 getter
-    // 传给 Dashboard；render 内部建根 Owner + 接线，signal 变化 → 更新插槽 → 自动重绘。
+    // 传给 Dashboard；render 内部建根 Owner + 接线，sig 变化 → 更新插槽 → 自动重绘。
     app.render(() =>
         <div id="app">
             <Dashboard count={count} doubled={doubled}/>

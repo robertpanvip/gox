@@ -25,16 +25,16 @@ func countKind(a *SignalAST, k ExprKind) int {
 
 func TestExprASTSignalDeclNode(t *testing.T) {
 	src := `package main
-signal count = 0
-signal total
+sig count = 0
+sig total
 func main() {}
 `
 	_, _, a := signalASTOf(src)
 	if !a.HasSignal() {
-		t.Fatal("应识别到 signal 声明")
+		t.Fatal("应识别到 sig 声明")
 	}
 	if got := countKind(a, ExSignalDecl); got != 2 {
-		t.Fatalf("signal 声明节点应为 2，got %d: %v", got, a.Nodes())
+		t.Fatalf("sig 声明节点应为 2，got %d: %v", got, a.Nodes())
 	}
 	// 声明节点应持有 BkSignal 绑定，且带初值的记录 RHS 区间。
 	var withInit *GXExpr
@@ -62,7 +62,7 @@ func main() {}
 
 func TestExprASTReadWriteClassify(t *testing.T) {
 	src := `package main
-signal count = 0
+sig count = 0
 func main() {
     println(count)   // read
     count = 5        // write
@@ -86,7 +86,7 @@ func main() {
 			t.Errorf("%s 节点应为 %d，got %d（全部节点：%v）", c.kind, c.want, got, a.Nodes())
 		}
 	}
-	// 每个引用节点都应直接持有 signal 绑定。
+	// 每个引用节点都应直接持有 sig 绑定。
 	for _, e := range a.Nodes() {
 		if e.Kind == ExSignalDecl {
 			continue
@@ -98,9 +98,9 @@ func main() {
 }
 
 func TestExprASTShadowing(t *testing.T) {
-	// 参数遮蔽 signal 名：参数 count 不是 signal 引用，不应产生引用节点。
+	// 参数遮蔽 sig 名：参数 count 不是 sig 引用，不应产生引用节点。
 	src := `package main
-signal count = 0
+sig count = 0
 func f(count int) int { return count + 1 }
 func main() {
     println(count)
@@ -113,17 +113,17 @@ func main() {
 	_, _, a := signalASTOf(src)
 	// 引用节点只有 main 里 println(count) 一处；f 的参数与块内 := 都被遮蔽。
 	if got := countKind(a, ExSignalRead); got != 1 {
-		t.Fatalf("遮蔽后 signal 读应仅 1 处，got %d（全部节点：%v）", got, a.Nodes())
+		t.Fatalf("遮蔽后 sig 读应仅 1 处，got %d（全部节点：%v）", got, a.Nodes())
 	}
 }
 
-// TestExprASTParityWithLegacy 对拍：AST 认定「哪些 offset 是 signal 引用」应与
+// TestExprASTParityWithLegacy 对拍：AST 认定「哪些 offset 是 sig 引用」应与
 // 旧判定（collectSignalVars + isSignalRefAt + 形态排除）完全一致。E1 切换的等价性
 // 由 golden 全量兜底，这里先做节点级对拍。
 func TestExprASTParityWithLegacy(t *testing.T) {
 	src := `package main
-signal count = 0
-signal total = 0
+sig count = 0
+sig total = 0
 func f(count int) int {
     total = count
     total += count
@@ -173,26 +173,26 @@ func main() {
 	}
 
 	if len(legacy) != len(astRefs) {
-		t.Errorf("signal 引用数不一致：legacy=%d ast=%d\nlegacy=%v\nast=%v",
+		t.Errorf("sig 引用数不一致：legacy=%d ast=%d\nlegacy=%v\nast=%v",
 			len(legacy), len(astRefs), fmt.Sprint(legacy), fmt.Sprint(astRefs))
 	}
 	for off := range legacy {
 		if !astRefs[off] {
-			t.Errorf("legacy 认定 off=%d 是 signal 引用但 AST 未收录", off)
+			t.Errorf("legacy 认定 off=%d 是 sig 引用但 AST 未收录", off)
 		}
 	}
 	for off := range astRefs {
 		if !legacy[off] {
-			t.Errorf("AST 认定 off=%d 是 signal 引用但 legacy 未认定", off)
+			t.Errorf("AST 认定 off=%d 是 sig 引用但 legacy 未认定", off)
 		}
 	}
 	// 声明名集合也应对拍。
 	if len(sigs) != len(a.SignalNames()) {
-		t.Errorf("signal 名集合不一致：legacy=%v ast=%v", sigs, a.SignalNames())
+		t.Errorf("sig 名集合不一致：legacy=%v ast=%v", sigs, a.SignalNames())
 	}
 	for name := range sigs {
 		if !a.SignalNames()[name] {
-			t.Errorf("legacy signal 名 %q 未在 AST 中", name)
+			t.Errorf("legacy sig 名 %q 未在 AST 中", name)
 		}
 	}
 }
@@ -229,10 +229,10 @@ func TestExprASTTemplateNodes(t *testing.T) {
 
 // TestExprASTTemplateOffsetThroughPipeline 固化 E2 关键前提：desugar 到
 // transformTemplates 之前，主流 Template token 的 Pos.Offset 仍能命中原始 AST。
-// 覆盖 signal/lambda/对象字面量/解构混合（这些 transform 会增删 token 造成下标漂移）。
+// 覆盖 sig/lambda/对象字面量/解构混合（这些 transform 会增删 token 造成下标漂移）。
 func TestExprASTTemplateOffsetThroughPipeline(t *testing.T) {
 	sources := []string{
-		"package main\nsignal n = 0\nfunc main() { s := `hi ${n}`; println(s) }\n",
+		"package main\nsig n = 0\nfunc main() { s := `hi ${n}`; println(s) }\n",
 		"package main\nfunc f(x int) int { return x }\nfunc main() { a := 1; s := `a=${a} f=${f(a)}`; println(s) }\n",
 		"package main\ntype P struct{ name string }\nfunc main() { p := P{name: \"z\"}; { name, age := p.name, 1; s := `n=${name} a=${age}`; println(s) } }\n",
 	}

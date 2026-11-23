@@ -19,7 +19,7 @@
 | Computed 句柄 | `ComputedWithHandle` 返回 `(Signal[T], Computation)` |
 | Owner 树 | `CreateRoot` / `GetOwner` / `RunWithOwner`，父销毁级联子；嵌套 `CreateRoot` 自动挂为子 |
 | 生命周期 | `OnCleanup`（重跑前 + 销毁时执行）、`OnMount`（首次挂载执行一次） |
-| 批处理 | `Batch(f)` 合并同一轮 signal 写入，批次结束统一调度 Effect |
+| 批处理 | `Batch(f)` 合并同一轮 sig 写入，批次结束统一调度 Effect |
 
 `scene.Computation` 以类型别名统一到 `signal.Computation`，使 `signal.Effect` 可直接作为
 `BindReactive` 的实参（Go 函数类型要求返回类型 identical）。
@@ -60,7 +60,7 @@ view := <div>
 
 ```gox
 type User struct { id int; name string }
-signal users = []User{{1, "Tom"}, {2, "Jack"}}
+sig users = []User{{1, "Tom"}, {2, "Jack"}}
 
 view := <ul>
     <For each={users} key={(u) => u.id}>
@@ -71,7 +71,7 @@ view := <ul>
 
 > `(u)` 无类型注解时，编译器从 `each={users}` 的集合类型（`[]User`）推断元素类型
 > `User`，生成 `ForGetterOfSignal[User]`。以下写法均受支持：
-> - signal 变量：`signal users = []User{...}`（改写前采集声明类型）
+> - sig 变量：`sig users = []User{...}`（改写前采集声明类型）
 > - 普通变量：`users := []User{...}`（查询绑定表）
 > - 显式注解：`(u User) => ...` 始终优先于推断，可用于 `each` 类型无法静态确定的场景。
 > `key` lambda 的参数类型同样可省略，复用 render 的元素类型。
@@ -82,9 +82,9 @@ view := <ul>
 - keyed diff：`key(item)` 生成稳定键，相同键的节点被复用（移动而非重建）；
 - 新增元素：新 Owner 下构建子树；删除元素：销毁 Owner（级联清理 Effect/Cleanup）；
 - 重排：只调整节点顺序，不重跑 render；
-- 每个元素独立 Owner，元素内 signal 变化只更新对应项；
-- **item signal 根治**：每项持有一个 item signal，render 参数是它的 getter `func() T`。
-  同 key 值变化时只写该 signal，子树 getter（编译成 `u().field`）登记的依赖精确重跑，
+- 每个元素独立 Owner，元素内 sig 变化只更新对应项；
+- **item sig 根治**：每项持有一个 item sig，render 参数是它的 getter `func() T`。
+  同 key 值变化时只写该 sig，子树 getter（编译成 `u().field`）登记的依赖精确重跑，
   只发 `SetText/SetAttr`——不销毁重建、不发 `ReplaceChildren`、项内 ID 天然稳定；
 - 泛型工厂 `ForGetterOfSignal[T]` 编译期保留元素类型安全（旧 `ForGetterOf[T]` /
   `NewFor` 值快照模式仍保留兼容，同 key 值变化走销毁重建）。
@@ -93,21 +93,21 @@ view := <ul>
 render 签名为 `func(u func() T) *gxscene.Instance`，body 内 `u.field` 改写为 `u().field`。
 
 > **组件边界与响应式 props**：普通 props 字段是挂载时求值一次的值快照（组件插槽
-> getter 只调一次），item signal 无法驱动它。若 render body 把 item 传入组件的**普通**
+> getter 只调一次），item sig 无法驱动它。若 render body 把 item 传入组件的**普通**
 > props 字段（如 `<Card name={u.name}/>` / `<Card u={u}/>`），编译器检测到该逃逸后，
 > 整个 `<For>` 回退到值快照 `ForGetterOf[T]`（render 签名 `func(u T)`），同 key 值变化走
 > 销毁重建以取到新 props 值——行为正确但失去零重建收益。
 >
-> **根治写法：把 props 字段声明为 signal**（`type CardProps struct { signal name string }`，
-> 见语言规范 §11.1）。signal 字段本身是 getter、值实时保鲜，item 传入时**不触发回退**，
+> **根治写法：把 props 字段声明为 sig**（`type CardProps struct { sig name string }`，
+> 见语言规范 §11.1）。sig 字段本身是 getter、值实时保鲜，item 传入时**不触发回退**，
 > 仍走 `ForGetterOfSignal` 零重建——这是组件需要响应 item 变化时的推荐写法。
 > 直接插值 `{u.name}`、item 参与事件/普通表达式等不跨组件边界的场景也走信号化。
-> 同理，`let x = u` 这类在组件内手动缓存 item 的写法会固化为快照，不受 item signal 驱动，
+> 同理，`let x = u` 这类在组件内手动缓存 item 的写法会固化为快照，不受 item sig 驱动，
 > 应始终在需要响应式的位置直接读 item getter。
 
 > 元素类型 `T` 的推断优先级：render 参数显式注解 > `each` 集合类型推断（`[]T` /
-> `[N]T` / signal 声明字面量）> 降级 `any`。推断复用统一绑定表与 signal 声明类型
-> 采集，在 signal 改写前完成，确保初值字面量类型不被 `Signal.New(...)` 包裹遮蔽。
+> `[N]T` / sig 声明字面量）> 降级 `any`。推断复用统一绑定表与 sig 声明类型
+> 采集，在 sig 改写前完成，确保初值字面量类型不被 `Signal.New(...)` 包裹遮蔽。
 
 ---
 
@@ -123,11 +123,11 @@ render 签名为 `func(u func() T) *gxscene.Instance`，body 内 `u.field` 改�
   结构重绘接线全部封装在内部（`bindReactive` 变为私有）。源码无需再手写 `app.BindReactive`。
 - **组件生命周期**：组件在建树时创建的 `Signal.effect` / `computed` / `onMount` /
   `onCleanup` 归属本次 `Render` 的根 Owner；`App.Close` / 重复 `Render` 时随 Owner
-  级联销毁并执行 `onCleanup`，不会残留永不停止的 Effect。组件内局部 `signal` 变化
+  级联销毁并执行 `onCleanup`，不会残留永不停止的 Effect。组件内局部 `sig` 变化
   照常驱动 UI 更新（见 `examples/jsxapp-solid.gx`）。
 - **关闭清理**：`App.Close` dispose 根 Owner（级联组件副作用）与内部聚合句柄，
   调用 `inst.Dispose()` 清理结构 effect 与元素 Owner；Render 之前调用也安全。
-- **批处理**：`Batch` 合并同一轮多次 signal 写入为一帧重绘（已验证）。
+- **批处理**：`Batch` 合并同一轮多次 sig 写入为一帧重绘（已验证）。
 - **压力测试**：Owner 500 轮创建/销毁、分支 200 轮切换，Effect/Cleanup 严格配对无泄漏。
 
 ---

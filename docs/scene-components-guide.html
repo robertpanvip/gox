@@ -117,7 +117,7 @@
   <tr><td><code>req.method</code> / <code>u.path</code></td><td><code>req.Method</code> / <code>u.Path</code></td><td>结构体字段：小写书写，还原</td></tr>
   <tr><td><code>r.URL</code> / <code>http.StatusOK</code></td><td>原样保留</td><td>全大写缩写：<b>写大写</b>，不动</td></tr>
   <tr><td><code>gxscene.get[T]()</code></td><td><code>gxscene.Get[T]()</code></td><td>runtime 符号：小写书写，还原</td></tr>
-  <tr><td><code>view.bindReactive(Signal.effect)</code></td><td><code>view.BindReactive(signal.Effect)</code></td><td>方法小写；signal API 用大写 <code>Signal.</code> 前缀</td></tr>
+  <tr><td><code>view.bindReactive(Signal.effect)</code></td><td><code>view.BindReactive(signal.Effect)</code></td><td>方法小写；Signal API 用大写 <code>Signal.</code> 前缀</td></tr>
   <tr><td><code>gxapp.open({ ... })</code> + <code>app.render(() => &lt;App/&gt;)</code></td><td><code>gxapp.Open(gxapp.WindowConfig{...})</code> + <code>app.Render(func() any {...})</code></td><td><b>open 只收配置</b>（裸对象字面量，从签名推断）；<b>render 收建树函数</b>（SolidJS 风格），内部建根 Owner + 接线</td></tr>
   <tr><td><code>pub func Stat(...)</code> + <code>&lt;Stat/&gt;</code></td><td><code>func Stat(...)</code></td><td><b>组件名大写开头</b>（pub 声明与 JSX 标签一致）</td></tr>
   <tr><td><code>pub func card</code> + <code>&lt;Card/&gt;</code></td><td><code>func Card</code></td><td>pub 声明小写；<b>JSX 标签必须大写</b></td></tr>
@@ -126,11 +126,11 @@
 </table>
 
 <div class="note">
-<b>五条边界（踩过的坑）：</b>① <b>所有 signal API 用大写 <code>Signal.</code> 前缀</b>——<code>Signal.computed</code> / <code>Signal.effect</code> / <code>Signal.createRoot</code> / <code>Signal.batch</code> 等。<code>Signal</code> 是语法糖占位包名，既避免与 <code>signal</code> 声明关键字混淆，也保证还原；<b>不要</b>写裸 <code>computed(...)</code> 或小写 <code>signal.effect(...)</code>。
+<b>五条边界（踩过的坑）：</b>① <b>所有 Signal API 用大写 <code>Signal.</code> 前缀</b>——<code>Signal.computed</code> / <code>Signal.effect</code> / <code>Signal.createRoot</code> / <code>Signal.batch</code> 等。<code>Signal</code> 是语法糖占位包名，既避免与 <code>sig</code> 声明关键字混淆，也保证还原；<b>不要</b>写裸 <code>computed(...)</code> 或小写 <code>signal.effect(...)</code>。
 ② <b>组件名大写开头</b>——<code>pub func Stat(...)</code> 配 <code>&lt;Stat/&gt;</code>。JSX 标签首字母大写 = 组件、小写 = 原生 HTML 标签，这是硬编码判定。
 ③ <b>配置对象写裸字面量、字段小写</b>——<code>gxapp.open({ title: ..., width: ... })</code>，字段写小写（大小写混写、省略可选字段也支持），编译器用 <code>go list</code> + <code>go/parser</code> 读取 <code>gxapp.open</code> 所在包的真实 Go 源码 AST，取出参数类型补全为 <code>gxapp.WindowConfig</code> 并把字段还原成真实拼写（通用机制，对任意外部包函数都有效；读不到时回退匿名 struct）。无需也不应手写 <code>gxapp.windowConfig{...}</code>。
-④ <b>open 与 render 分工</b>——<code>gxapp.open(cfg)</code> 只创建窗口外壳并返回 <code>App</code>，<code>app.render(() =&gt; &lt;App/&gt;)</code> 收一个<b>建树函数</b>（SolidJS 风格）：内部建立根 Owner、画首帧、封装 <code>bindReactive</code>（signal 变化 → 更新 + 重绘，含分支/列表结构重绘），源码无需手写接线。组件内的 <code>Signal.effect</code> / <code>onMount</code> / <code>onCleanup</code> 归属该 Owner，<code>app.close</code> 时级联清理。
-⑤ <b>回调用箭头函数</b>——<code>Signal.computed(() =&gt; expr)</code> / <code>Signal.effect(() =&gt; ...)</code> / <code>batch</code> / <code>onMount</code> / <code>onCleanup</code> 一律写箭头，贴近 SolidJS 习惯，别写 <code>func() T { return ... }</code>。单语句 <code>() =&gt; expr</code>，多语句 <code>() =&gt; { stmt; stmt }</code>（花括号 body 生成 <code>func(){...}</code>）；编译器从 body 反推类型，<code>() =&gt; count()</code> 单点 signal getter 会从声明类型反查（不降级 <code>any</code>），带参数的 <code>createRoot((o *Signal.owner) =&gt; {...})</code> 保留显式标注。
+④ <b>open 与 render 分工</b>——<code>gxapp.open(cfg)</code> 只创建窗口外壳并返回 <code>App</code>，<code>app.render(() =&gt; &lt;App/&gt;)</code> 收一个<b>建树函数</b>（SolidJS 风格）：内部建立根 Owner、画首帧、封装 <code>bindReactive</code>（sig 变化 → 更新 + 重绘，含分支/列表结构重绘），源码无需手写接线。组件内的 <code>Signal.effect</code> / <code>onMount</code> / <code>onCleanup</code> 归属该 Owner，<code>app.close</code> 时级联清理。
+⑤ <b>回调用箭头函数</b>——<code>Signal.computed(() =&gt; expr)</code> / <code>Signal.effect(() =&gt; ...)</code> / <code>batch</code> / <code>onMount</code> / <code>onCleanup</code> 一律写箭头，贴近 SolidJS 习惯，别写 <code>func() T { return ... }</code>。单语句 <code>() =&gt; expr</code>，多语句 <code>() =&gt; { stmt; stmt }</code>（花括号 body 生成 <code>func(){...}</code>）；编译器从 body 反推类型，<code>() =&gt; count()</code> 单点 sig getter 会从声明类型反查（不降级 <code>any</code>），带参数的 <code>createRoot((o *Signal.owner) =&gt; {...})</code> 保留显式标注。
 </div>
 
 <h2>二、工作原理（三段流程）</h2>
@@ -155,7 +155,7 @@
   </div>
   <div class="fcol c3">
     <h4><span class="dot"></span>③ 更新期（每次写入）</h4>
-    <div class="box"><div class="lbl">signal 写入</div><pre><span class="em">t</span> = <span class="st">"new"</span>
+    <div class="box"><div class="lbl">sig 写入</div><pre><span class="em">t</span> = <span class="st">"new"</span>
 → effect 重跑</pre></div>
     <div class="arw">↓</div>
     <div class="box"><div class="lbl">精确写节点</div><pre>只写依赖它的插槽
@@ -165,7 +165,7 @@
 <div class="note">组件是一种「不透明的子树插槽」：骨架编译期固定，组件形状运行时嫁接；更新靠 getter 保鲜 + 递归透传，而不是重建整树或做 vdom Diff。</div>
 
 <h2>三、完整实战（一条龙）</h2>
-<p>下面这段是<b>经过 <code>go run</code> 实测</b>的完整 GX 源码，同时用到了对象字面量、对象解构、signal、条件分支、Keyed For 和应用入口——全部小写写法。</p>
+<p>下面这段是<b>经过 <code>go run</code> 实测</b>的完整 GX 源码，同时用到了对象字面量、对象解构、sig、条件分支、Keyed For 和应用入口——全部小写写法。</p>
 <pre class="code"><span class="cap">demo.gx · 编译：gox build demo.gx -o main.go && go run .</span><span class="kw">package</span> main
 
 <span class="kw">import</span> (
@@ -189,10 +189,10 @@
     cfg := { title: <span class="st">"Gox"</span>, width: <span class="ty">800</span>, height: <span class="ty">600</span> }
     { title, width } := cfg
 
-    <span class="cm">// signal 源 + computed 派生（count 变化 → doubled 自动重算）</span>
-    <span class="kw">signal</span> count = <span class="ty">0</span>
-    <span class="kw">signal</span> visible = <span class="kw">true</span>
-    <span class="kw">signal</span> users = []<span class="ty">user</span>{{<span class="ty">1</span>, <span class="st">"Tom"</span>}, {<span class="ty">2</span>, <span class="st">"Jack"</span>}}
+    <span class="cm">// sig 源 + computed 派生（count 变化 → doubled 自动重算）</span>
+    <span class="kw">sig</span> count = <span class="ty">0</span>
+    <span class="kw">sig</span> visible = <span class="kw">true</span>
+    <span class="kw">sig</span> users = []<span class="ty">user</span>{{<span class="ty">1</span>, <span class="st">"Tom"</span>}, {<span class="ty">2</span>, <span class="st">"Jack"</span>}}
     doubled := Signal.<span class="fn">computed</span>(() =&gt; count * <span class="ty">2</span>)
 
     <span class="cm">// 应用入口：open 只收配置（裸对象字面量）；render 收建树函数，内部建根 Owner + 接线</span>
@@ -211,7 +211,7 @@
 
     <span class="cm">// 批处理：同一帧内 count→5、visible→false，只重绘一次（多语句用花括号 body）</span>
     <span class="fn">Signal</span>.<span class="fn">batch</span>(() =&gt; { count(<span class="ty">5</span>); visible(<span class="kw">false</span>) })
-    fmt.<span class="fn">println</span>(doubled)  <span class="cm">// 10，signal 读裸写</span>
+    fmt.<span class="fn">println</span>(doubled)  <span class="cm">// 10，sig 读裸写</span>
 }</pre>
 <div class="note"><b>实测输出要点：</b>初始渲染出 <code>"Tom"</code>/<code>"Jack"</code> 列表；<code>visible=false</code> 后条件分支切到 <code>Hidden</code>；<code>doubled()</code> 得到 <code>10</code>。<code>&lt;For&gt;</code> 的 render 参数 <code>(u)</code> 未写类型——编译器从 <code>each={users}</code> 的 <code>[]user</code> 自动推断出元素类型。</div>
 
@@ -229,10 +229,10 @@
 })
 <span class="cm">// 相同值不触发下游；自定义比较用 Signal.newWithEquals</span>
 <span class="cm">// 派生需要提前销毁时用 Signal.computedWithHandle</span></pre>
-<div class="note"><code>signal</code> 源信号默认用 <code>reflect.DeepEqual</code> 做相等性裁剪——值未变不触发下游。<code>scene.computation</code> 是 <code>signal.computation</code> 的类型别名，因此 <code>Signal.effect</code> 可作为底层 <code>bindReactive</code> 的实参；应用入口的 <code>app.render</code> 内部已经用 <code>Signal.effect</code> 完成接线，无需手写。</div>
+<div class="note"><code>sig</code> 源信号默认用 <code>reflect.DeepEqual</code> 做相等性裁剪——值未变不触发下游。<code>scene.computation</code> 是 <code>signal.computation</code> 的类型别名，因此 <code>Signal.effect</code> 可作为底层 <code>bindReactive</code> 的实参；应用入口的 <code>app.render</code> 内部已经用 <code>Signal.effect</code> 完成接线，无需手写。</div>
 
 <h3>阶段 2 · 条件分支</h3>
-<p>JSX 内支持 <code>if / else if / else</code> 子节点。selector 读 signal 登记依赖；索引变化时销毁旧 Owner、重建局部子树，索引不变时只更新叶子。</p>
+<p>JSX 内支持 <code>if / else if / else</code> 子节点。selector 读 sig 登记依赖；索引变化时销毁旧 Owner、重建局部子树，索引不变时只更新叶子。</p>
 <pre class="code">view := &lt;<span class="jx">div</span>&gt;
     <span class="kw">if</span> visible {
         &lt;<span class="jx">span</span>&gt;{count}&lt;/<span class="jx">span</span>&gt;
@@ -250,7 +250,7 @@
         {(u) =&gt; &lt;<span class="jx">li</span>&gt;{u.name}&lt;/<span class="jx">li</span>&gt;}
     &lt;/<span class="jx">For</span>&gt;
 &lt;/<span class="jx">ul</span>&gt;</pre>
-<div class="note">元素类型推断支持 signal 变量、普通 <code>:=</code> 变量和函数返回值；若写了显式注解如 <code>(u user)</code>，则以注解为准。</div>
+<div class="note">元素类型推断支持 sig 变量、普通 <code>:=</code> 变量和函数返回值；若写了显式注解如 <code>(u user)</code>，则以注解为准。</div>
 
 <h3>阶段 4 · GUI 调度与生命周期</h3>
 <p>应用入口把「叶子聚合 effect」与「结构插槽接线」封装进 <code>app.render</code>：<code>open(cfg)</code> 先建好窗口外壳，<code>render(() =&gt; &lt;App/&gt;)</code> 在<b>根 Owner</b> 下建树、画首帧并在内部接好响应式——分支/列表切换重建子树后自动画一帧；<code>Signal.batch</code> 合并同一轮多次写入为一次重绘；<code>app.close</code> 销毁根 Owner，级联清理组件 <code>onCleanup</code> 与所有订阅。</p>
@@ -261,9 +261,9 @@ app.<span class="fn">render</span>(() =&gt; &lt;<span class="jx">div</span>&gt;{
 <span class="fn">Signal</span>.<span class="fn">batch</span>(() =&gt; { count(<span class="ty">5</span>); visible(<span class="kw">false</span>) })  <span class="cm">// 一次重绘</span></pre>
 
 <h3>有状态组件（SolidJS 风格，推荐）</h3>
-<p>组件函数<b>只在建树时执行一次</b>——状态是组件「自己的」，写在组件内部而非 <code>main</code> 里，靠 signal + effect 保鲜。副作用用 <code>Signal.onMount</code> 启动、<code>Signal.onCleanup</code> 清理，二者归属 <code>app.render</code> 建立的根 Owner，<code>app.close</code> 时级联执行。完整可运行示例见 <code>examples/jsxapp-solid.gx</code>（组件内定时器自增，close 时打印 unmounted）。</p>
+<p>组件函数<b>只在建树时执行一次</b>——状态是组件「自己的」，写在组件内部而非 <code>main</code> 里，靠 sig + effect 保鲜。副作用用 <code>Signal.onMount</code> 启动、<code>Signal.onCleanup</code> 清理，二者归属 <code>app.render</code> 建立的根 Owner，<code>app.close</code> 时级联执行。完整可运行示例见 <code>examples/jsxapp-solid.gx</code>（组件内定时器自增，close 时打印 unmounted）。</p>
 <pre class="code"><span class="kw">pub func</span> <span class="fn">Counter</span>(props gxscene.<span class="ty">Props</span>) *gxscene.<span class="ty">Instance</span> {
-    <span class="kw">signal</span> count = <span class="ty">0</span>   <span class="cm">// 组件局部状态</span>
+    <span class="kw">sig</span> count = <span class="ty">0</span>   <span class="cm">// 组件局部状态</span>
     <span class="kw">let</span> doubled = <span class="fn">Signal</span>.<span class="fn">computed</span>(() =&gt; count * <span class="ty">2</span>)
     <span class="fn">Signal</span>.<span class="fn">effect</span>(() =&gt; { fmt.<span class="fn">println</span>(<span class="st">"tick"</span>, count, doubled) })  <span class="cm">// 状态变化逻辑</span>
     stop := <span class="fn">make</span>(<span class="kw">chan</span> <span class="kw">struct</span>{})
@@ -275,23 +275,23 @@ app.<span class="fn">render</span>(() =&gt; &lt;<span class="jx">div</span>&gt;{
 }
 app.<span class="fn">render</span>(() =&gt; &lt;<span class="jx">div</span>&gt;&lt;<span class="jx">Counter</span>/&gt;&lt;/<span class="jx">div</span>&gt;)  <span class="cm">// 根 Owner 在此建立</span>
 app.<span class="fn">close</span>()  <span class="cm">// 级联执行 Counter 的 onCleanup</span></pre>
-<div class="note">组件内直接用裸 <code>count</code> 读 signal（编译器补 <code>()</code>）；<code>onCleanup/onMount</code> 必须写在组件函数体内（建树时注册到 Owner），这样卸载才能级联清理。</div>
+<div class="note">组件内直接用裸 <code>count</code> 读 sig（编译器补 <code>()</code>）；<code>onCleanup/onMount</code> 必须写在组件函数体内（建树时注册到 Owner），这样卸载才能级联清理。</div>
 
 <h2>五、约束清单</h2>
 <ol class="constraints">
   <li><b>大小写按来源分流</b>：引用<b>外部 Go 包</b>（<code>fmt</code> / <code>gxscene</code> / <code>gxapp</code>）时函数/方法/字段一律小写，编译器 <code>upperFirst</code> 还原；全大写缩写写大写原样保留。<b>类型名例外</b>：<code>gxscene.Props</code> / <code>gxscene.Instance</code> 按真实拼写大写开头、原样保留。</li>
   <li><b>本地 GX 模块严格大小写</b>：import 命中项目内另一组 <code>.gx</code> 时，符号/字段必须按被导入方 <code>pub</code> 导出名写——<code>util.add</code> 查表还原成 <code>util.Add</code>；写错大小写（<code>util.ADD</code>）报 <code>import-case</code> 诊断、产物原样保留。用 <code>gox build &lt;entry.gx&gt; -root &lt;根&gt;</code> 启用项目模式，详见 <code>examples/crossfile/</code>。</li>
-  <li><b>signal API 大写前缀</b>：<code>Signal.computed</code> / <code>Signal.effect</code> / <code>Signal.createRoot</code> / <code>Signal.batch</code> 等一律大写 <code>Signal.</code>，避免与 <code>signal</code> 声明关键字混淆；不要写裸 <code>computed(...)</code>。</li>
-  <li><b>回调用箭头函数</b>：<code>Signal.computed(() =&gt; expr)</code> / <code>Signal.effect(() =&gt; ...)</code>，多语句用 <code>() =&gt; { ... }</code>，从 body 反推类型（含单点 signal getter），不写 <code>func() T { return ... }</code>。</li>
+  <li><b>Signal API 大写前缀</b>：<code>Signal.computed</code> / <code>Signal.effect</code> / <code>Signal.createRoot</code> / <code>Signal.batch</code> 等一律大写 <code>Signal.</code>，避免与 <code>sig</code> 声明关键字混淆；不要写裸 <code>computed(...)</code>。</li>
+  <li><b>回调用箭头函数</b>：<code>Signal.computed(() =&gt; expr)</code> / <code>Signal.effect(() =&gt; ...)</code>，多语句用 <code>() =&gt; { ... }</code>，从 body 反推类型（含单点 sig getter），不写 <code>func() T { return ... }</code>。</li>
   <li><b>组件名大写开头</b>：<code>pub func Stat(...)</code> + <code>&lt;Stat/&gt;</code>；组件标签不能小写。</li>
   <li><b>配置写裸对象字面量</b>：<code>gxapp.open({ ... })</code>（只收配置，返回 App），从签名推断具名类型，不手写 <code>gxapp.windowConfig{...}</code>。</li>
   <li><b>pub 声明小写 + JSX 标签大写</b>：<code>pub func card</code> 配 <code>&lt;Card/&gt;</code>；组件标签小写会被当成原生标签。</li>
   <li><b>Props 用 getter 保鲜</b>：<code>gxscene.get[T](props,...)</code> 得到 getter，在插槽里 <code>value()</code> 读；写成 <code>value</code> 会变成不更新的快照。</li>
   <li><b>组件只建树一次</b>：函数体是「建树」而非「每次渲染」，不要在组件函数里放依赖刷新的副作用。</li>
-  <li><b>分支 selector 必须读 signal</b> 才有响应式；<code>&lt;For&gt;</code> 必须提供 <code>key</code> 才能做 keyed 复用。</li>
+  <li><b>分支 selector 必须读 sig</b> 才有响应式；<code>&lt;For&gt;</code> 必须提供 <code>key</code> 才能做 keyed 复用。</li>
   <li><b>Owner 作用域</b>：effect / cleanup 归属当前 Owner，父销毁级联子；需要独立生命周期时用 <code>Signal.createRoot</code>。</li>
   <li><b>结构变化重绘</b>：<code>app.render(() =&gt; &lt;App/&gt;)</code> 内部已接好响应式，分支/列表切换自动重绘一帧，无需手写 <code>bindReactive</code>。</li>
-  <li><b>相等性裁剪</b>：signal 默认 <code>DeepEqual</code>，相同值不触发；需要自定义比较用 <code>Signal.newWithEquals</code>。</li>
+  <li><b>相等性裁剪</b>：sig 默认 <code>DeepEqual</code>，相同值不触发；需要自定义比较用 <code>Signal.newWithEquals</code>。</li>
 </ol>
 
 <h2>六、API 速查（GX 写法 → 生成 Go）</h2>
@@ -302,11 +302,11 @@ app.<span class="fn">close</span>()  <span class="cm">// 级联执行 Counter �
   <tr><td><code>gxscene.Props</code> / <code>gxscene.Instance</code></td><td>原样</td><td><b>类型名按真实拼写大写开头</b>，编译器原样保留；不要写小写 <code>gxscene.props</code></td></tr>
   <tr><td><code>gxscene.get[T]</code></td><td><code>Get[T]</code></td><td>组件 props 读取方法（小写书写，还原；getter 语义）</td></tr>
   <tr><td><code>gxscene.render</code> / <code>gxscene.renderText</code></td><td><code>Render</code> / <code>RenderText</code></td><td>渲染模板：返回实例 / 直接返回 string</td></tr>
-  <tr><td><code>view.update</code></td><td><code>Instance.Update</code></td><td>全量重算（signal 接线后通常无需手动调）</td></tr>
+  <tr><td><code>view.update</code></td><td><code>Instance.Update</code></td><td>全量重算（sig 接线后通常无需手动调）</td></tr>
   <tr><td><code>view.bindReactive(effect)</code></td><td><code>Instance.BindReactive</code></td><td>把 effect 接到所有插槽 + 结构插槽：写入自动精确更新与重绘</td></tr>
   <tr><td><code>view.dispose()</code></td><td><code>Instance.Dispose</code></td><td>销毁实例：停订阅与结构 Owner</td></tr>
   <tr><td><code>Signal.new</code> / <code>Signal.newWithEquals</code></td><td><code>signal.New</code> / <code>signal.NewWithEquals</code></td><td>响应式源：默认裁剪 / 自定义比较</td></tr>
-  <tr><td><code>Signal.computed(() =&gt; expr)</code> / <code>Signal.computedWithHandle</code></td><td><code>signal.Computed</code> / <code>ComputedWithHandle</code></td><td>派生只读信号（后者带可销毁句柄）；回调用箭头函数，body 是单点 signal getter 也能推断类型</td></tr>
+  <tr><td><code>Signal.computed(() =&gt; expr)</code> / <code>Signal.computedWithHandle</code></td><td><code>signal.Computed</code> / <code>ComputedWithHandle</code></td><td>派生只读信号（后者带可销毁句柄）；回调用箭头函数，body 是单点 sig getter 也能推断类型</td></tr>
   <tr><td><code>Signal.effect</code></td><td><code>signal.Effect → Computation</code></td><td>可销毁 effect，幂等 dispose，自动挂 Owner</td></tr>
   <tr><td><code>Signal.createRoot</code> / <code>Signal.getOwner</code> / <code>Signal.runWithOwner</code></td><td><code>CreateRoot</code> / <code>GetOwner</code> / <code>RunWithOwner</code></td><td>Owner 树：建作用域、取当前、切换归属</td></tr>
   <tr><td><code>Signal.onCleanup</code> / <code>Signal.onMount</code> / <code>Signal.batch</code></td><td><code>OnCleanup</code> / <code>OnMount</code> / <code>Batch</code></td><td>生命周期清理 / 首挂载 / 合并写入</td></tr>

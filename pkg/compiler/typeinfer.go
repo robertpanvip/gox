@@ -193,7 +193,7 @@ func inferExprLitType(toks []Token, from, to int) string {
 		return ""
 	}
 	// 具名复合字面量 TypeName{...}（含 &TypeName{...}）→ 返回类型名。
-	// 这是 struct signal 字段读写解包判定 receiver 类型的关键依据：
+	// 这是 struct sig 字段读写解包判定 receiver 类型的关键依据：
 	// `p := CardProps{...}` 必须推断出 p 的类型是 CardProps。
 	// 注意排除 map[K]V{...} / []T{...} 等：它们的起点是 `map`/`[` 而非裸 Ident。
 	nameIdx := from

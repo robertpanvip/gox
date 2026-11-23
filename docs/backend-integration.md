@@ -10,7 +10,7 @@
 
 | 改动类型 | 例子 | 后端是否要动 |
 |---|---|---|
-| **host 内部实现**（协议不变） | 编译器优化、opcode 增删内部指令、`Update()` 算法、`signal` 调度、内置 Headless/Text 实现、`App` 内部字段、新增不暴露的辅助 API | **不用动** |
+| **host 内部实现**（协议不变） | 编译器优化、opcode 增删内部指令、`Update()` 算法、`sig` 调度、内置 Headless/Text 实现、`App` 内部字段、新增不暴露的辅助 API | **不用动** |
 | **协议变更**（契约面变了） | `Window` 接口增删方法或改签名、**已有** `Node` 字段语义变化或删除、`NodeType` 枚举变化、`Handler`/`EventContext` 签名变化、`WindowConfig` 字段语义变化 | **必须跟着实现** |
 | **additive 字段/方法**（协议面扩展但向后兼容） | 新增 `Node.ID`/`Node.Layout`、合成事件、`Changes()` 等——只加不删、不改已有签名，旧后端忽略即可 | **不用动**（可选采用） |
 
@@ -35,14 +35,14 @@
 │  - compiler（GX → Go）   │◀──│  - 实现 gxapp.Window          │
 │  - gxscene（场景树/协议） │   │  - 读 Node.ID / Layout（可选） │
 │  - gxapp（窗口接口/调度） │   │  - 布局 / 命中 / 事件派发      │
-│  - signal（响应式）       │   │  - 胶水入口 run(app)          │
+│  - sig（响应式）       │   │  - 胶水入口 run(app)          │
 └──────────────────────────┘   └───────────────────────────────┘
                ▲                          │
                └────── import 协议类型 ────┘
                     （单向：后端依赖 host）
 ```
 
-**host 负责**：把 GX 编成 Go；维护 opcode 常量骨架与常驻场景树；signal 变化时做细粒度 `Update()` 并驱动一次重绘；定义节点形状与事件协议；管理 Owner / Cleanup / 生命周期。
+**host 负责**：把 GX 编成 Go；维护 opcode 常量骨架与常驻场景树；sig 变化时做细粒度 `Update()` 并驱动一次重绘；定义节点形状与事件协议；管理 Owner / Cleanup / 生命周期。
 
 **后端负责**：窗口创建与事件循环；遍历 `Node` 树做布局；命中测试；取 handler 派发事件；把场景树绘制成实际像素（Skia / wgpu / GLFW / 文本等）。**布局、命中、派发归后端**，host 不参与。
 
@@ -98,7 +98,7 @@ type Node struct {
   - `node.Handler(name) any`：取原值，后端按自己约定的签名调用（自定义事件走这条）。
   - `node.Dispatch(name, EventContext) bool`：若 handler 恰为推荐签名 `Handler` 则调用并返回 `true`，否则 `false`（后端改用自定义签名处理）。**只在命中节点本地派发，不冒泡。**
 
-**事件回路（重要）**：`Window` 接口没有专门的事件输入通道。约定是后端在 `Run()` 的事件循环里收到原生事件 → 自己做命中测试找到目标 `Node` → 调 `Handler()` / `Dispatch()` → handler 内写 signal → host 的 `bindReactive` 自动 `Update()` 并 `Draw()` 一帧。这条路径目前是**约定**，未固化为接口方法，接入方需按此实现。
+**事件回路（重要）**：`Window` 接口没有专门的事件输入通道。约定是后端在 `Run()` 的事件循环里收到原生事件 → 自己做命中测试找到目标 `Node` → 调 `Handler()` / `Dispatch()` → handler 内写 sig → host 的 `bindReactive` 自动 `Update()` 并 `Draw()` 一帧。这条路径目前是**约定**，未固化为接口方法，接入方需按此实现。
 
 #### 统一合成事件与冒泡 / 捕获（additive，可选）
 
@@ -130,7 +130,7 @@ host **不定义绘制后端接口**（旧 `gxscene.Backend interface{Paint}` �
 **③ 增量变更通道** — `Instance.Changes()/TakeChanges()`（App 同名转发）
 ```go
 app.EnableChanges()                  // 打开记录（不调用则零开销、行为不变）
-// ... signal 变化触发更新 ...
+// ... sig 变化触发更新 ...
 for _, ch := range app.TakeChanges() { // 取走自上帧以来的有序变更
     switch ch.Kind {
     case gxscene.ChangeSetAttr:    /* ch.NodeID / ch.Key / ch.Value */
@@ -167,7 +167,7 @@ for _, ch := range app.TakeChanges() { // 取走自上帧以来的有序变更
 - 变更用 `Node.ID` 定位（`ChildID`/`BeforeID` 同为跨帧稳定 ID）；整棵实例树（组件/分支/列表项）共享同一 sink，一次 `TakeChanges` 取全。**嵌套场景同样覆盖**：组件嵌在 For 列表项或 Branch 分支内时（`For.buildEntry` / `Branch.Resolve` 先建子树后接 sink），运行时用 `adoptSinkDeep` 递归把项内/分支内已挂载的组件与更深层控制器改指到共享 sink，因此 `<li><Card text={u.name}/></li>` 这类写法里组件子树的 `SetText` 也会出现在根 `TakeChanges()` 中（曾遗漏，第六轮修复）。
 - 这是 opcode 常驻树 + 细粒度 `Update()` 的自然产物——`Update` 本来就算出"哪些插槽变了"，这里只是暴露出来，**不像被移除的 vdom 后端那样每次重建整树**；细粒度 diff 只作用于单个动态插槽的 children，不产生 `createElement`、不重建整棵树。
 - 后端要么**完全不消费**增量、每次全量 `Draw(root)`（零改动），要么**完整消费**上面全部指令做增量重绘。二者择一即可；**不能只实现其中一条**：例如新增列表项只发 `InsertBefore`、不发 `ReplaceChildren`，只实现后者的后端会永远不显示新增项。`ReplaceChildren` 只是少数场景（文本↔容器互转、旧值快照模式的同 key 重建）的兜底指令，不是"一条通用替代"。
-- **For 同 key 值变化**：编译器生成的 `<For>` 通常走 item signal（`ForGetterOfSignal`），值变化只写 item signal → 依赖它的叶子精确重跑 → 发 `SetText/SetAttr`，**不发** `ReplaceChildren`、项内 ID 不变。两类例外仍走销毁重建并发 `ReplaceChildren`：手写的旧 `NewFor`（值快照），以及编译器把 item 传入组件 props 时自动回退的 `ForGetterOf`（值快照，见 reactive-ui-roadmap 的组件边界限制）。后端两种都支持即可。
+- **For 同 key 值变化**：编译器生成的 `<For>` 通常走 item sig（`ForGetterOfSignal`），值变化只写 item sig → 依赖它的叶子精确重跑 → 发 `SetText/SetAttr`，**不发** `ReplaceChildren`、项内 ID 不变。两类例外仍走销毁重建并发 `ReplaceChildren`：手写的旧 `NewFor`（值快照），以及编译器把 item 传入组件 props 时自动回退的 `ForGetterOf`（值快照，见 reactive-ui-roadmap 的组件边界限制）。后端两种都支持即可。
 
 **diff 策略可替换**：host 内建的 LIS diff 只是默认实现。若后端已维护自己的镜像树、或有更契合自身渲染模型的高效 diff，可用 `SetChildDiffer` 注入自己的算法直接产出协议 `Change`，覆盖内建——host 不再跑那一遍 LIS：
 

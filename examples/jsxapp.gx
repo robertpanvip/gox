@@ -15,8 +15,8 @@ import (
 )
 
 func main() {
-    // signal 响应式：render 内部自动接线，signal 变化即更新场景树并重绘窗口。
-    signal count = 0
+    // sig 响应式：render 内部自动接线，sig 变化即更新场景树并重绘窗口。
+    sig count = 0
     let doubled = Signal.computed(() => count * 2)
 
     // 打开窗口：只传配置（裸对象字面量），返回 (*App, error)。

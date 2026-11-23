@@ -552,7 +552,7 @@ func structFieldValueExpectType(toks []Token, open, colon int, an *Analysis, str
 		return ""
 	}
 	ft := info.fields[field]
-	// 第十轮 P2-1：signal 字段的 info.fields 是降级后的 Signal.Signal[T]；
+	// 第十轮 P2-1：sig 字段的 info.fields 是降级后的 Signal.Signal[T]；
 	// 省略类型字面量 `inner: {v:"x"}` 要补全为 T{...}，须先剥掉 Signal[...] 包装，
 	// 否则生成非法的 Signal.Signal[Inner]{V:"x"}。
 	if inner := bareFieldType(ft); strings.Contains(ft, "Signal") && inner != "" {
@@ -898,9 +898,9 @@ func validateObjectLit(lit *objectLit, expect string, structs map[string]*struct
 			return nil, &objectLitError{pos: f.pos, msg: fmt.Sprintf("未知字段 %q（类型 %s 的字段有: %s）", f.name, expect, strings.Join(info.order, ", "))}
 		}
 		seen[f.name] = true
-		// signal 字段（降级为 Signal.Signal[T]）的值形态由生成侧
+		// sig 字段（降级为 Signal.Signal[T]）的值形态由生成侧
 		// （wrapSignalFieldLiterals / signalFieldPropTokens）统一保证：
-		// signal 直通、字面量包 Signal.New、派生包 Signal.Computed。
+		// sig 直通、字面量包 Signal.New、派生包 Signal.Computed。
 		// inferValueType 无法识别这些包装调用，会误判为底层类型，故此处跳过
 		// 类型校验；最终类型正确性由 Go 编译器兜底。
 		if isSignalFieldType(ftype) {
@@ -921,7 +921,7 @@ func validateObjectLit(lit *objectLit, expect string, structs map[string]*struct
 	return info, nil
 }
 
-// isSignalFieldType 判断字段类型是否为 struct signal 字段降级后的 Signal.Signal[T]。
+// isSignalFieldType 判断字段类型是否为 struct sig 字段降级后的 Signal.Signal[T]。
 // 兼容带包别名（signal.Signal[T]）与注入占位名（Signal.Signal[T]）两种形态。
 func isSignalFieldType(ftype string) bool {
 	s := strings.TrimSpace(ftype)

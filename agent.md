@@ -30,10 +30,10 @@ Gox 是一个把 `.gx` 转译成标准 Go 的编译器。`.gx` = Go 语法 + 一
 | `r.URL` / `http.StatusOK` | 原样 | **全大写缩写写大写，原样保留** |
 | `gxscene.get[T](props, "x")` | `gxscene.Get[T](...)` | runtime 符号：小写书写，还原 |
 | `props gxscene.Props` / `*gxscene.Instance` | 原样 | **类型名按真实拼写大写开头**，编译器原样保留；不要写成小写 `gxscene.props`（那是值/字段，不是类型） |
-| `view.bindReactive(Signal.effect)` | `view.BindReactive(signal.Effect)` | 底层 scene 实例方法：小写书写；signal API 用大写 `Signal.` 前缀 |
+| `view.bindReactive(Signal.effect)` | `view.BindReactive(signal.Effect)` | 底层 scene 实例方法：小写书写；Signal API 用大写 `Signal.` 前缀 |
 | `gxapp.open({ ... })` + `app.render(() => <App/>)` | `gxapp.Open(gxapp.WindowConfig{...})` + `app.Render(func() any {...})` | **open 只收配置**（裸对象字面量，从签名推断类型）返回 App；**render 收建树函数**（SolidJS 风格），内部建根 Owner + 接线，无需手写 bindReactive |
-| `Signal.createRoot(...)` / `Signal.onCleanup(...)` | `signal.CreateRoot` / `signal.OnCleanup` | **signal API 一律大写 `Signal.` 前缀** |
-| `Signal.computed(() => expr)` | `signal.Computed(func() T { return expr })` | **computed/回调首选箭头函数**（SolidJS 风格）；body 是单点 signal getter 时也能推断返回类型 |
+| `Signal.createRoot(...)` / `Signal.onCleanup(...)` | `signal.CreateRoot` / `signal.OnCleanup` | **Signal API 一律大写 `Signal.` 前缀** |
+| `Signal.computed(() => expr)` | `signal.Computed(func() T { return expr })` | **computed/回调首选箭头函数**（SolidJS 风格）；body 是单点 sig getter 时也能推断返回类型 |
 | `pub func Stat(...)` | `func Stat(...)` | **组件名 `pub func` 大写开头** |
 | `util.add(1, 2)`（util 是本地 GX 模块） | `util.Add(1, 2)` | **GX 来源**：严格查被导入方 `pub` 导出表（`add→Add`），不猜测；写 `util.ADD` 报 `import-case` 诊断且产物原样保留 |
 | `model.box{value: 9}`（model 是本地 GX 模块） | `model.Box{Value: 9}` | **GX 字段**：查被导入方 `pub` 字段限定名导出表；写错大小写报 `import-field-case` 诊断 |
@@ -41,16 +41,16 @@ Gox 是一个把 `.gx` 转译成标准 Go 的编译器。`.gx` = Go 语法 + 一
 **边界与例外**（务必遵守，否则会写出无法编译的示例）：
 
 1. **多词符号只小写首字母，其余照抄 Go 拼写**：`bindReactive` → `BindReactive`、`getOwner` → `GetOwner`（不能写 `bindreactive`，那会生成 `Bindreactive`，拼错）。
-2. **只写小写语法糖，禁止手写底层大写 API**：`Signal.computed` / `Signal.effect` / `Signal.createRoot` / `Signal.onCleanup` / `Signal.onMount` / `Signal.batch` / `Signal.getOwner` / `Signal.runWithOwner` 等一律以大写 `Signal` 前缀 + **小写成员名**书写，编译器末尾还原成大写符号。原因有三：`Signal` 是语法糖占位包名（ImportManager 解析为 `import Signal "<module>/runtime/signal"`）、**避免与 `signal` 声明关键字（`signal n = 0`）混淆**、且底层大写构造器（`Signal.New` / `Signal.Computed` / `Signal.Effect` / `Signal.NewWithEquals` 等）是编译器内部 API，源码直接调用会报编译错误。源信号用 `signal n = v`，派生用 `Signal.computed(...)`，副作用用 `Signal.effect(...)`——用户无需感知 signal 与普通变量的区别。不要写裸 `computed(...)`（裸标识符不会被还原）；也不要为了自定义相等策略去写 `Signal.newWithEquals`（不从此层暴露）。作为函数值传递时写小写即可（如 `view.bindReactive(Signal.effect)`）。生成产物统一是 `signal.XXX`（小写包名）。
+2. **只写小写语法糖，禁止手写底层大写 API**：`Signal.computed` / `Signal.effect` / `Signal.createRoot` / `Signal.onCleanup` / `Signal.onMount` / `Signal.batch` / `Signal.getOwner` / `Signal.runWithOwner` 等一律以大写 `Signal` 前缀 + **小写成员名**书写，编译器末尾还原成大写符号。原因有三：`Signal` 是语法糖占位包名（ImportManager 解析为 `import Signal "<module>/runtime/signal"`）、**避免与 `sig` 声明关键字（`sig n = 0`）混淆**、且底层大写构造器（`Signal.New` / `Signal.Computed` / `Signal.Effect` / `Signal.NewWithEquals` 等）是编译器内部 API，源码直接调用会报编译错误。源信号用 `sig n = v`，派生用 `Signal.computed(...)`，副作用用 `Signal.effect(...)`——用户无需感知 sig 与普通变量的区别。不要写裸 `computed(...)`（裸标识符不会被还原）；也不要为了自定义相等策略去写 `Signal.newWithEquals`（不从此层暴露）。作为函数值传递时写小写即可（如 `view.bindReactive(Signal.effect)`）。生成产物统一是 `signal.XXX`（小写包名）。
 3. **导出/私有只由 `pub` 决定，与名字大小写无关**：加 `pub` 即导出（编译器首字母大写并登记到导出表），不加即私有、名字大小写原样保留——例如 `type cardProps` 和 `type CardProps`（无 `pub`）都是私有类型，不需要靠写小写来"表示私有"。跨文件导出表也只收 `pub` 符号。组件同理：`pub func Stat(...)` 导出，调用写 `<Stat/>`；JSX 里首字母大写 = 组件、小写 = 原生 HTML 标签，这是硬编码判定，不能把组件写成小写标签。
 4. **裸标识符不碰**：内置函数等裸标识符一律不改，不要给它们加大小写。
-5. **回调用箭头函数**：`Signal.computed` / `Signal.effect` / `batch` / `onMount` / `onCleanup` / 集合回调（`map`/`filter`）等一律写箭头——单语句 `() => expr` / `x => expr`，多语句 `() => { stmt; stmt }`（花括号 body，生成 `func(){...}`），贴近 SolidJS/JS 习惯，别写 `func() T { return ... }`。编译器从 body 反推参数与返回类型，包括 `computed(() => count)` 单点 signal getter（裸写，从 signal 声明类型反查，不降级 `any`）；带参数的 `createRoot((o *Signal.owner) => { ... })` 保留显式类型标注。只有极少数需要显式多返回值的场合才用 `func` 字面量。
+5. **回调用箭头函数**：`Signal.computed` / `Signal.effect` / `batch` / `onMount` / `onCleanup` / 集合回调（`map`/`filter`）等一律写箭头——单语句 `() => expr` / `x => expr`，多语句 `() => { stmt; stmt }`（花括号 body，生成 `func(){...}`），贴近 SolidJS/JS 习惯，别写 `func() T { return ... }`。编译器从 body 反推参数与返回类型，包括 `computed(() => count)` 单点 sig getter（裸写，从 sig 声明类型反查，不降级 `any`）；带参数的 `createRoot((o *Signal.owner) => { ... })` 保留显式类型标注。只有极少数需要显式多返回值的场合才用 `func` 字面量。
 6. **本地 GX 模块严格大小写，别套 Go 的裸写约定**：对本地 `.gx` 模块（import 命中项目内 `.gx`），符号/字段大小写必须与被导入方 `pub` 导出名一致，不能像外部 Go 包那样"随便写小写等还原"。写小写源名（如 `util.add`）可查表还原；写错大小写（如 `util.ADD`、`model.box{VALUE:9}`）由检查器报 `import-case` / `import-field-case`，产物原样保留不改赌。用 `gox build <entry.gx> -root <项目根>` 或 `gox check <entry.gx> -root <项目根>` 触发项目模式；详见 `examples/crossfile/`。
 
 ### 反面教材（本项目真实犯过的错，禁止重演）
 
 ```gx
-// ❌ 错：signal API 用小写前缀（与 signal 关键字混淆）/ 组件小写 / 配置写全类型名 / open 传 JSX / render 收已建好的树
+// ❌ 错：Signal API 用小写前缀（与 sig 关键字混淆）/ 组件小写 / 配置写全类型名 / open 传 JSX / render 收已建好的树
 signal.createRoot(func(o *signal.owner) { signal.onCleanup(...) })
 view.bindReactive(signal.effect)
 pub func stat(props gxscene.Props) *gxscene.Instance { ... }
@@ -58,7 +58,7 @@ app, _ := gxapp.open(view, gxapp.windowConfig{...})
 app.bindReactive(signal.effect)
 app.render(view)
 
-// ✅ 对：signal API 大写 Signal. 前缀；pub 组件大写；配置用裸对象字面量；
+// ✅ 对：Signal API 大写 Signal. 前缀；pub 组件大写；配置用裸对象字面量；
 //      open 只收配置、render 收建树函数（圆括号箭头）且自带响应式与生命周期
 Signal.createRoot((o *Signal.owner) => { Signal.onCleanup(() => { ... }) })
 view.bindReactive(Signal.effect)
@@ -84,7 +84,7 @@ app.render(() => <div><Stat/></div>)
 | 对象解构 | `{ title, n } := cfg` | 纯标识符列表，逐字段生成赋值 |
 | is 守卫 | `if (v is int) { ... }` | 块内窄化为具体类型 |
 | 联合类型 | `v int \| string \| bool` | 擦除为 any + 入口守卫 |
-| Signal 响应式 | `signal n = 0`、`n = 5`、`Signal.computed(...)`、`Signal.effect(...)` | 读自动补 `()`，写改写为 `n(v)`；**API 一律大写 `Signal.` 前缀** |
+| Signal 响应式 | `sig n = 0`、`n = 5`、`Signal.computed(...)`、`Signal.effect(...)` | 读自动补 `()`，写改写为 `n(v)`；**API 一律大写 `Signal.` 前缀** |
 
 ## 3. Scene / 响应式 UI（scene 后端 + 四阶段增强）
 
@@ -93,7 +93,7 @@ JSX 统一走 scene 后端：编译期 opcode + 常驻场景树 + getter 保鲜 
 四阶段响应式增强的**源码写法**（详见 `docs/reactive-ui-roadmap.md`）：
 
 ```gx
-// 阶段1：Owner / Cleanup / Effect 句柄（signal API 一律大写 Signal. 前缀）
+// 阶段1：Owner / Cleanup / Effect 句柄（Signal API 一律大写 Signal. 前缀）
 Signal.createRoot((o *Signal.owner) => {
     h := Signal.effect(() => {
         fmt.println(count)
@@ -102,7 +102,7 @@ Signal.createRoot((o *Signal.owner) => {
     _ = h // h.dispose() 幂等
 })
 
-// 阶段2：条件分支（selector 读 signal，切换时销毁重建局部子树 Owner）
+// 阶段2：条件分支（selector 读 sig，切换时销毁重建局部子树 Owner）
 view := <div>
     if visible {
         <span>{count}</span>
@@ -129,11 +129,11 @@ Signal.batch(() => { count(5); visible(false) })
 
 ### 有状态组件（SolidJS 风格，推荐）
 
-组件函数**只在建树时执行一次**，状态写在组件内部（不在 main 里），靠 signal + effect 保鲜；副作用用 `onMount` 启动、`onCleanup` 清理，二者归属 App 根 Owner，`app.close()` 时级联执行。完整可运行示例见 `examples/jsxapp-solid.gx`：
+组件函数**只在建树时执行一次**，状态写在组件内部（不在 main 里），靠 sig + effect 保鲜；副作用用 `onMount` 启动、`onCleanup` 清理，二者归属 App 根 Owner，`app.close()` 时级联执行。完整可运行示例见 `examples/jsxapp-solid.gx`：
 
 ```gx
 pub func Counter(props gxscene.Props) *gxscene.Instance {
-    signal count = 0
+    sig count = 0
     let doubled = Signal.computed(() => count * 2)
     Signal.effect(() => { fmt.println("tick", count, doubled) })
     stop := make(chan struct{})
@@ -150,9 +150,9 @@ func main() {
 }
 ```
 
-约束：组件名大写开头（`pub func Counter` + `<Counter/>`）；**signal 读一律裸写**（`count * 2`、`if count >= 3`、`{count}`），编译器自动补 `()` 并建立依赖，不要手写 `count()`；`onCleanup/onMount` 必须写在组件函数体内（建树时注册到 Owner），不要在 effect 回调外提前调用。
+约束：组件名大写开头（`pub func Counter` + `<Counter/>`）；**sig 读一律裸写**（`count * 2`、`if count >= 3`、`{count}`），编译器自动补 `()` 并建立依赖，不要手写 `count()`；`onCleanup/onMount` 必须写在组件函数体内（建树时注册到 Owner），不要在 effect 回调外提前调用。
 
-约束：分支 selector 必须读 signal 才有响应式；`<For>` 必须提供 `key`；组件内 signal 要经 Props getter 传到叶子插槽才能在写入时更新；app 场景的响应式接线（叶子聚合 effect + 分支/列表结构重绘）全部封装在 `app.render` 内部，源码无需手写 bindReactive；外部包函数的配置参数（如 `gxapp.open({ ... })`）可直接写裸对象字面量——编译器从该包真实 Go 源码 AST 读取期望参数类型并补全（通用机制，见 `pkg/compiler/gosig.go`）。
+约束：分支 selector 必须读 sig 才有响应式；`<For>` 必须提供 `key`；组件内 sig 要经 Props getter 传到叶子插槽才能在写入时更新；app 场景的响应式接线（叶子聚合 effect + 分支/列表结构重绘）全部封装在 `app.render` 内部，源码无需手写 bindReactive；外部包函数的配置参数（如 `gxapp.open({ ... })`）可直接写裸对象字面量——编译器从该包真实 Go 源码 AST 读取期望参数类型并补全（通用机制，见 `pkg/compiler/gosig.go`）。
 
 ## 4. 环境与命令
 
