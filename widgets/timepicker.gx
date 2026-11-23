@@ -1,0 +1,333 @@
+// gx:nocollections
+// 本文件为原生 Go 组件源码，经 gox build 转译为 timepicker.go。
+// gx:nocollections 声明跳过集合/裸对象字面量 desugar，保留手写 opcode 的原生 Go 语义。
+package widgets
+
+// TimePicker 时间选择器：把"时/分/(秒)"三段选择封装成一个组件，业务只需提供
+// value 与 onChange（BindValue）。每段是一个触发器，点击后用 Popover 浮层列出
+// 该段的全部取值，选中即回传完整时间字符串并关闭浮层。
+//
+// 结构与 Select 同构（Popover + For + OpBranch），因此复用同一套浮层定位与响应式
+// 接线，跨后端天然一致；不引入任何原生绘制依赖。
+//
+// Props:
+//   - value        func() string  当前时间（"HH:MM" 或 "HH:MM:SS"）
+//   - onChange     Handler        变更回传，用 BindValue 包装
+//   - with-seconds bool           是否显示秒段（默认 false）
+//   - hour12       bool           12 小时制（默认 24 小时制）
+//   - width        string         单段触发器宽度（默认 "56"）
+//   - tone         强调色
+//   - placeholder  string         空值占位（默认 "--"）
+//
+// 回传的数据键与 BindValue 一致：ctx.Synthetic.Data["value"] = 新时间字符串。
+import (
+	"fmt"
+	"strconv"
+	"strings"
+	"sync/atomic"
+
+	gxscene "github.com/robertpanvip/gox/runtime/scene"
+	"github.com/robertpanvip/gox/runtime/signal"
+)
+
+var timePickerSeq atomic.Uint64
+
+type timeSegment int
+
+const (
+	segHour timeSegment = iota
+	segMinute
+	segSecond
+)
+
+// TimePicker 构造一个时间选择器实例。
+func TimePicker(props gxscene.Props) *gxscene.Instance {
+	uid := "timepicker-" + strconv.FormatUint(timePickerSeq.Add(1), 10)
+
+	value := stringGet(props, "value")
+	onChange := gxscene.Get[gxscene.Handler](props, "onChange")
+	withSeconds := boolGet(props, "with-seconds", false)
+	hour12 := boolGet(props, "hour12", false)
+	width := gxscene.Get[string](props, "width")
+	tone := gxscene.Get[string](props, "tone")
+	placeholder := gxscene.Get[string](props, "placeholder")
+
+	w := width()
+	if w == "" {
+		w = "56"
+	}
+	ph := placeholder()
+	if ph == "" {
+		ph = "--"
+	}
+
+	// 当前打开的段（段号+1；0 表示全关）——用 signal 驱动 Branch 切换菜单内容。
+	openSeg := signal.New(0)
+
+	// 解析当前值成时/分/秒（无效片段返回 -1，显示 placeholder）。
+	parse := func() [3]int {
+		var out [3]int
+		out[0], out[1], out[2] = -1, -1, -1
+		parts := strings.Split(strings.TrimSpace(value()), ":")
+		for i, p := range parts {
+			if i > 2 {
+				break
+			}
+			if n, err := strconv.Atoi(p); err == nil {
+				out[i] = n
+			}
+		}
+		return out
+	}
+
+	// 回传新时间：保留原值的有效片段，仅覆盖被改的段。
+	emit := func(ctx gxscene.EventContext, seg timeSegment, n int) {
+		cur := parse()
+		cur[int(seg)] = n
+		hh, mm, ss := cur[0], cur[1], cur[2]
+		if hh < 0 {
+			hh = 0
+		}
+		if mm < 0 {
+			mm = 0
+		}
+		if ss < 0 {
+			ss = 0
+		}
+		var s string
+		if withSeconds() {
+			s = fmt.Sprintf("%02d:%02d:%02d", hh, mm, ss)
+		} else {
+			s = fmt.Sprintf("%02d:%02d", hh, mm)
+		}
+		openSeg(0) // 选中后关闭浮层
+		emitValue(onChange(), ctx, s)
+	}
+
+	// 段格式：12 小时制对小时取模并补 1..12。
+	hourDisplay := func(h int) string {
+		if h < 0 {
+			return ph
+		}
+		if !hour12() {
+			return fmt.Sprintf("%02d", h)
+		}
+		v := h % 12
+		if v == 0 {
+			v = 12
+		}
+		return fmt.Sprintf("%02d", v)
+	}
+	segText := func(seg timeSegment) string {
+		v := parse()[int(seg)]
+		switch seg {
+		case segHour:
+			return hourDisplay(v)
+		case segMinute:
+			if v < 0 {
+				return ph
+			}
+			return fmt.Sprintf("%02d", v)
+		default:
+			if v < 0 {
+				return ph
+			}
+			return fmt.Sprintf("%02d", v)
+		}
+	}
+
+	// 三段触发器。每段点击切换 openSeg；每段占一个独立 OpComp 插槽（一个 slot
+	// 只能挂一个组件实例，共用会互相覆盖）。
+	segments := []timeSegment{segHour, segMinute}
+	if withSeconds() {
+		segments = append(segments, segSecond)
+	}
+	segNodes := make([]func() any, 0, len(segments))
+	accent := toneColor(tone())
+	for _, seg := range segments {
+		s := seg
+		segNodes = append(segNodes, func() any {
+			return timeSegmentTrigger(s, func() string { return segText(s) }, w, accent, openSeg, uid)
+		})
+	}
+
+	// 容器：Row + 动态选项菜单（浮层）。菜单用 Branch 按 openSeg 切换内容。
+	// 插槽布局：每段一个 OpComp（slot 0..len-1），菜单 Branch 占最后一个。
+	menuSlot := len(segments)
+	nSlots := menuSlot + 1
+	ops := []gxscene.Op{
+		el("div"),
+		attr("gx-role", "timepicker"),
+		attr("gx-timepicker-id", uid),
+		attr("flex-direction", "row"), attr("align-items", "center"), attr("gap", "6"),
+	}
+	for i := range segments {
+		ops = append(ops,
+			gxscene.Op{Code: gxscene.OpElem, Arg: "div"},
+			gxscene.Op{Code: gxscene.OpComp, Arg: "TimeSegment", Slot: i},
+			gxscene.Op{Code: gxscene.OpClose},
+		)
+		// 段间冒号分隔符（静态节点，不占 getter 插槽）。
+		if i < len(segments)-1 {
+			ops = append(ops,
+				el("span"), attr("color", AppleLabel2),
+				attr("font-size", "18"), attr("weight", "bold"),
+				gxscene.Op{Code: gxscene.OpChildText, Arg: ":"}, closeEl(),
+			)
+		}
+	}
+	ops = append(ops, gxscene.Op{Code: gxscene.OpBranch, Slot: menuSlot})
+	ops = append(ops, closeEl())
+
+	// 菜单 Branch 必须是稳定对象（getter 每次返回同一指针），否则 signal 变化时
+	// SetPart 会把新 Branch 当新值处理，无法驱动 selector 刷新。
+	menu := timePickerMenu(openSeg, onChange, emit, hour12(), withSeconds(), tone(), w)
+	getters := make([]func() any, 0, nSlots)
+	getters = append(getters, segNodes...)
+	getters = append(getters, func() any { return menu })
+
+	// 与 Select/Popover 一致：不在此处接线，由 App.Render 或测试显式 BindReactive，
+	// 避免 app 场景重复订阅。
+	return gxscene.Render(gxscene.Template{Ops: ops, N: nSlots}, getters...)
+}
+
+// timeSegmentTrigger 一个段触发器：点击时把 openSeg 设为该段(+1)或关闭(0)。
+// 视觉：柔和填充块 + 大圆角，当前打开的段用强调色描边与淡色底，数字字号放大。
+func timeSegmentTrigger(seg timeSegment, text func() string, width, tone string, openSeg signal.Signal[int], uid string) *gxscene.Instance {
+	const (
+		clickSlot = iota
+		textSlot
+		bgSlot
+		borderSlot
+		nSlots
+	)
+	ops := []gxscene.Op{
+		el("div"), attr("gx-role", "time-segment"),
+		attr("gx-time-segment", fmt.Sprintf("%d", seg)),
+		attr("width", width),
+		attr("border-width", "1"), attr("border-radius", RadiusControl),
+		attr("padding", "10"),
+		attr("align-items", "center"), attr("justify-content", "center"),
+		gxscene.Op{Code: gxscene.OpDynAttr, Key: "bg", Slot: bgSlot},
+		gxscene.Op{Code: gxscene.OpDynAttr, Key: "border", Slot: borderSlot},
+		gxscene.Op{Code: gxscene.OpEvent, Key: "onClick", Slot: clickSlot},
+		el("span"), attr("font-size", "18"), attr("weight", "bold"),
+		gxscene.Op{Code: gxscene.OpDynChild, Slot: textSlot}, closeEl(),
+		closeEl(),
+	}
+	isOpen := func() bool { return openSeg() == int(seg)+1 }
+	return gxscene.Render(gxscene.Template{Ops: ops, N: nSlots},
+		func() any {
+			return gxscene.Handler(func(gxscene.EventContext) {
+				want := int(seg) + 1
+				if openSeg() == want {
+					openSeg(0)
+				} else {
+					openSeg(want)
+				}
+			})
+		},
+		func() any { return text() }, // 动态文本：value 变化时刷新
+		func() any { // 打开段用强调色淡底，其余用控件填充
+			if isOpen() {
+				return tone
+			}
+			return AppleFill
+		},
+		func() any { // 打开段描边强调色，其余细描边
+			if isOpen() {
+				return tone
+			}
+			return AppleSeparator
+		},
+	)
+}
+
+// timePickerMenu 根据 openSeg 生成选项浮层。selector = openSeg（0 关闭）。
+func timePickerMenu(openSeg signal.Signal[int], onChange func() gxscene.Handler, emit func(gxscene.EventContext, timeSegment, int), hour12, withSeconds bool, tone, width string) *gxscene.Branch {
+	return gxscene.NewBranch(
+		func() int { return openSeg() },
+		// [0] 关闭
+		func() *gxscene.Instance { return nil },
+		// [1] 时
+		func() *gxscene.Instance { return timeOptionsMenu(segHour, emit, hour12, withSeconds, tone, width) },
+		// [2] 分
+		func() *gxscene.Instance { return timeOptionsMenu(segMinute, emit, hour12, withSeconds, tone, width) },
+		// [3] 秒
+		func() *gxscene.Instance { return timeOptionsMenu(segSecond, emit, hour12, withSeconds, tone, width) },
+	)
+}
+
+// timeOptionsMenu 某个段的数字选项网格：用 For 列出该段全部取值，点击 → emit。
+func timeOptionsMenu(seg timeSegment, emit func(gxscene.EventContext, timeSegment, int), hour12, withSeconds bool, tone, width string) *gxscene.Instance {
+	values := segmentValues(seg, hour12)
+	items := make([]any, len(values))
+	for i, n := range values {
+		items[i] = n
+	}
+	forCtl := gxscene.NewFor(
+		func() []any { return items },
+		func(v any) any { return v },
+		func(v any) *gxscene.Instance {
+			return timeOptionItem(seg, v.(int), emit, tone)
+		},
+	)
+	ops := []gxscene.Op{
+		el("div"), attr("gx-role", "timepicker-menu"),
+		attr("gx-placement", "bottom-start"),
+		attr("bg", AppleMaterialReg), attr("border-radius", RadiusCard),
+		attr("border", AppleHairline), attr("border-width", "1"),
+		attr("box-shadow", ShadowFloat), attr("padding", "4"),
+		attr("flex-wrap", "wrap"), attr("width", menuWidth(width)),
+		gxscene.Op{Code: gxscene.OpFor, Slot: 0},
+		closeEl(),
+	}
+	return gxscene.Render(gxscene.Template{Ops: ops, N: 1},
+		func() any { return forCtl },
+	)
+}
+
+func menuWidth(segW string) string {
+	f, err := strconv.Atoi(segW)
+	if err != nil || f <= 0 {
+		return "180"
+	}
+	return strconv.Itoa(f*3 + 12)
+}
+
+func timeOptionItem(seg timeSegment, n int, emit func(gxscene.EventContext, timeSegment, int), tone string) *gxscene.Instance {
+	const clickSlot = 0
+	ops := []gxscene.Op{
+		el("div"), attr("gx-role", "time-option"),
+		attr("width", "40"), attr("padding", "6"),
+		attr("align-items", "center"), attr("justify-content", "center"),
+		attr("border-radius", RadiusSmall), attr("color", ThemeText),
+		attr("font-size", "13"),
+		gxscene.Op{Code: gxscene.OpEvent, Key: "onClick", Slot: clickSlot},
+		gxscene.Op{Code: gxscene.OpChildText, Arg: fmt.Sprintf("%02d", n)}, closeEl(),
+	}
+	return gxscene.Render(gxscene.Template{Ops: ops, N: 1},
+		func() any {
+			s := seg
+			v := n
+			return gxscene.Handler(func(ctx gxscene.EventContext) { emit(ctx, s, v) })
+		},
+	)
+}
+
+// segmentValues 返回某段可选值。小时段 12 小时制为 1..12，否则 0..23；分/秒 0..59。
+func segmentValues(seg timeSegment, hour12 bool) []int {
+	var out []int
+	lo, hi := 0, 59
+	if seg == segHour {
+		if hour12 {
+			lo, hi = 1, 12
+		} else {
+			lo, hi = 0, 23
+		}
+	}
+	for i := lo; i <= hi; i++ {
+		out = append(out, i)
+	}
+	return out
+}

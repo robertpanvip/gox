@@ -1,3 +1,6 @@
+// gx:nocollections
+// 本文件为原生 Go 组件源码，经 gox build 转译为 media.go。
+// gx:nocollections 声明跳过集合/裸对象字面量 desugar，保留手写 opcode 的原生 Go 语义。
 // Img / Canvas 是 GX 通用组件层的图片与画布组件。
 //
 // 与其他 widgets 一样，它们只产出一个后端无关的 gxscene 场景树节点，真正的

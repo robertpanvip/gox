@@ -1,0 +1,182 @@
+// gx:nocollections
+// 本文件为原生 Go 组件源码，经 gox build 转译为 options.go。
+// gx:nocollections 声明跳过集合/裸对象字面量 desugar，保留手写 opcode 的原生 Go 语义。
+package widgets
+
+import (
+	"strconv"
+	"strings"
+
+	gxscene "github.com/robertpanvip/gox/runtime/scene"
+)
+
+// Option 是 Select / RadioGroup / Segmented / Tabs 等"选项型"组件的统一条目。
+// Value 是选中后回传的业务值，Label 是显示文本（为空时回退显示 Value）。
+type Option struct {
+	Label    string
+	Value    string
+	Disabled bool
+}
+
+// optionsFrom 读取一个"选项列表"属性，兼容多种书写形态：
+//
+//	[]Option                     静态选项
+//	func() []Option              动态选项
+//	func() any → []Option/[]any  响应式选项（signal 驱动）
+//	[]string / []any / []map     便捷形态（字符串自动 label==value）
+//
+// 返回的是一个实时 getter：每次调用都重新求值，因此接 signal 后选项变化能重绘。
+func optionsFrom(props gxscene.Props, key string) func() []Option {
+	raw, ok := props[key]
+	if !ok {
+		return func() []Option { return nil }
+	}
+	return func() []Option { return normalizeOptions(evalProp(raw)) }
+}
+
+// evalProp 把 func() any 求值一次；其余值原样返回。
+func evalProp(raw any) any {
+	switch v := raw.(type) {
+	case func() any:
+		return v()
+	default:
+		return raw
+	}
+}
+
+func normalizeOptions(v any) []Option {
+	switch x := v.(type) {
+	case []Option:
+		return x
+	case []string:
+		out := make([]Option, len(x))
+		for i, s := range x {
+			out[i] = Option{Label: s, Value: s}
+		}
+		return out
+	case []any:
+		out := make([]Option, 0, len(x))
+		for _, item := range x {
+			if o, ok := asOption(item); ok {
+				out = append(out, o)
+			}
+		}
+		return out
+	case []map[string]any:
+		out := make([]Option, 0, len(x))
+		for _, m := range x {
+			if o, ok := asOption(m); ok {
+				out = append(out, o)
+			}
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+func asOption(v any) (Option, bool) {
+	switch x := v.(type) {
+	case Option:
+		return x, true
+	case string:
+		return Option{Label: x, Value: x}, true
+	case map[string]any:
+		label, _ := x["label"].(string)
+		value, _ := x["value"].(string)
+		if label == "" {
+			label, _ = x["Label"].(string)
+		}
+		if value == "" {
+			value, _ = x["Value"].(string)
+		}
+		disabled, _ := x["disabled"].(bool)
+		if value == "" {
+			value = label
+		}
+		if label == "" {
+			label = value
+		}
+		return Option{Label: label, Value: value, Disabled: disabled}, label != "" || value != ""
+	default:
+		return Option{}, false
+	}
+}
+
+// boolGet 读取一个布尔 getter，兼容 bool / func() bool / func() any(signal)。
+// Modal/Portal 的 open/closable/maskClosable 用它抹平业务侧书写差异。
+func boolGet(props gxscene.Props, key string, def bool) func() bool {
+	raw, ok := props[key]
+	if !ok {
+		return func() bool { return def }
+	}
+	return func() bool {
+		switch v := raw.(type) {
+		case bool:
+			return v
+		case func() bool:
+			return v()
+		case func() any:
+			if b, ok := v().(bool); ok {
+				return b
+			}
+		}
+		return def
+	}
+}
+
+// numberGet 读取一个数值 getter，兼容 int / float64 / string("12px") 及 func() any。
+// 滑块、进度类组件用它抹平业务侧的数值书写差异。
+func numberGet(props gxscene.Props, key string, def float64) func() float64 {
+	if raw, ok := props[key]; ok {
+		return func() float64 {
+			if f, ok := toFloat(evalProp(raw)); ok {
+				return f
+			}
+			return def
+		}
+	}
+	return func() float64 { return def }
+}
+
+func toFloat(v any) (float64, bool) {
+	switch x := v.(type) {
+	case float64:
+		return x, true
+	case float32:
+		return float64(x), true
+	case int:
+		return float64(x), true
+	case int64:
+		return float64(x), true
+	case string:
+		f, err := parseFloat(x)
+		return f, err == nil
+	default:
+		return 0, false
+	}
+}
+
+// fmtNum 用紧凑格式输出数值（整数不带小数点），用于写进样式属性。
+func fmtNum(f float64) string {
+	return strconv.FormatFloat(f, 'f', -1, 64)
+}
+
+// clamp 把 v 限制在 [lo, hi]。
+func clamp(v, lo, hi float64) float64 {
+	if v < lo {
+		return lo
+	}
+	if v > hi {
+		return hi
+	}
+	return v
+}
+
+// optionLabel 返回选项显示文本，Label 为空时回退 Value。
+func optionLabel(o Option) string {
+	if strings.TrimSpace(o.Label) != "" {
+		return o.Label
+	}
+	return o.Value
+}

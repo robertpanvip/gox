@@ -87,6 +87,11 @@ func CompileSceneWithModule(file, src, module string) (*Result, error) {
 // compileWithMode 是全部公开入口的共享管线：JSX 统一走 gxscene opcode 后端，
 // imports 提供跨文件 import 来源表（nil 表示单文件、一律按 Go 来源处理）。
 func compileWithMode(file, src, module string, imports map[string]ImportInfo) (*Result, error) {
+	// 文件级原生 Go 开关：组件库等纯 Go + 手写 opcode 源码可声明 gx:nocollections，
+	// 跳过会误伤原生 Go 的两类 desugar——全局切片提升（[]T → list.List[T]）与
+	// 裸对象字面量补全（[]T{{...}} 里的省略类型元素被误判成 GX 对象字面量）。
+	// 其余 GX 变换（JSX / pub / 小写还原等）照常。默认关闭，行为零变化。
+	noCollections := hasNoCollectionsPragma(src)
 	toks := New(src).AllTokens()
 	// 第十轮 P3：GX/Go 都不支持三元 `?:` 与 `?` 运算符。若放行会生成含 '?' 的
 	// 非法 Go（invalid character U+003F），且错误定位困难——在管线入口显式报错。
@@ -135,9 +140,14 @@ func compileWithMode(file, src, module string, imports map[string]ImportInfo) (*
 	toks = expandDefaults(toks, defaultDefs)
 	toks = transformLambdas(toks, analysis, bindings, sigTypes)
 	// 对象字面量：期望类型校验失败时返回带 GX 坐标的错误。
-	toks, err := transformObjectLits(toks, analysis, bindings)
-	if err != nil {
-		return nil, err
+	// 原生 Go 模式跳过：手写 opcode 里的 []Op{{Code:...},...} 省略类型元素会被
+	// 误判成 GX 裸对象字面量，补成 struct{...}{...} 后无法赋回 []Op。
+	var err error
+	if !noCollections {
+		toks, err = transformObjectLits(toks, analysis, bindings)
+		if err != nil {
+			return nil, err
+		}
 	}
 	// 显式类型名的指针 props：Card(CardProps{...}) 传 *CardProps 时补 '&'（P2-3）。
 	// 省略类型名的 Card({...}) 已由 transformObjectLits 的 ptrPrefix 覆盖。
@@ -175,11 +185,14 @@ func compileWithMode(file, src, module string, imports map[string]ImportInfo) (*
 	toks = transformJSXScene(toks, ctx)
 	// 第二次对象字面量变换：补全 JSX 转换新产生的 Card({...}) 期望类型并校验。
 	// 第一次已在 desugar 早期处理非 JSX 字面量；这里处理 JSX 阶段新增的。
-	toks, err = transformObjectLits(toks, analysis, bindings)
-	if err != nil {
-		return nil, err
+	// 原生 Go 模式同样跳过。
+	if !noCollections {
+		toks, err = transformObjectLits(toks, analysis, bindings)
+		if err != nil {
+			return nil, err
+		}
+		toks = transformCollections(toks, module)
 	}
-	toks = transformCollections(toks, module)
 	// 统一 import 别名：源码若已用别名导入 list/vdom/strconv，生成代码的占位包名
 	// 需替换为实际别名；否则各 transform 注入的 import 会与生成引用对不上。
 	toks = ReconcileImports(toks, module)
@@ -244,6 +257,7 @@ func emit(toks []Token, file string) (string, *sourcemap.SourceMap) {
 // CompileStage 只执行单个转换阶段，用于 CLI 的 jsx/pub 等子命令与调试。
 // stage 取值：lex / union / typeguard / enum / jsx / pub / external / all。
 func CompileStage(src, stage string) (string, error) {
+	noCollections := hasNoCollectionsPragma(src)
 	toks := New(src).AllTokens()
 	names := map[string]string{}
 	switch stage {
@@ -264,7 +278,9 @@ func CompileStage(src, stage string) (string, error) {
 	case "pub":
 		toks = transformPub(toks, names)
 	case "collections":
-		toks = transformCollections(toks, defaultModule)
+		if !noCollections {
+			toks = transformCollections(toks, defaultModule)
+		}
 	case "external":
 		scope := collectScope(toks)
 		toks = transformExternal(toks, scope, names, nil)
@@ -279,9 +295,12 @@ func CompileStage(src, stage string) (string, error) {
 		analysis := Analyze(toks)
 		toks = expandDefaults(toks, defaultDefs)
 		toks = transformLambdas(toks, analysis, bindings, sigTypes)
-		toks, err := transformObjectLits(toks, analysis, bindings)
-		if err != nil {
-			return "", err
+		var err error
+		if !noCollections {
+			toks, err = transformObjectLits(toks, analysis, bindings)
+			if err != nil {
+				return "", err
+			}
 		}
 		toks, err = expandDestructures(toks, bindings)
 		if err != nil {
@@ -296,11 +315,13 @@ func CompileStage(src, stage string) (string, error) {
 		comps := collectCompContracts(toks, structs)
 		ctx := &jsxSceneCtx{sigs: sigs, comps: comps, sigTypes: sigTypes, bindings: bindings}
 		toks = transformJSXScene(toks, ctx)
-		toks, err = transformObjectLits(toks, analysis, bindings)
-		if err != nil {
-			return "", err
+		if !noCollections {
+			toks, err = transformObjectLits(toks, analysis, bindings)
+			if err != nil {
+				return "", err
+			}
+			toks = transformCollections(toks, defaultModule)
 		}
-		toks = transformCollections(toks, defaultModule)
 		toks = ReconcileImports(toks, defaultModule)
 		scope := collectScope(toks)
 		toks = restoreRefs(toks, names, bindings)

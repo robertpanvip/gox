@@ -1,3 +1,6 @@
+// gx:nocollections
+// 本文件为原生 Go 组件源码，经 gox build 转译为 filepicker.go。
+// gx:nocollections 声明跳过集合/裸对象字面量 desugar，保留手写 opcode 的原生 Go 语义。
 package widgets
 
 // FilePicker 是唯一无法用纯场景树表达的组件：打开文件对话框是 OS 原生能力。

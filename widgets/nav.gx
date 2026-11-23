@@ -1,0 +1,239 @@
+// gx:nocollections
+// 本文件为原生 Go 组件源码，经 gox build 转译为 nav.go。
+// gx:nocollections 声明跳过集合/裸对象字面量 desugar，保留手写 opcode 的原生 Go 语义。
+package widgets
+
+import (
+	gxscene "github.com/robertpanvip/gox/runtime/scene"
+)
+
+// 导航类组件：Tabs / Segmented。
+// 两者都基于 Option 列表 + 当前 value + onChange(BindValue) 的受控模式。
+
+// Tabs 标签页。props:
+//
+//	value     func() string        当前激活 tab 的 value
+//	tabs      []Option 等          标签项（label + value）
+//	onChange  Handler              切换回传，用 BindValue 包装
+//	panels    []func() any         每个 tab 对应的内容 getter（与 tabs 同序；可选）
+//	tone      强调色
+//	width     宽度
+//	tab-width 单个标签宽（默认按内容 padding）
+//
+// panels 存在时用 OpBranch 按激活索引切换内容子树；未提供时 Tabs 只渲染标签栏，
+// 业务自行在别处根据 value 决定内容。
+func Tabs(props gxscene.Props) *gxscene.Instance {
+	value := gxscene.Get[string](props, "value")
+	tabs := optionsFrom(props, "tabs")
+	onChange := gxscene.Get[gxscene.Handler](props, "onChange")
+	tone := gxscene.Get[string](props, "tone")
+	width := gxscene.Get[string](props, "width")
+	tabWidth := gxscene.Get[string](props, "tab-width")
+
+	// panels: []func() any 或 func() []func() any
+	panels := panelsFrom(props, "panels")
+
+	activeIndex := func() int {
+		v := value()
+		for i, o := range tabs() {
+			if o.Value == v {
+				return i
+			}
+		}
+		return 0
+	}
+
+	const (
+		tabForSlot = iota // 0
+		panelBranchSlot   // 1
+		nSlots            // 2
+	)
+	ops := []gxscene.Op{
+		el("div"), attr("gx-role", "tabs"),
+		attr("flex-direction", "column"), attr("gap", "0"),
+	}
+	if w := width(); w != "" {
+		ops = append(ops, attr("width", w))
+	}
+	// 标签栏
+	ops = append(ops,
+		el("div"), attr("flex-direction", "row"), attr("gap", "2"),
+		attr("border", ThemeBorder), attr("border-width", "1"),
+		attr("border-radius", "8"), attr("padding", "3"), attr("bg", ThemePanel),
+		gxscene.Op{Code: gxscene.OpFor, Slot: tabForSlot},
+		closeEl(),
+	)
+	// 内容面板（仅在有 panels 时挂 Branch）
+	if len(panels) > 0 {
+		ops = append(ops, gxscene.Op{Code: gxscene.OpBranch, Slot: panelBranchSlot})
+	}
+	ops = append(ops, closeEl())
+
+	tabFor := gxscene.NewFor(
+		func() []any {
+			ts := tabs()
+			out := make([]any, len(ts))
+			for i, o := range ts {
+				out[i] = tabItemInput{index: i, option: o}
+			}
+			return out
+		},
+		func(v any) any { return v.(tabItemInput).option.Value },
+		func(v any) *gxscene.Instance {
+			in := v.(tabItemInput)
+			return tabItem(in.index, in.option, value, tone(), onChange(), tabWidth())
+		},
+	)
+
+	getters := []func() any{func() any { return tabFor }}
+	if len(panels) > 0 {
+		builders := make([]func() *gxscene.Instance, len(panels))
+		for i, p := range panels {
+			panelGetter := p
+			builders[i] = func() *gxscene.Instance {
+				v := panelGetter()
+				if inst, ok := v.(*gxscene.Instance); ok {
+					return inst
+				}
+				return nil
+			}
+		}
+		branch := gxscene.NewBranch(
+			func() int { return clampInt(activeIndex(), 0, len(builders)-1) },
+			builders...,
+		)
+		getters = append(getters, func() any { return branch })
+	}
+	return gxscene.Render(gxscene.Template{Ops: ops, N: nSlots}, getters...)
+}
+
+type tabItemInput struct {
+	index  int
+	option Option
+}
+
+func tabItem(index int, o Option, value func() string, tone string, onChange gxscene.Handler, tabWidth string) *gxscene.Instance {
+	active := func() bool { return value() == o.Value }
+	const (
+		clickSlot = iota
+		bgSlot
+		colorSlot
+		nSlots
+	)
+	ops := []gxscene.Op{
+		el("div"), attr("gx-role", "tab"),
+		attr("padding", "8"), attr("border-radius", "6"),
+		attr("align-items", "center"), attr("justify-content", "center"),
+		attr("transition", "bg 160ms ease, color 160ms ease"),
+		event("onClick", clickSlot),
+		dynAttr("bg", bgSlot), dynAttr("color", colorSlot),
+		gxscene.Op{Code: gxscene.OpChildText, Arg: optionLabel(o)}, closeEl(),
+	}
+	if tabWidth != "" {
+		// 在根节点插入 width 属性（紧跟 gx-role 之后）。
+		ops = append(ops[:2], append([]gxscene.Op{attr("width", tabWidth)}, ops[2:]...)...)
+	}
+	disabled := o.Disabled
+	return gxscene.Render(gxscene.Template{Ops: ops, N: nSlots},
+		func() any {
+			return gxscene.Handler(func(ctx gxscene.EventContext) {
+				if disabled {
+					return
+				}
+				emitValue(onChange, ctx, o.Value)
+			})
+		},
+		func() any {
+			if active() {
+				return toneColor(tone)
+			}
+			return ThemePanel
+		},
+		func() any {
+			if active() {
+				return "#07130f"
+			}
+			return ThemeMuted
+		},
+	)
+}
+
+// panelsFrom 读取内容面板 getter 列表，兼容 []func() any 与 func() []func() any。
+func panelsFrom(props gxscene.Props, key string) []func() any {
+	raw, ok := props[key]
+	if !ok {
+		return nil
+	}
+	switch v := evalProp(raw).(type) {
+	case []func() any:
+		return v
+	case func() []func() any:
+		return v()
+	default:
+		return nil
+	}
+}
+
+func clampInt(v, lo, hi int) int {
+	if hi < lo {
+		return lo
+	}
+	if v < lo {
+		return lo
+	}
+	if v > hi {
+		return hi
+	}
+	return v
+}
+
+// Segmented 分段控件（偏设置切换的紧凑标签栏，语义与 Tabs 相同但无 panels）。
+// props: value, options(alias: segments), onChange(BindValue), tone, width。
+func Segmented(props gxscene.Props) *gxscene.Instance {
+	// 支持 "options" 与 "segments" 两种键。
+	optsProps := props
+	if _, ok := props["options"]; !ok {
+		if seg, ok := props["segments"]; ok {
+			cp := make(gxscene.Props, len(props)+1)
+			for k, v := range props {
+				cp[k] = v
+			}
+			cp["options"] = seg
+			optsProps = cp
+		}
+	}
+	value := gxscene.Get[string](props, "value")
+	options := optionsFrom(optsProps, "options")
+	onChange := gxscene.Get[gxscene.Handler](props, "onChange")
+	tone := gxscene.Get[string](props, "tone")
+	width := gxscene.Get[string](props, "width")
+
+	forCtl := gxscene.NewFor(
+		func() []any {
+			os := options()
+			out := make([]any, len(os))
+			for i, o := range os {
+				out[i] = tabItemInput{index: i, option: o}
+			}
+			return out
+		},
+		func(v any) any { return v.(tabItemInput).option.Value },
+		func(v any) *gxscene.Instance {
+			in := v.(tabItemInput)
+			return tabItem(in.index, in.option, value, tone(), onChange(), "")
+		},
+	)
+	ops := []gxscene.Op{
+		el("div"), attr("gx-role", "segmented"),
+		attr("flex-direction", "row"), attr("gap", "2"),
+		attr("border", ThemeBorder), attr("border-width", "1"),
+		attr("border-radius", "8"), attr("padding", "3"), attr("bg", ThemePanel),
+	}
+	if w := width(); w != "" {
+		ops = append(ops, attr("width", w))
+	}
+	ops = append(ops, gxscene.Op{Code: gxscene.OpFor, Slot: 0}, closeEl())
+	return gxscene.Render(gxscene.Template{Ops: ops, N: 1},
+		func() any { return forCtl },
+	)
+}

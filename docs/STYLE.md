@@ -194,23 +194,23 @@ Context **可以跨文件共享**，且共享的是同一个响应式实例（�
 
 ## 12. 用 GX 编写组件库（自举）
 
-widgets 标准库正在从"手写 `gxscene.Op` 数组"迁移到"用 GX 语言本身书写"。样板是 `widgets/card.gx`：
+**widgets 标准库已全量迁移为 `.gx` 源 + `.go` 产物共存**：目录下每个组件都有同名 `.gx`（事实来源）与 `.go`（`make gxbuild` 生成并提交）。Go 工具链只认 `.go`，故源与产物共存，**改完 `.gx` 必须重跑 `make gxbuild`** 保持同步；产物可重复生成（幂等，diff 稳定）。
 
-- **源文件** `widgets/card.gx` 用 JSX + `pub` + `gxscene.Get` 表达组件，是可读的事实来源。
-- **产物** `widgets/card.go` 由 `make gxbuild`（遍历 `widgets/*.gx` 转译为同目录同名 `.go`）生成并提交——Go 工具链只认 `.go`，故源与产物共存，**改完 `.gx` 必须重跑 `make gxbuild`** 保持同步。
-- 转译产物与手写实现行为等价：JSX 的属性/文本/子节点分别编译成 `OpAttr`/`OpChildText`/`OpDynChild`+getter，事件 `onXxx={...}` 编译成 `OpEvent`，`if`/`<For>` 编译成 `OpBranch`/`OpFor`。已验证产物可重复生成（diff 稳定）、全量测试零回归。
+GX 语法本是 Go 的超集——`.gx` 里既能写 JSX，也能直接写原生 Go。组件因此分两种写法，同包混编、测试零改动：
 
-**迁移边界（哪些能用纯 JSX 表达，哪些保留 Go）**：
+- **JSX 写法**（如 `card.gx`）：`pub func` + JSX + `gxscene.Get`。属性/文本/子节点编译成 `OpAttr`/`OpChildText`/`OpDynChild`+getter，事件 `onXxx={...}` 编译成 `OpEvent`，`if`/`<For>` 编译成 `OpBranch`/`OpFor`。适合纯展示/布局组件。
+- **原生 Go 写法**（其余大多数组件）：手写 `gxscene.Op` 数组 + 事件/focus/浮层等命令式逻辑，整段放进 `.gx` 原样透传。适合依赖 `Owner/CreateRoot`（Context/Theme Provider）、稳定 `*Branch` 对象（Tooltip/TimePicker/Select 浮层）、焦点状态机（Input）等 JSX 抽象层不覆盖的运行时底层能力。
 
-| 组件类别 | 能否用 GX 源 | 说明 |
-|---|---|---|
-| 纯展示/布局（Card/Text/Badge/Divider/Row/Col/Stat…） | ✅ 直接转 | JSX + `gxscene.Get` 足够 |
-| 列表/条件（Table 表头、选项菜单） | ✅ `<For>`/`if` | 编译成 `OpFor`/`OpBranch` |
-| 依赖**稳定 Branch 对象**（Tooltip/TimePicker/Select 浮层） | ⚠️ 需增强 | menu getter 每次需返回同一 `*Branch` 指针，JSX 的内联 BranchGetter 会重建；暂留 Go |
-| 依赖 **Owner/CreateRoot**（Context/Theme Provider） | ❌ 保留 Go | `ProvideValue`/`LookupValue`/owner 栈是运行时底层 API，JSX 抽象层不暴露 |
-| 焦点状态机（Input 的 InputChar/Backspace） | ⚠️ 部分 | 场景树可用 JSX，焦点/键盘派发逻辑留 Go |
+### `gx:nocollections` 文件级开关
 
-即"能用 JSX 表达的逐步转，涉及运行时底层的保留 Go"——两者同包混编，测试零改动。
+原生 Go 写法的组件在源码首部声明 `// gx:nocollections`，跳过两类会**误伤原生 Go** 的 desugar：
+
+| 被跳过的变换 | 不跳过时的破坏 |
+|---|---|
+| 全局切片提升 `[]T → list.List[T]` | 污染函数签名/类型断言（`func() []any` 变 `func() list.List[any]` 导致类型不兼容），并引入 `runtime/list` 依赖 |
+| 裸对象字面量补全 | `[]gxscene.Op{{Code:...},...}` 里省略类型的元素被误判成 GX 对象字面量，补成 `struct{...}{...}` 后无法赋回 `[]Op` |
+
+其余 GX 变换（JSX / `pub` / 小写符号还原 / import 注入等）照常进行。**该开关默认关闭**，普通 `.gx` 应用代码行为零变化，仍享受切片提升与集合链式方法。回归测试见 `pkg/compiler/nocollections_test.go`。
 
 ## 验证
 

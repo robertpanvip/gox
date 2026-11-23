@@ -1,6 +1,9 @@
 package compiler
 
-import "strconv"
+import (
+	"strconv"
+	"strings"
+)
 
 // collections 转换：把集合链式调用与切片类型提升为 gx 运行时。
 //
@@ -39,6 +42,18 @@ func sceneImportPath(module string) string {
 		module = defaultModule
 	}
 	return module + "/runtime/scene"
+}
+
+// nocollectionsPragma 是文件级开关：源码任意注释行含此标记时，整条集合变换
+// （链式方法还原 + 全局切片提升 + MapFilter 融合 + 链式接收者包装）全部跳过。
+// 用途：组件库等「原生 Go + 手写 opcode」源码用 GX 承载时，保留 []T 原生语义，
+// 避免 list.List[T] 污染函数签名/类型断言并引入 runtime/list 依赖。默认无此标记，
+// 行为零变化。标记只是一条注释，会被 emit 原样保留进产物。
+const nocollectionsPragma = "gx:nocollections"
+
+// hasNoCollectionsPragma 检测源码是否声明跳过集合变换。
+func hasNoCollectionsPragma(src string) bool {
+	return strings.Contains(src, nocollectionsPragma)
 }
 
 func transformCollections(in []Token, module string) []Token {

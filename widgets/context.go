@@ -1,3 +1,6 @@
+// gx:nocollections
+// 本文件为原生 Go 组件源码，经 gox build 转译为 context.go。
+// gx:nocollections 声明跳过集合/裸对象字面量 desugar，保留手写 opcode 的原生 Go 语义。
 // Context 是 GX 的响应式上下文，语义对齐 React Context：
 //
 //   - Provider 在自己的响应式作用域（Owner）里挂一个 value signal，只有它的

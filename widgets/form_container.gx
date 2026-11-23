@@ -1,0 +1,313 @@
+// gx:nocollections
+// 本文件为原生 Go 组件源码，经 gox build 转译为 form_container.go。
+// gx:nocollections 声明跳过集合/裸对象字面量 desugar，保留手写 opcode 的原生 Go 语义。
+package widgets
+
+// Form / FormItem 是声明式表单容器层，与 form.go 里的"表单控件"（Checkbox /
+// Switch / RadioGroup / Slider）互补：
+//   - FormItem 负责单个字段的排布：label + 必填标记 + 控件子树 + 错误文本；
+//   - Form 负责整体：字段列表、错误摘要、提交按钮。
+//
+// 两者都保持无状态——校验结果由业务用 errors getter 提供（如 signal 持有的
+// map[string]string），信号所有权始终在业务侧，与响应式系统契合。Scan 场景树
+// 即可验证结构，绘制完全交给后端原生层。
+//
+//	errors := signal.New(map[string]string{})
+//	widgets.Form(gxscene.Props{
+//	    "onSubmit": widgets.BindSubmit(func() { /* 校验 + 提交 */ }),
+//	    "errors":   func() any { return errors() },
+//	    "children": func() any { return fieldItems },
+//	})
+import (
+	"sort"
+	"strconv"
+	"strings"
+	"sync/atomic"
+
+	gxscene "github.com/robertpanvip/gox/runtime/scene"
+)
+
+var formSeq atomic.Uint64
+
+// errorMapGet 读取错误集合 getter。兼容 map[string]string / map[string]any /
+// []string（下标当字段名），并求值 func() any（signal）。
+func errorMapGet(props gxscene.Props, key string) func() map[string]string {
+	raw, ok := props[key]
+	if !ok {
+		return func() map[string]string { return nil }
+	}
+	return func() map[string]string { return normalizeErrors(evalProp(raw)) }
+}
+
+func normalizeErrors(v any) map[string]string {
+	switch x := v.(type) {
+	case map[string]string:
+		return x
+	case map[string]any:
+		out := make(map[string]string, len(x))
+		for k, val := range x {
+			if s, ok := val.(string); ok && s != "" {
+				out[k] = s
+			}
+		}
+		return out
+	case []string:
+		out := make(map[string]string, len(x))
+		for i, s := range x {
+			if s != "" {
+				out[strconv.Itoa(i)] = s
+			}
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+// BindSubmit 把 func() 包装成 Form 的 onSubmit Handler。
+func BindSubmit(fn func()) gxscene.Handler {
+	return gxscene.Handler(func(gxscene.EventContext) { fn() })
+}
+
+// Form 表单容器。props:
+//
+//	children  func() any → 字段子树（FormItem 列表）
+//	onSubmit  Handler    提交按钮点击回传（用 BindSubmit 包装）
+//	errors    getter     错误集合，渲染为底部错误摘要
+//	title     string     可选标题
+//	submit-label string  提交按钮文字（默认 "提交"；为空串则不渲染提交按钮）
+//	width     string     宽度
+//	gap       string     字段间距（默认 "12"）
+func Form(props gxscene.Props) *gxscene.Instance {
+	uid := "form-" + strconv.FormatUint(formSeq.Add(1), 10)
+
+	childrenGet := gxscene.Get[any](props, "children")
+	errorsGet := errorMapGet(props, "errors")
+	title := gxscene.Get[string](props, "title")
+	width := gxscene.Get[string](props, "width")
+	gap := gxscene.Get[string](props, "gap")
+	submitLabel := gxscene.Get[string](props, "submit-label")
+	onSubmit := gxscene.Get[gxscene.Handler](props, "onSubmit")
+
+	g := gap()
+	if g == "" {
+		g = "12"
+	}
+	sl := submitLabel()
+	if sl == "" && submitLabelRaw(props) {
+		sl = "提交" // 未显式传 submit-label 但传了 onSubmit → 默认按钮
+	}
+
+	// 插槽：0=children(OpComp), 1=错误摘要(OpDynChild), 2=onSubmit(OpEvent)
+	const (
+		childrenSlot = iota
+		errorsSlot
+		submitSlot
+		nSlots
+	)
+	// 固定结构标记：保证本模板的 templateKey 与 FormItem 等其他 N 相同的模板
+	// 不碰撞（templateKey 只编码 Ops 结构，不含归属组件名）。
+	ops := []gxscene.Op{
+		el("div"),
+		attr("gx-role", "form"),
+		attr("gx-widget", "form"),
+		attr("gx-form-id", uid),
+		attr("flex-direction", "column"),
+		attr("gap", g),
+		attr("bg", ThemePanel),
+		attr("border-radius", RadiusCard),
+		attr("padding", "16"),
+	}
+	if w := width(); w != "" {
+		ops = append(ops, attr("width", w))
+	}
+	if t := title(); t != "" {
+		ops = append(ops,
+			el("div"), attr("gx-role", "form-title"),
+			attr("font-size", "16"), attr("weight", "bold"), attr("color", ThemeText),
+			gxscene.Op{Code: gxscene.OpChildText, Arg: t}, closeEl(),
+		)
+	}
+	ops = append(ops, gxscene.Op{Code: gxscene.OpElem, Arg: "div"})
+	ops = append(ops, gxscene.Op{Code: gxscene.OpComp, Arg: "FormFields", Slot: childrenSlot})
+	ops = append(ops, closeEl())
+	// 错误摘要：固定容器 + dynChild 返回标量文本（不返回 *Instance，否则被
+	// stableChildComp 判为稳定子树而不建 effect，signal 变化无法刷新）。
+	ops = append(ops,
+		el("div"), attr("gx-role", "form-errors"),
+		attr("flex-direction", "column"), attr("gap", "4"),
+		gxscene.Op{Code: gxscene.OpDynChild, Slot: errorsSlot},
+		closeEl(),
+	)
+	// 无提交按钮时不声明 submitSlot：否则该 slot 落进 compile 的防御分支
+	// （slotChild + 空 path 指向根），getter 返回的 Handler 会被 embedValue 当
+	// 子树嫁接到根节点，把整棵树冲成 #text。
+	n := nSlots
+	if sl == "" {
+		n = submitSlot
+	} else {
+		ops = append(ops,
+			el("button"), attr("gx-role", "form-submit"),
+			attr("variant", "primary"), attr("bg", ThemeAccent),
+			attr("color", "#ffffff"), attr("border-radius", RadiusControl),
+			attr("padding", "10"), attr("width", "100"),
+			gxscene.Op{Code: gxscene.OpEvent, Key: "onClick", Slot: submitSlot},
+			gxscene.Op{Code: gxscene.OpChildText, Arg: sl}, closeEl(),
+		)
+	}
+	ops = append(ops, closeEl())
+
+	getters := []func() any{
+		func() any {
+			if v, ok := childrenGet().(*gxscene.Instance); ok {
+				return v
+			}
+			return nil
+		},
+		func() any { return errorSummaryText(errorsGet()) },
+	}
+	if sl != "" {
+		getters = append(getters, func() any {
+			h := onSubmit()
+			if h == nil {
+				return gxscene.Handler(func(gxscene.EventContext) {})
+			}
+			return h
+		})
+	}
+	return gxscene.Render(gxscene.Template{Ops: ops, N: n}, getters...)
+}
+
+// submitLabelRaw 报告业务是否显式传了 "submit-label" 键（用于决定是否给默认按钮）。
+func submitLabelRaw(props gxscene.Props) bool {
+	_, ok := props["onSubmit"]
+	return ok
+}
+
+// errorSummaryText 把错误集合拼成一段文本（标量，走 dynChild 文本节点，可被
+// effect 响应式刷新）。稳定排序避免 map 迭代造成镜像树抖动。
+func errorSummaryText(errs map[string]string) string {
+	if len(errs) == 0 {
+		return ""
+	}
+	keys := make([]string, 0, len(errs))
+	for k := range errs {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var b strings.Builder
+	for i, k := range keys {
+		if i > 0 {
+			b.WriteString("  ")
+		}
+		b.WriteString(k)
+		b.WriteString(": ")
+		b.WriteString(errs[k])
+	}
+	return b.String()
+}
+
+// FormItem 单个表单字段：label + 必填标记 + 控件 + 错误文本。props:
+//
+//	label    string     字段标题
+//	name     string     字段名（用于错误摘要定位，写进 gx-field）
+//	required bool       是否显示必填星号
+//	error    getter     字段错误文本（string 或 func() any），空则隐藏
+//	children func() any 控件子树（*Instance）
+//	width    string
+//	hint     string     辅助说明（可选）
+func FormItem(props gxscene.Props) *gxscene.Instance {
+	label := gxscene.Get[string](props, "label")
+	name := gxscene.Get[string](props, "name")
+	required := boolGet(props, "required", false)
+	errorGet := stringGet(props, "error")
+	hint := gxscene.Get[string](props, "hint")
+	width := gxscene.Get[string](props, "width")
+	childrenGet := gxscene.Get[any](props, "children")
+
+	const (
+		childrenSlot = iota
+		errorSlot
+		nSlots
+	)
+	ops := []gxscene.Op{
+		el("div"), attr("gx-role", "form-item"),
+		attr("flex-direction", "column"), attr("gap", "4"),
+	}
+	if w := width(); w != "" {
+		ops = append(ops, attr("width", w))
+	}
+	if n := name(); n != "" {
+		ops = append(ops, attr("gx-field", n))
+	}
+	// label 行
+	if l := label(); l != "" {
+		ops = append(ops,
+			el("div"), attr("gx-role", "form-label"),
+			attr("flex-direction", "row"), attr("gap", "4"),
+			attr("font-size", "13"), attr("color", ThemeText),
+			gxscene.Op{Code: gxscene.OpChildText, Arg: l},
+		)
+		if required() {
+			ops = append(ops,
+				el("span"), attr("color", toneColor("danger")),
+				gxscene.Op{Code: gxscene.OpChildText, Arg: "*"}, closeEl(),
+			)
+		}
+		ops = append(ops, closeEl())
+	}
+	// 控件子树
+	ops = append(ops,
+		el("div"),
+		gxscene.Op{Code: gxscene.OpComp, Arg: "FormItemControl", Slot: childrenSlot},
+		closeEl(),
+	)
+	// 错误文本（动态）；hint 作为静态辅助说明
+	if h := hint(); h != "" {
+		ops = append(ops,
+			el("div"), attr("gx-role", "form-hint"),
+			attr("font-size", "12"), attr("color", ThemeMuted),
+			gxscene.Op{Code: gxscene.OpChildText, Arg: h}, closeEl(),
+		)
+	}
+	// 错误文本：固定节点 + dynChild 返回标量（可被 effect 刷新；返回 *Instance
+	// 会被 stableChildComp 判为稳定子树而不建 effect）。无错误时文本为空。
+	ops = append(ops,
+		el("div"), attr("gx-role", "form-field-error"),
+		attr("color", toneColor("danger")), attr("font-size", "12"),
+		gxscene.Op{Code: gxscene.OpDynChild, Slot: errorSlot},
+		closeEl(),
+	)
+	ops = append(ops, closeEl())
+
+	return gxscene.Render(gxscene.Template{Ops: ops, N: nSlots},
+		func() any {
+			if v, ok := childrenGet().(*gxscene.Instance); ok {
+				return v
+			}
+			return nil
+		},
+		func() any { return errorGet() },
+	)
+}
+
+// stringGet 读取字符串 getter，兼容 string / func() string / func() any(signal)。
+func stringGet(props gxscene.Props, key string) func() string {
+	raw, ok := props[key]
+	if !ok {
+		return func() string { return "" }
+	}
+	return func() string {
+		switch v := raw.(type) {
+		case string:
+			return v
+		case func() string:
+			return v()
+		case func() any:
+			if s, ok := v().(string); ok {
+				return s
+			}
+		}
+		return ""
+	}
+}

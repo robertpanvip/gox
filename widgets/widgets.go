@@ -1,3 +1,6 @@
+// gx:nocollections
+// 本文件为原生 Go 组件源码，经 gox build 转译为 widgets.go。
+// gx:nocollections 声明跳过集合/裸对象字面量 desugar，保留手写 opcode 的原生 Go 语义。
 // Package widgets 是 skia 后端预制的 GX 控件库。
 //
 // 它是一组「组件函数」——签名为 func(gxscene.Props) *gxscene.Instance，与 GX
