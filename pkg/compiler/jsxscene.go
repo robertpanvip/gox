@@ -412,6 +412,12 @@ func walkScene(n *jsxNode, ops *[]sceneOp, getters *[]sceneGetter, slotCounter *
 		// 后端自定义事件（如 onFoo）同样原样进 Node.Handlers。静态字符串/bool 的
 		// on* 也放行（编译为常量 getter，后端按需解释）。
 		if isEventAttrName(a.name) {
+			// B6：事件属性的箭头函数 body 是赋值语句时（() => n = n+1），
+			// JSX 属性路径不展开箭头，=> 残留产非法 Go。给明确诊断 + 修法。
+			if a.kind == attrExpr && isArrowAssignExpr(a.value) {
+				ctx.report("event-arrow-statement", a.pos,
+					"事件 handler 的箭头函数体是赋值语句，请用 func() { ... } 字面量（如 onClick={func() { n = n + 1 }}）")
+			}
 			s := *slotCounter
 			*slotCounter++
 			*ops = append(*ops, sceneOp{code: "OpEvent", key: a.name, slot: s})
@@ -441,6 +447,13 @@ func walkSceneChildren(n *jsxNode, ops *[]sceneOp, getters *[]sceneGetter, slotC
 	for _, c := range n.children {
 		switch c.kind {
 		case childText:
+			// A6：JSX 里写 Go 控制语句（for range / switch）会被当文本节点，
+			// 且体内标识符未定义，产出坏 Go。明确报错并提示 GX 写法。
+			if isGoControlInJSX(c.text) {
+				ctx.report("jsx-control-statement", c.pos,
+					"JSX 内不支持 for/switch 语句；列表请用 <For each={...}>，条件请用 if 块")
+				continue
+			}
 			txt := normalizeText(c.text)
 			if txt == "" {
 				continue
@@ -875,17 +888,18 @@ func (ctx *jsxSceneCtx) reportForNotList(n *jsxNode, collType string) {
 	})
 }
 
-// reportAttrUnsupported 对不支持的属性写法追加带坐标的 GX 诊断（A2/A3/B10）。
-// 目的是把"编译通过 + 静默错值"变成带 GX 位置和修法的明确报错。
-func (ctx *jsxSceneCtx) reportAttrUnsupported(pos Pos, attr, msg string) {
+// report 追加一条带 GX 坐标的诊断。diags 为空时静默（如 CompileStage 不收集诊断）。
+func (ctx *jsxSceneCtx) report(code string, pos Pos, msg string) {
 	if ctx == nil || ctx.diags == nil {
 		return
 	}
-	*ctx.diags = append(*ctx.diags, GXDiagnostic{
-		Pos:     pos,
-		Code:    "attr-unsupported",
-		Message: "属性 " + attr + "：" + msg,
-	})
+	*ctx.diags = append(*ctx.diags, GXDiagnostic{Pos: pos, Code: code, Message: msg})
+}
+
+// reportAttrUnsupported 对不支持的属性写法追加带坐标的 GX 诊断（A2/A3/B10）。
+// 目的是把"编译通过 + 静默错值"变成带 GX 位置和修法的明确报错。
+func (ctx *jsxSceneCtx) reportAttrUnsupported(pos Pos, attr, msg string) {
+	ctx.report("attr-unsupported", pos, "属性 "+attr+"："+msg)
 }
 
 // isObjectLitText 判断 readBraced 读出的表达式文本是否是一个对象字面量
@@ -893,6 +907,50 @@ func (ctx *jsxSceneCtx) reportAttrUnsupported(pos Pos, attr, msg string) {
 func isObjectLitText(s string) bool {
 	t := strings.TrimSpace(s)
 	return len(t) >= 2 && t[0] == '{' && t[len(t)-1] == '}'
+}
+
+// isGoControlInJSX 判断 JSX 文本节点是否是一段误写的 Go 控制语句（A6）。
+// JSX 里 for/switch 不是合法子节点，会被当文本并产出坏 Go。这里只认 trim 后
+// 以 "for " / "switch " 开头的形态（关键字后须跟空白，避免误伤普通文本"format"）。
+func isGoControlInJSX(s string) bool {
+	t := strings.TrimSpace(s)
+	for _, kw := range []string{"for", "switch"} {
+		if strings.HasPrefix(t, kw) && len(t) > len(kw) && isHSpace(t[len(kw)]) {
+			return true
+		}
+	}
+	return false
+}
+
+// isArrowAssignExpr 判断事件属性值是否是"箭头函数 + 赋值 body"形态（B6）：
+// `() => n = n + 1` / `(e) => n = e`。这类 lambda 在 JSX 属性路径不会被
+// transformLambdas 展开，=> 会残留进 Go 源码导致语法错误。
+func isArrowAssignExpr(s string) bool {
+	arrow := strings.Index(s, "=>")
+	if arrow < 0 {
+		return false
+	}
+	body := strings.TrimSpace(s[arrow+2:])
+	// body 以标识符/选择器开头且含单个 '='（赋值，非 ==/!=/<=/>=）。
+	if body == "" {
+		return false
+	}
+	for i := 0; i < len(body); i++ {
+		if body[i] == '=' {
+			prev := byte(0)
+			next := byte(0)
+			if i > 0 {
+				prev = body[i-1]
+			}
+			if i+1 < len(body) {
+				next = body[i+1]
+			}
+			if prev != '=' && prev != '!' && prev != '<' && prev != '>' && next != '=' {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // indexedRoot 判断 each 表达式是否是「根标识符本身被索引」的形态（第十二轮 P1-A）。
@@ -1114,7 +1172,22 @@ func transformJSXScene(in []Token, ctx *jsxSceneCtx) []Token {
 					i = j - 1 // 吞掉纯排版空白（Space/Newline/Comment）
 				}
 			}
+			// B9：return <a/> <b/> 多根——return 后紧跟另一个 JSX 根，产出
+			// 两个相邻 Render 表达式导致非法 Go。给明确诊断 + 修法。
+			if prev := prevSig(in, i-1); prev >= 0 && in[prev].Text == "return" &&
+				j < len(in) && in[j].Kind == JSX {
+				ctx.report("jsx-multi-root", t.Pos,
+					"组件 return 只能有一个根 JSX；请用 <div>...</div> 包裹多个根，或改写为 if 块返回单个根")
+			}
 			continue
+		}
+		// B9：return if v { <b/> } else { <i/> } —— Go 里 return 后不能跟 if 语句，
+		// 产非法 Go。给明确诊断 + 修法（用条件表达式或包一层组件）。
+		if t.Text == "return" {
+			if n := nextSig(in, i+1); n >= 0 && in[n].Text == "if" {
+				ctx.report("jsx-return-if", t.Pos,
+					"return 后不能直接跟 if 块；请用条件表达式（cond ? <a/> : <b/>）或让组件返回单个根")
+			}
 		}
 		out = append(out, t)
 	}
