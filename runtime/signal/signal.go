@@ -162,7 +162,12 @@ func withObserver(n *node, fn func()) {
 		activeObservers.Add(-1) // 退出重算
 	}()
 
-	fn() // 用户回调在锁外执行，回调内读写 signal 会再次获取锁——不会自锁
+	// 恢复创建时的 Owner 作用域（React Context 语义的关键一环）：
+	// effect / computed 重跑、条件分支与 keyed 列表重建子树时，fn 内会新建
+	// 计算、注册 cleanup，并在其中沿 Owner 链 Lookup context。若不在 n.owner
+	// 下执行，这些查找会走空（读到默认 context）或把副作用挂到错误 Owner。
+	// runWithOwner 自带「已是栈顶则跳过」保护，避免与外层 CreateRoot 重复压栈。
+	runWithOwner(n.owner, fn)
 }
 
 // ---------- 公开 API ----------

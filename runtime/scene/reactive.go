@@ -29,6 +29,12 @@ type ReactiveAdapter struct {
 	Root func(f func(o Owner)) Owner
 	// NewSignal 创建一个值为 v 的源信号。
 	NewSignal func(v any) Signal
+	// CurrentOwner 返回当前 goroutine 所在的响应式 Owner（无作用域为 nil）。
+	// 动态子树（Branch/For）在建树期捕获它，重建时用它恢复 context 作用域——
+	// 这是 Context 在 if / For 子树里不丢值的必要条件。
+	CurrentOwner func() Owner
+	// RunWithOwner 在给定 Owner 下执行 f；o 为 nil 时直接执行。
+	RunWithOwner func(o Owner, f func())
 }
 
 // DefaultReactiveAdapter 用 signal 包实现的默认适配器。
@@ -52,6 +58,18 @@ var DefaultReactiveAdapter = ReactiveAdapter{
 			return s()
 		}
 	},
+	CurrentOwner: func() Owner { return signal.GetOwner() },
+	RunWithOwner: func(o Owner, f func()) {
+		if so, ok := o.(*signal.Owner); ok {
+			signal.RunWithOwner(so, f)
+		} else {
+			// 自定义适配器传入的非 signal Owner：无法恢复，直接执行。
+			// 语义退化为「动态子树不继承 context」，不影响无 Context 的应用。
+			if f != nil {
+				f()
+			}
+		}
+	},
 }
 
 // castAny 是恒等转换，仅用于让 any 值满足 Signal[any] 的泛型参数（其类型即 any）。
@@ -67,6 +85,13 @@ func SetReactiveAdapter(a ReactiveAdapter) (old ReactiveAdapter) {
 	if a.Effect == nil || a.Root == nil || a.NewSignal == nil {
 		activeAdapter = DefaultReactiveAdapter
 		return old
+	}
+	// 新增的可选原语缺省回落到默认实现，兼容旧的自定义适配器。
+	if a.CurrentOwner == nil {
+		a.CurrentOwner = DefaultReactiveAdapter.CurrentOwner
+	}
+	if a.RunWithOwner == nil {
+		a.RunWithOwner = DefaultReactiveAdapter.RunWithOwner
 	}
 	activeAdapter = a
 	return old

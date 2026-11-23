@@ -28,7 +28,46 @@ type Owner struct {
 	mounts   []func()
 	mounted  bool
 	disposed bool
+	// values 是 Owner 上的 keyed 值挂载点（React Context 的落点）。Provider
+	// 在自己的 Owner 上 Put 一个 (context key -> value signal)，子树内 Use 沿
+	// parent 链 Lookup 最近的绑定，从而得到「子树隔离 + 就近覆盖」语义。
+	// key 通常是 *Context[T] 指针（天然唯一、可比较）；value 由 widgets 层约定。
+	values map[any]any
 }
+
+// ProvideValue 在当前 Owner 上挂一个 keyed 值，供其后代沿 parent 链 LookupValue。
+// 同一 key 重复 Provide 覆盖旧值（内层 Provider 覆盖外层）。o 为 nil 时 no-op。
+func (o *Owner) ProvideValue(key, value any) {
+	if o == nil {
+		return
+	}
+	o.mu.Lock()
+	if o.values == nil {
+		o.values = make(map[any]any)
+	}
+	o.values[key] = value
+	o.mu.Unlock()
+}
+
+// LookupValue 从 start 起沿 parent 链向上查找最近的 key，找到即返回 (v, true)。
+// 这是 React Context「就近覆盖」的核心：内层 Owner 先命中，外层被遮蔽。
+// start 为 nil（无 Owner 作用域）时返回 (nil, false)。
+func LookupValue(start *Owner, key any) (any, bool) {
+	for o := start; o != nil; {
+		o.mu.Lock()
+		v, ok := o.values[key]
+		parent := o.parent
+		o.mu.Unlock()
+		if ok {
+			return v, true
+		}
+		o = parent
+	}
+	return nil, false
+}
+
+// LookupValue 是包级 LookupValue 的方法形式，nil receiver 安全。
+func (o *Owner) LookupValue(key any) (any, bool) { return LookupValue(o, key) }
 
 // Computation 是可销毁的响应式计算句柄。Effect 返回它；Computed 也可通过
 // ComputedWithHandle 取得。销毁是幂等的。
@@ -95,6 +134,10 @@ func CreateRoot(f func(o *Owner)) *Owner {
 	mu.Unlock()
 
 	if parent != nil {
+		// 设置 parent 链：Context / Owner 沿链向上 Lookup 依赖它。
+		// 旧实现只登记 children（供 Dispose 级联），未回填 parent，
+		// 导致 from-child 向上的查找一路走空——React 语义的就近覆盖失效。
+		o.parent = parent
 		parent.mu.Lock()
 		if !parent.disposed {
 			parent.children = append(parent.children, o)
@@ -132,7 +175,13 @@ func GetOwner() *Owner {
 }
 
 // RunWithOwner 在指定 Owner 下执行 f，f 内创建的计算与注册的 cleanup 归属 o。
-func RunWithOwner(o *Owner, f func()) {
+func RunWithOwner(o *Owner, f func()) { runWithOwner(o, f) }
+
+// runWithOwner 是带「栈已由 eff 预压」检测的内部实现。
+// withObserver 重算时会先把 n.owner 压栈以恢复作用域；若此刻再经 Effect→
+// attachToOwner→... 间接调用 runWithOwner(o) 且 o 正是栈顶，则跳过重复压栈，
+// 避免 defer 交错弹出时把外层 Owner 误删（栈 LIFO 会被打乱）。
+func runWithOwner(o *Owner, f func()) {
 	if o == nil {
 		if f != nil {
 			f()
@@ -141,10 +190,17 @@ func RunWithOwner(o *Owner, f func()) {
 	}
 	id := goid()
 	mu.Lock()
-	ownerStacks[id] = append(ownerStacks[id], o)
+	st := ownerStacks[id]
+	alreadyTop := len(st) > 0 && st[len(st)-1] == o
+	if !alreadyTop {
+		ownerStacks[id] = append(st, o)
+	}
 	mu.Unlock()
 
 	defer func() {
+		if alreadyTop {
+			return
+		}
 		mu.Lock()
 		st := ownerStacks[id]
 		if len(st) <= 1 {

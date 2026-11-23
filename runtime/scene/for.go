@@ -40,6 +40,7 @@ type For struct {
 	indexKey bool
 	sink     *changeSink // 所属实例树的变更缓冲，传给各列表项子实例
 	bctx     *bindCtx    // 统一接线上下文，传给新建的列表项子树
+	scope    Owner       // 建树期捕获的 Owner；列表项重建时恢复它以继承 Context
 }
 
 type forEntry struct {
@@ -99,6 +100,7 @@ func NewFor(each func() []any, key func(any) any, render func(any) *Instance) *F
 		render:   render,
 		entries:  make(map[any]*forEntry),
 		indexKey: key == nil,
+		scope:    Reactive().CurrentOwner(),
 	}
 }
 
@@ -116,6 +118,7 @@ func NewForSignal(each func() []any, key func(any) any, render func(func() any) 
 		sigRender: render,
 		entries:   make(map[any]*forEntry),
 		indexKey:  key == nil,
+		scope:     Reactive().CurrentOwner(),
 	}
 }
 
@@ -360,10 +363,19 @@ func (f *For) buildEntry(entry *forEntry) {
 		entry.item = Reactive().NewSignal(entry.value)
 	}
 	entry.owner = Reactive().Root(func(o Owner) {
-		if f.sigRender != nil {
-			entry.inst = f.sigRender(func() any { return entry.item() })
+		build := func() {
+			if f.sigRender != nil {
+				entry.inst = f.sigRender(func() any { return entry.item() })
+			} else {
+				entry.inst = f.render(entry.value)
+			}
+		}
+		// 恢复建树期捕获的 Owner：列表项 render 里的组件函数 / Context.Use
+		// 借此沿正确 parent 链找到 Provider（含列表整体增删项后的重建）。
+		if f.scope != nil {
+			Reactive().RunWithOwner(f.scope, build)
 		} else {
-			entry.inst = f.render(entry.value)
+			build()
 		}
 		if entry.inst == nil {
 			return

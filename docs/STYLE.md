@@ -124,16 +124,20 @@ GX 侧用 `widgets.Canvas(props)` 构建（`ops` 传 `[]canvas.Op`）。两端�
 
 ## 10. Context 与 Theme（响应式共享状态）
 
-GX 组件是纯函数，没有 hook 式"当前渲染上下文"。`widgets.Context[T]` 用 signal 承载共享值，绕开逐层 props 透传：
+`widgets.Context[T]` 是**真正的 React Context 语义**：子树隔离、嵌套就近覆盖、值变化精确驱动消费者。它建立在 GX 已有的 Solid 式响应式 Owner 树上，绕开逐层 props 透传：
 
-- `ctx := widgets.NewContext(def)` 创建；`ctx.Use()` 返回 `func() T`（可直接作为 GX 动态插槽 getter，读取即订阅）；`ctx.Set(v)` 写入并触发全树消费者重绘；`ctx.Provider(props)` 声明式确立子树初值（`value` 支持 getter，构造时读一次）。
-- 语义边界：Context 是**应用级单例通道**——一个 `Context[T]` 全树共享一个当前值，最后写入者生效；不支持 React 那种按子树隔离的多 Provider。要多套配置并存请用多个 Context 实例。
-- context 不进场景树/wire 协议，纯 Go 运行期通道，零后端改动。
+- `ctx := widgets.NewContext(def)` 创建；`ctx.Use()` 在组件函数里调用，返回 `func() T`（可直接作为 GX 动态插槽 getter，读取即订阅）；`ctx.Set(v)` 写**默认通道**（无 Provider 时的全局用法）；`ctx.Provider(props)` 声明式提供子树值（`value` 支持静态 `T` / `func() T` / `func() any` getter）。
+- **作用域语义**：`Provider` 用 `signal.CreateRoot` 建独立 Owner 挂值，`Use()` 沿 Owner 的 parent 链**就近查找**最近的 Provider——
+  - 子树隔离：兄弟 Provider 各读各的值，互不串台；Provider 不写全局默认值。
+  - 就近覆盖：嵌套 Provider 内层遮蔽外层。
+  - 动态子树不丢值：`if` 分支与 keyed 列表重建子树时恢复建树期 Owner（scene/branch.go、for.go + reactive.go 的 `CurrentOwner/RunWithOwner`），`Use()` 仍命中所属 Provider。
+  - 响应式更新：`value` 为 getter 时订阅上游 signal，变化只让读到它的消费者重算。
+- 没有任何 Provider 时回落到默认 signal（`Set` 写它），保留 `SetTheme` 这类全局单例用法。context 不进场景树/wire 协议，纯 Go 运行期通道，零后端改动。
 
 `widgets.Theme` 是基于 Context 预制的整套设计令牌（配色/圆角/阴影/间距）：
 
-- `DarkTheme` / `LightTheme` 两套预置；`SetTheme(t)` / `ThemeProvider` 切换；`UseTheme()` 返回 `func() Theme`，`UseToken("accent")` 返回单个令牌 getter。
-- 组件把 `UseToken(...)` 作为 `dynAttr` getter 即可随主题切换重绘（demo 底部有深色/浅色切换演示）。
+- `DarkTheme` / `LightTheme` 两套预置；`SetTheme(t)` 全局切换默认通道；`ThemeProvider(props)` 为子树提供主题（子树隔离，不改全局）；`UseTheme()` 返回 `func() Theme`，`UseToken("accent")` 返回单个令牌 getter。
+- 组件把 `UseToken(...)` 作为 `dynAttr` getter 即可随主题切换重绘（demo 底部有深色/浅色切换演示）。需要"一个窗口深色、某个面板浅色"时，用 `ThemeProvider` 包住该子树即可，全局主题不受影响。
 - 既有 `Theme*` 常量（apple_theme.go）保持不变向后兼容；新代码优先用 `UseTheme` 以支持切换。
 
 ## 11. 窗口外观配置（无边框 / 透明 / 置顶 / 图标）

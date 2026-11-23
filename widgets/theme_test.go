@@ -71,16 +71,22 @@ func TestUseThemeDrivesComponentSlot(t *testing.T) {
 
 func TestThemeProvider(t *testing.T) {
 	SetTheme(DarkTheme)
+	var inside *gxscene.Instance
 	prov := ThemeProvider(gxscene.Props{
 		"value": LightTheme,
 		"children": func() any {
-			return gxscene.Render(gxscene.Template{Ops: []gxscene.Op{
-				el("span"), gxscene.Op{Code: gxscene.OpChildText, Arg: "content"}, closeEl(),
-			}})
+			use := UseTheme()
+			inside = gxscene.Render(gxscene.Template{Ops: []gxscene.Op{
+				el("span"), dynChild(0), closeEl(),
+			}, N: 1}, func() any { return use().Name })
+			return inside
 		},
 	})
-	if CurrentTheme().Name != "light" {
-		t.Errorf("ThemeProvider 应写入 light, got %q", CurrentTheme().Name)
+	if got := (gxscene.TextBackend{}).Paint(inside.Root()); !containsStr(got, "light") {
+		t.Errorf("子树内应读 light 主题, got %q", got)
+	}
+	if CurrentTheme().Name != "dark" {
+		t.Errorf("ThemeProvider 不应改全局主题（子树隔离）, got %q", CurrentTheme().Name)
 	}
 	if findByGxRole(prov.Root(), "context-provider") == nil {
 		t.Error("缺少 context-provider 容器")
