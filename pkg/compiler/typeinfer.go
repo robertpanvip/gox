@@ -218,6 +218,13 @@ func inferExprLitType(toks []Token, from, to int) string {
 		}
 		return inferIdentType(toks, toks[from].Text, from)
 	}
+	// 泛型调用 Get[T](...) / pkg.Get[T](...) → 从显式类型实参提取 T（B1）。
+	// 必须早于「含字符串 → string」：Get[[]Row](props, "rows") 的参数含字符串
+	// 字面量，旧扫描会把 rows 误推成 string，进而 <For> 元素推成 rune。
+	// 该形态很窄（'(' 前是类型实参的 ']'），不会误伤索引 rows[0] 或普通调用。
+	if t := genericCallTypeArg(toks, from, to); t != "" {
+		return t
+	}
 	// 切片/数组复合字面量：[]T{...} / [N]T{...} → []T / [N]T。
 	// 必须早于「含字符串 → string」：元素里可能带字符串字面量（如 []User{{1,"Tom"}}）。
 	if typ := compositeLitType(toks, from, to); typ != "" {
@@ -251,6 +258,42 @@ func inferExprLitType(toks []Token, from, to int) string {
 		return "rune"
 	}
 	return ""
+}
+
+// genericCallTypeArg 从泛型调用 `Get[T](args...)` / `pkg.Get[T](args...)` 的显式
+// 类型实参提取 T 的文本（如 []Row、int、map[string]int）。用于 B1：
+// `rows := gxscene.Get[[]Row](...)` 的参数含字符串字面量，字符串扫描会把 rows
+// 误推成 string，进而让 <For> 元素类型退化成 rune。
+//
+// 判据（足够窄，不误伤索引 rows[0] 或普通调用 makeP("x")）：
+//   - 在 [from,to) 内找第一个 '('（调用参数列表起点）；
+//   - '(' 的前一个非空白 token 必须是 ']'（类型实参的闭合括号）；
+//   - 用 matchDelimBack 反查配对的 '['，其内容用 go/parser 校验为合法 Go 类型。
+// 校验失败或非该形态返回 ""，交由调用方走原有推断路径。
+func genericCallTypeArg(toks []Token, from, to int) string {
+	lp := -1
+	for i := from; i < to && i < len(toks); i++ {
+		if toks[i].Text == "(" {
+			lp = i
+			break
+		}
+	}
+	if lp <= from {
+		return ""
+	}
+	closeBracket := prevSigIn(toks, lp-1, from)
+	if closeBracket < from || toks[closeBracket].Text != "]" {
+		return ""
+	}
+	openBracket := matchDelimBack(toks, closeBracket, "]")
+	if openBracket < from || openBracket >= closeBracket {
+		return ""
+	}
+	arg := exprText(toks, openBracket+1, closeBracket)
+	if !isValidGoTypeExpr(arg) {
+		return ""
+	}
+	return arg
 }
 
 // compositeLitType 从复合字面量 `[]T{...}` / `[N]T{...}` / `map[K]V{...}` 提取
