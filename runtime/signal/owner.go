@@ -324,9 +324,13 @@ func Batch(f func()) {
 		pending := pendingEffect[id]
 		delete(pendingEffect, id)
 		mu.Unlock()
-		for _, e := range pending {
-			scheduleEffect(e)
-		}
+		// 在帧边界内冲刷：一批 effect 全部跑完后统一触发 AfterEffects hooks
+		// （app 据此合并为一帧重绘）。effect 回调内若再写信号，内层边界不重复触发。
+		withFlush(id, func() {
+			for _, e := range pending {
+				scheduleEffect(e)
+			}
+		})
 	}()
 
 	f()
@@ -354,7 +358,11 @@ func dispatchEffects(effects []*node) {
 		return
 	}
 	mu.Unlock()
-	for _, e := range effects {
-		scheduleEffect(e)
-	}
+	// 帧边界内调度：本轮写触发的所有 effect 跑完后统一触发 AfterEffects hooks。
+	// 若 effect 回调内再写信号，内层边界 depth>1 不重复触发，只在最外层画一帧。
+	withFlush(id, func() {
+		for _, e := range effects {
+			scheduleEffect(e)
+		}
+	})
 }

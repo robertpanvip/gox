@@ -78,12 +78,14 @@ type Window interface {
 
 // App 是 open 返回的应用句柄，持有窗口后端与配置；render 之后再持有场景树实例。
 type App struct {
-	win      Window
-	cfg      WindowConfig
-	inst     *gxscene.Instance // render 前为 nil
-	owner    *signal.Owner     // render 建树的根 Owner：组件内 effect/computed/cleanup 归属它
-	closed   bool
-	rendered bool
+	win         Window
+	cfg         WindowConfig
+	inst        *gxscene.Instance // render 前为 nil
+	owner       *signal.Owner     // render 建树的根 Owner：组件内 effect/computed/cleanup 归属它
+	unFlush     func()            // 注销帧边界 hook（T1.2）
+	drawPending bool              // 一批 effect 内是否发生需要重绘的变化（预留给 Dispatcher 精确化）
+	closed      bool
+	rendered    bool
 }
 
 // Open 按配置创建默认 Headless 窗口，返回应用句柄。不接收 JSX——JSX 交给 Render。
@@ -159,6 +161,11 @@ func (a *App) Render(build func() any) error {
 
 // teardownTree 销毁当前场景树及其 Owner（含组件副作用）与订阅。
 func (a *App) teardownTree() {
+	if a.unFlush != nil {
+		a.unFlush() // 注销帧边界 hook，避免旧闭包在重渲染后继续触发重绘
+		a.unFlush = nil
+	}
+	a.drawPending = false
 	if a.owner != nil {
 		a.owner.Dispose() // 级联销毁组件内 effect/computed、Bind 建立的订阅，执行 onCleanup
 		a.owner = nil
@@ -169,43 +176,60 @@ func (a *App) teardownTree() {
 	}
 }
 
-// bindReactive 把 signal 接到整棵场景树，并负责窗口重绘，分两路：
+// bindReactive 把 signal 接到整棵场景树，负责精确更新与窗口重绘（T1.1/T1.2）：
 //
-//  1. 叶子插槽：一个聚合 effect 调 Instance.Update() 读全部叶子 getter（含组件
-//     子树）并裁剪写入——保证一帧内叶子状态一致，只画一帧（ReactDOM 式批处理）；
-//  2. 结构插槽（条件分支 / keyed 列表）：BindStructural 递归整棵实例树（含组件内
-//     与嵌套分支），selector/each 变化时 Resolve 重建/复用子树并触发 onDirty 重绘。
+//  1. 叶子插槽：BindLeafEffects 为每个叶子 getter 建独立 effect——signal 变化只
+//     精确重求值依赖它的那个 getter 并 SetPart，不遍历全树、不重建子树；
+//  2. 结构插槽：BindStructural 递归整棵树接条件分支 / keyed 列表，selector/each
+//     变化时 Resolve 重建/复用子树；
+//  3. 帧合并：两路 effect 都通过 a.reactiveEffect 包装——每次重跑只置 drawPending
+//     标志；signal 的 AfterEffects 帧边界在一批 effect 全部跑完后统一 Draw 一次，
+//     保证「一帧一致性」且 N 个 signal 变化也只画一帧。
 //
-// 接线期（各 effect 首次立即执行）产生的重绘全部静音——Render 已画过首帧。
+// 接线期各 effect 首次执行不经过帧边界（signal.Effect 首次直接调度），不会触发
+// 重绘；Render 已画首帧。批处理（signal.Batch）与嵌套写都由帧边界的 depth 去重。
 //
-// 结构插槽的静音已下沉到 scene 的 bindCtx.silent：BindStructural 接线期整体静音，
-// 且 For/Branch 动态构建子树期间也静音（批量新增 N 项不再画 N 帧）。app 层只需：
-//   - 叶子聚合 effect 用独立 priming 跳过首次重绘（它不走 bindCtx）；
-//   - 结构插槽把 Draw 作为 onDirty 交给 BindStructural。
-//
-// 两路 effect 都挂在 a.owner 下，teardown 时随 Owner 级联销毁。
+// 包装 effect 经 bindCtx.effect 一路传给 For/Branch 的动态子树，使列表项 / 分支
+// 内的叶子变化同样触发重绘——这是插槽级模型下替代「聚合 Update 递归全树」的关键。
+// 所有 effect 挂在 a.owner 下，teardown 时随 Owner 级联销毁。
 func (a *App) bindReactive() {
 	if a.inst == nil || a.closed {
 		return
 	}
-	// 叶子聚合 effect：一帧一致性。首次执行只登记依赖，不重绘。
-	leafPriming := true
-	signal.Effect(func() {
-		_ = a.inst.Update()
-		if leafPriming {
-			leafPriming = false
+	// 帧边界 hook：一批 effect 跑完后统一画一帧。
+	//
+	// 为何不依赖 drawPending 标志：首帧期（applyAll）就建立的 Branch/For 子树用的是
+	// 裸 signal.Effect 接线（那时 ctx 尚未注入），其叶子变化不经过包装 effect，无法
+	// 置标志。改为「帧边界触发即重绘」——帧边界只在 signal 写入真正调度了 effect 时
+	// 触发（写相同值被 DeepEqual 短路、无关 signal 无订阅者都不触发），因此不会多画
+	// 无效帧，同时覆盖所有层级的叶子（含动态子树首帧项）。
+	a.unFlush = signal.AfterEffects(func() {
+		if a.closed {
 			return
 		}
-		if !a.closed {
-			_ = a.Draw()
-		}
+		a.drawPending = false
+		_ = a.Draw()
 	})
-	// 结构插槽：递归接线（接线期静音由 BindStructural 内部负责），变化后重绘。
-	a.inst.BindStructural(signal.Effect, func() {
-		if !a.closed {
-			_ = a.Draw()
-		}
-	})
+
+	wrap := func(body func()) signal.Computation {
+		return signal.Effect(func() {
+			body()
+			a.requestDraw()
+		})
+	}
+	// 两路接线共用同一包装 effect：结构通过 bindCtx.effect 传给 For/Branch 子树。
+	a.inst.BindStructural(wrap, a.requestDraw)
+	a.inst.BindLeafEffects(wrap)
+	// 接线期 effect 首次执行会置位；清空以免接线后无变化时多画一帧。
+	a.drawPending = false
+}
+
+// requestDraw 标记本轮需要重绘。由响应式 effect 与结构 onDirty 调用；真正绘制
+// 延迟到 signal 的 AfterEffects 帧边界执行，从而把同批多次变化合并为一帧。
+func (a *App) requestDraw() {
+	if !a.closed {
+		a.drawPending = true
+	}
 }
 
 // Draw 立即把当前场景树绘制一帧到窗口。Render 之前调用为 no-op。

@@ -879,6 +879,17 @@ func (i *Instance) BindReactive(effect func(func()) Computation) {
 	}
 }
 
+// BindLeafEffects 是 bindLeaves 的导出入口：为整棵稳定树（含组件子树）的叶子
+// 插槽建立每插槽 effect，不碰结构插槽。
+//
+// app 场景用它替代「一个聚合 effect 调 Update 遍历全树」：每个叶子 getter 只在
+// 依赖它的 signal 变化时重求值并 SetPart，值未变则零写入；所有 effect 跑完后由
+// signal 的 AfterEffects 帧边界统一触发一次窗口重绘（T1.1 插槽级 + T1.2 帧合并）。
+// 结构插槽（条件/列表）由 BindStructural 负责，二者职责互斥，避免双订阅。
+func (i *Instance) BindLeafEffects(effect func(func()) Computation) {
+	i.bindLeaves(effect)
+}
+
 // bindLeaves 只给叶子插槽（slotChild/slotAttr/slotEvent）接线，不碰结构插槽；
 // slotComp 递归进子组件。供「已有 bindCtx 负责结构接线」的场景使用——动态子树
 // 的叶子需要自己的细粒度 effect（不在父级聚合 Update 的递归路径上），而结构由

@@ -365,7 +365,10 @@ func (f *For) buildEntry(entry *forEntry) {
 			// 回调会调 onDirty；批量新增 N 项就是 N 帧。静音后由 each 的外层 effect
 			// 统一画 1 帧。
 			f.bctx.withSilent(func() {
-				entry.inst.bindLeaves(signal.Effect)
+				// 用 ctx 注入的 effect（app 场景为带 UI-dirty 标记的包装 effect），
+				// 使列表项内叶子的变化也能被 app 的帧边界统一重绘；纯 scene 场景
+				// 该 effect 就是 signal.Effect。
+				entry.inst.bindLeaves(f.bctx.effect)
 				entry.inst.bindRec(f.bctx)
 			})
 		} else {

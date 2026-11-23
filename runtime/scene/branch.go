@@ -106,12 +106,16 @@ func (b *Branch) Resolve() *Instance {
 				}
 				// 用所属实例树的统一接线上下文递归接线（含 onDirty 重绘回调）。
 				// 这替代了原先的裸 BindReactive——后者让嵌套分支切换后树变了却不重绘。
-				// 分支子树挂在 slotBranch.child 上、其叶子由根聚合 effect 的 Update
-				// 递归覆盖，因此这里只接结构插槽，不另建聚合 effect（避免重复重绘）。
+				// 插槽级模型下，分支子树的叶子也需要自己的 effect：app 已去掉聚合
+				// Update，叶子若只靠聚合遍历就再也收不到 signal 写入。结构与叶子
+				// 分工——结构走 bindStructure（含嵌套），叶子走 bindLeaves，二者互斥。
 				if b.bctx != nil {
 					// 构建子树期间的静音：新子树内的结构 effect 首次回调不该各自触发重绘；
 					// 分支切换本身的重绘由外层 SetPart effect 的 onDirty 负责（1 帧）。
-					b.bctx.withSilent(func() { cur.bindStructure(b.bctx) })
+					b.bctx.withSilent(func() {
+						cur.bindLeaves(b.bctx.effect)
+						cur.bindStructure(b.bctx)
+					})
 				} else {
 					cur.BindReactive(signal.Effect)
 				}
