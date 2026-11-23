@@ -258,6 +258,30 @@ impl<'a> DeltaView<'a> {
         }
         applied
     }
+
+    /// 判断本增量帧是否是"纯滚动帧"：所有动作都是对 scroll-top / scroll-left
+    /// 的 SET_ATTR，没有任何文本/结构/其它属性变更。
+    ///
+    /// 用途（render 层）：纯滚动只改变绘制坐标，不改变节点结构、文本内容、
+    /// 字号与布局尺寸，因此 Taffy 布局结果与 glyphon 字形 buffer 都可跨帧复用，
+    /// 无需重新 set_text + shape。空动作帧不算滚动帧（避免误判）。
+    pub fn is_scroll_only(&self) -> bool {
+        if self.count == 0 {
+            return false;
+        }
+        for i in 0..self.count {
+            let o = DELTA_HEADER + i * ACTION_SZ;
+            let kind = self.buf[o];
+            if kind != ACT_SET_ATTR {
+                return false;
+            }
+            let key = self.pool_str(u32at(self.buf, o + 16));
+            if key != "scroll-top" && key != "scroll-left" {
+                return false;
+            }
+        }
+        true
+    }
 }
 
 #[cfg(test)]
@@ -342,6 +366,65 @@ mod tests {
         buf[o..o+pool.len()].copy_from_slice(&pool); o += pool.len();
         buf[o..].copy_from_slice(blob);
         buf
+    }
+
+    /// 构造 GRX2 SET_ATTR 帧：actions = [(node_id, key, val)]。
+    /// 与 Go 侧 serialize_delta.go 的布局一致：key 在 action+16，val 在 action+20。
+    fn make_setattr_frame(actions: &[(&str, &str, &str)]) -> Vec<u8> {
+        let mut pool: Vec<u8> = Vec::new();
+        let mut act_bytes = vec![0u8; actions.len() * ACTION_SZ];
+        for (i, (node, key, val)) in actions.iter().enumerate() {
+            let o = i * ACTION_SZ;
+            act_bytes[o] = ACT_SET_ATTR;
+            put32(&mut act_bytes, o + 4, pool_str(&mut pool, node));
+            put32(&mut act_bytes, o + 16, pool_str(&mut pool, key));
+            put32(&mut act_bytes, o + 20, pool_str(&mut pool, val));
+        }
+        let total = DELTA_HEADER + act_bytes.len() + pool.len();
+        let mut buf = vec![0u8; total];
+        put32(&mut buf, 0, DELTA_MAGIC);
+        put32(&mut buf, 8, actions.len() as u32);
+        put32(&mut buf, 12, pool.len() as u32);
+        let mut o = DELTA_HEADER;
+        buf[o..o + act_bytes.len()].copy_from_slice(&act_bytes); o += act_bytes.len();
+        buf[o..o + pool.len()].copy_from_slice(&pool);
+        buf
+    }
+
+    #[test]
+    fn scroll_only_recognizes_scroll_attrs() {
+        // 单个 scroll-top
+        let f = make_setattr_frame(&[("vp", "scroll-top", "120")]);
+        let v = DeltaView::parse(&f).unwrap();
+        assert!(v.is_scroll_only(), "纯 scroll-top 帧应识别为滚动帧");
+
+        // 多个 scroll 属性（scroll-top + scroll-left）
+        let f = make_setattr_frame(&[("vp", "scroll-top", "120"), ("vp", "scroll-left", "30")]);
+        let v = DeltaView::parse(&f).unwrap();
+        assert!(v.is_scroll_only(), "纯 scroll 属性帧应识别为滚动帧");
+    }
+
+    #[test]
+    fn scroll_only_rejects_content_changes() {
+        // 文本/其它属性/混合都不是纯滚动帧——必须走全量重建保证正确。
+        let cases: Vec<Vec<(&str, &str, &str)>> = vec![
+            vec![("vp", "height", "100")],                       // 非 scroll 属性
+            vec![("vp", "scroll-top", "120"), ("a", "color", "red")], // 混合
+        ];
+        for acts in cases {
+            let f = make_setattr_frame(&acts);
+            let v = DeltaView::parse(&f).unwrap();
+            assert!(!v.is_scroll_only(), "含非 scroll 变化的帧不应识别为滚动帧: {:?}", acts);
+        }
+        // 空动作帧不算滚动帧
+        let f = make_setattr_frame(&[]);
+        let v = DeltaView::parse(&f).unwrap();
+        assert!(!v.is_scroll_only(), "空帧不应识别为滚动帧");
+
+        // 文本动作（SET_TEXT）不是滚动帧
+        let f = make_grx2(&[(ACT_SET_TEXT, "a", "", "", "new text")], &[]);
+        let v = DeltaView::parse(&f).unwrap();
+        assert!(!v.is_scroll_only(), "文本变更帧不应识别为滚动帧");
     }
 
     fn base_tree() -> SceneNode {

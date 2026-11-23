@@ -269,6 +269,20 @@ impl ObjectFit {
     }
 }
 
+/// 文本序列签名：把每个文本的 (内容, 字号) 编码成可比较字符串。
+/// 用于判定 glyphon buffer 缓存是否仍匹配——滚动时视口边缘 item 进出会
+/// 改变 dl.texts 内容，只有签名完全一致才能安全复用按序缓存的字形 buffer。
+fn text_sig(texts: &[TextDraw]) -> String {
+    let mut s = String::with_capacity(texts.len() * 16);
+    for t in texts {
+        s.push_str(&t.text);
+        s.push('@');
+        s.push_str(&format!("{:.2}", t.size));
+        s.push(';');
+    }
+    s
+}
+
 #[derive(Clone)]
 struct ShapeDraw {
     x: f32,
@@ -661,8 +675,17 @@ pub struct Renderer {
     frame_dirty: bool,
     /// 缓存的文本 buffer：无变化帧直接复用，避免每帧重建+shape
     cached_buffers: Vec<Buffer>,
+    /// cached_buffers 对应的文本签名（text@size 序列）。
+    /// 纯滚动帧里 emit 会按 clip 过滤文本——视口边缘 item 进出会让 dl.texts
+    /// 数量或顺序变化。仅比长度不够（滚出+滚入可能数量相同但内容不同），
+    /// 必须比对内容签名才能安全复用字形 buffer。
+    cached_text_sig: String,
     /// 缓存的文本区域屏幕坐标（与 cached_buffers 一一对应，供命中/调试）
     cached_areas_dirty: bool,
+    /// 最近一帧是否为"纯滚动帧"（只改 scroll-top/scroll-left）。
+    /// 纯滚动不改变布局/文本/字形，render 可复用缓存的 glyphon buffer，
+    /// 跳过最昂贵的 set_text + shape_until_scroll。
+    scroll_only: bool,
     /// 最近光标位置（MouseInput 事件不带坐标）
     cursor: (f32, f32),
     window: std::sync::Arc<Window>,
@@ -817,7 +840,9 @@ struct VSOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f };
             anim_origin: std::time::Instant::now(),
             frame_dirty: true,
             cached_buffers: Vec::new(),
+            cached_text_sig: String::new(),
             cached_areas_dirty: true,
+            scroll_only: false,
             cursor: (0.0, 0.0),
             window,
         }
@@ -839,12 +864,17 @@ struct VSOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f };
                 self.scene = Some(root);
                 self.frame_dirty = true;
                 self.cached_areas_dirty = true;
+                self.scroll_only = false; // 全量帧：不能假设可复用字形
                 return true;
             }
         } else if let Some(delta) = DeltaView::parse(bytes) {
             // 增量动作：按 nodeID 打补丁
             if let Some(root) = self.scene.as_mut() {
+                // 必须在 apply 之前判断：apply 消费的是 &self（不可变借），但先算好
+                // 纯滚动标志语义更清晰，也避免将来 apply 改成消耗型时出错。
+                let scroll_only = delta.is_scroll_only();
                 delta.apply(root);
+                self.scroll_only = scroll_only;
                 self.frame_dirty = true;
                 self.cached_areas_dirty = true;
                 return true;
@@ -1017,18 +1047,41 @@ struct VSOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f };
             self.paint_shapes(&dl, bg);
 
             // 文本：每个 text 一个 buffer，缓存下来供无变化帧复用（避免每帧 shape）。
-            let mut buffers: Vec<Buffer> = Vec::new();
-            for t in &dl.texts {
-                let mut b = Buffer::new(&mut self.font_system, Metrics::new(t.size, t.size * 1.35));
-                b.set_size(&mut self.font_system, Some(700.0), Some(80.0));
-                let attrs = Attrs::new().family(Family::SansSerif);
-                b.set_text(&mut self.font_system, &t.text, &attrs, Shaping::Advanced);
-                b.shape_until_scroll(&mut self.font_system, false);
-                buffers.push(b);
+            //
+            // 纯滚动帧优化（半分层）：只改 scroll-top/scroll-left 时，节点结构、
+            // 文本内容和字号都没变——变化的只是绘制坐标（已体现在新 dl.texts 的
+            // x/y 与主 Pixmap 里）。glyphon 的 Buffer 存的是整形后的字形，位置由
+            // 每帧的 TextArea.left/top 提供，因此 buffer 可安全跨帧复用，跳过最
+            // 昂贵的 set_text + shape_until_scroll（文本密集列表里这是主要开销）。
+            //
+            // 正确性：emit 会按 clip 过滤文本，滚动时视口边缘 item 进出会改变
+            // dl.texts 的内容/顺序。故用「text@size 内容签名」判定——只有当前
+            // 文本序列与缓存时完全一致（顺序、内容、字号都相同）才复用。仅比
+            // 长度不够：滚出+滚入可能数量相同但内容不同，会配错字形。
+            // 动画帧不能复用：animator 可能改了字号/文本等驱动属性。
+            let cur_sig = text_sig(&dl.texts);
+            let can_reuse_glyphs = self.scroll_only
+                && !animating
+                && cur_sig == self.cached_text_sig;
+            if can_reuse_glyphs {
+                #[cfg(debug_assertions)]
+                eprintln!("[rust-backend] scroll-only: reuse {} glyph buffers", self.cached_buffers.len());
+            } else {
+                let mut buffers: Vec<Buffer> = Vec::with_capacity(dl.texts.len());
+                for t in &dl.texts {
+                    let mut b = Buffer::new(&mut self.font_system, Metrics::new(t.size, t.size * 1.35));
+                    b.set_size(&mut self.font_system, Some(700.0), Some(80.0));
+                    let attrs = Attrs::new().family(Family::SansSerif);
+                    b.set_text(&mut self.font_system, &t.text, &attrs, Shaping::Advanced);
+                    b.shape_until_scroll(&mut self.font_system, false);
+                    buffers.push(b);
+                }
+                self.cached_buffers = buffers;
+                self.cached_text_sig = cur_sig;
             }
-            self.cached_buffers = buffers;
             self.frame_dirty = false;
             self.cached_areas_dirty = false;
+            self.scroll_only = false;
         }
 
         // 从当前 DisplayList + 缓存 buffers 组装 areas（有无变化都要做，因为 prepare 每帧消费 areas）。
@@ -1117,6 +1170,9 @@ struct VSOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f };
         // 尺寸相关缓存失效：下一帧必须重算布局与文本。
         self.frame_dirty = true;
         self.cached_areas_dirty = true;
+        self.scroll_only = false;
+        self.cached_buffers.clear(); // 避免与旧尺寸残留帧误命中字形复用
+        self.cached_text_sig.clear();
     }
 
     pub fn window(&self) -> &Window {
@@ -1147,6 +1203,41 @@ pub fn bench_frame(buf: &[u8], width: f32, height: f32, iters: u32) -> Option<u6
     // 防止编译器优化掉结果。
     std::hint::black_box(sink);
     Some(ns)
+}
+
+#[cfg(test)]
+mod text_sig_tests {
+    use super::*;
+
+    fn td(text: &str, size: f32) -> TextDraw {
+        TextDraw {
+            text: text.into(), x: 0.0, y: 0.0, size,
+            color: (0, 0, 0), clip: None,
+        }
+    }
+
+    #[test]
+    fn same_sequence_same_sig() {
+        let a = [td("A", 16.0), td("B", 16.0)];
+        let b = [td("A", 16.0), td("B", 16.0)];
+        assert_eq!(text_sig(&a), text_sig(&b));
+    }
+
+    #[test]
+    fn content_order_size_change_sig() {
+        let a = [td("A", 16.0), td("B", 16.0)];
+        // 内容变化
+        assert_ne!(text_sig(&a), text_sig(&[td("A", 16.0), td("C", 16.0)]));
+        // 顺序变化（数量相同、内容相同——这正是滚动进出可能踩到的坑）
+        assert_ne!(text_sig(&a), text_sig(&[td("B", 16.0), td("A", 16.0)]));
+        // 字号变化
+        assert_ne!(text_sig(&a), text_sig(&[td("A", 16.0), td("B", 20.0)]));
+        // 数量变化
+        assert_ne!(text_sig(&a), text_sig(&[td("A", 16.0)]));
+        // 坐标变化不影响签名（滚动就是只改坐标）
+        let moved = [TextDraw { x: 3.0, y: -6.0, ..td("A", 16.0) }, TextDraw { x: 3.0, y: -6.0, ..td("B", 16.0) }];
+        assert_eq!(text_sig(&a), text_sig(&moved));
+    }
 }
 
 #[cfg(test)]
