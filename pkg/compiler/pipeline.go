@@ -17,6 +17,10 @@ type Result struct {
 	// Analysis 是 desugar 之前 GX 语义层的产物（符号表 / 收窄 / 诊断）。
 	// 供 CLI / LSP 消费 GX 原生诊断；仅 Compile 路径填充，CompileStage 为 nil。
 	Analysis *Analysis
+	// InvalidGo 表示本次编译报告了「产出非法 Go」的致命诊断，产物已被抑制
+	// （GoSource/SourceMap 清空）。诊断仍保留在 Analysis 中供 LSP/CLI 展示。
+	// 下游若把 GoSource 直接落盘/展示，必须先检查此标志，避免拿到坏产物。
+	InvalidGo bool
 }
 
 // Validate 用 Go 解析器校验生成源码的语法（不检查类型/符号）。
@@ -186,7 +190,21 @@ func compileWithMode(file, src, module string, imports map[string]ImportInfo) (*
 	toks = transformExternal(toks, scope, names, &analysis.diags)
 	toks = transformCompositeFields(toks, scope, &analysis.diags)
 	goSrc, sm := emit(toks, file)
-	return &Result{File: file, GoSource: goSrc, SourceMap: sm, Analysis: analysis}, nil
+	res := &Result{File: file, GoSource: goSrc, SourceMap: sm, Analysis: analysis}
+	// Bug 05：致命诊断（如 B9 多根 / return-if、B6 事件箭头赋值）在 emit 后仍
+	// 留下非法 Go。但这些错误走诊断化路径（err==nil）以便 LSP 展示，若下游
+	// cabi 直接把 GoSource 落盘/展示就会拿到坏产物。这里用 Go 解析器做闸门：
+	// 有诊断且语法非法则清空产物并标记 InvalidGo，诊断仍保留在 Analysis 中。
+	// 不返回 error——维持「诊断化错误 err==nil」的既有契约（LSP 靠诊断工作）。
+	// 只在已有诊断时抑制，避免把"无诊断但语法非法"的其它问题（另案）卷入本次修复。
+	if len(analysis.diags) > 0 {
+		if err := res.Validate(); err != nil {
+			res.GoSource = ""
+			res.SourceMap = nil
+			res.InvalidGo = true
+		}
+	}
+	return res, nil
 }
 
 // CompileSource 以默认文件名转译源码。

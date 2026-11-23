@@ -41,6 +41,11 @@ const (
 	OpBranch                  // 条件分支插槽：Slot=索引；getter 返回一个动态子树控制器（*Branch）
 	OpFor                     // Keyed 列表插槽：Slot=索引；getter 返回一个动态子树控制器（*For）
 	OpEvent                   // 事件绑定插槽：Key=事件名（JSX 原样，如 "onClick"）, Slot=索引；getter 返回 handler
+	// OpDynComp 动态组件插槽（Solid <Dynamic> 语义）：Slot=索引；getter 返回一个
+	// *Instance。与 OpDynChild（children 插槽，实例一劳永逸保稳，Issue #1）不同：
+	// 该插槽每次求值 getter，按返回实例的场景模板身份比较——身份变化则替换子树、
+	// 身份不变则复用旧子树只做细粒度更新。是"确实想按条件切换组件"的显式出口。
+	OpDynComp
 )
 
 // Op 是一条 opcode 指令。Arg/Key/Slot 的含义由 Code 决定。
@@ -143,9 +148,10 @@ type slotKind uint8
 const (
 	slotChild slotKind = iota
 	slotAttr
-	slotComp   // 复合组件：getter 返回一个 *Instance，挂载为子树，Update 递归驱动
-	slotBranch // 动态子树：getter 返回 subtreeController（*Branch 条件分支 / *For keyed 列表）
-	slotEvent  // 事件绑定：getter 返回 handler 原值，写入节点的 Handlers（不进 Props）
+	slotComp    // 复合组件：getter 返回一个 *Instance，挂载为子树，Update 递归驱动
+	slotBranch  // 动态子树：getter 返回 subtreeController（*Branch 条件分支 / *For keyed 列表）
+	slotEvent   // 事件绑定：getter 返回 handler 原值，写入节点的 Handlers（不进 Props）
+	slotDynamic // 动态组件（OpDynComp / <Dynamic>）：getter 返回 *Instance，按模板身份切换子树
 )
 
 // subtreeController 是动态子树控制器的公共契约：Branch（条件分支）与 For（keyed 列表）
@@ -214,6 +220,10 @@ func (i *Instance) noteEval(slot int) {
 //
 // 统一为「实例常驻、递归 Update、不重建」语义，与 slotComp 一致，即 SolidJS「组件不重建、
 // 结构未变时实例保稳」。slotBranch 虽然也用 child 字段，但生命周期由 ctrl 管理，不在此列。
+//
+// 例外 slotDynamic（OpDynComp / Solid <Dynamic>）：它是「确实想按条件切换组件」的显式出口，
+// 不纳入保稳——每次求值 getter、按模板身份决定复用或替换（见 syncDynamicComp）。
+// 缺省的 children 插槽（slotChild）保持保稳，故 Issue #1 不受影响。
 func (s *slot) stableChildComp() *Instance {
 	if s.child == nil {
 		return nil
@@ -222,6 +232,17 @@ func (s *slot) stableChildComp() *Instance {
 		return s.child
 	}
 	return nil
+}
+
+// dynamicCompKey 返回动态组件插槽当前承载实例的「场景模板身份」。
+// 用模板结构（templateKey）而非实例指针作身份：同一组件每次 Render 会 new 出
+// 不同 *Instance，但模板相同即视为同一组件（复用旧子树、只 Update 保局部状态）；
+// 模板不同才视为切换组件。返回 "" 表示当前无实例或无法判定。
+func (s *slot) dynamicCompKey() string {
+	if s.child == nil {
+		return ""
+	}
+	return templateKey(s.child.tpl)
 }
 
 // compiledTemplate 是解析 opcode 一次得到的静态骨架（只解析一次，全局缓存）。
@@ -309,9 +330,10 @@ func compile(t Template) *compiledTemplate {
 			if op.Slot >= 0 && op.Slot < t.N {
 				slots[op.Slot] = &slot{kind: slotEvent, path: childPath(cur), attr: op.Key}
 			}
-		case OpComp:
+		case OpComp, OpDynComp:
 			// 组件在场景树里是一个逻辑包装节点（Kind=组件名，Type=NodeFragment 透明透传）。
 			// 它的子节点在 applyAll 时由子组件实例的根 children 嫁接而来；编译期只有空壳。
+			// OpDynComp 同构，但插槽标记为 slotDynamic（按模板身份切换，见 stableChildComp）。
 			idx := childOfStack(cur)
 			n := cur.Children[idx]
 			n.Kind = op.Arg
@@ -319,7 +341,11 @@ func compile(t Template) *compiledTemplate {
 			n.Props = map[string]any{}
 			n.parent = cur
 			if op.Slot >= 0 && op.Slot < t.N {
-				slots[op.Slot] = &slot{kind: slotComp, path: append(childPath(cur), idx)}
+				kind := slotComp
+				if op.Code == OpDynComp {
+					kind = slotDynamic
+				}
+				slots[op.Slot] = &slot{kind: kind, path: append(childPath(cur), idx)}
 			}
 		case OpBranch, OpFor:
 			// 条件分支 / keyed 列表都是透明包装节点（Kind=#frag 语义），
@@ -651,6 +677,76 @@ func mountComp(s *slot, v any) {
 	}
 }
 
+// syncDynamicComp 是 slotDynamic（<Dynamic>）的核心：每次求值 getter，按场景模板
+// 身份决定复用还是替换子组件实例。
+//
+//   - getter 返回 *Instance：其模板身份（templateKey）与当前 child 相同 → 视为同一
+//     组件，丢弃这次新构造的实例（它未被 adopt/接线），保留旧实例并递归 Update；
+//     身份不同 → Dispose 旧子树、嫁接新子树、adoptSinkDeep、按需递归接线，完成组件切换。
+//   - getter 返回非 *Instance（标量/切片）→ 退化走 embedValue，与普通 child 插槽一致。
+//
+// 用模板身份而非指针判等，是因为 children getter 每次求值都 new 一个 *Instance；
+// 同一组件的新构造应复用（保局部状态、props 由实例内响应式 getter 保鲜），不同
+// 组件才替换——这正是 Solid <Dynamic> 的语义，且不触碰普通 children 插槽的
+// Issue #1 保稳路径。
+//
+// 返回 true 表示本次写入了节点（组件切换或标量变化），供 Update/SetPart 计数。
+func (i *Instance) syncDynamicComp(s *slot, v any, ctx *bindCtx) bool {
+	if inst, ok := v.(*Instance); ok && inst != nil {
+		newKey := templateKey(inst.tpl)
+		if s.child != nil && s.child != inst && s.dynamicCompKey() == newKey {
+			// 同一组件模板的新构造：复用旧实例，丢弃新构造。props 由旧实例内
+			// 的响应式 getter 保鲜；这里只递归驱动旧子树细粒度更新。
+			s.last = v
+			s.child.Update()
+			return false
+		}
+		if s.child == inst {
+			// getter 直接返回同一实例：只递归 Update。
+			s.last = v
+			s.child.Update()
+			return false
+		}
+		// 组件身份变化（或首次挂载）：替换。
+		old := s.child
+		if old != nil {
+			old.Dispose() // 停订阅 + 清 comps，级联其稳定子树
+		}
+		oldChildren := childrenSnapshot(s.node)
+		s.last = v
+		i.mountDynamicComp(s, inst, ctx)
+		if i.changes != nil {
+			diffChildren(i.changes, s.node, oldChildren, s.node.Children)
+		}
+		return true
+	}
+	// 非 *Instance：退化走普通 child 值语义。
+	old := childrenSnapshot(s.node)
+	wasText := s.node.Kind == "#text"
+	s.last = v
+	embedValue(s, v)
+	i.recordChildTransition(s.node, old, wasText)
+	return true
+}
+
+// mountDynamicComp 把一个动态组件实例嫁接到 slotDynamic 包装节点下，
+// 并共享变更 sink、按需递归接线（app 场景由 bindCtx 提供 effect/onDirty）。
+func (i *Instance) mountDynamicComp(s *slot, inst *Instance, ctx *bindCtx) {
+	mountComp(s, inst)
+	if inst == nil {
+		return
+	}
+	adoptSinkDeep(inst, i.changes)
+	if ctx != nil {
+		ctx.withSilent(func() {
+			inst.bindLeaves(ctx.effect)
+			inst.bindStructure(ctx)
+		})
+	} else {
+		inst.BindReactive(Reactive().Effect)
+	}
+}
+
 // mountBranch 把条件分支/列表当前命中的子树嫁接到槽位包装节点下。
 // 分支切换由 Branch.Resolve / For.Resolve 负责销毁旧 Owner 并构建/复用子树；
 // 这里做场景树嫁接，并把"哪些子节点增删/移动"记录成细粒度指令。
@@ -697,6 +793,15 @@ func (i *Instance) applyAll() {
 			s.node.Handlers[s.attr] = v
 		case slotComp:
 			mountComp(s, v)
+		case slotDynamic:
+			// 首帧只挂载、接线延后到 BindReactive/BindStructural（那里会带 ctx）。
+			// 这里不建 effect（由调用方统一接线），故直接挂载而不走 syncDynamicComp。
+			if inst, ok := v.(*Instance); ok && inst != nil {
+				mountComp(s, inst)
+				adoptSinkDeep(inst, i.changes)
+			} else {
+				embedValue(s, v)
+			}
 		case slotBranch:
 			attachController(i, s, v)
 		}
@@ -728,6 +833,19 @@ func (i *Instance) Update() int {
 			w := ch.Update()
 			written += w
 			i.Writes += w
+			continue
+		}
+		// Bug 03：动态组件插槽（<Dynamic>）不做稳定锁定——每次求值 getter，
+		// 按模板身份复用或替换子组件（syncDynamicComp）。
+		if s.kind == slotDynamic {
+			var v any
+			if s.get != nil {
+				v = s.get()
+			}
+			if i.syncDynamicComp(s, v, i.bctx) {
+				written++
+				i.Writes++
+			}
 			continue
 		}
 		// 条件分支：切换由 BindReactive 建立的独立 Effect 驱动（读 selector 登记
@@ -881,6 +999,15 @@ func (i *Instance) SetPart(slot int, v any) {
 		i.Writes++
 		return
 	}
+	// Bug 03：动态组件插槽按模板身份切换，不走下面的 equalValue 快照裁剪
+	// （同一个 *Instance 指针幂等由 syncDynamicComp 内部处理）。
+	if s.kind == slotDynamic {
+		if i.syncDynamicComp(s, v, i.bctx) {
+			s.node.dirty = true
+			i.Writes++
+		}
+		return
+	}
 	if equalValue(s.last, v) {
 		return
 	}
@@ -932,6 +1059,24 @@ func (i *Instance) BindReactive(effect func(func()) Computation) {
 			continue
 		}
 		switch sl.kind {
+		case slotDynamic:
+			// <Dynamic>：给当前子树递归接叶子；为 getter 建 effect 驱动组件切换。
+			// SetPart→syncDynamicComp 按模板身份决定复用/替换，替换时新子树由
+			// mountDynamicComp 递归接线（无 ctx 退化路径）。
+			if sl.child != nil {
+				sl.child.BindReactive(effect)
+			}
+			if sl.get != nil {
+				slot := s
+				getter := sl.get
+				i.slots[slot].wired = true
+				if c := effect(func() {
+					i.noteEval(slot)
+					i.SetPart(slot, getter())
+				}); c != nil {
+					i.comps = append(i.comps, c)
+				}
+			}
 		case slotBranch:
 			// 纯 scene 场景下 BindReactive 是唯一入口，For/Branch 靠这里的 effect
 			// 调 Resolve 驱动增删/切换。app 场景走 BindStructural——两条路径互斥，
@@ -991,6 +1136,14 @@ func (i *Instance) bindLeaves(effect func(func()) Computation) {
 		// 不为其建 SetPart(getter()) effect（getter 重求值会重建子树，Issue #1）。
 		if ch := sl.stableChildComp(); ch != nil {
 			ch.bindLeaves(effect)
+			continue
+		}
+		// slotDynamic（<Dynamic>）的 getter effect 由 bindStructure 建立（组件切换
+		// 是结构变化，需触发 onDirty 重绘）；这里只递归给当前子树接叶子。
+		if sl.kind == slotDynamic {
+			if sl.child != nil {
+				sl.child.bindLeaves(effect)
+			}
 			continue
 		}
 		if sl.kind == slotBranch || sl.get == nil {
@@ -1074,6 +1227,26 @@ func (i *Instance) bindStructure(ctx *bindCtx) {
 			continue
 		}
 		switch sl.kind {
+		case slotDynamic:
+			// <Dynamic> 组件切换是结构变化：当前子树递归接结构插槽，并为 getter
+			// 建 effect（SetPart→syncDynamicComp 按模板身份切换）+ 变化后 onDirty 重绘。
+			if sl.child != nil {
+				sl.child.bindStructure(ctx)
+			}
+			if sl.get == nil {
+				continue
+			}
+			getter := sl.get
+			i.slots[slot].wired = true
+			if c := ctx.effect(func() {
+				i.noteEval(slot)
+				i.SetPart(slot, getter())
+				if ctx.onDirty != nil && !ctx.silent {
+					ctx.onDirty()
+				}
+			}); c != nil {
+				i.comps = append(i.comps, c)
+			}
 		case slotBranch:
 			if sl.ctrl != nil {
 				// ctx 交给控制器，供其后续 Resolve 构建的新子树递归接线。
@@ -1116,6 +1289,9 @@ func (i *Instance) Dispose() {
 	for _, sl := range i.slots {
 		if ch := sl.stableChildComp(); ch != nil {
 			ch.Dispose()
+		}
+		if sl.kind == slotDynamic && sl.child != nil {
+			sl.child.Dispose()
 		}
 		if sl.kind == slotBranch && sl.ctrl != nil {
 			sl.ctrl.Dispose()

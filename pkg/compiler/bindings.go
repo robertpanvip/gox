@@ -141,6 +141,33 @@ type Bindings struct {
 	structScopes map[string]*BindScope  // type 名 → 对应 struct 的 SkStruct scope（供 SelAt）
 	toks         []Token                // 原始 token 流（供 SelAt 反查接收者名）
 	funcSigs     map[string]*FuncSigRaw // 具名函数的原始文本签名（供签名反查）
+	// typeOverrides 是临时「标识符→类型名」覆盖表，供 lambda 形参（典型：<For>
+	// 的 item 参数）在 JSX 场景转换期间使用——这类参数不在 Bindings 作用域表里，
+	// 但 sig 字段链解析（recvTypeAt）需要知道其 receiver 类型才能补 ()。
+	// 由 WithTypeOverride 成对设置/恢复，支持嵌套。
+	typeOverrides map[string]string
+}
+
+// WithTypeOverride 临时把 name 的类型设为 typ，返回恢复闭包。
+// 用于 For item 参数等 lambda 形参：它们的类型由 forItemTypes 推断得到，
+// 不在 Bindings 作用域表中，但 sig 字段链解析需要按 receiver 类型查表。
+// 恢复闭包必须在使用结束后调用，以支持嵌套 For 的同名参数。
+func (b *Bindings) WithTypeOverride(name, typ string) func() {
+	if b == nil || name == "" || typ == "" {
+		return func() {}
+	}
+	if b.typeOverrides == nil {
+		b.typeOverrides = map[string]string{}
+	}
+	old, had := b.typeOverrides[name]
+	b.typeOverrides[name] = typ
+	return func() {
+		if had {
+			b.typeOverrides[name] = old
+		} else {
+			delete(b.typeOverrides, name)
+		}
+	}
 }
 
 // ---------- 构建（Binder）----------
