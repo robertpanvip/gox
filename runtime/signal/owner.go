@@ -326,11 +326,14 @@ func Batch(f func()) {
 		mu.Unlock()
 		// 在帧边界内冲刷：一批 effect 全部跑完后统一触发 AfterEffects hooks
 		// （app 据此合并为一帧重绘）。effect 回调内若再写信号，内层边界不重复触发。
-		withFlush(id, func() {
-			for _, e := range pending {
-				scheduleEffect(e)
-			}
-		})
+		// 无 pending（本批写入都被相等性短路）时不进边界，避免触发无效帧。
+		if len(pending) > 0 {
+			withFlush(id, func() {
+				for _, e := range pending {
+					scheduleEffect(e)
+				}
+			})
+		}
 	}()
 
 	f()

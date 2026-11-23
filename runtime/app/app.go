@@ -82,8 +82,11 @@ type App struct {
 	cfg         WindowConfig
 	inst        *gxscene.Instance // render 前为 nil
 	owner       *signal.Owner     // render 建树的根 Owner：组件内 effect/computed/cleanup 归属它
+	dispatcher  FrameDispatcher   // 帧重绘派发器（默认 InlineDispatcher）
 	unFlush     func()            // 注销帧边界 hook（T1.2）
 	drawPending bool              // 一批 effect 内是否发生需要重绘的变化（预留给 Dispatcher 精确化）
+	lastDrawErr error             // 最近一次 Draw 的错误（T2.2）
+	errHook     func(error)       // 可选：Draw 错误回调
 	closed      bool
 	rendered    bool
 }
@@ -110,8 +113,51 @@ func OpenWith(cfg WindowConfig, win Window) (*App, error) {
 	if err := win.Open(cfg); err != nil {
 		return nil, fmt.Errorf("gxapp: 打开窗口失败: %w", err)
 	}
-	return &App{win: win, cfg: cfg}, nil
+	app := &App{win: win, cfg: cfg}
+	app.setDispatcher(&InlineDispatcher{})
+	return app, nil
 }
+
+// SetDispatcher 替换帧重绘派发器（T2.1）。必须在 Render 之前调用——Render 接线时
+// 会把派发器绑定到真正的 Draw sink。nil 恢复默认 InlineDispatcher。
+//
+// 真实 GUI 后端用 QueueDispatcher 把重绘派发到 UI 线程，避免后台 goroutine 写
+// signal 时在非 UI 线程调用 Window.Draw。
+func (a *App) SetDispatcher(d FrameDispatcher) {
+	if a == nil {
+		return
+	}
+	a.setDispatcher(d)
+}
+
+func (a *App) setDispatcher(d FrameDispatcher) {
+	if d == nil {
+		d = &InlineDispatcher{}
+	}
+	a.dispatcher = d
+	// sink 在 render 前 inst 为 nil，drawNow 会安全 no-op；Render 后仍指向同一闭包。
+	d.SetSink(a.drawNow)
+}
+
+// drawNow 是派发器最终执行的绘制动作：真正调用窗口 Draw 并记录错误（T2.2）。
+func (a *App) drawNow() {
+	if a.closed || a.inst == nil {
+		return
+	}
+	err := a.win.Draw(a.inst.Root())
+	a.lastDrawErr = err
+	if err != nil && a.errHook != nil {
+		a.errHook(err)
+	}
+}
+
+// SetErrorHandler 设置 Draw 错误回调（T2.2）。err 为 nil 时不调用。
+func (a *App) SetErrorHandler(fn func(error)) {
+	a.errHook = fn
+}
+
+// LastDrawError 返回最近一次 Draw 的错误（未出错为 nil）。
+func (a *App) LastDrawError() error { return a.lastDrawErr }
 
 // Render 在一棵根 Owner 下运行 build 构建并挂载 JSX 场景树：画首帧，并在内部
 // 完成响应式接线（signal 变化 → 精确更新 + 自动重绘，含条件分支 / keyed 列表的结构重绘）。
@@ -147,8 +193,8 @@ func (a *App) Render(build func() any) error {
 		}
 		if inst != nil {
 			a.inst = inst
-			_ = a.Draw() // 首帧：此时组件的建树期副作用已登记
-			// 响应式接线也放在同一 Owner 内：聚合 effect 与结构 effect 随 Owner 一起销毁。
+			a.drawNow() // 首帧：同步绘制，此时组件的建树期副作用已登记
+			// 响应式接线也放在同一 Owner 内：各 effect 随 Owner 一起销毁。
 			a.bindReactive()
 		}
 	})
@@ -208,7 +254,10 @@ func (a *App) bindReactive() {
 			return
 		}
 		a.drawPending = false
-		_ = a.Draw()
+		// 交给派发器决定在哪执行 Draw：InlineDispatcher 同步执行（headless/测试），
+		// QueueDispatcher 投递到 UI 线程（真实 GUI）。后台 goroutine 写 signal 不会
+		// 在错误线程调用 Window.Draw（T2.1）。
+		a.dispatcher.RequestFrame()
 	})
 
 	wrap := func(body func()) signal.Computation {
@@ -232,12 +281,11 @@ func (a *App) requestDraw() {
 	}
 }
 
-// Draw 立即把当前场景树绘制一帧到窗口。Render 之前调用为 no-op。
+// Draw 立即把当前场景树绘制一帧到窗口（同步，不经派发器）。Render 之前 no-op。
+// 错误被记录并可通过 LastDrawError 查询（T2.2）。
 func (a *App) Draw() error {
-	if a.closed || a.inst == nil {
-		return nil
-	}
-	return a.win.Draw(a.inst.Root())
+	a.drawNow()
+	return a.lastDrawErr
 }
 
 // Update 触发场景树细粒度更新（转发 Instance.Update），成功后重绘一帧。
@@ -247,7 +295,7 @@ func (a *App) Update() int {
 		return 0
 	}
 	n := a.inst.Update()
-	_ = a.Draw()
+	a.drawNow()
 	return n
 }
 
@@ -268,6 +316,9 @@ func (a *App) Close() error {
 	// 先销毁整棵响应式树：停订阅、执行组件 onCleanup，避免关闭过程中 signal 写入
 	// 触发已关闭窗口的重绘。
 	a.teardownTree()
+	if a.dispatcher != nil {
+		a.dispatcher.Close()
+	}
 	return a.win.Close()
 }
 
