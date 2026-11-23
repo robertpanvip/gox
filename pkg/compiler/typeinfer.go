@@ -225,6 +225,13 @@ func inferExprLitType(toks []Token, from, to int) string {
 	if t := genericCallTypeArg(toks, from, to); t != "" {
 		return t
 	}
+	// 函数字面量 func(...) T { ... }（B3）：rows := func() []Row {...} 时，
+	// GX 把 rows 当 getter（读时 ()），绑定类型应记其返回值 T（[]Row），
+	// 供 <For each={rows}> 推断元素 Row。也必须早于字符串扫描——函数体里的
+	// 字符串字面量会让 rows 误推成 string → rune。
+	if t := funcLitResultType(toks, from, to); t != "" {
+		return t
+	}
 	// 切片/数组复合字面量：[]T{...} / [N]T{...} → []T / [N]T。
 	// 必须早于「含字符串 → string」：元素里可能带字符串字面量（如 []User{{1,"Tom"}}）。
 	if typ := compositeLitType(toks, from, to); typ != "" {
@@ -258,6 +265,53 @@ func inferExprLitType(toks []Token, from, to int) string {
 		return "rune"
 	}
 	return ""
+}
+
+// funcLitResultType 从函数字面量 `func(...) T { ... }` 提取返回类型文本 T（B3）。
+// 用于 `rows := func() []Row {...}`：rows 是 getter，绑定类型记返回值 []Row，
+// <For each={rows}> 才能推断元素 Row（而非函数体字符串导致的 string/rune）。
+// 只认单个返回类型（无括号多返回值），且用 go/parser 校验为合法 Go 类型。
+func funcLitResultType(toks []Token, from, to int) string {
+	if from >= to || toks[from].Text != "func" {
+		return ""
+	}
+	lp := nextSigIn(toks, from+1, to)
+	if lp < 0 || toks[lp].Text != "(" {
+		return ""
+	}
+	rp := matchDelim(toks, lp, "(", ")")
+	if rp < 0 || rp >= to {
+		return ""
+	}
+	// 返回类型：')' 之后到 '{' 之间的 token；多返回值（以 '(' 开头）暂不处理。
+	rstart := nextSigIn(toks, rp+1, to)
+	if rstart < 0 || toks[rstart].Text == "{" || toks[rstart].Text == "(" {
+		return ""
+	}
+	rend := rstart
+	depth := 0
+	for rend < to {
+		txt := toks[rend].Text
+		if txt == "{" && depth == 0 {
+			break // 函数体起始
+		}
+		switch txt {
+		case "[", "(":
+			depth++
+		case "]":
+			depth--
+		case ")":
+			if depth > 0 {
+				depth--
+			}
+		}
+		rend++
+	}
+	typ := exprText(toks, rstart, rend)
+	if !isValidGoTypeExpr(typ) {
+		return ""
+	}
+	return typ
 }
 
 // genericCallTypeArg 从泛型调用 `Get[T](args...)` / `pkg.Get[T](args...)` 的显式

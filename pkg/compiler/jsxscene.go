@@ -52,6 +52,10 @@ type jsxSceneCtx struct {
 	// jsxPos 会让插值里的函数内 signal 绑定查询落空（A1：列表显示函数地址）。
 	// 生成 render body 期间锁定，强制用外层 <For> 的真实绝对坐标作锚点。
 	jsxPosLocked bool
+	// forItemTypes: 当前各层 <For> render lambda 参数名 → 元素类型（B2）。
+	// 嵌套 For 的内层 each（如 r.cells）需要按外层 item 类型 r:Row 查字段类型，
+	// 否则退化成 []any。生成 render body 期间登记，退出恢复。
+	forItemTypes map[string]string
 	// signalFields: struct signal 字段表（类型名 → signal 字段名集合）。
 	// item 逃逸检测用它区分：props 字段是 signal 字段时本身保鲜，无需回退值快照。
 	signalFields signalFieldTable
@@ -311,6 +315,18 @@ func compCallTyped(n *jsxNode, ctx *jsxSceneCtx) []Token {
 // compCallProps 生成老式 gxscene.Props getter-map 组件调用。
 func compCallProps(n *jsxNode, ctx *jsxSceneCtx) []Token {
 	p := n.pos
+	// B11：零参数组件（func Counter() ...）用 <Counter/> 调用时，不应传 gxscene.Props。
+	// 仅当调用不带任何 props（无 attrs、无 children）且签名确为零参数时省略。
+	if len(n.attrs) == 0 && len(n.children) == 0 && ctx.bindings != nil {
+		name := n.name
+		if idx := strings.LastIndex(name, "."); idx >= 0 {
+			name = name[idx+1:]
+		}
+		if sig := ctx.bindings.funcSigs[name]; sig != nil && len(sig.ParamTypes) == 0 && !sig.IsVoid {
+			out := componentNameTokens(n, p)
+			return append(out, tokOp("(", p), tokOp(")", p))
+		}
+	}
 	out := componentNameTokens(n, p)
 	out = append(out, tokOp("(", p),
 		tokIdent("gxscene", p), tokOp(".", p), tokIdent("Props", p), tokOp("{", p))
@@ -698,6 +714,15 @@ func forTokens(n *jsxNode, ctx *jsxSceneCtx) []Token {
 		tokOp("[", p), tokOp("]", p), tokIdent(strings.TrimSpace(elemType), p), tokSpace(" ", p),
 		tokOp("{", p), tokSpace(" ", p), tokIdent("return", p), tokSpace(" ", p))
 	out = append(out, lexExprScene(eachExpr, p, ctx)...)
+	// B3/B1：each={rows} 若 rows 是 getter 变量（`rows := func() []T{...}` 或
+	// `rows := Get[T](...)`），绑定表记的是解包后类型 []T，直接 return rows 会
+	// 返回函数值而非切片，go build 报 "cannot use rows (func() []T) as []T"。
+	// 这里对裸 getter 标识符补一次调用 rows()。已是调用的形态（rows()/f(x)）
+	// 与 signal 变量（走 sigs 改写）不受影响。
+	if rootIdentOfExpr(strings.TrimSpace(eachExpr)) == strings.TrimSpace(eachExpr) &&
+		ctx.bindings != nil && isGetterVarFromToks(ctx.bindings.toks, strings.TrimSpace(eachExpr)) {
+		out = append(out, tokOp("(", p), tokOp(")", p))
+	}
 	out = append(out, tokSpace(" ", p), tokOp("}", p), tokOp(",", p))
 
 	// key: func(T) any { return <keyBody> }；无 key 时为 nil。
@@ -750,9 +775,25 @@ func forTokens(n *jsxNode, ctx *jsxSceneCtx) []Token {
 	// 逃逸时保持 forItemParam 不变，u.name 保持值快照语义。
 	oldItemParam := ctx.forItemParam
 	oldLocked := ctx.jsxPosLocked
+	oldItemTypes := ctx.forItemTypes
 	if !escaped {
 		ctx.forItemParam = paramName
 	}
+	// B2：无论是否逃逸都要登记本层 item 参数类型。逃逸只改变读语义
+	// （值快照 ForGetterOf vs signal 化 ForGetterOfSignal），不改变 item 的静态
+	// 类型；内层 <For each={r.cells}> 需按 r:Row 查字段推元素类型。
+	// 之前把它放进 !escaped 分支，r.cells 传给内层 For 被判逃逸后，r 未登记，
+	// 内层只能退化 any。
+	if ctx.forItemTypes == nil {
+		ctx.forItemTypes = map[string]string{}
+	} else {
+		cp := make(map[string]string, len(ctx.forItemTypes)+1)
+		for k, v := range ctx.forItemTypes {
+			cp[k] = v
+		}
+		ctx.forItemTypes = cp
+	}
+	ctx.forItemTypes[paramName] = elemType
 	bodyToks := New(rBody).AllTokens()
 	// rBody 来自重新词法化的片段，其内部 JSX 的 Pos 是相对假坐标（Index 很小）。
 	// 锁定 jsxPos 强制用外层 <For> 的真实绝对坐标作锚点，否则 {n}/{d} 等插值查
@@ -763,6 +804,7 @@ func forTokens(n *jsxNode, ctx *jsxSceneCtx) []Token {
 	bodyToks = transformJSXScene(bodyToks, ctx)
 	ctx.jsxPosLocked = oldLocked
 	ctx.forItemParam = oldItemParam
+	ctx.forItemTypes = oldItemTypes
 	for _, t := range bodyToks {
 		if t.Kind == EOF {
 			continue
@@ -818,6 +860,27 @@ func (ctx *jsxSceneCtx) inferForElemType(eachExpr string, pos Pos) string {
 	if root == "" {
 		return ""
 	}
+	// B2：嵌套 For 的内层 each 是外层 item 的字段（r.cells）。外层 item r 不在
+	// bindings 里，按 forItemTypes[r]=Row 查 struct 字段 cells 的类型 → []Cell。
+	if ctx.forItemTypes != nil && ctx.bindings != nil {
+		if itemType, ok := ctx.forItemTypes[root]; ok && itemType != "" {
+			t := strings.TrimSpace(eachExpr)
+			if strings.HasPrefix(t, root+".") {
+				field := strings.TrimPrefix(t, root+".")
+				if dot := strings.IndexAny(field, ".[("); dot >= 0 {
+					field = field[:dot]
+				}
+				// struct 字段绑定在 Binder 阶段只记 Kind、不记 Type（addBinding(...,"")），
+				// 所以 structScopes[itemType].Bindings[field].Type 恒为空，走不到类型。
+				// 改为直接查原始 token 流里的 `type <itemType> struct { field T }` 声明。
+				if ft := structFieldTypeFromToks(ctx.bindings.toks, itemType, field); ft != "" {
+					if s := sliceElemType(ft); s != "" {
+						return s
+					}
+				}
+			}
+		}
+	}
 	// N-2（既有）：each 根标识符被索引时（rows["k"] / grouped[g]），根是 map，
 	// TypeAt 常把 map 推断成 key 类型（string），sliceElemType 进而得到 rune，
 	// 错误信息与真实元素类型毫无关联。改为按声明反推容器类型并逐层剥索引。
@@ -852,6 +915,169 @@ func (ctx *jsxSceneCtx) inferForElemType(eachExpr string, pos Pos) string {
 		return ""
 	}
 	return sliceElemType(collType)
+}
+
+// structFieldTypeFromToks 在原始 token 流中定位 `type <typeName> struct { ... }`，
+// 返回其中名为 <field> 的字段类型文本（如 "[]Cell" / "map[string]int"）。
+//
+// 为什么需要它：Binder 收集 struct 字段时只登记 Kind=BkField、Type 传空串
+// （见 bindings.go addBinding(..., "")），所以 structScopes 里的字段绑定查不到
+// 类型。嵌套 <For each={r.cells}> 想从外层 item 类型 r:Row 推内层元素 Cell，
+// 只能回到原始 token 流按声明文本反查。跨文件 struct 不在同一 token 流内，
+// 返回 ""，调用方降级 any（不误报）。
+func structFieldTypeFromToks(toks []Token, typeName, field string) string {
+	n := len(toks)
+	for i := 0; i < n; i++ {
+		if !toks[i].is("type") {
+			continue
+		}
+		j := nextSig(toks, i+1)
+		if j < 0 || j >= n || toks[j].Text != typeName {
+			continue
+		}
+		k := nextSig(toks, j+1)
+		if k < 0 || k >= n || !toks[k].is("struct") {
+			continue
+		}
+		br := nextSig(toks, k+1)
+		if br < 0 || br >= n || toks[br].Text != "{" {
+			continue
+		}
+		cl := matchDelim(toks, br, "{", "}")
+		if cl < 0 || cl > n {
+			continue
+		}
+		if t := fieldTypeInStruct(toks, br+1, cl, field); t != "" {
+			return t
+		}
+	}
+	return ""
+}
+
+// fieldTypeInStruct 在 struct body [from,to) 顶层按字段声明行查找 field 的类型。
+// 按换行 / 分号切逻辑行，并在每个逻辑行内调用 fieldTypeInDecl。
+func fieldTypeInStruct(toks []Token, from, to int, field string) string {
+	depth := 0
+	lineFrom := from
+	for i := from; i <= to; i++ {
+		if i < to {
+			switch toks[i].Text {
+			case "{", "[", "(":
+				depth++
+			case "}", "]", ")":
+				depth--
+			}
+		}
+		endLine := i == to || (depth == 0 && (toks[i].Kind == Newline || toks[i].Text == ";"))
+		if !endLine {
+			continue
+		}
+		if t := fieldTypeInDecl(toks, lineFrom, i, field); t != "" {
+			return t
+		}
+		lineFrom = i + 1
+	}
+	return ""
+}
+
+// fieldTypeInDecl 解析单条字段声明 `name Type [tag]` / `a, b Type`：找到 field
+// 后返回其类型文本（跳过共享名字与字符串 tag）。未命中返回 ""。
+func fieldTypeInDecl(toks []Token, from, to int, field string) string {
+	var idxs []int
+	for i := from; i < to; i++ {
+		if toks[i].Kind == Space || toks[i].Kind == Comment {
+			continue
+		}
+		idxs = append(idxs, i)
+	}
+	for p, ix := range idxs {
+		if toks[ix].Kind != Ident || toks[ix].Text != field {
+			continue
+		}
+		ts := p + 1
+		// 跳过 `, nextName`（a, b int 共享类型）。
+		for ts+1 < len(idxs) && toks[idxs[ts]].Text == "," && toks[idxs[ts+1]].Kind == Ident {
+			ts += 2
+		}
+		if ts >= len(idxs) {
+			return ""
+		}
+		var sb strings.Builder
+		for _, tix := range idxs[ts:] {
+			t := toks[tix]
+			if t.Kind == String || t.Kind == Template {
+				break // struct tag
+			}
+			sb.WriteString(t.Text)
+		}
+		return sb.String()
+	}
+	return ""
+}
+
+// isGetterVarFromToks 在原始 token 流里判断 name 是否由 getter 表达式声明：
+//   - `name := func(...) T { ... }`（函数字面量，B3）
+//   - `name := Get[T](...)` / `name := pkg.Get[T](...)`（泛型 getter 工厂，B1）
+//
+// 绑定表把这类变量的 Type 记为解包后的返回类型（[]Row），编译产物里它是函数值，
+// <For each={name}> 生成 each getter 时必须调用一次才能拿到切片。
+func isGetterVarFromToks(toks []Token, name string) bool {
+	n := len(toks)
+	for i := 0; i < n; i++ {
+		if toks[i].Kind != Ident || toks[i].Text != name {
+			continue
+		}
+		op := nextSig(toks, i+1)
+		if op < 0 || op >= n {
+			continue
+		}
+		switch toks[op].Text {
+		case ":=", "=":
+			// 继续看右侧
+		default:
+			continue
+		}
+		rhs := nextSig(toks, op+1)
+		if rhs < 0 || rhs >= n {
+			continue
+		}
+		if toks[rhs].is("func") {
+			lp := nextSig(toks, rhs+1)
+			if lp >= 0 && lp < n && toks[lp].Text == "(" {
+				return true
+			}
+		}
+		if isGetterFactoryCall(toks, rhs) {
+			return true
+		}
+	}
+	return false
+}
+
+// isGetterFactoryCall 判断 toks[at] 起是否为 `Get[T](...)` / `pkg.Get[T](...)`
+// 形态的泛型 getter 工厂调用。只认名字 Get/get，避免误伤普通泛型函数。
+func isGetterFactoryCall(toks []Token, at int) bool {
+	j := at
+	if j+2 < len(toks) && toks[j+1].Text == "." && toks[j+2].Kind == Ident {
+		j += 2
+	}
+	if j < 0 || j >= len(toks) || toks[j].Kind != Ident {
+		return false
+	}
+	nm := toks[j].Text
+	if nm != "Get" && nm != "get" {
+		return false
+	}
+	k := nextSig(toks, j+1)
+	if k < 0 || k >= len(toks) || toks[k].Text != "[" {
+		return false
+	}
+	cl := matchDelim(toks, k, "[", "]")
+	if cl < 0 || cl >= len(toks) {
+		return false
+	}
+	p := nextSig(toks, cl+1)
+	return p >= 0 && p < len(toks) && toks[p].Text == "("
 }
 
 // forEachCollType 返回 each 表达式根标识符的集合类型文本（第十二轮 P3-F），
