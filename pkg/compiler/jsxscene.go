@@ -761,6 +761,12 @@ func forTokens(n *jsxNode, ctx *jsxSceneCtx) []Token {
 		if len(ctx.sigs) > 0 {
 			bodyToks = rewriteJSXInterpSignals(bodyToks, ctx.sigs)
 		}
+		// Bug 01（处 2）：key lambda 读 item 的 sig 字段（如 key={(u)=>u.name}）
+		// 也要补 ()，否则 key 取到函数地址、去重永远不相等。注入 kName 的静态
+		// 类型并走 sig 字段 selector 改写（与 render body 同源）。
+		restoreKeyType := ctx.bindings.WithTypeOverride(kName, kType)
+		bodyToks = rewriteJSXSignalFieldSelectors(bodyToks, ctx.bindings, ctx.signalFields, ctx.jsxPos)
+		restoreKeyType()
 		for _, t := range bodyToks {
 			if t.Kind == EOF {
 				continue
@@ -815,7 +821,17 @@ func forTokens(n *jsxNode, ctx *jsxSceneCtx) []Token {
 	// 显示成函数地址（A1）。item 参数 r 仍由 forItemParam 正常识别，不受影响。
 	// 保存/恢复旧锁值以支持嵌套 For（内层结束时不能解锁外层）。
 	ctx.jsxPosLocked = true
+	// Bug 01：把本层（含继承的外层）item 参数类型临时注入 Bindings，使 sig 字段
+	// 链解析（recvTypeAt）能识别 u().field / u.field 的 receiver 类型并补 ()。
+	// 这类 lambda 形参不在 Bindings 作用域表里，只能靠 forItemTypes 推断。
+	var restoreItemTypes []func()
+	for name, typ := range ctx.forItemTypes {
+		restoreItemTypes = append(restoreItemTypes, ctx.bindings.WithTypeOverride(name, typ))
+	}
 	bodyToks = transformJSXScene(bodyToks, ctx)
+	for i := len(restoreItemTypes) - 1; i >= 0; i-- {
+		restoreItemTypes[i]()
+	}
 	ctx.jsxPosLocked = oldLocked
 	ctx.forItemParam = oldItemParam
 	ctx.forItemTypes = oldItemTypes

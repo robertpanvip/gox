@@ -23,9 +23,10 @@ func gx_version() *C.char {
 }
 
 type translateResult struct {
-	GoSource  string `json:"goSource"`
-	SourceMap string `json:"sourceMap"`
-	Error     string `json:"error,omitempty"`
+	GoSource    string `json:"goSource"`
+	SourceMap   string `json:"sourceMap"`
+	Error       string `json:"error,omitempty"`
+	Diagnostics string `json:"diagnostics,omitempty"` // 致命诊断被抑制时的 GX 诊断 JSON 数组
 }
 
 //export gx_translate
@@ -35,6 +36,20 @@ func gx_translate(source *C.char) *C.char {
 	out := translateResult{}
 	if err != nil {
 		out.Error = err.Error()
+	} else if res.InvalidGo {
+		// 编译产生致命诊断、产物被抑制：把 GX 诊断序列化回传，避免插件拿到
+		// 空 goSource 却不知道原因（Bug 05）。
+		diags := []any{}
+		if res.Analysis != nil {
+			for _, d := range res.Analysis.Diagnostics() {
+				diags = append(diags, map[string]any{
+					"line": d.Pos.Line, "col": d.Pos.Col, "code": d.Code, "message": d.Message,
+				})
+			}
+		}
+		b, _ := json.Marshal(diags)
+		out.Diagnostics = string(b)
+		out.Error = "编译产生致命诊断，Go 产物已抑制"
 	} else {
 		out.GoSource = res.GoSource
 		if sm, e := json.Marshal(res.SourceMap); e == nil {

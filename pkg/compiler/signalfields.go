@@ -273,6 +273,12 @@ func recvTypeAt(b *Bindings, recvName string, recvPos Pos) string {
 	if b == nil {
 		return ""
 	}
+	// 临时类型覆盖（For item 等 lambda 形参）：这类标识符不在 Bindings 作用域表，
+	// 但 sig 字段链解析需要其 receiver 类型。优先于作用域表，因为覆盖是场景内
+	// 显式注入的精确类型。
+	if t := b.typeOverrides[recvName]; t != "" {
+		return strings.TrimSpace(strings.TrimPrefix(t, "*"))
+	}
 	if bd := b.ResolveAt(recvName, recvPos); bd != nil {
 		return strings.TrimSpace(strings.TrimPrefix(bd.Type, "*"))
 	}
@@ -1059,6 +1065,22 @@ func rewriteSignalFieldRefs(toks []Token, b *Bindings, tbl signalFieldTable, dia
 		if op == "" || !chain.tailIsSig {
 			// 纯读，或链尾不是 sig（链式中间段是 sig 也要补 ()）：
 			// 对整个链的每个 sig 段补 ()，消费整条链。
+			// Bug 02（C2 漏网形态）：若写目标是非 sig 字段、但访问链中间经过 sig 字段
+			// （如 h.s.n = 2，h.s 是 sig 字段持有 struct），改写后会产出 h.s().n = 2
+			// ——对函数结果取字段赋值，是非法 Go。checkSignalValueDeepWrite 只认 sig
+			// 变量（isSignalRefAt），这类 sig 字段中间段命不中，故在此补诊断。
+			// 只读（op == ""）正常，不报。
+			if op != "" && len(chain.segs) > 0 && diags != nil {
+				chainText := exprText(toks, i, fieldIdx+1)
+				lastSig := chain.segs[len(chain.segs)-1]
+				sigChainText := exprText(toks, i, lastSig+1) // 如 h.s（到最后一个 sig 段）
+				*diags = append(*diags, GXDiagnostic{
+					Pos:  toks[i].Pos,
+					Code: "signal-deep-write",
+					Message: "sig 字段持有的复合值不支持字段直接赋值（" + chainText +
+						"）；请整体替换后写回 sig，如 " + sigChainText + "(新值)",
+				})
+			}
 			emitChain(i, fieldIdx, chain.segs, -1)
 			i = fieldIdx
 			continue

@@ -456,6 +456,7 @@ func (p *jsxParser) parseElement() *jsxNode {
 }
 
 func (p *jsxParser) parseChildren(n *jsxNode) {
+	afterCond := false // 上一轮刚 append 条件块：其后紧跟的纯空白是排版残留（Bug 04）
 	for !p.eof() {
 		// 子节点行注释（> // 头注、</span> // 尾注）：跳过到行尾，避免被当成
 		// 可见文本节点渲染出来（A7）。
@@ -478,6 +479,7 @@ func (p *jsxParser) parseChildren(n *jsxNode) {
 			child := p.parseElement()
 			child.pos = cpos
 			n.children = append(n.children, jsxChild{kind: childElement, node: child, pos: cpos})
+			afterCond = false
 			continue
 		}
 		if p.cur() == '<' {
@@ -492,6 +494,7 @@ func (p *jsxParser) parseChildren(n *jsxNode) {
 		if p.cur() == '{' {
 			cpos := p.pos()
 			n.children = append(n.children, jsxChild{kind: childExpr, text: p.readBraced(), pos: cpos})
+			afterCond = false
 			continue
 		}
 		// 条件分支：if <expr> { <children> } [else if <expr> { ... }]* [else { ... }]
@@ -501,25 +504,36 @@ func (p *jsxParser) parseChildren(n *jsxNode) {
 			if cond != nil {
 				cond.pos = cpos
 				n.children = append(n.children, jsxChild{kind: childCond, cond: cond, pos: cpos})
+				afterCond = true
 				continue
 			}
 		}
 		cpos := p.pos()
 		var b strings.Builder
+		boundaryBreak := false // 是否因 if / 行注释边界提前 break（这类纯空白是排版残留）
 		for !p.eof() && p.cur() != '<' && p.cur() != '{' {
 			// 文本里的行注释（x // 尾注）：停下交给主循环跳过，别写进文本节点（A7）。
 			if p.atLineComment() {
+				boundaryBreak = true
 				break
 			}
 			// 若当前积累的文本全是空白，且遇到 if 关键字，则停下交给下一轮解析条件块。
 			if strings.TrimSpace(b.String()) == "" && p.atIfKeyword() {
+				boundaryBreak = true
 				break
 			}
 			b.WriteByte(p.advance())
 		}
-		if b.Len() > 0 {
+		// Bug 04：if / 注释边界 break 留下的纯空白（如 "if 前"、" }) " 后）以及
+		// 紧跟条件块之后的纯空白是排版残留，不应产出独立的 " " 文本节点；但因
+		// < / { / } / EOF 结束的 inline 空白（如 <b>A</b> <i>B</i> 的分隔空格）、
+		// 或条件块后含内容的文本（如 " tail"）是有意的，必须保留。
+		pureWS := strings.TrimSpace(b.String()) == ""
+		dropWS := pureWS && (boundaryBreak || afterCond) // 仅边界/条件块后的纯空白丢弃
+		if b.Len() > 0 && !dropWS {
 			n.children = append(n.children, jsxChild{kind: childText, text: b.String(), pos: cpos})
 		}
+		afterCond = false
 	}
 }
 
@@ -654,7 +668,9 @@ func (p *jsxParser) parseCondBlock() []jsxChild {
 			}
 			b.WriteByte(p.advance())
 		}
-		if b.Len() > 0 {
+		// Bug 04：条件块内的纯空白文本（块首尾缩进、相邻元素间换行排版）是残留，
+		// 不产出独立 " " 节点；含实际内容的文本照常保留。
+		if b.Len() > 0 && strings.TrimSpace(b.String()) != "" {
 			kids = append(kids, jsxChild{kind: childText, text: b.String(), pos: cpos})
 		}
 	}

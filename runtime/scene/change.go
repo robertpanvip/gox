@@ -206,7 +206,12 @@ func adoptSinkDeep(inst *Instance, s *changeSink) {
 			continue
 		}
 		switch sl.kind {
-		case slotComp:
+		case slotComp, slotDynamic:
+			// slotDynamic（<Dynamic>）与 slotComp 一样承载可替换的子组件实例。
+			adoptSinkDeep(sl.child, s)
+		case slotChild:
+			// Issue #1 后 slotChild 也会承载 *Instance（children 保稳子树），
+			// 必须递归注入 sink，否则其内部组件变更写进孤立 sink 而丢失。
 			adoptSinkDeep(sl.child, s)
 		case slotBranch:
 			if d, ok := sl.ctrl.(deepSinkAdopter); ok {
