@@ -103,7 +103,27 @@ GX 侧用 `widgets.Canvas(props)` 构建（`ops` 传 `[]canvas.Op`）。两端�
 - 跨语言：`backend/rust/go/widgets_e2e_test.go`、`image.go`、`mirror_consistency_test.go`——GX 组件库场景树经 GRX1/GRX2 喂给 Rust 镜像探针，节点数与属性严格一致。
 - 正式 GX 后端 demo：`backend/rust/go/cmd/demo`（widgets 构建场景 → FramePresenter → GRX 协议 → Rust 渲染）。`backend/rust/src/main.rs` 是纯 Rust 渲染栈 spike（IME/GPU），非 GX 后端 demo。
 
+## 9. 组件分层决策（性能敏感走原生各自实现）
+
+组件库扩充遵循一条原则：**纯声明式可表达且无性能瓶颈的组件，放 `gox/widgets` 两端共用；性能或平台能力敏感的，才交给后端原生各自实现**。
+
+| 组件 | 分层 | 说明 |
+|---|---|---|
+| Tooltip | 声明式（Popover 变体） | hover 触发浮层，无 scrim；`onMouseEnter`/`onMouseLeave` 驱动 PopoverState |
+| Form / FormItem | 声明式 | 布局 + label/必填/错误展示；errors 由业务 signal 提供 |
+| TimePicker | 声明式（Popover + For） | 时/分/秒三段，12/24 小时制，选中经 `BindValue` 回传 |
+| Table | 声明式 + VirtualList | 行虚拟化：1000 行数据场景树只建 ~12 个可见行节点，节点数与数据量解耦，不新增 wire 协议 |
+| FilePicker | **原生能力通道（各自实现）** | OS 文件对话框不是场景树能画的：`widgets.FileDialog` 契约 + 注册表，各后端各自实现并注册 |
+
+### FilePicker 契约与接入
+
+- `widgets.FileDialog`：`OpenFile(FileOptions) ([]string, error)`，装配期用 `widgets.RegisterFileDialog(d)` 注册。
+- `widgets.FilePicker(props)`：产出触发按钮，点击调注册实现；选中经 `widgets.BindPick(func([]string))` 回传（`ctx.Synthetic.Data["paths"]`），取消走 `onCancel`。
+- 未注册实现时走 `noopFileDialog`（返回空选择，不 panic），headless/测试安全。
+- 原生实现：`backend/skia/filedialog.go`（`skia.RegisterFileDialog()`）、`backend/rust/go/filedialog.go`（`rb.RegisterFileDialog()`）——两端各自调用平台原生对话框工具（zenity/kdialog / osascript / PowerShell），互不 import。Rust 端若要换纯 Rust `rfd`，只需新增 C ABI 并保持接口形态。
+
 ## 验证
 
 - 单元测试：两端各有解析 / 定位 / 裁剪 / 插值 / 阴影单测（Go `go test ./...`、Rust `cargo test --release`）。
+- 新增组件单测：`widgets/` 下 tooltip/form_container/timepicker/table/filepicker 各自 `_test.go`；FilePicker 用 mock Dialog 验证契约回传。
 - 端到端截图：`examples/skia-style-demo` 展示 absolute 徽标、阴影卡片、transition 进度条、1000 项虚拟滚动列表；首帧与动画后各截一张确认。

@@ -58,6 +58,8 @@ func main() {
 	gxapp.MustRegister("rust", func(cfg gxapp.WindowConfig) (gxapp.Window, error) {
 		return win, nil
 	})
+	// 注册 Rust 后端的文件对话框能力：FilePicker 组件点击时由它弹出原生对话框。
+	rb.RegisterFileDialog()
 	app, err := gxapp.OpenBackend(gxapp.WindowConfig{
 		Title: "PULSE Dashboard", Width: 760, Height: 560, Backend: "rust",
 	})
@@ -142,6 +144,28 @@ func main() {
 						"id": "demo-input", "value": name,
 						"width": "360", "placeholder": "点击后输入…",
 						"onInput": widgets.BindInput(func(s string) { name(s) }),
+					}),
+					// 新增组件验证：Tooltip / TimePicker / FilePicker / Table 均走同一套 GX 场景树。
+					widgets.Tooltip(gxscene.Props{
+						"trigger": func() any { return widgets.Button(gxscene.Props{"label": "悬停我", "variant": "secondary"}) },
+						"content": func() any { return textNode("这是 Tooltip 提示", "#ffffff", "12") },
+						"placement": "top",
+					}),
+					widgets.TimePicker(gxscene.Props{
+						"value": func() any { return "09:30" },
+						"onChange": widgets.BindValue(func(string) {}),
+					}),
+					widgets.FilePicker(gxscene.Props{
+						"label":  "选择文件…",
+						"onPick": widgets.BindPick(func([]string) {}),
+					}),
+					widgets.Table(gxscene.Props{
+						"columns": []widgets.TableColumn{
+							{Key: "k", Title: "键", Width: "120", Sortable: true},
+							{Key: "v", Title: "值", Width: "120"},
+						},
+						"rows": func() any { return []any{[]string{"A", "1"}, []string{"B", "2"}} },
+						"row-height": 32, "viewport-height": 72,
 					}),
 					// 底部说明
 					textNode("IME: 点击输入框后，中文组合串/上屏字经回调写回 signal", "#2dd4bf", "13"),
