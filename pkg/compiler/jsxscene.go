@@ -411,6 +411,12 @@ func walkScene(n *jsxNode, ops *[]sceneOp, getters *[]sceneGetter, slotCounter *
 	*ops = append(*ops, sceneOp{code: "OpElem", argQuote: strconv.Quote(n.name), slot: -1})
 
 	for _, a := range n.attrs {
+		// A5：高置信拼错的属性名给提示——bind:value 等冒号前缀、onClik 等事件名
+		// 手误。只报明确模式，不设封闭白名单（Node 属性对后端扩展开放，见
+		// docs/node-protocol.md），避免误伤后端自定义属性。
+		if msg, _ := suspiciousAttr(a.name); msg != "" {
+			ctx.report("attr-unknown", a.pos, msg)
+		}
 		// A2/A3：class/style 传对象字面量（class={{ active: true }}）不是 GX/后端
 		// 支持的写法——对象会被降级成匿名 struct 塞进属性值，静默错值（后端拿到
 		// 无意义的 struct）。给出带坐标的诊断，提示改用条件表达式或静态拼接。
@@ -659,6 +665,14 @@ func forTokens(n *jsxNode, ctx *jsxSceneCtx) []Token {
 			eachExpr = a.value
 		case "key":
 			keyLambda = a.value
+		default:
+			// A4：<For empty={...}> 及其它非 each/key 属性被静默丢弃（empty 节点
+			// 既不进模板也不进 slot）。明确报未知属性，提示用条件分支实现空态。
+			msg := "<For> 不支持属性 " + a.name
+			if a.name == "empty" {
+				msg += "：请用 if 块在列表为空时渲染占位（如 {len(rows) == 0 ? <li>none</li> : <For .../>}）"
+			}
+			ctx.reportAttrUnsupported(a.pos, a.name, msg)
 		}
 	}
 	// children 里的首个表达式是 render lambda。
@@ -1126,6 +1140,83 @@ func (ctx *jsxSceneCtx) report(code string, pos Pos, msg string) {
 // 目的是把"编译通过 + 静默错值"变成带 GX 位置和修法的明确报错。
 func (ctx *jsxSceneCtx) reportAttrUnsupported(pos Pos, attr, msg string) {
 	ctx.report("attr-unsupported", pos, "属性 "+attr+"："+msg)
+}
+
+// gxStandardEvents 是标准事件名（去 on 前缀、首字母小写的驼峰值），仅用于 A5
+// 高置信拼写提示。它不是白名单：on* 事件始终无条件透传，表外事件合法。
+var gxStandardEvents = []string{
+	"click", "mouseEnter", "mouseLeave", "mouseMove", "mouseDown", "mouseUp",
+	"keyDown", "keyUp", "input", "change", "focus", "blur",
+}
+
+// suspiciousAttr 对「高置信拼错」的属性名给出提示（A5）。
+// 只覆盖两类不会误伤后端自定义属性的模式：
+//   - 冒号前缀（bind:value 等框架残留语法，GX 不支持）；
+//   - onXxx 与某标准事件编辑距离 ≤1（onClik→onClick 等明显手误）。
+//
+// 返回空串表示不报；其余为建议写法。
+func suspiciousAttr(name string) (msg, hint string) {
+	if i := strings.IndexByte(name, ':'); i > 0 {
+		return "不支持 " + name + " 这类冒号前缀属性（其他框架语法残留）；请用普通属性 + 事件回调",
+			strings.Replace(name, ":", "", 1)
+	}
+	if !strings.HasPrefix(name, "on") || len(name) <= 2 {
+		return "", ""
+	}
+	eve := name[2:]
+	best, bestD := "", 3
+	for _, std := range gxStandardEvents {
+		if strings.EqualFold(eve, std) {
+			return "", "" // 大小写差异不算拼错（GX 按原样透传）
+		}
+		if d := editDistanceLE2(strings.ToLower(eve), strings.ToLower(std), 2); d < bestD {
+			best, bestD = std, d
+		}
+	}
+	if bestD <= 1 {
+		return "事件名 " + name + " 疑似拼写错误；标准事件为 on" + best + "（on* 仍会透传，请确认是否手误）", "on" + best
+	}
+	return "", ""
+}
+
+// editDistanceLE2 计算编辑距离，超过 limit 提前返回 limit+1（够用且省开销）。
+func editDistanceLE2(a, b string, limit int) int {
+	if len(a) > len(b)+limit || len(b) > len(a)+limit {
+		return limit + 1
+	}
+	prev := make([]int, len(b)+1)
+	cur := make([]int, len(b)+1)
+	for j := range prev {
+		prev[j] = j
+	}
+	for i := 1; i <= len(a); i++ {
+		cur[0] = i
+		best := cur[0]
+		for j := 1; j <= len(b); j++ {
+			cost := 1
+			if a[i-1] == b[j-1] {
+				cost = 0
+			}
+			v := prev[j-1] + cost
+			if x := prev[j] + 1; x < v {
+				v = x
+			}
+			if x := cur[j-1] + 1; x < v {
+				v = x
+			}
+			cur[j] = v
+		}
+		for j := 0; j <= len(b); j++ {
+			prev[j] = cur[j]
+			if prev[j] < best {
+				best = prev[j]
+			}
+		}
+		if best > limit {
+			return limit + 1
+		}
+	}
+	return prev[len(b)]
 }
 
 // isObjectLitText 判断 readBraced 读出的表达式文本是否是一个对象字面量
