@@ -218,6 +218,20 @@ func inferExprLitType(toks []Token, from, to int) string {
 		}
 		return inferIdentType(toks, toks[from].Text, from)
 	}
+	// 泛型调用 Get[T](...) / pkg.Get[T](...) → 从显式类型实参提取 T（B1）。
+	// 必须早于「含字符串 → string」：Get[[]Row](props, "rows") 的参数含字符串
+	// 字面量，旧扫描会把 rows 误推成 string，进而 <For> 元素推成 rune。
+	// 该形态很窄（'(' 前是类型实参的 ']'），不会误伤索引 rows[0] 或普通调用。
+	if t := genericCallTypeArg(toks, from, to); t != "" {
+		return t
+	}
+	// 函数字面量 func(...) T { ... }（B3）：rows := func() []Row {...} 时，
+	// GX 把 rows 当 getter（读时 ()），绑定类型应记其返回值 T（[]Row），
+	// 供 <For each={rows}> 推断元素 Row。也必须早于字符串扫描——函数体里的
+	// 字符串字面量会让 rows 误推成 string → rune。
+	if t := funcLitResultType(toks, from, to); t != "" {
+		return t
+	}
 	// 切片/数组复合字面量：[]T{...} / [N]T{...} → []T / [N]T。
 	// 必须早于「含字符串 → string」：元素里可能带字符串字面量（如 []User{{1,"Tom"}}）。
 	if typ := compositeLitType(toks, from, to); typ != "" {
@@ -253,11 +267,103 @@ func inferExprLitType(toks []Token, from, to int) string {
 	return ""
 }
 
-// compositeLitType 从切片/数组复合字面量 `[]T{...}` / `[N]T{...}` 提取完整集合
-// 类型文本（`[]T` / `[N]T`）。用 Go parser 校验，确保只返回合法切片类型；
-// 非复合字面量或无法判定返回 ""。调用方可再经 sliceElemType 取元素类型。
+// funcLitResultType 从函数字面量 `func(...) T { ... }` 提取返回类型文本 T（B3）。
+// 用于 `rows := func() []Row {...}`：rows 是 getter，绑定类型记返回值 []Row，
+// <For each={rows}> 才能推断元素 Row（而非函数体字符串导致的 string/rune）。
+// 只认单个返回类型（无括号多返回值），且用 go/parser 校验为合法 Go 类型。
+func funcLitResultType(toks []Token, from, to int) string {
+	if from >= to || toks[from].Text != "func" {
+		return ""
+	}
+	lp := nextSigIn(toks, from+1, to)
+	if lp < 0 || toks[lp].Text != "(" {
+		return ""
+	}
+	rp := matchDelim(toks, lp, "(", ")")
+	if rp < 0 || rp >= to {
+		return ""
+	}
+	// 返回类型：')' 之后到 '{' 之间的 token；多返回值（以 '(' 开头）暂不处理。
+	rstart := nextSigIn(toks, rp+1, to)
+	if rstart < 0 || toks[rstart].Text == "{" || toks[rstart].Text == "(" {
+		return ""
+	}
+	rend := rstart
+	depth := 0
+	for rend < to {
+		txt := toks[rend].Text
+		if txt == "{" && depth == 0 {
+			break // 函数体起始
+		}
+		switch txt {
+		case "[", "(":
+			depth++
+		case "]":
+			depth--
+		case ")":
+			if depth > 0 {
+				depth--
+			}
+		}
+		rend++
+	}
+	typ := exprText(toks, rstart, rend)
+	if !isValidGoTypeExpr(typ) {
+		return ""
+	}
+	return typ
+}
+
+// genericCallTypeArg 从泛型调用 `Get[T](args...)` / `pkg.Get[T](args...)` 的显式
+// 类型实参提取 T 的文本（如 []Row、int、map[string]int）。用于 B1：
+// `rows := gxscene.Get[[]Row](...)` 的参数含字符串字面量，字符串扫描会把 rows
+// 误推成 string，进而让 <For> 元素类型退化成 rune。
+//
+// 判据（足够窄，不误伤索引 rows[0] 或普通调用 makeP("x")）：
+//   - 在 [from,to) 内找第一个 '('（调用参数列表起点）；
+//   - '(' 的前一个非空白 token 必须是 ']'（类型实参的闭合括号）；
+//   - 用 matchDelimBack 反查配对的 '['，其内容用 go/parser 校验为合法 Go 类型。
+// 校验失败或非该形态返回 ""，交由调用方走原有推断路径。
+func genericCallTypeArg(toks []Token, from, to int) string {
+	lp := -1
+	for i := from; i < to && i < len(toks); i++ {
+		if toks[i].Text == "(" {
+			lp = i
+			break
+		}
+	}
+	if lp <= from {
+		return ""
+	}
+	closeBracket := prevSigIn(toks, lp-1, from)
+	if closeBracket < from || toks[closeBracket].Text != "]" {
+		return ""
+	}
+	openBracket := matchDelimBack(toks, closeBracket, "]")
+	if openBracket < from || openBracket >= closeBracket {
+		return ""
+	}
+	arg := exprText(toks, openBracket+1, closeBracket)
+	if !isValidGoTypeExpr(arg) {
+		return ""
+	}
+	return arg
+}
+
+// compositeLitType 从复合字面量 `[]T{...}` / `[N]T{...}` / `map[K]V{...}` 提取
+// 完整集合类型文本。用 Go parser 校验，确保只返回合法切片/map 类型；
+// 非复合字面量或无法判定返回 ""。调用方可再经 sliceElemType/containerElemTypeOnce
+// 取元素类型。
+//
+// 第十二轮 P2-B：原实现只认 `[]`/`[N]` 切片，map[K]V{...} 落到「含字符串字面量
+// → string」兜底，把 m := map[string]P{...} 的 TypeAt 推成 key 类型 string，
+// 逼得索引链家族靠 150 行文本回扫擦屁股。这里补 map 分支，让类型从源头正确。
 func compositeLitType(toks []Token, from, to int) string {
-	if from >= to || toks[from].Text != "[" {
+	if from >= to {
+		return ""
+	}
+	isMap := toks[from].is("map")
+	if !isMap && toks[from].Text != "[" {
 		return ""
 	}
 	// 找顶层第一个 `{`（值序列起点），其左侧即类型片段 `[]T` / `[N]T`。
@@ -284,6 +390,14 @@ func compositeLitType(toks []Token, from, to int) string {
 		return ""
 	}
 	text := exprText(toks, from, brace)
+	if isMap {
+		// map[K]V：必须是合法 Go 类型且以 map[ 开头。
+
+		if strings.HasPrefix(text, "map[") && isValidGoTypeExpr(text) {
+			return text
+		}
+		return ""
+	}
 	if !isSliceGoTypeExpr(text) {
 		return ""
 	}
@@ -296,6 +410,12 @@ func sliceElemType(typeText string) string {
 	t := strings.TrimSpace(typeText)
 	if t == "string" {
 		return "rune" // range string 得到 rune/byte；保守用 rune（由 Go 决定具体）
+	}
+	// 第十二轮 P3-F：非切片且非 string 的类型（如 map[K]V）不是列表，
+	// 旧实现直接 return t 会把 map 当元素类型，生成 []map[K]V 的误导产物。
+	// For 需要列表，这类类型应由调用方给出明确诊断。
+	if !strings.HasPrefix(t, "[") {
+		return ""
 	}
 	for strings.HasPrefix(t, "[") {
 		close := -1

@@ -580,3 +580,480 @@ func main() {
 		t.Errorf("once/only 应编成普通 OpAttr, got:\n%s", out)
 	}
 }
+
+// 第十一轮 N-2（既有）：each 是索引表达式 rows["k"] 时，元素类型不能退化为 rune。
+// 根标识符 rows 是 map[string][]Row，TypeAt 只给出 key 类型 string → 旧逻辑推成 rune。
+func TestJSXSceneForInferFromIndexedMap(t *testing.T) {
+	res, err := CompileScene("for_indexed.gx", `package main
+import gxscene "github.com/robertpanvip/gox/runtime/scene"
+type Row struct { id int; name string }
+func main() {
+	rows := map[string][]Row{"k": {{1, "a"}}}
+	_ = <ul><For each={rows["k"]} key={(r) => r.id}>{(r) => <li>{r.name}</li>}</For></ul>
+}
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := res.GoSource
+	// 直接断言元素类型 Row 与 item getter 形态，不再自我打折地只查一个子串。
+	for _, want := range []string{
+		"gxscene.ForGetterOfSignal[Row]",
+		"func() Row) *gxscene.Instance",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("each 索引应推断为 Row，期望 %q, got:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "ForGetterOfSignal[rune]") || strings.Contains(out, "[]rune") {
+		t.Errorf("不应退化为 rune, got:\n%s", out)
+	}
+}
+
+// 第十二轮 P1-A（本轮回归）：each 是函数调用、实参含索引时，不能因为表达式里
+// 出现 '[' 就抢走推断权——根是 filter，方括号在实参 rows["k"] 里。
+// 旧实现 strings.Count("[")>0 命中索引路径，推断落空 return "" 掐断 FuncResult
+// 兜底，退化成 ForGetterOfSignal[any] 编译失败。
+func TestJSXSceneForInferCallWithIndexedArg(t *testing.T) {
+	res, err := CompileScene("for_call_idx.gx", `package main
+import gxscene "github.com/robertpanvip/gox/runtime/scene"
+type Row struct { id int; name string }
+func filter(xs []Row) []Row { return xs }
+func main() {
+	rows := map[string][]Row{"k": {{1, "a"}}}
+	_ = <ul><For each={filter(rows["k"])} key={(r) => r.id}>{(r) => <li>{r.name}</li>}</For></ul>
+}
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := res.GoSource
+	if !strings.Contains(out, "gxscene.ForGetterOfSignal[Row]") {
+		t.Errorf("函数调用实参含索引仍应推断为 Row，got:\n%s", out)
+	}
+	if strings.Contains(out, "ForGetterOfSignal[any]") || strings.Contains(out, "[]rune") {
+		t.Errorf("不应退化为 any/rune, got:\n%s", out)
+	}
+	// 生成代码必须通过 Go 语法校验（防止 any 版本残留非法调用形态）。
+	if err := res.Validate(); err != nil {
+		t.Errorf("生成 Go 应语法有效: %v\n---\n%s", err, out)
+	}
+}
+
+// 第十二轮 P3-E：each 索引集合是函数参数时也能推断元素类型（Binding.Type 优先于文本回扫）。
+func TestJSXSceneForInferFromIndexedParam(t *testing.T) {
+	res, err := CompileScene("for_param.gx", `package main
+import gxscene "github.com/robertpanvip/gox/runtime/scene"
+type Row struct { id int; name string }
+func render(rows map[string][]Row) any {
+	return <ul><For each={rows["k"]} key={(r) => r.id}>{(r) => <li>{r.name}</li>}</For></ul>
+}
+func main(){}
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := res.GoSource
+	if !strings.Contains(out, "gxscene.ForGetterOfSignal[Row]") {
+		t.Errorf("函数参数索引应推断为 Row，got:\n%s", out)
+	}
+	if strings.Contains(out, "ForGetterOfSignal[map[string]") || strings.Contains(out, "[any]") {
+		t.Errorf("不应退化为 map/any, got:\n%s", out)
+	}
+}
+
+// 第十二轮 P3-F：each 是 map（非列表）时产出 for-not-list 诊断，不再误导成 []map[...] 编译错误。
+func TestJSXSceneForMapDiagnostic(t *testing.T) {
+	res, err := CompileScene("for_map.gx", `package main
+import gxscene "github.com/robertpanvip/gox/runtime/scene"
+type Row struct { id int; name string }
+func main() {
+	m := map[string]Row{"k": {1, "a"}}
+	_ = <ul><For each={m}>{(r) => <li>x</li>}</For></ul>
+}
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, d := range res.Analysis.Diagnostics() {
+		if d.Code == "for-not-list" && strings.Contains(d.Message, "请先转成切片") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("each=map 应产出 for-not-list 诊断, got:\n%v", res.Analysis.Diagnostics())
+	}
+	// 生成代码不再含 []map[...] / []rune 的误导类型。
+	if strings.Contains(res.GoSource, "[]map[") || strings.Contains(res.GoSource, "[]rune") {
+		t.Errorf("不应生成误导的 []map/[]rune, got:\n%s", res.GoSource)
+	}
+}
+
+// 跨行缩进的 JSX 元素不得让生成代码多出/残留换行，导致宿主参数列表语法错误。
+// 复现自 examples/jsxapp-full.gx：根视图原来必须写紧凑单行，
+// 写成 app.render(() => <div>\n...\n</div>\n) 会报
+// "missing ',' before newline in argument list"。
+func TestJSXMultilineNoStrayNewlineBeforeClose(t *testing.T) {
+	cases := []struct {
+		name string
+		src  string
+	}{
+		{
+			name: "箭头后换行+JSX跨行+闭括号独立行",
+			src: `package main
+import gxapp "github.com/robertpanvip/gox/runtime/app"
+func main() {
+	app, _ := gxapp.open(nil); _ = app
+	app.render(() =>
+		<div id="app">
+			<span>hello</span>
+		</div>
+	)
+}
+`,
+		},
+		{
+			name: "JSX跨行+闭括号独立行",
+			src: `package main
+func main() {
+	f := () => <div id="app">
+		<span>hello</span>
+		<b>world</b>
+	</div>
+	_ = f
+}
+`,
+		},
+		{
+			name: "JSX作为多参数之一跨行",
+			src: `package main
+func main() {
+	foo(
+		<div>
+			<span>x</span>
+		</div>,
+		other,
+	)
+}
+`,
+		},
+		{
+			name: "JSX作最后参数带尾逗号",
+			src: `package main
+func main() {
+	foo(a,
+		<div>
+			<span>x</span>
+		</div>,
+	)
+}
+`,
+		},
+		{
+			name: "JSX直接作实参跨行(无lambda包装)",
+			src: `package main
+func main() {
+	foo(
+		<div>
+			<span>x</span>
+		</div>
+	)
+}
+`,
+		},
+		{
+			name: "JSX作slice元素跨行",
+			src: `package main
+func main() {
+	x := []any{
+		<div>
+			<span>x</span>
+		</div>,
+	}
+	_ = x
+}
+`,
+		},
+		{
+			name: "JSX作map值跨行",
+			src: `package main
+func main() {
+	x := map[string]any{"k": <div>
+		<span>x</span>
+	</div>}
+	_ = x
+}
+`,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			res, err := CompileScene("multiline.gx", c.src)
+			if err != nil {
+				t.Fatalf("编译失败: %v", err)
+			}
+			if verr := res.Validate(); verr != nil {
+				t.Errorf("生成 Go 语法无效: %v\n---\n%s", verr, res.GoSource)
+			}
+		})
+	}
+}
+
+// 真正的语句结束换行必须保留——JSX 后跟标识符（另一条语句）时不能把两行粘一起。
+func TestJSXMultilineKeepsStatementBreak(t *testing.T) {
+	res, err := CompileScene("stmtbreak.gx", `package main
+func main() {
+	x := <div>
+		<span>x</span>
+	</div>
+	_ = x
+}
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if verr := res.Validate(); verr != nil {
+		t.Fatalf("生成 Go 语法无效: %v\n---\n%s", verr, res.GoSource)
+	}
+	// 两条语句必须各占一行：保留 JSX 后的语句分隔换行。
+	if !strings.Contains(res.GoSource, "\n\t_ = x") {
+		t.Errorf("JSX 后的语句换行被误吞，两条语句粘在一起:\n%s", res.GoSource)
+	}
+}
+
+// return JSX 后跟 `}`（函数体结束）的换行必须保留：不能把 return 语句与函数闭合
+// 挤到同一行（曾因把 `}` 误列为"吞换行触发符"导致 golden 回归）。
+func TestJSXMultilineKeepsReturnFuncClose(t *testing.T) {
+	res, err := CompileScene("returnclose.gx", `package main
+func Card() any {
+	return <div>
+		<span>x</span>
+	</div>
+}
+func main() {}
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if verr := res.Validate(); verr != nil {
+		t.Fatalf("生成 Go 语法无效: %v", verr)
+	}
+	// 函数闭合 `}` 必须独占一行，不能出现 `...)}` 挤在一起。
+	if !strings.Contains(res.GoSource, "\n}\n") {
+		t.Errorf("return JSX 后的函数闭合换行被误吞:\n%s", res.GoSource)
+	}
+}
+
+// Issue #2 回归：JSX 属性值内嵌 lambda 中的 signal 复合赋值/简单赋值，
+// RHS 的裸 signal 读必须与顶层闭包一致递归补 ()，否则生成 Signal[T] 与
+// 标量相加的类型错误（load(load + 1)）。
+func TestJSXSceneLambdaSignalCompoundRHS(t *testing.T) {
+	res, err := CompileScene("iss2.gx", `package main
+import gxscene "github.com/robertpanvip/gox/runtime/scene"
+signal load = 42
+signal other = 8
+func main() {
+	let inc = func() { load = load + 1 } // 顶层闭包对照
+	_ = <div>
+		<button onClick={gxscene.Handler(func(ctx gxscene.EventContext) {
+			load = load + 1
+			load = other
+			load += other
+		})}/>
+	</div>
+}
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := res.GoSource
+	if verr := res.Validate(); verr != nil {
+		t.Fatalf("生成 Go 语法无效: %v\n---\n%s", verr, out)
+	}
+	// 顶层闭包与 JSX lambda 的空白排版不同（前者-token 带空格），去空格后统一比对。
+	compact := strings.ReplaceAll(strings.ReplaceAll(out, " ", ""), "\t", "")
+	// JSX prop 内 lambda：三种赋值的 RHS 都必须递归补 ()，绝不能出现裸 signal 相加/赋值。
+	for _, bad := range []string{"load(load+1)", "load(other)", "load(load+other)"} {
+		if strings.Contains(compact, bad) {
+			t.Errorf("JSX lambda RHS 漏了读调用 %q, got:\n%s", bad, out)
+		}
+	}
+	// 两种正确形态都必须至少各出现一次（顶层闭包与 JSX lambda 各一处）。
+	if n := strings.Count(compact, "load(load()+1)"); n < 2 {
+		t.Errorf("复合赋值 RHS 读调用应至少出现在顶层闭包与 JSX lambda 两处, got %d:\n%s", n, out)
+	}
+	if !strings.Contains(compact, "load(other())") {
+		t.Errorf("简单赋值 RHS 的 other 应补 (), got:\n%s", out)
+	}
+	if !strings.Contains(compact, "load(load()+other())") {
+		t.Errorf("+= 复合赋值 RHS 的 other 应补 (), got:\n%s", out)
+	}
+}
+
+// 第十三轮 P3-D：跨行 JSX 闭合标签后夹行注释（`</div> // 尾注`）再接宿主 `)` 时，
+// 注释必须连同换行一并吞掉，否则生成 `}// 尾注\n)` 报 missing ','。覆盖两种路径：
+// JSX 直接作实参，与 JSX 作为 lambda body（app.render(() => <div/> // 尾注)）。
+func TestJSXMultilineTrailingCommentBeforeClose(t *testing.T) {
+	cases := []struct {
+		name string
+		src  string
+	}{
+		{
+			name: "JSX直接实参带尾注",
+			src: `package main
+func main() {
+	foo(
+		<div>
+			<span>x</span>
+		</div> // 尾注
+	)
+}
+func foo(any) {}
+`,
+		},
+		{
+			name: "lambda-body-JSX带尾注",
+			src: `package main
+import gxapp "github.com/robertpanvip/gox/runtime/app"
+func main() {
+	app, _ := gxapp.open(nil)
+	_ = app
+	app.render(() =>
+		<div id="app">
+			<span>hi</span>
+		</div> // 尾注
+	)
+}
+`,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			res, err := CompileScene("comment.gx", c.src)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if verr := res.Validate(); verr != nil {
+				t.Fatalf("生成 Go 语法无效: %v\n---\n%s", verr, res.GoSource)
+			}
+			// 注释不得残留在生成的闭括号前（残留会把 ')' 注释掉）。
+			if strings.Contains(res.GoSource, "// 尾注\n\t)") || strings.Contains(res.GoSource, "// 尾注\n)") {
+				t.Errorf("行注释未被吞掉，会注释掉闭括号:\n%s", res.GoSource)
+			}
+		})
+	}
+}
+
+// 第十三轮 P3-E：each 是 string 变量 / 函数返回 map 时也要产出 for-not-list
+// 诊断，不再静默编成 ForGetterOfSignal[rune] 或漏报。
+func TestJSXSceneForNotListStringAndFuncMap(t *testing.T) {
+	cases := []struct {
+		name string
+		src  string
+	}{
+		{
+			name: "string变量",
+			src: `package main
+func main() {
+	s := "abc"
+	_ = <For each={s}>{u => <span>{u}</span>}</For>
+}
+`,
+		},
+		{
+			name: "函数返回map",
+			src: `package main
+func getM() map[string]int { return nil }
+func main() {
+	_ = <For each={getM()}>{u => <span>{u}</span>}</For>
+}
+`,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			res, err := CompileScene("notlist.gx", c.src)
+			if err != nil {
+				t.Fatal(err)
+			}
+			found := false
+			for _, d := range res.Analysis.Diagnostics() {
+				if d.Code == "for-not-list" && strings.Contains(d.Message, "请先转成切片") {
+					found = true
+				}
+			}
+			if !found {
+				t.Errorf("each 非列表应产出 for-not-list 诊断, got:\n%v", res.Analysis.Diagnostics())
+			}
+		})
+	}
+}
+
+// Issue A1：<For> 渲染体里读"当前函数内"声明的 signal / computed 时，
+// 必须补写 ()（它们是 Signal[T] 函数）。根因是 render body 重新词法化后内部
+// JSX 的 Pos 是假坐标，覆盖了 jsxPos 锚点，导致绑定查询把函数内 signal 误判
+// 为局部遮蔽。修复用 jsxPosLocked 锁定外层真实坐标。
+func TestForBodyRewritesFunctionLocalSignals(t *testing.T) {
+	src := `package main
+type Row struct { id int; name string }
+func main() {
+    signal n = 3
+    let d = Signal.computed(func() int { return 7 })
+    rows := []Row{{1, "a"}}
+    _ = <ul><For each={rows} key={(r) => r.id}>{(r) => <li>{r.name} {n} {d}</li>}</For></ul>
+}
+`
+	res, err := CompileScene("for-local-sig.gx", src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	goSrc := res.GoSource
+	// 函数内 signal / computed 必须补 ()；item 字段 r.name 必须补 ()；key 的 r.id 正常。
+	for _, want := range []string{
+		"func() any{ return n() }",
+		"func() any{ return d() }",
+		"func() any{ return r().name }",
+		"func(r Row) any { return r.id }",
+	} {
+		if !strings.Contains(goSrc, want) {
+			t.Errorf("产物应包含 %q, got:\n%s", want, goSrc)
+		}
+	}
+	// 绝不能出现把 Signal 本体塞进文本的形态。
+	for _, bad := range []string{
+		"func() any{ return n }",
+		"func() any{ return d }",
+		"func() any{ return r.name }",
+	} {
+		if strings.Contains(goSrc, bad) {
+			t.Errorf("产物不应包含 %q, got:\n%s", bad, goSrc)
+		}
+	}
+}
+
+// A1 守护：包级 signal 在 For 里、if 块里函数内 signal 的改写不受本次修复影响。
+func TestForBodySignalRewriteNoRegression(t *testing.T) {
+	src := `package main
+type Row struct { id int; name string }
+signal total = 10
+func main() {
+    signal n = 1
+    rows := []Row{{1, "a"}}
+    _ = <ul><For each={rows}>{(r) => <li>{total} {n}</li>}</For></ul>
+    _ = <div>{n}</div>
+}
+`
+	res, err := CompileScene("for-regress.gx", src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 包级 signal（For 内）、函数内 signal（For 内 + 普通 JSX 内）都应补 ()。
+	count := strings.Count(res.GoSource, "func() any{ return n() }")
+	if count < 2 {
+		t.Errorf("函数内 signal 在 For 与普通 JSX 内都应补 (), got %d 处:\n%s", count, res.GoSource)
+	}
+	if !strings.Contains(res.GoSource, "func() any{ return total() }") {
+		t.Errorf("包级 signal 应补 (), got:\n%s", res.GoSource)
+	}
+}

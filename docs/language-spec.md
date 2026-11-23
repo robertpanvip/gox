@@ -66,6 +66,18 @@ pub enum perm { read = 1 << iota, write, exec }  // 位标志 1,2,4
 | `<br/>` 空元素 | `gxscene.OpElem Arg:"br"` + `gxscene.OpClose` |
 | `<Foo/>` 组件 | `gxscene.OpComp` + `Foo(gxscene.Props{…})` |
 
+**JSX 可跨行**：闭合标签后的换行若属于排版缩进（换行后紧跟宿主调用的 `)` / `]` / `,`，中间可夹行注释），编译器会吞掉这段空白，避免 Go 在参数列表换行处要求 trailing comma。因此下面两种写法等价，无需为规避语法错误而把 JSX 挤成单行：
+
+```jsx
+app.render(() =>
+    <div>
+        <span>hi</span>
+    </div> // 尾注也会被一并吞掉
+)
+```
+
+> 只有紧邻调用闭合符号的排版换行会被吞；后接标识符或 `}`（函数体/语句结束）的换行是真正的语句分隔，保留——不会把 `return` 与函数闭合挤到同一行。
+
 运行时 `runtime/scene/`：`Template` / `Op` / `Render` / `Instance`。`Render` 缓存静态骨架、clone 出常驻场景树；`Instance.Update()` 只回写变化的插槽（可观测指标 `Writes`），不含调度。host 不定义绘制后端接口：GUI 后端实现 `gxapp.Window`，可用 `Node.ID` / `Node.Layout` / `Changes()` 做增量绘制；内置 `TextBackend` 只是文本工具。
 
 ### 3.1 `<For>` 列表
@@ -79,6 +91,8 @@ pub enum perm { read = 1 << iota, write, exec }  // 位标志 1,2,4
 | render 参数 `item` | 是元素值的 getter（`func() T`）：子树动态 getter 必须经它读值以登记依赖。`item` 逃逸到组件 props 等无法信号化的场景时，编译器回退值快照模式（同 key 值变化重建该项） |
 
 > 注意（第十轮 P1-1）：早期实现在 `key=nil` 时把 nil 包成"恒返回 nil 的闭包"，导致 `indexKey` 判定失效、所有元素 key 坍缩、列表塌成最后一项；叠加 `BindReactive` 会每帧重建而死循环。现已修复——省略 `key` 是可用的常规写法。
+
+> 已知限制（第十三轮 P3-E）：`each` 用**具名切片类型**（`type Rows []Row`，底层被提升为 `list.List[Row]`）时，元素类型推断会退成 `any`、each getter 的 `[]T` 返回类型与具名类型不兼容。绕过方式：用匿名切片 `[]Row`，或给 render 形参加显式类型注解。这是 each getter 返回类型生成的问题，非 keyed diff 语义问题，后续随类型系统一起处理。`each` 是 `map` / `string` 等非列表时会报 `for-not-list` 诊断（函数返回形态同样覆盖）。
 
 ## 4. 外部 Go 符号
 
@@ -176,6 +190,12 @@ println(doubled)                                   // → println(doubled())，�
 - **读取性能**：依赖追踪只在 effect/computed 重算期间需要，而这类场景是少数；普通读取走**无锁快路径**——用原子计数器 `activeObservers` 判断当前无 observer 重算时，直接原子读取当前值，跳过抓栈（goroutine id 解析）与加锁。signal 值用原子指针存储避免撕裂。实测读取 ~2 ns（约为普通变量的 2 倍），相较抓栈方案（~2900 ns）提速约 1400×；computed 缓存命中读 ~14 ns。
 - **import**：`Signal` 占位包名由 ImportManager 统一解析为 `import Signal "<module>/runtime/signal"`；源码已用别名导入则复用。
 
+**已知边界与绕法**（能跑但需按规则写，编译器不改写也不会自动报警的三处）：
+
+- **signal 作实参传的是当前值**：裸标识符读一律补 `()`，所以 `show(n)` → `show(n())`，传进去的是当前值而非 getter，`show` 内部拿不到响应式。这是函数式 signal 的既定语义（读即解包），不是 bug。想传 getter 保鲜，用 `func() T { return n }` 包一层、或改用 §11.1 的 struct `signal` 字段 / 组件 `Props`（getter-map）传递。
+- **props getter 只读**：`Get[T](props, "k")` 返回 `func() T`，只能读；`rows(append(rows(), x))` 带参写会编译错（`want ()`）。这是单向数据流的设计选择——组件内要改父状态，由父级额外传一个 `func(...)` 回调，而不是写 prop getter 本身。
+- **signal 持复合值的「深写」不刷新、且已诊断化**：`signal s = S{n:1}; s.n = 2` 与 `signal rows = []Row{...}; rows[0].name = "b"` 会改写为 `s().n = 2` / `rows()[0].name = "b"`——值确实变了，但没有调用 signal 写函数、依赖它的 slot 不刷新。编译器对这两种形态报 `signal-deep-write` 诊断并给出修法：整体替换后重新赋值（`s(S{n:2})` / `rows(新切片)`）；只读（如插值里的 `rows()[0].name`）与普通非 signal 变量的字段赋值不受影响。
+
 ### 11.1 struct signal 字段（响应式 props）
 
 struct 的字段可以声明为 `signal`，编译器生成一个 getter 字段（`Signal.Signal[T]`），并自动改写读写。这样持有该 struct 的地方（含组件/持有者函数）读到的是**实时值**而非构造时的一次性快照——值可由外部 signal 驱动保鲜。
@@ -207,10 +227,12 @@ func main() {
   | 2 字面量 | 纯常量（数字/字符串/bool/nil） | `Signal.New(v)` |
   | 3 构造 | 复合字面量（如 `Leaf{v:"a"}`） | `Signal.New(v)`，一次构造、可写、可响应 |
   | 4 派生 | 含 signal 读的表达式（如 `p.a + p.b`） | `Signal.Computed(func() T { return v })`，登记依赖、只读（带参写入显式 panic，不再静默丢弃） |
-  | 5 裸变量 | 单个普通变量/字段（如 `v`、`q.title`） | `Signal.LockedGetter(func() T { return v }, func(x T) { v = x })`，读跟随、写落回变量，外层实例级互斥锁防竞态 |
+  | 5 裸变量 | 单个普通变量/字段（如 `v`、`q.title`） | 可写跟随 getter（内部为按变量共享锁的 `LockedGetterShared`）：读跟随、写落回变量；**不登记依赖，UI 不自动刷新** |
   | 6 其它 | 普通表达式（无 signal 读、非上述形态） | `Signal.New(v)` 快照 |
   
-  **硬判据**：凡是生成出的 `func(...T) T` 忽略参数、不登记依赖的，都不是合法 signal。档 3 的复合字面量必须走 `Signal.New`（一次构造、可写），不能包成每次读重建的裸闭包——否则中间 signal 段变化时 UI 不刷新、写入静默丢失。档 5 用 `Signal.LockedGetter` 保留"读跟随、写落回变量"：早期版本是裸闭包 `v=arg[0]`/`return v`，无锁读写捕获变量会造成数据竞争（并发读写同一字段 `-race` 实证）；加锁后经由该字段的读写安全。**边界**：并发安全只覆盖经由 getter 的访问——若代码在别处直接读写同一变量 `v`（与字段并发），需自行同步（编译器无法给用户的裸变量读写加锁）。需要写自动通知依赖的完整响应式，请用 `signal` 源（档 1 透传）或 `Signal.New`（档 2/3）。
+  **硬判据**：凡是生成出的 `func(...T) T` 忽略参数、不登记依赖的，都不是合法 signal。档 3 的复合字面量必须走 `Signal.New`（一次构造、可写），不能包成每次读重建的裸闭包——否则中间 signal 段变化时 UI 不刷新、写入静默丢失。档 5 用可写跟随 getter（内部 `LockedGetterShared`）保留"读跟随、写落回变量"：早期版本是裸闭包 `v=arg[0]`/`return v`，无锁读写捕获变量会造成数据竞争（并发读写同一字段 `-race` 实证）；加锁后经由该字段的读写安全，且同一被跟随变量的多个字段/多个实例共享同一把锁（按根标识符的声明位置生成 key），避免"各持一把锁彼此不互斥"的竞态。**边界 1（并发）**：并发安全只覆盖经由 getter 的访问——若代码在别处直接读写同一变量 `v`（与字段并发），需自行同步（编译器无法给用户的裸变量读写加锁）。**边界 2（响应式）**：档 5 不登记依赖，写入不会自动通知 UI 刷新；需要写自动通知依赖的完整响应式，请用 `signal` 源（档 1 透传）或 `Signal.New`（档 2/3）。**边界 3（性能）**：档 5 每次读都要加锁（约 14ns，真 signal 约 2ns），且不应登记依赖、不刷 UI——只用于"跟随外部普通变量"的场景，不要用在列表渲染的热路径；列表项请用 `signal` 源（档 1）。
+  
+  > 上述表格中的 `Signal.New` / `Signal.Computed` 等是实现内部产物，用户不应在 `.gx` 里手写底层大写 API（会被 `checkNoRawSignalAPI` 拦下）；源信号一律用 `signal n = v` 语法糖。
   
   手写 `CardProps{name: v}` 与 JSX `<Card name={v}/>` 共用 `buildSignalFieldValue`，走同一套六档语义。派生档（档 4）是惰性求值的（首次读字段时才计算）。
 - **类型安全**：只有 receiver 类型已知、且该字段确为某 struct 的 signal 字段时才解包；普通字段、同名但非 signal 的字段、外部包符号都不受影响。JSX 插值里的 selector 补 `()` 也按 receiver 断言类型判定，不会因同文件别处有同名字段而误伤普通字段读取。
@@ -223,6 +245,7 @@ func main() {
 - `.gx ↔ .go` 双向位置映射（最近邻），可 JSON 序列化。
 - LSP：initialize / didOpen / didChange / definition / hover / completion / documentSymbol / rename，诊断经 sourcemap 回投到 `.gx`。
 - 编译检查：真实 `go build`（可取消 context + LRU 缓存），诊断回投到 `.gx` 行号。支持注入 go.mod `replace` 以解析本地运行时；跨文件项目模式下，多份产物一起 `go build`，诊断按产物文件回投到**对应 `.gx`（含子目录包，如 `util/math.gx`）**的正确行列。
+- **产物落点**：单文件模式按 `-o <file.go>` 落盘（省略时默认 `<源文件>.go`，如 `app.gx` → `app.gx.go`）；项目模式（`-root`）把每份 `.gx` 落成**同目录同名 `.go`**（如 `util/math.gx` → `util/math.go`），不读 `-o`。两种模式的产物命名规则不同，脚本化时注意区分。
 
 ## 13. 跨文件项目（GX 导入 GX）
 

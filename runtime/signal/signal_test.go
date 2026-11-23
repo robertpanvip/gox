@@ -5,6 +5,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestSignalReadWrite(t *testing.T) {
@@ -544,4 +545,52 @@ func TestComputedWritePanics(t *testing.T) {
 		}
 	}()
 	d(99) // 应 panic
+}
+
+// 第十一轮 N-3：同一变量被多个 getter 引用时（同实例多字段/跨实例），
+// 用同一 key 的 LockedGetterShared 必须共享锁——并发写 a、读 b 不得 data race。
+// 旧实现每个 getter 各持一把 sync.Mutex，同变量多字段彼此不互斥，仍报 race。
+func TestLockedGetterSharedSameKeyConcurrent(t *testing.T) {
+	v := "init"
+	// 模拟 P{a: v, b: v}：两个字段都跟随同一变量 v，生成时拿到相同 key。
+	ga := LockedGetterShared("sf:shared-var", func() string { return v }, func(x string) { v = x })
+	gb := LockedGetterShared("sf:shared-var", func() string { return v }, func(x string) { v = x })
+	var wg sync.WaitGroup
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func(n int) {
+			defer wg.Done()
+			for j := 0; j < 300; j++ {
+				if n == 0 {
+					ga("w")
+				} else {
+					_ = gb()
+				}
+			}
+		}(i)
+	}
+	wg.Wait()
+	if v == "" {
+		t.Fatal("写应落回被捕获变量")
+	}
+}
+
+// 第十一轮 N-3：LockedGetterShared 的 get/set panic 时锁须释放（不死锁）。
+func TestLockedGetterSharedUnlockOnPanic(t *testing.T) {
+	g := LockedGetterShared("sf:panic", func() string { return "x" }, func(string) { panic("boom") })
+	func() {
+		defer func() { _ = recover() }()
+		g("trigger")
+	}()
+	// 若上一把锁未释放，下面这次读取会永久阻塞；能返回即证明已解锁。
+	done := make(chan string, 1)
+	go func() { done <- g() }()
+	select {
+	case got := <-done:
+		if got != "x" {
+			t.Fatalf("want x, got %s", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("panic 后锁未释放，读被永久阻塞")
+	}
 }

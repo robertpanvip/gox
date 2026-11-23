@@ -1,6 +1,7 @@
 package compiler
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -456,7 +457,7 @@ func main() {
 }
 `
 	got := compileOK(t, "sf8_plain.gx", src)
-	containsAll(t, got, `Signal.LockedGetter(`)
+	containsAll(t, got, `Signal.LockedGetterShared("sf:`)
 	gotCompact := strings.Join(strings.Fields(got), "")
 	containsAll(t, gotCompact,
 		`func()string{returnplain}`,
@@ -486,7 +487,7 @@ func main() {
 		`b: Signal.Computed(func() string { return n() + "!" })`,
 	)
 	containsAll(t, strings.Join(strings.Fields(got), ""),
-		`c:Signal.LockedGetter(`,
+		`c:Signal.LockedGetterShared("sf:`,
 		`func()string{returnplain}`,
 		`func(__vstring){plain=__v}`,
 	)
@@ -743,7 +744,7 @@ func main() {
 `
 	got := compileOK(t, "r10_writable.gx", src)
 	containsAll(t, got,
-		`a: Signal.LockedGetter(`,
+		`a: Signal.LockedGetterShared("sf:`,
 		`func() string { return v }`,
 		`func(__v string) { v = __v }`,
 	)
@@ -1006,5 +1007,263 @@ func main() {
 	}
 	if !strings.Contains(err.Error(), "不支持三元") {
 		t.Errorf("应给出三元不支持的诊断，got: %v", err)
+	}
+}
+
+// 第十一轮 N-1（本轮回归）：同一个 map 变量索引链的重复访问，每次都必须改写。
+// 回归点：containerElemTypeFromDecl 文本回溯在第二次访问时命中上一次引用 m["k"]
+// 的 '['，曾误判成 []T 类型起点并提前返回，导致第二次读静默失效（打印函数地址）、
+// 先读后写生成非法的 map struct field 赋值。
+func TestR12RepeatedMapIndexReadAndWrite(t *testing.T) {
+	src := `package main
+import "fmt"
+type P struct { signal a string }
+func main() {
+	m := map[string]P{"k": {a: "x"}}
+	fmt.Println(m["k"].a)
+	fmt.Println(m["k"].a)
+	m["k"].a = "y"
+	fmt.Println(m["k"].a)
+}
+`
+	got := compileOK(t, "r12_map_repeat.gx", src)
+	// 三次读都必须是 getter() 调用；少一次即第二次被静默漏改。
+	if c := strings.Count(got, `m["k"].a()`); c != 3 {
+		t.Errorf("期望 3 处 m[\"k\"].a() getter 读，实际 %d 处:\n%s", c, got)
+	}
+	// 写必须改写成调用式，否则 Validate 阶段就因 map struct field 赋值失败。
+	compact := strings.Join(strings.Fields(got), "")
+	containsAll(t, compact, `m["k"].a("y")`)
+}
+
+// 第十一轮 N-1：多层索引 m["k"][0][0].a 同样要支持重复访问。
+func TestR12RepeatedNestedMapIndexRead(t *testing.T) {
+	src := `package main
+import "fmt"
+type P struct { signal a string }
+func main() {
+	m := map[string][][]P{"k": {{{a: "x"}}}}
+	fmt.Println(m["k"][0][0].a)
+	fmt.Println(m["k"][0][0].a)
+}
+`
+	got := compileOK(t, "r12_nested_map_repeat.gx", src)
+	if c := strings.Count(got, `m["k"][0][0].a()`); c != 2 {
+		t.Errorf("期望 2 处 getter 读，实际 %d 处:\n%s", c, got)
+	}
+}
+
+// 第十一轮 N-3：同一变量被多个 fields / 多个实例引用时，生成的共享锁 key 必须相同，
+// 否则运行时各持一把锁，同实例多字段/跨实例并发仍 race。
+func TestR12SharedLockKeySameVariable(t *testing.T) {
+	src := `package main
+type P struct { signal a string; signal b string }
+func main() {
+	v := "x"
+	p1 := P{a: v, b: v}
+	p2 := P{a: v, b: v}
+	_, _ = p1, p2
+}
+`
+	got := compileOK(t, "r12_share_key.gx", src)
+	// 用正则跨行提取所有 LockedGetterShared("key"...) 的 key，不依赖产物排版。
+	keys := extractLockKeys(t, got)
+	if len(keys) != 4 {
+		t.Fatalf("期望 4 个档5 getter（p1.a/p1.b/p2.a/p2.b），实际 %d:\n%s", len(keys), got)
+	}
+	for _, k := range keys[1:] {
+		if k != keys[0] {
+			t.Errorf("同一变量 v 的 getter 必须共享 key，期望 %q，另有 %q:\n%s", keys[0], k, got)
+		}
+	}
+}
+
+// 第十一轮 N-3：不同变量必须生成不同 key，避免无关变量被强制串行化。
+func TestR12SharedLockKeyDistinctVariables(t *testing.T) {
+	src := `package main
+type P struct { signal a string; signal b string }
+func main() {
+	v := "x"
+	w := "y"
+	p := P{a: v, b: w}
+	_ = p
+}
+`
+	got := compileOK(t, "r12_distinct_key.gx", src)
+	keys := extractLockKeys(t, got)
+	if len(keys) != 2 {
+		t.Fatalf("期望 2 个档5 getter，实际 %d:\n%s", len(keys), got)
+	}
+	// 两个 key 必须不同：v 与 w 是不同声明。
+	if keys[0] == keys[1] {
+		t.Errorf("不同变量 v/w 不应共享 key，都是 %q:\n%s", keys[0], got)
+	}
+}
+
+// extractLockKeys 用正则从生成 Go 中提取所有 LockedGetterShared 的 key 字面量，
+// 跨行匹配、不依赖产物排版（第十二轮测试质量修正）。
+func extractLockKeys(t *testing.T, goSrc string) []string {
+	t.Helper()
+	re := regexp.MustCompile(`LockedGetterShared\("([^"]*)"`)
+	matches := re.FindAllStringSubmatch(goSrc, -1)
+	keys := make([]string, 0, len(matches))
+	for _, m := range matches {
+		keys = append(keys, m[1])
+	}
+	return keys
+}
+
+// 第十二轮 P2-D：结构体字段容器 s.m["k"] / s.ps[0] 的 signal 字段读必须改写。
+// 旧实现在 .m 段用 bareFieldType("map[string]P") 得空串，类型链断裂，链尾 a 漏改。
+func TestR12StructFieldContainerIndex(t *testing.T) {
+	src := `package main
+import "fmt"
+type P struct { signal a string }
+type S struct { m map[string]P; ps []P }
+func main() {
+	s := S{m: map[string]P{"k": {a: "x"}}, ps: []P{{a: "p"}}}
+	fmt.Println(s.m["k"].a, s.ps[0].a)
+	s.m["k"].a = "y"
+	fmt.Println(s.m["k"].a)
+}
+`
+	got := compileOK(t, "r12_struct_container.gx", src)
+	containsAll(t, got,
+		`s.m["k"].a()`,
+		`s.ps[0].a()`,
+	)
+	compact := strings.Join(strings.Fields(got), "")
+	containsAll(t, compact, `s.m["k"].a("y")`)
+}
+
+// 第十二轮 §4.5 立规矩：silentIndexedSignalField 的判据正确性——
+// 含索引 + 链尾字段名唯一命中 signal 字段 → 报；普通字段名/多类型同名 → 不报。
+func TestR12SilentIndexedSignalFieldDetect(t *testing.T) {
+	src := `package main
+type P struct { signal a string; b int }
+type Q struct { a int }
+func main() {
+	m := map[string]P{"k": {a: "x", b: 1}}
+	_ = m["k"].a
+	_ = m["k"].b
+}
+`
+	toks := New(src).AllTokens()
+	decls := collectSignalFieldDecls(toks)
+	tbl := buildSignalFieldTable(toks, decls)
+
+	// 找 m["k"].a 的 m 下标（第 2 个 m：声明后第一次使用）。
+	mIdx := -1
+	cnt := 0
+	for i, tk := range toks {
+		if tk.Text == "m" && tk.Kind == Ident {
+			cnt++
+			if cnt == 2 {
+				mIdx = i
+				break
+			}
+		}
+	}
+	if mIdx < 0 {
+		t.Fatal("找不到 m 使用点")
+	}
+	field, hit := silentIndexedSignalField(toks, mIdx, 0, tbl, nil)
+	if !hit || field != "a" {
+		t.Errorf("m[\"k\"].a 应命中 signal 字段 a，got field=%q hit=%v", field, hit)
+	}
+	// 用独立源码验证普通字段 b 不触发（b 不是任何类型的 signal 字段）。
+	src2 := `package main
+type P struct { signal a string; b int }
+func main() {
+	m := map[string]P{"k": {b: 1}}
+	_ = m["k"].b
+}
+`
+	toks2 := New(src2).AllTokens()
+	tbl2 := buildSignalFieldTable(toks2, collectSignalFieldDecls(toks2))
+	m2 := -1
+	cnt2 := 0
+	for i, tk := range toks2 {
+		if tk.Text == "m" && tk.Kind == Ident {
+			cnt2++
+			if cnt2 == 2 { m2 = i; break }
+		}
+	}
+	_, hit2 := silentIndexedSignalField(toks2, m2, 0, tbl2, nil)
+	if hit2 {
+		t.Error("普通字段 b 不应命中 signal 字段检测")
+	}
+}
+
+// 第十三轮 P1-A：诊断按「元素类型确为 signal 字段的 owner」判定，不再按字段名
+// 唯一命中。普通字段与别处 signal 字段撞名不得误报（否则项目模式构建被阻断）；
+// 真阳性（map 元素类型的 signal 字段读未改写）仍须命中。
+func TestR13SilentIndexedFieldNoFalsePositive(t *testing.T) {
+	// 误报场景：Item.title 是 signal 字段，Row.title 是普通字段——撞名不应报错。
+	srcFalse := `package main
+type Item struct { signal title string }
+type Row  struct { title string }
+func main() {
+	rows := []Row{{title: "t"}}
+	_ = rows[0].title
+}
+`
+	res, err := Compile("r13_false.gx", srcFalse)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hasDiagCode(res.Analysis.Diagnostics(), "signal-field-index-unknown") {
+		t.Errorf("普通字段撞名不应误报 signal-field-index-unknown:\n%+v", res.Analysis.Diagnostics())
+	}
+	if !strings.Contains(res.GoSource, `rows[0].title`) {
+		t.Errorf("普通字段读应保持原样, got:\n%s", res.GoSource)
+	}
+
+	// 元素类型可推断时，正常路径应直接改写成 a()，不挂诊断（无需沉默兜底）。
+	srcOK := `package main
+type P struct { signal a string }
+func main() {
+	m := map[string]P{"k": {a: "x"}}
+	_ = m["k"].a
+}
+`
+	res2, err := Compile("r13_ok.gx", srcOK)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hasDiagCode(res2.Analysis.Diagnostics(), "signal-field-index-unknown") {
+		t.Errorf("类型可推断且已改写时不应挂诊断:\n%+v", res2.Analysis.Diagnostics())
+	}
+	if !strings.Contains(res2.GoSource, `m["k"].a()`) {
+		t.Errorf("map 元素 signal 字段应被正常改写为 a(), got:\n%s", res2.GoSource)
+	}
+}
+
+// 判据层：元素类型推不出时保持沉默（不猜测、不按字段名撞车误报）。
+func TestR13SilentIndexedFieldUnknownTypeStaysSilent(t *testing.T) {
+	// rows 声明为函数参数且无元素类型信息时，回退用不到声明、Binding.Type 也为空，
+	// silentIndexedSignalField 应返回 false（宁可沉默也不误报）。
+	src := `package main
+type P struct { signal x string }
+func main() {
+	rows := getRows()
+	_ = rows[0].x
+}
+func getRows() []any { return nil }
+`
+	toks := New(src).AllTokens()
+	tbl := buildSignalFieldTable(toks, collectSignalFieldDecls(toks))
+	// 找 rows[0].x 里的 rows（使用点，非声明点）。
+	idx := -1
+	cnt := 0
+	for i, tk := range toks {
+		if tk.Text == "rows" && tk.Kind == Ident {
+			cnt++
+			if cnt == 2 { idx = i; break }
+		}
+	}
+	if idx < 0 { t.Fatal("找不到 rows 使用点") }
+	if _, hit := silentIndexedSignalField(toks, idx, 0, tbl, nil); hit {
+		t.Error("元素类型推不出时应保持沉默，不得按字段名撞车命中")
 	}
 }

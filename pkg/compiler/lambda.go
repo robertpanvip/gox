@@ -92,7 +92,10 @@ func parseLambdaAt(toks []Token, arrowIdx int) *lambdaExpr {
 	// 花括号 body `() => { stmt; stmt }`：lambdaBodyEnd 的深度扫描会把整块
 	// { ... } 纳入 body（内部的 ) ; 换行因深度>0 不终止）。标记后由
 	// buildLambdaParts 生成 `func(){ ... }`（不再包裹 return）。
-	if toks[bodyFrom].Text == "{" {
+	// 例外（B8）：`Signal.computed(() => { x: a, y: b })` 的 body 是对象字面量
+	// 而非语句块——`x: a` 不是合法 Go 语句。此时不标 blockBody，让它走
+	// `return {...}` 并由 objectlit 阶段转成匿名 struct。
+	if toks[bodyFrom].Text == "{" && !isObjectLiteralBody(toks, bodyFrom, bodyTo) {
 		l.blockBody = true
 	}
 	l.bodyFrom, l.bodyTo = bodyFrom, bodyTo
@@ -107,6 +110,39 @@ func parseLambdaAt(toks []Token, arrowIdx int) *lambdaExpr {
 //   - 分号 / 换行（语句结束）
 //
 // 注意：body 内的函数调用参数逗号因深度 >0 被跳过。
+// isObjectLiteralBody 判断 lambda 的花括号 body 是否为对象字面量 `{ k: v, ... }`
+// 而非语句块。对象字面量的特征：花括号内首个有效 token 是标识符且紧跟 ':'
+// （如 `{ x: a, y: b }`）；语句块首 token 多为关键字 / 声明 / 调用，或含 ';'、':='、
+// return 等语句元素。用于 B8：computed(() => { x: a, y: b }) 应生成返回对象的 lambda。
+func isObjectLiteralBody(toks []Token, from, to int) bool {
+	if from >= to || toks[from].Text != "{" {
+		return false
+	}
+	i := nextSigIn(toks, from+1, to)
+	if i < 0 || toks[i].Kind != Ident || isGoKeyword(toks[i].Text) {
+		return false
+	}
+	// 首个标识符后必须紧跟 ':'（标签语句 `L: for` 也满足，但后面是关键字，下面排除）。
+	j := nextSigIn(toks, i+1, to)
+	if j < 0 || toks[j].Text != ":" {
+		return false
+	}
+	// 含语句分隔符 / 短声明 / return 的不是对象字面量。
+	for k := from + 1; k < to && k < len(toks); k++ {
+		switch toks[k].Text {
+		case ";", ":=", "return", "if", "for", "switch", "var", "const", "defer", "go":
+			return false
+		}
+	}
+	// 标签语句 `L: for` / `L: {` 形态：':' 后是控制关键字或 '{'，排除。
+	if k := nextSigIn(toks, j+1, to); k >= 0 {
+		if isGoKeyword(toks[k].Text) || toks[k].Text == "{" {
+			return false
+		}
+	}
+	return true
+}
+
 func lambdaBodyEnd(toks []Token, start int) int {
 	depth := 0
 	for i := start; i < len(toks); i++ {
@@ -765,7 +801,42 @@ func transformLambdas(in []Token, an *Analysis, b *Bindings, sigTypes ...map[str
 		out := make([]Token, 0, len(in)+len(parts))
 		out = append(out, in[:l.paramOpen]...)
 		out = append(out, parts...)
-		out = append(out, in[l.bodyTo:]...)
+		rest := l.bodyTo
+		// JSX 跨行缩进的排版换行：当 lambda body 末尾是 JSX（如 `() => <div>\n...\n</div>`），
+		// lambdaBodyEnd 在 JSX 后的换行处停止，该换行落在生成的 `}` 与宿主闭括号之间，
+		// 形成 `f(func() any {...}\n)`——Go 要求参数列表换行前有 trailing comma，否则报
+		// "missing ',' before newline in argument list"。这段空白只是 JSX 的视觉缩进：
+		// 当且仅当换行后紧跟宿主调用闭合符号（`)` / `]` / `,`）时吞掉；后接标识符或
+		// `}`（函数体/语句块结束）说明是真正的语句结束换行，保留——否则会把 return
+		// 语句与函数闭合括到同一行、破坏 golden 形态。
+		// 第十三轮 P3-D：lambdaBodyEnd 遇到 Comment 即截断，bodyTo 可能停在
+		// `</div> // 尾注` 的空格/注释处，而非紧邻 JSX。往前跳过排版空白/注释
+		// 确认 body 末尾确实是 JSX，再决定是否吞掉换行——否则带尾注的跨行形态
+		// 会把注释留在 `}` 与 `)` 之间，生成 `}// 尾注\n)` 报 missing ','。
+		lastBody := l.bodyTo - 1
+		for lastBody >= l.bodyFrom &&
+			(in[lastBody].Kind == Space || in[lastBody].Kind == Newline || in[lastBody].Kind == Comment) {
+			lastBody--
+		}
+		if !l.blockBody && l.bodyTo > l.bodyFrom && lastBody >= l.bodyFrom && in[lastBody].Kind == JSX {
+			j := l.bodyTo
+			hasNL := false
+			// 第十三轮 P3-D：JSX 后排版区可能夹行注释（`</div> // 尾注` 再换行接
+			// `)`）。Comment 一并吞掉，否则它会把随后的 `)` 注释掉、丢失闭合括号。
+			for j < len(in) && (in[j].Kind == Space || in[j].Kind == Newline || in[j].Kind == Comment) {
+				if in[j].Kind == Newline {
+					hasNL = true
+				}
+				j++
+			}
+			if hasNL && j < len(in) {
+				switch in[j].Text {
+				case ")", "]", ",":
+					rest = j
+				}
+			}
+		}
+		out = append(out, in[rest:]...)
 		in = out
 	}
 }

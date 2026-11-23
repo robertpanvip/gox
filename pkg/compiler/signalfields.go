@@ -1,6 +1,9 @@
 package compiler
 
-import "strings"
+import (
+	"strconv"
+	"strings"
+)
 
 // signalfields.go — struct signal 字段（语言特性）。
 //
@@ -44,10 +47,12 @@ import "strings"
 //  档3 构造  E 是复合字面量构造（如 Leaf{v:"a"}）     → Signal.New(E)，一次构造、可写、可响应；
 //  档4 派生  E 含 signal 读（如 p.a + p.b）           → Signal.Computed(func() T { return E })，
 //           登记依赖，只读（Computed 语义本就只读）；
-//  档5 裸变量 E 是单个普通变量/字段（如 v、q.title）  → Signal.LockedGetter(get,set)：
-//           get 读跟随 E 最新值、set 写落回 E；外层实例级互斥锁保护读写，消除无锁
-//           捕获变量的竞态（第十轮 P1-2）。跟随语义不变，仍需 source 变量在别处被
-//           直接写入时自行同步（编译器无法给用户裸变量读写加锁）。
+//  档5 裸变量 E 是单个普通变量/字段（如 v、q.title）  → Signal.LockedGetterShared(key,get,set)：
+//           get 读跟随 E 最新值、set 写落回 E；按 E 根标识符的声明位置生成 key，
+//           同一变量的所有 getter 在运行时共享一把互斥锁，既消除无锁捕获变量的
+//           竞态（第十轮 P1-2），也消除多字段/多实例各持一把锁彼此不互斥的竞态
+//           （第十一轮 N-3）。跟随语义不变，不登记依赖、UI 不自动刷新；source
+//           变量在别处被直接写入时仍需用户自行同步。
 //  档6 其它  普通表达式（无 signal 读、非上述形态）    → Signal.New(E) 快照，绝不生成
 //           忽略参数的假 signal。
 //
@@ -469,7 +474,10 @@ func resolveSignalChainEx(toks []Token, i int, recvPos Pos, b *Bindings, tbl sig
 		if ft == "" && isSig {
 			ft = tbl.fieldType(curType, field)
 		}
-		curType = bareFieldType(ft)
+		// 第十二轮 P2-D：普通字段若是容器（s.m map[string]P / s.ps []P），
+		// 保留完整容器类型供随后的 [...] 推进；不能像 signal 字段那样 bare 掉
+		// （bareFieldType 对 map[...] 返回空，会让链断裂、s.m["k"].a 静默漏改）。
+		curType = chainFieldType(ft)
 		if curType == "" {
 			// 类型链断裂（如末尾是 int/string）：后面即使还有 '.' 也无法判定，
 			// 保守停止、不按名猜测。
@@ -484,6 +492,25 @@ func resolveSignalChainEx(toks []Token, i int, recvPos Pos, b *Bindings, tbl sig
 					cur = rp
 				}
 			}
+		}
+		// 第十二轮 P2-D：字段段后紧跟的 [...]（s.m["k"] / s.ps[0]）在此推进
+		// receiver 类型到元素类型，并把游标移到 ']'，使下一个 '.' 能接上。
+		// 与链首直接索引（上面的循环）共用同一套 containerElemTypeOnce 逻辑。
+		for {
+			lb := nextSigIn(toks, cur+1, limit)
+			if lb < 0 || toks[lb].Text != "[" {
+				break
+			}
+			rb := matchDelim(toks, lb, "[", "]")
+			if rb <= lb || rb >= limit {
+				break
+			}
+			et := containerElemTypeOnce(curType)
+			if et == "" {
+				break
+			}
+			curType = et
+			cur = rb
 		}
 	}
 	if chain.fieldCount == 0 {
@@ -532,6 +559,23 @@ func receiverTypeBeforeTail(toks []Token, i, start int, callRecv bool, recvPos P
 //   - *T → T；去掉可能的包前缀（pkg.T → T，具名类型在 signalFieldTable 按基名登记）
 //
 // 无法归一（如 int/string 等内建类型、匿名 struct）返回空串。
+// chainFieldType 供 selector 链传播字段类型（第十二轮 P2-D）：
+//   - 容器类型（map[K]V / []T / [N]T / list.List[T]）原样保留，供随后 [...] 推进；
+//   - 其它字段沿用 bareFieldType（signal/list 剥元素、指针/包名剥前缀）。
+//
+// 不这样做的话，bareFieldType("map[string]P") 返回空（"其它泛型不作为 receiver"），
+// 使 s.m["k"].a 的类型链在 .m 处断裂、链尾 a 的 signal 字段读被静默漏改。
+func chainFieldType(ft string) string {
+	t := strings.TrimSpace(ft)
+	if strings.HasPrefix(t, "map[") || strings.HasPrefix(t, "list.List[") || strings.HasPrefix(t, "List[") {
+		return t
+	}
+	if strings.HasPrefix(t, "[") && strings.Contains(t, "]") {
+		return t // []T / [N]T
+	}
+	return bareFieldType(ft)
+}
+
 func bareFieldType(ft string) string {
 	t := strings.TrimSpace(ft)
 	i := strings.Index(t, "[")
@@ -563,7 +607,19 @@ func containerElemTypeFromBinding(b *Bindings, name string, pos Pos) string {
 		return ""
 	}
 	bd := b.ResolveAt(name, pos)
-	if bd == nil || len(b.toks) == 0 {
+	if bd == nil {
+		return ""
+	}
+	// 第十二轮 P3-E：优先用 Binding.Type——参数/指针/render 返回/:=map 字面量
+	// 的容器类型都已被 Bind 准确推断（P2-B 修好 map 字面量后尤甚），而文本回扫
+	// 只认 `var`/`:=`，对函数参数 `func f(rows map[K][]V)` 永远返回空。
+	// 这里剥一层元素类型，与下方文本反推的返回值语义一致（map[K]V→V）。
+	if bd.Type != "" {
+		if et := containerElemTypeOnce(bd.Type); et != "" {
+			return et
+		}
+	}
+	if len(b.toks) == 0 {
 		return ""
 	}
 	// 找声明下标：b.toks 是 Bind 时的原始流，DeclPos 在其中稳定命中。
@@ -601,6 +657,12 @@ func containerElemTypeFromDeclAt(toks []Token, declIdx int) string {
 		}
 	}
 	if looksContainerTypeStart(toks, after) {
+		// N-1：`m["k"]` 的 '[' 是索引而非 []T 类型起点，第二次访问同名 token 时
+		// 会被本分支误判。只有 `var m map[K]V` / `var m []T` 才是声明——
+		// 短声明 `m := map...` 走上面的 := 分支，不会出现在这里。
+		if p := prevSig(toks, declIdx-1); p < 0 || !toks[p].is("var") {
+			return ""
+		}
 		te := typeRangeEnd(toks, after)
 		if te > after {
 			if et := containerElemTypeOnce(exprText(toks, after, te)); et != "" {
@@ -760,6 +822,76 @@ func isSignalSelector(toks []Token, i int, b *Bindings, tbl signalFieldTable) (f
 	return sel.field, true, sel.fieldIdx
 }
 
+// silentIndexedSignalField 检测「索引元素的 signal 字段读未被改写」的静默漏改
+// 场景（第十二轮 §4.5 立规矩，第十三轮 P1-A 收窄判据）。只在极窄窗口报警：
+//   - 链首标识符后有索引 '['（x[i].f），且链能走到一个尾字段名 f；
+//   - x 的容器元素类型可推断，且该元素类型确实声明了 signal 字段 f；
+//   - 正常类型路径没能把 f 识别为 signal 字段（调用方在 !ok 分支调用本函数）。
+//
+// 返回 (字段名, 是否命中)。命中即应报"无法推断索引元素类型"诊断，而非静默让
+// Go 打印 Signal 函数地址。
+func silentIndexedSignalField(toks []Token, i, limit int, tbl signalFieldTable, b *Bindings) (string, bool) {
+	if i < 0 || i >= len(toks) || toks[i].Kind != Ident {
+		return "", false
+	}
+	if limit <= 0 || limit > len(toks) {
+		limit = len(toks)
+	}
+	// 链首后是否紧跟索引（跳过空白），再沿 '.'/索引走到尾字段名。
+	hasIndex := false
+	lastField := ""
+	cur := i
+	for {
+		n := nextSigIn(toks, cur+1, limit)
+		if n < 0 {
+			break
+		}
+		if toks[n].Text == "[" {
+			rb := matchDelim(toks, n, "[", "]")
+			if rb <= n || rb >= limit {
+				break
+			}
+			hasIndex = true
+			cur = rb
+			continue
+		}
+		if toks[n].Text == "." {
+			k := nextSigIn(toks, n+1, limit)
+			if k < 0 || toks[k].Kind != Ident || isGoKeyword(toks[k].Text) {
+				break
+			}
+			lastField = toks[k].Text
+			cur = k
+			continue
+		}
+		break
+	}
+	if !hasIndex || lastField == "" {
+		return "", false
+	}
+	// 第十三轮 P1-A：元素类型必须可推断，且该类型确实把 lastField 声明为 signal
+	// 字段。旧判据只比「字段名唯一命中」不看类型，导致 Row.title（普通字段）与
+	// Item.title（signal 字段）撞名时误报、阻断构建。推不出就沉默，不猜。
+	et := ""
+	if b != nil {
+		et = containerElemTypeFromBinding(b, toks[i].Text, toks[i].Pos)
+	}
+	if et == "" {
+		et = containerElemTypeFromDecl(toks, i, toks[i].Pos)
+	}
+	if et == "" {
+		return "", false
+	}
+	fields, ok := tbl.sig[bareFieldType(et)]
+	if !ok {
+		return "", false
+	}
+	if _, ok := fields[lastField]; !ok {
+		return "", false
+	}
+	return lastField, true
+}
+
 // rewriteSignalFieldRefs 对持有 signal 字段 struct 的 selector 做读写解包：
 //   - 读 `p.name` → `p.name()`
 //   - 写 `p.name = expr` → `p.name(expr)`
@@ -769,7 +901,84 @@ func isSignalSelector(toks []Token, i int, b *Bindings, tbl signalFieldTable) (f
 // 判定基于 receiver 的推断类型 + signalFieldTable；普通字段、外部包符号、
 // 已是调用 `p.name(...)` 都不改。this transform 在 transformSignals 之后、
 // external 之前运行——此时字段仍是小写、类型已是 Signal.Signal[T]。
-func rewriteSignalFieldRefs(toks []Token, b *Bindings, tbl signalFieldTable) []Token {
+// checkSignalValueDeepWrite 检测 signal 持有复合值时的字段深写：`signal s = S{...}; s.n = 2`
+// 会被改写为 `s().n = 2`，Go 报 "cannot assign to s().n"，信息不指向 GX 写法。
+// 给带坐标的诊断，提示整体替换 signal。signal 字段自身的写（p.name = v，p 是普通
+// struct 变量、name 是 signal 字段）不在此列——p 不是 signal 变量，不会命中。
+func checkSignalValueDeepWrite(toks []Token, b *Bindings, diags *[]GXDiagnostic) {
+	if b == nil || diags == nil {
+		return
+	}
+	for i := 0; i < len(toks); i++ {
+		if toks[i].Text != "." {
+			continue
+		}
+		// '.' 前是赋值目标链，往左剥掉所有索引 [...]，直到 signal 读调用 s()。
+		// 无索引：s().n = 2        （B4，原有逻辑）
+		// 带索引：rows()[0].name = "b"（C2，值变了但 signal 未写、UI 不刷新）
+		j := prevSig(toks, i-1)
+		if j < 0 {
+			continue
+		}
+		indexed := false
+		steps := 0
+		for toks[j].Text == "]" {
+			lb := matchDelimBack(toks, j, "]")
+			if lb < 0 {
+				break
+			}
+			j = prevSig(toks, lb-1)
+			if j < 0 {
+				break
+			}
+			indexed = true
+			steps++
+			if steps > 8 { // 防御异常深链
+				break
+			}
+		}
+		if j < 0 || toks[j].Text != ")" {
+			continue
+		}
+		lp := matchDelimBack(toks, j, ")")
+		if lp < 0 || nextSig(toks, lp+1) != j { // 只认无参读 s()，跳过 s(v) 写调用
+			continue
+		}
+		id := prevSig(toks, lp-1)
+		if id < 0 || toks[id].Kind != Ident || isGoKeyword(toks[id].Text) {
+			continue
+		}
+		if !isSignalRefAt(b, toks[id].Text, toks[id].Pos) {
+			continue
+		}
+		// '.' 后是字段名，再跟赋值/复合赋值符。
+		field := nextSig(toks, i+1)
+		if field < 0 || toks[field].Kind != Ident || isGoKeyword(toks[field].Text) {
+			continue
+		}
+		op := nextSig(toks, field+1)
+		if op < 0 || !isAssignOp(toks[op].Text) && !compoundAssignOps[toks[op].Text] {
+			continue
+		}
+		msg := ""
+		if indexed {
+			// C2：切片元素字段赋值编译得过、值也变了，但没有 signal 写、slot 不刷新。
+			msg = "signal 持有的切片元素字段直接赋值不会触发刷新（" + exprText(toks, id, op) + "）；请整体替换后重新赋值 signal，如 " + toks[id].Text + "(新切片)"
+		} else {
+			msg = "signal 持有的复合值不支持字段直接赋值（" + toks[id].Text + "." + toks[field].Text + " = ...）；请整体替换 signal，如 " + toks[id].Text + "(新值)"
+		}
+		*diags = append(*diags, GXDiagnostic{
+			Pos:     toks[i].Pos,
+			Code:    "signal-deep-write",
+			Message: msg,
+		})
+		i = op
+	}
+}
+
+func rewriteSignalFieldRefs(toks []Token, b *Bindings, tbl signalFieldTable, diags *[]GXDiagnostic) []Token {
+	// B4：signal 持有复合值的字段深写（s.n = 2）——即使本文件无 signal 字段表也要报。
+	checkSignalValueDeepWrite(toks, b, diags)
 	if !tbl.hasSignalFields() {
 		return toks
 	}
@@ -806,6 +1015,18 @@ func rewriteSignalFieldRefs(toks []Token, b *Bindings, tbl signalFieldTable) []T
 		// emitChain 对"段后已有 ()"不重复补，故跳过是安全的。
 		chain, ok := resolveSignalChainEx(toks, i, toks[i].Pos, b, tbl, 0, true)
 		if !ok || len(chain.segs) == 0 {
+			// 第十二轮 §4.5 立规矩：索引链元素类型推不出、链尾字段名唯一命中
+			// signal 字段时，不能静默输出裸 selector（Go 会打印 Signal 函数地址），
+			// 报明确诊断让用户显式标注或改用切片变量。
+			if diags != nil {
+				if field, hit := silentIndexedSignalField(toks, i, 0, tbl, b); hit {
+					*diags = append(*diags, GXDiagnostic{
+						Pos:     toks[i].Pos,
+						Code:    "signal-field-index-unknown",
+						Message: "无法推断索引元素的类型，字段 " + field + " 是 signal 字段但读未被改写；请显式标注元素类型或改用切片变量",
+					})
+				}
+			}
 			out = append(out, t)
 			continue
 		}
@@ -1361,6 +1582,34 @@ func wrapLitBody(toks []Token, lit compositeLitInfo, b *Bindings, tbl signalFiel
 
 // wrapLitSeg 处理单个字段段 [s,e)（`field : value`）：先递归处理 value 内部嵌套
 // 字面量得到 newVal，再按三档生成载荷；非 signal 字段只递归下探、原样搬运。
+// stripSoleSignalShorthand 处理 `P{v}` 位置简写（P 唯一字段是 signal 字段）：
+// 段 [s,e) 去空白后若恰是 `Ident ( )` 且 Ident 是 signal 读，则剥掉 () 保留
+// getter 本身，使 P{v()} → P{v}（signal 字段需要 Signal[T] 而非读出的 T）。
+// 非该形态返回 (nil, false)。
+func stripSoleSignalShorthand(toks []Token, s, e int, b *Bindings) ([]Token, bool) {
+	idx := -1
+	for k := s; k < e; k++ {
+		if toks[k].Kind == Space || toks[k].Kind == Newline || toks[k].Kind == Comment {
+			continue
+		}
+		if idx < 0 {
+			idx = k
+			continue
+		}
+		// 首个有效 token 后只允许 '(' ')'（signal 读调用）或空白。
+		if toks[k].Text != "(" && toks[k].Text != ")" {
+			return nil, false
+		}
+	}
+	if idx < 0 || toks[idx].Kind != Ident || isGoKeyword(toks[idx].Text) {
+		return nil, false
+	}
+	if b == nil || !isSignalRefAt(b, toks[idx].Text, toks[idx].Pos) {
+		return nil, false
+	}
+	return []Token{toks[idx]}, true
+}
+
 func wrapLitSeg(toks []Token, typeName string, seg [2]int, b *Bindings, tbl signalFieldTable) ([]Token, bool) {
 	s, e := seg[0], seg[1]
 	// 段内找顶层 ':'（字段值可能是复合字面量，须按深度跳过内部 ':'）。
@@ -1381,6 +1630,15 @@ func wrapLitSeg(toks []Token, typeName string, seg [2]int, b *Bindings, tbl sign
 		}
 	}
 	if colon < 0 {
+		// B7：位置简写 `P{v}`（P 只有一个字段且是 signal 字段）——transformSignals
+		// 已把 signal 变量 v 补成 v()（string），但 signal 字段要的是 getter 本身
+		// （Signal[string]）。仅当类型恰有一个字段且它是 signal 字段时安全剥 ()。
+		// 多字段布局简写无法确定 v 落在哪个位置，保持原样（显式键 P{a: v} 可用）。
+		if len(tbl.all[typeName]) == 1 && len(tbl.sig[typeName]) == 1 {
+			if stripped, ok := stripSoleSignalShorthand(toks, s, e, b); ok {
+				return stripped, true
+			}
+		}
 		return wrapLitsInRange(toks, s, e, b, tbl)
 	}
 	nameIdx := nextSigIn(toks, s, colon)
@@ -1579,19 +1837,52 @@ func assignableRef(toks []Token, from, to int, b *Bindings, pos Pos) *[2]int {
 	return nil
 }
 
-// signalLockedGetterCall 生成「带锁跟随 getter」（档5，第十轮 P1-2）：
+// signalLockKey 为「跟随同一变量」的档5 getter 生成稳定的共享锁 key（第十一轮 N-3，
+// 第十二轮 P3-G 增强）。身份 = 根标识符名 + 声明位置（DeclPos.Offset）：
+// 同一变量被多个字段引用、或在多个实例里构造时，ResolveAt 都解析到同一 Binding
+// → 同一 key → 运行时复用同一把锁，修复"同变量多字段/多实例各持一把锁、彼此不互斥"
+// 的数据竞争。带上变量名后，跨编译单元「同 offset 但不同名」的变量不再误共用锁。
+// 解析不到 Binding 时退化为 ref 文本，仍保证同名访问共享（保守但正确）。
 //
-//	Signal.LockedGetter(
+// 边界：key 是进程级的（运行时 sync.Map 按 key 共享），极端情况下两个不同编译单元的
+// 同名变量恰好落在同一 Offset 仍会共用一把锁——正确性无碍（只是串行化），
+// 不引入文件身份是为了保持编译管线零签名侵入；LSP 多文件并发若在意该串行化，
+// 可在调用方为不同文件使用不同进程/命名空间。
+func signalLockKey(ref []Token, b *Bindings, pos Pos) string {
+	name := ""
+	for _, t := range ref {
+		if t.Kind == Ident {
+			name = t.Text
+			break
+		}
+	}
+	text := exprText(ref, 0, len(ref))
+	if name != "" && b != nil {
+		if bd := b.ResolveAt(name, pos); bd != nil && bd.DeclPos.valid() {
+			return "sf:" + name + ":" + strconv.Itoa(bd.DeclPos.Offset)
+		}
+	}
+	return "sf#" + text
+}
+
+// signalLockedGetterCall 生成「带锁跟随 getter」（档5，第十轮 P1-2 / 第十一轮 N-3）：
+//
+//	Signal.LockedGetterShared(
+//	    "<key>",
 //	    func() T { return <ref> },
 //	    func(__v T) { <ref> = __v },
 //	)
 //
-// 读跟随普通变量最新值、写落回变量（保留用户要的跟随语义），外层由 LockedGetter
-// 的实例级互斥锁保护读写，消除裸闭包 v=arg[0]/return v 的数据竞争。
+// 读跟随普通变量最新值、写落回变量（保留用户要的跟随语义）。<key> 标识被跟随的
+// 变量，运行时按 key 共享互斥锁——同一变量的所有 getter 用同一把锁串行化，
+// 消除裸闭包 v=arg[0]/return v 的数据竞争，也消除"多字段各自一把锁"的 race。
 // <ref> 是单个可赋值变量/selector（assignableRef 的结果，const 已排除）。
-func signalLockedGetterCall(T string, p Pos, ref []Token) []Token {
-	// Signal.LockedGetter(
-	out := []Token{signalPkgToken(p), tokOp(".", p), tokIdent("LockedGetter", p), tokOp("(", p)}
+func signalLockedGetterCall(T string, p Pos, key string, ref []Token) []Token {
+	// Signal.LockedGetterShared(
+	out := []Token{
+		signalPkgToken(p), tokOp(".", p), tokIdent("LockedGetterShared", p), tokOp("(", p),
+		tokString(strconv.Quote(key), p), tokOp(",", p),
+	}
 	// func() T { return <ref> }
 	out = append(out, tokIdent("func", p), tokOp("(", p), tokOp(")", p), tokSpace(" ", p))
 	out = append(out, tokensForType(T, p)...)
@@ -1633,12 +1924,14 @@ func buildSignalFieldValue(T string, p Pos, toks []Token, from, to int, b *Bindi
 		// 档4：含 signal 读——Computed 登记依赖，只读。
 		return signalComputedCall(T, p, expr)
 	case sigValPlainVar:
-		// 档5：单个普通变量/selector——Signal.LockedGetter，跟随语义不变。
-		// 第十轮 P1-2：保留读跟随/写落回变量，但用实例级互斥锁包住 get/set，
-		// 消除裸闭包 v=arg[0]/return v 的数据竞争。
+		// 档5：单个普通变量/selector——Signal.LockedGetterShared，跟随语义不变。
+		// 第十轮 P1-2：用互斥锁包住 get/set 消除裸闭包数据竞争；
+		// 第十一轮 N-3：锁按被跟随变量共享（同一声明位置 → 同一 key → 同一把锁），
+		// 修复同实例多字段、跨实例共享同一变量时各持一把锁仍 race 的问题。
 		refRange := assignableRef(toks, from, to, b, pos)
 		ref := append([]Token{}, toks[refRange[0]:refRange[1]]...)
-		return signalLockedGetterCall(T, p, ref)
+		key := signalLockKey(ref, b, pos)
+		return signalLockedGetterCall(T, p, key, ref)
 	case sigValSnapshot:
 		fallthrough
 	default:

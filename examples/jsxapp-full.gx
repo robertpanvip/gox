@@ -54,7 +54,11 @@ func main() {
 
     // 组合根视图（SolidJS 风格建树函数）：count/doubled 在插值里读，编成 getter
     // 传给 Dashboard；render 内部建根 Owner + 接线，signal 变化 → 更新插槽 → 自动重绘。
-    app.render(() => <div id="app"><Dashboard count={count} doubled={doubled}/></div>)
+    app.render(() =>
+        <div id="app">
+            <Dashboard count={count} doubled={doubled}/>
+        </div>
+    )
 
     // count=5 后，count→5、doubled→10，两行在同一次重绘里一致更新
     count = 5

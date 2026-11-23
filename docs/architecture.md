@@ -80,10 +80,10 @@ emit               拼装 Go 源码，同时记录输出 token → 输入位置�
    - **档2 字面量**：数字/字符串/bool/nil 等纯常量 → `Signal.New(v)`；
    - **档3 构造**：复合字面量（如 `Leaf{v:"a"}`）→ `Signal.New(v)`，一次构造、可写、可响应（**不可**包成每次读重建的裸闭包，否则写入丢失、依赖链断裂、UI 不刷新）；
    - **档4 派生**：含 signal 读的表达式（如 `p.a + p.b`）→ `Signal.Computed(func() T { return expr })`，登记依赖、只读（带参写入显式 panic，不再静默丢弃）；
-   - **档5 裸变量**：单个普通变量/字段（如 `v`、`q.title`）→ `Signal.LockedGetter(func() T { return v }, func(x T) { v = x })`，读跟随最新值、写落回变量，外层实例级互斥锁防竞态（第十轮 P1-2：早期裸闭包 `v=arg[0]` 无锁，并发读写同一字段会 data race）；
+   - **档5 裸变量**：单个普通变量/字段（如 `v`、`q.title`）→ 可写跟随 getter（内部 `LockedGetterShared`，按变量声明位置生成 key 共享一把互斥锁），读跟随最新值、写落回变量；**不登记依赖，UI 不自动刷新**（第十轮 P1-2：早期裸闭包 `v=arg[0]` 无锁会 data race；第十一轮 N-3：早期每 getter 各持一把锁，同实例多字段/跨实例共享同一变量仍 race，改为按变量 key 共享锁）；
    - **档6 其它**：普通表达式 → `Signal.New(v)` 快照。
   
-   硬判据：生成出的 `func(...T) T` 若忽略参数、不登记依赖，就不是合法 signal。派生档由 `exprHasSignalRead` 判定（transformSignals 已把裸信号读改写成 `n()`，据此识别）。集成测试 `TestIntegrationSignalFieldHandwrittenDerivedLive`、`TestIntegrationChainRWGetterFreshReceiver` 与编译测试 `TestSignalFieldHandwrittenDerivedUsesComputed` 固化了「手写派生保鲜 / 链中间 signal 段变化保鲜」。档 5 的并发边界：`LockedGetter` 只保护经由该字段的读写；用户代码在别处直接读写同一变量需自行同步。
+   硬判据：生成出的 `func(...T) T` 若忽略参数、不登记依赖，就不是合法 signal。派生档由 `exprHasSignalRead` 判定（transformSignals 已把裸信号读改写成 `n()`，据此识别）。集成测试 `TestIntegrationSignalFieldHandwrittenDerivedLive`、`TestIntegrationChainRWGetterFreshReceiver` 与编译测试 `TestSignalFieldHandwrittenDerivedUsesComputed` 固化了「手写派生保鲜 / 链中间 signal 段变化保鲜」。档 5 两条边界：**并发**——共享锁只保护经由 getter 的访问，用户代码在别处直接读写同一变量需自行同步（编译测试 `TestR12SharedLockKeySameVariable/DistinctVariables` 固化同变量同 key、异变量异 key；`-race` 测试 `TestLockedGetterSharedSameKeyConcurrent` 固化多字段并发安全）；**响应式**——不登记依赖，写不通知 UI 刷新，需完整响应式请用 signal 源或 `Signal.New`；**性能**——每次读加锁约 14ns（真 signal 约 2ns），不要用在列表渲染热路径，列表项请用 signal 源。共享锁注册表是进程级 `sync.Map`，key 为「变量名 + 声明 Offset」，跨编译单元同构变量（同名同 offset）可能共用锁，正确性无碍、仅串行化。
 3. **读写解包**：`rewriteSignalFieldRefs` 用 receiver 的推断类型（`Bindings.ResolveAt(...).Type`，已增强为识别具名复合字面量 `X{...}`）查表，只对命中的 selector 补 `()` / 改写为调用式。普通字段、同名非 signal 字段、外部包符号都不动。JSX 插值侧 `rewriteJSXSignalFieldSelectors` 同样按 receiver 类型判定（不再按字段名全表猜），兑现 `language-spec.md` §11.1 的类型安全承诺。
 
 保鲜语义的关键在构造直通：`p := X{name: src}` 必须生成 `name: src`（getter 本身），不能是 `Signal.New(src())`（快照当前值、断开后续更新）。集成测试 `TestIntegrationSignalFieldLiveProps` 固化了这一点（源 signal 更新后持有者读到新值）。
@@ -115,6 +115,16 @@ emit               拼装 Go 源码，同时记录输出 token → 输入位置�
 - `AddReplace` 注入 `go.mod replace`，使生成代码能解析到本地运行时（runtime/scene、runtime/list）。
 
 诊断的 Go 坐标经 `sourcemap.GoToGx` 转成 `.gx` 坐标后输出（CLI `-check` 与 LSP 诊断共用此路径）。多文件场景用 `CheckFiles([]SourceFile)`：每份产物以相对路径（如 `util/math.go`）写入临时 module，`SetModulePath` 设项目 module 使本地包 import 可解析，诊断的 `File` 字段保留相对路径，CLI 据此选择对应 `.gx` 的 sourcemap 回投到正确文件与行。
+
+### signal 字段漏改诊断：规矩该立在哪
+
+signal 字段读若漏改写（`p.name` 未变 `p.name()`），生成代码会打印 `Signal` 函数地址而非值。这类漏改的诊断有两处落点，职责不同：
+
+- **源码侧（`pkg/compiler/signalfields.go`）**：`silentIndexedSignalField` 在索引链元素类型推不出时报 `signal-field-index-unknown`。判据必须校验「元素类型可推断且该类型确有此 signal 字段」，不能只比字段名——否则 `type Item struct{ signal title string }` 与 `type Row struct{ title string }` 并存时，`rows[0].title`（普通字段）会因撞名被误报、阻断构建（第十三轮 P1-A）。推不出就沉默，不猜。
+- **产物侧（`internal/check`）**：更彻底的规矩是「类型为 `Signal.Signal[T]` 的表达式出现在非调用位置即报错」，能一次覆盖 `x[i].f` / `fn()[i].f` / comma-ok / range map / 类型断言等所有形态，且天然不误报普通字段。**当前未落地**：`internal/check.exprType` 依赖 GX 语义层类型（signal 变量的逻辑类型是 `T` 而非物理类型 `Signal[T]`），拿不到该判据所需的物理类型；实现它需引入 `go/types` 对生成代码做 type-check（`buildcheck` 已有 `go build` 机制，但要拿每个表达式类型需额外 `types.Info`）并接 sourcemap 回投。属架构级改动，列为后续方向。
+- **多左值 comma-ok（第十三轮 P2-C）**：`inferMultiLHSTypes` 已补「`v, ok := m[k]` → 首值取元素类型、次值 bool」，使 `v.a` 这类 signal 字段读能沿类型链正确改写。其余形态（range map / 类型断言）暂由产物侧方案兜底（待落地）。
+
+诊断可见性：单文件 `gox build` 与项目模式（`gox build -root`）现已统一消费 `Analysis.Diagnostics()`——同一份 `.gx` 不再出现「换个构建方式结论不同」。
 
 ## 跨文件 GX 模块（`pkg/module`）
 

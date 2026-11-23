@@ -1179,3 +1179,73 @@ func main() {
 		t.Errorf("工厂返回字段读写失败, got:\n%s", out)
 	}
 }
+
+// 第十一轮 N-3：档5 跟随普通变量的字段改用按变量共享锁的 LockedGetterShared，
+// 端到端验证生成代码可真实编译运行、写落回变量、读跟随最新值（跟随语义不变）。
+func TestIntegrationR12SharedLockPlainVarField(t *testing.T) {
+	src := `package main
+import "fmt"
+type P struct { signal a string; signal b string }
+func main() {
+	v := "x"
+	p := P{a: v, b: v}
+	fmt.Println("init", p.a(), p.b())
+	p.a = "y"
+	fmt.Println("write-a", p.a(), p.b(), v)
+	v = "z"
+	fmt.Println("follow", p.a(), p.b())
+}
+`
+	out := runGX(t, src)
+	want := []string{"init x x", "write-a y y y", "follow z z"}
+	for _, w := range want {
+		if !strings.Contains(out, w) {
+			t.Errorf("共享锁跟随语义失败, 期望 %q, got:\n%s", w, out)
+		}
+	}
+}
+
+// 第十二轮 P2-B+P2-C：m, err := load() 的多左值与 map 字面量类型推断联动——
+// m["k"].a 必须被识别为 signal 字段并改写，否则静默打印函数地址、写生成非法 Go。
+func TestIntegrationR12MultiLHSMapIndex(t *testing.T) {
+	src := `package main
+import "fmt"
+type P struct { signal a string }
+func load() (map[string]P, error) { return map[string]P{"k": {a: "x"}}, nil }
+func main() {
+	m, err := load()
+	fmt.Println("read", m["k"].a, err == nil)
+	m["k"].a = "y"
+	fmt.Println("write", m["k"].a)
+}
+`
+	out := runGX(t, src)
+	if !strings.Contains(out, "read x true") || !strings.Contains(out, "write y") {
+		t.Errorf("多左值 map 索引读写改写失败, got:\n%s", out)
+	}
+	if strings.Contains(out, "0x") {
+		t.Errorf("不得打印函数地址（signal 字段读未改写）, got:\n%s", out)
+	}
+}
+
+// 第十二轮 P2-D：结构体字段容器（map / slice）里的 signal 字段读写真实运行验证。
+func TestIntegrationR12StructFieldContainerIndex(t *testing.T) {
+	src := `package main
+import "fmt"
+type P struct { signal a string }
+type S struct { m map[string]P; ps []P }
+func main() {
+	s := S{m: map[string]P{"k": {a: "x"}}, ps: []P{{a: "p"}}}
+	fmt.Println("map", s.m["k"].a, "slice", s.ps[0].a)
+	s.m["k"].a = "y"
+	fmt.Println("write", s.m["k"].a)
+}
+`
+	out := runGX(t, src)
+	if !strings.Contains(out, "map x slice p") || !strings.Contains(out, "write y") {
+		t.Errorf("结构体字段容器 signal 读写失败, got:\n%s", out)
+	}
+	if strings.Contains(out, "0x") {
+		t.Errorf("不得打印函数地址, got:\n%s", out)
+	}
+}

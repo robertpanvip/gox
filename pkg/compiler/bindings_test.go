@@ -1,6 +1,7 @@
 package compiler
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -538,4 +539,133 @@ func scopeKindOf(bd *Binding) string {
 		return "SkSelect"
 	}
 	return "?"
+}
+
+// 第十二轮 P2-B：map[K]V{...} 字面量的 TypeAt 必须给出完整 map 类型，
+// 不能再落到「含字符串 → string」兜底推成 key 类型。
+func TestBindTypeAtMapLiteral(t *testing.T) {
+	src := `package main
+func main() {
+    m := map[string]P{"k": {a: "x"}}
+    println(m)
+}
+`
+	toks := New(src).AllTokens()
+	b := Bind(toks)
+	usePos := posAtNthIdent(t, toks, "m", 2) // 第 1 个是声明，第 2 个是 println 使用点
+	if got := b.TypeAt("m", usePos); got != "map[string]P" {
+		t.Errorf("TypeAt(m) = %q, want %q", got, "map[string]P")
+	}
+}
+
+// 第十二轮 P2-C：多左值 := 必须按位置分别推断，不能把首个结果套给所有左值。
+func TestBindMultiLHSByPosition(t *testing.T) {
+	// 形态一：函数调用返回元组。
+	src1 := `package main
+type P struct { a string }
+func load() (map[string]P, error) { return nil, nil }
+func main() {
+    m, err := load()
+    println(m, err)
+}
+`
+	{
+		toks := New(src1).AllTokens()
+		b := Bind(toks)
+		mPos := posAtNthIdent(t, toks, "m", 2)   // 声明 + println 使用
+		errPos := posAtNthIdent(t, toks, "err", 2)
+		if got := b.TypeAt("m", mPos); got != "map[string]P" {
+			t.Errorf("元组首值 m: TypeAt = %q, want %q", got, "map[string]P")
+		}
+		if got := b.TypeAt("err", errPos); got != "error" {
+			t.Errorf("元组次值 err: TypeAt = %q, want %q", got, "error")
+		}
+	}
+	// 形态二：逗号分隔多表达式。
+	src2 := `package main
+type P struct { a string }
+func main() {
+    a, n := map[string]P{"k": {a: "x"}}, 1
+    println(a, n)
+}
+`
+	{
+		toks := New(src2).AllTokens()
+		b := Bind(toks)
+		aPos := posAtNthIdent(t, toks, "a", 2)
+		nPos := posAtNthIdent(t, toks, "n", 2)
+		if got := b.TypeAt("a", aPos); got != "map[string]P" {
+			t.Errorf("多表达式首值 a: TypeAt = %q, want %q", got, "map[string]P")
+		}
+		if got := b.TypeAt("n", nPos); got != "int" {
+			t.Errorf("多表达式次值 n: TypeAt = %q, want %q", got, "int")
+		}
+	}
+}
+
+// 第十三轮 P2-C：comma-ok 索引取值 `v, ok := m[k]` 的第一左值应取元素类型，
+// 使 v 的 signal 字段读（v.a）被正确改写成 v.a()，而非打印 Signal 函数地址。
+// 同时守护其它 comma-ok 形态不受影响。
+func TestBindCommaOKIndexElemType(t *testing.T) {
+	src := `package main
+import gxscene "github.com/robertpanvip/gox/runtime/scene"
+type P struct { signal a string }
+func main() {
+	m := map[string]P{"k": {a: "x"}}
+	v, ok := m["k"]
+	_ = ok
+	_ = <div>{v.a}</div>
+}
+`
+	res, err := CompileScene("comma.gx", src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if verr := res.Validate(); verr != nil {
+		t.Fatalf("生成 Go 语法无效: %v", verr)
+	}
+	if !strings.Contains(res.GoSource, "v.a()") {
+		t.Errorf("comma-ok 首值的 signal 字段读应改写为 v.a():\n%s", res.GoSource)
+	}
+	if strings.Contains(res.GoSource, "v.a }") || strings.Contains(res.GoSource, "return v.a ") {
+		t.Errorf("comma-ok 首值 signal 字段读未改写, got:\n%s", res.GoSource)
+	}
+}
+
+// 判据守护：indexElemTypeAt 只认单索引表达式，其它 comma-ok 形态不进入。
+func TestIndexElemTypeAtNarrow(t *testing.T) {
+	cases := []struct {
+		name, expr string
+		want       string
+	}{
+		{"单索引", `m["k"]`, "P"},
+		{"多索引非单值", `m["k"][0]`, ""},
+		{"selector尾巴", `m["k"].a`, ""},
+		{"channel接收", `<-ch`, ""},
+		{"普通标识符", `v`, ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			src := "package main\ntype P struct{}\nfunc main(){\n m := map[string]P{}\n _ = " + c.expr + "\n}\n"
+			toks := New(src).AllTokens()
+			b := Bind(toks)
+			// 取 `_ = <expr>` 之后表达式的起点（最后一个 `=` 即 `_ =`）。
+			from := -1
+			for i := len(toks) - 1; i >= 0; i-- {
+				if toks[i].Text == "=" {
+					if n := nextSig(toks, i+1); n >= 0 {
+						from = n
+					}
+					break
+				}
+			}
+			if from < 0 {
+				t.Fatal("找不到表达式起点")
+			}
+			got := indexElemTypeAt(toks, from, len(toks), b)
+			if got != c.want {
+				t.Errorf("indexElemTypeAt(%s) = %q, want %q", c.expr, got, c.want)
+			}
+		})
+	}
 }

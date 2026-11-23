@@ -153,7 +153,7 @@ func compileWithMode(file, src, module string, imports map[string]ImportInfo) (*
 	// 字段读 p.a 改写成 p.a()，后者才能在构造位置识别 recv.field() 形态并直通裸
 	// getter（保鲜）。若反序，wrap 生成的直通 getter p.a 会被随后的 rewrite 改成
 	// p.a()（快照，静默冻结）。两者互不依赖对方的产物结构，顺序调换对其余场景无影响。
-	toks = rewriteSignalFieldRefs(toks, bindings, signalFields)
+	toks = rewriteSignalFieldRefs(toks, bindings, signalFields, &analysis.diags)
 	toks = wrapSignalFieldLiterals(toks, bindings, signalFields)
 	toks = runUnion(toks)
 	toks = transformTypeGuard(toks, analysis)
@@ -167,7 +167,7 @@ func compileWithMode(file, src, module string, imports map[string]ImportInfo) (*
 	// 会从签名补全 Card(CardProps{...}) 并校验字段。
 	structs := collectStructTypes(toks)
 	comps := collectCompContracts(toks, structs)
-	ctx := &jsxSceneCtx{sigs: sigs, comps: comps, sigTypes: sigTypes, bindings: bindings, signalFields: signalFields}
+	ctx := &jsxSceneCtx{sigs: sigs, comps: comps, sigTypes: sigTypes, bindings: bindings, signalFields: signalFields, diags: &analysis.diags}
 	toks = transformJSXScene(toks, ctx)
 	// 第二次对象字面量变换：补全 JSX 转换新产生的 Card({...}) 期望类型并校验。
 	// 第一次已在 desugar 早期处理非 JSX 字面量；这里处理 JSX 阶段新增的。

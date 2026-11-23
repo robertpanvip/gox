@@ -574,9 +574,11 @@ func rewriteJSXInterpSignals(toks []Token, sigs map[string]bool) []Token {
 			for k < end && toks[k].Kind == Space {
 				k++
 			}
-			for ; k < end; k++ {
-				out = append(out, toks[k])
-			}
+			// 复合赋值 RHS 必须递归改写裸 signal 读（H-3），与顶层闭包一致：
+			// load = load + 1 → load(load() + 1)，漏改会生成 load(load + 1)
+			// 导致 Signal[int] 与 int 相加的类型错误。形态排除（selector 右侧 /
+			// 字段键 / 声明目标 / 已是调用 / 嵌套复合赋值）由本函数递归统一处理。
+			out = append(out, rewriteJSXInterpSignals(toks[k:end], sigs)...)
 			out = append(out, tokOp(")", t.Pos))
 			i = end - 1
 			continue
@@ -599,9 +601,8 @@ func rewriteJSXInterpSignals(toks []Token, sigs map[string]bool) []Token {
 			for k < end && toks[k].Kind == Space {
 				k++
 			}
-			for ; k < end; k++ {
-				out = append(out, toks[k])
-			}
+			// 简单赋值 RHS 同样递归补读调用：a = b → a(b())。
+			out = append(out, rewriteJSXInterpSignals(toks[k:end], sigs)...)
 			out = append(out, tokOp(")", t.Pos))
 			i = end - 1
 			continue
