@@ -122,8 +122,39 @@ GX 侧用 `widgets.Canvas(props)` 构建（`ops` 传 `[]canvas.Op`）。两端�
 - 未注册实现时走 `noopFileDialog`（返回空选择，不 panic），headless/测试安全。
 - 原生实现：`backend/skia/filedialog.go`（`skia.RegisterFileDialog()`）、`backend/rust/go/filedialog.go`（`rb.RegisterFileDialog()`）——两端各自调用平台原生对话框工具（zenity/kdialog / osascript / PowerShell），互不 import。Rust 端若要换纯 Rust `rfd`，只需新增 C ABI 并保持接口形态。
 
+## 10. Context 与 Theme（响应式共享状态）
+
+GX 组件是纯函数，没有 hook 式"当前渲染上下文"。`widgets.Context[T]` 用 signal 承载共享值，绕开逐层 props 透传：
+
+- `ctx := widgets.NewContext(def)` 创建；`ctx.Use()` 返回 `func() T`（可直接作为 GX 动态插槽 getter，读取即订阅）；`ctx.Set(v)` 写入并触发全树消费者重绘；`ctx.Provider(props)` 声明式确立子树初值（`value` 支持 getter，构造时读一次）。
+- 语义边界：Context 是**应用级单例通道**——一个 `Context[T]` 全树共享一个当前值，最后写入者生效；不支持 React 那种按子树隔离的多 Provider。要多套配置并存请用多个 Context 实例。
+- context 不进场景树/wire 协议，纯 Go 运行期通道，零后端改动。
+
+`widgets.Theme` 是基于 Context 预制的整套设计令牌（配色/圆角/阴影/间距）：
+
+- `DarkTheme` / `LightTheme` 两套预置；`SetTheme(t)` / `ThemeProvider` 切换；`UseTheme()` 返回 `func() Theme`，`UseToken("accent")` 返回单个令牌 getter。
+- 组件把 `UseToken(...)` 作为 `dynAttr` getter 即可随主题切换重绘（demo 底部有深色/浅色切换演示）。
+- 既有 `Theme*` 常量（apple_theme.go）保持不变向后兼容；新代码优先用 `UseTheme` 以支持切换。
+
+## 11. 窗口外观配置（无边框 / 透明 / 置顶 / 图标）
+
+`gxapp.WindowConfig` 新增外观字段，两端各自实现：
+
+| 字段 | 类型 | 语义 |
+|---|---|---|
+| `Decorated` | `*bool` | nil=后端默认；`NoDecorations()`=无边框；`WithDecorations()`=有边框。用指针区分"未设置"与"明确 false" |
+| `Transparent` | bool | 透明 framebuffer；配合无边框 + 透明 bg 可做无背景悬浮面板 |
+| `AlwaysOnTop` | bool | 窗口置顶 |
+| `Opacity` | float32 | 窗口级不透明度 0..1；<=0 或 >1 表示不设置（winit 端暂未生效） |
+| `IconPath` | string | 图标路径（字段已定义；skia 端待接 `SetIcon`，当前静默忽略） |
+
+- skia（GLFW）：`CreateWindow` 前设 `Decorated/TransparentFramebuffer/Floating` hints；透明时每帧 `gl.Clear(0,0,0,0)` 让场景透明区透出桌面。
+- rust（winit）：新增 C ABI `gx_window_new_ex(w,h,title,decorated,transparent,always_on_top,opacity)`；`gx_window_new` 保留为兼容包装。Backend 存配置，`WinitApp::resumed` 应用 `with_decorations/with_transparent/with_window_level`；title 参数也真正生效（此前写死）。
+- `GX_NODECOR=1` 运行 skia-style-demo 可验证无边框+透明配置（截图 `preview-context-theme.png` 含 Context/Theme 演示区）。
+
 ## 验证
 
-- 单元测试：两端各有解析 / 定位 / 裁剪 / 插值 / 阴影单测（Go `go test ./...`、Rust `cargo test --release`）。
-- 新增组件单测：`widgets/` 下 tooltip/form_container/timepicker/table/filepicker 各自 `_test.go`；FilePicker 用 mock Dialog 验证契约回传。
-- 端到端截图：`examples/skia-style-demo` 展示 absolute 徽标、阴影卡片、transition 进度条、1000 项虚拟滚动列表；首帧与动画后各截一张确认。
+- 单元测试：两端各有解析 / 定位 / 裁剪 / 插值 / 阴影单测（Go `go test ./...`、Rust `cargo test`）。
+- 新增组件单测：`widgets/` 下 context/theme + tooltip/form_container/timepicker/table/filepicker 各自 `_test.go`；FilePicker 用 mock Dialog 验证契约回传；Theme 测试覆盖令牌解析、`SetTheme` 驱动插槽重绘。
+- 窗口配置单测：`runtime/app/windowconfig_test.go`（默认值语义 / 三态 helper）、`backend/rust/go/windowconfig_test.go`（`decoratedC` 三态翻译）。
+- 端到端截图：`examples/skia-style-demo` 展示 absolute 徽标、阴影卡片、transition 进度条、1000 项虚拟滚动列表、5 个企业级组件、Context/Theme 切换区；`preview-enterprise.png` 与 `preview-context-theme.png` 两张确认。无边框配置经 `GX_NODECOR=1` 验证无系统标题栏、无崩溃。

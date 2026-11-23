@@ -34,6 +34,23 @@ use winit::{
 
 pub type EventCallback = Option<extern "C" fn(*const c_char, *mut c_void)>;
 
+/// 窗口外观配置（经 C ABI 由 Go 侧 WindowConfig 翻译而来）。
+/// decorated 用 i32 三态：-1=未设置(用默认 true)，0=无边框，1=有边框，
+/// 以兼容"未设置"与"明确 false"的区分（Go 侧 Decorated *bool）。
+#[derive(Clone, Copy)]
+struct WindowStyle {
+    decorated: i32,
+    transparent: bool,
+    always_on_top: bool,
+    opacity: f32,
+}
+
+impl Default for WindowStyle {
+    fn default() -> Self {
+        WindowStyle { decorated: -1, transparent: false, always_on_top: false, opacity: 0.0 }
+    }
+}
+
 struct Backend {
     /// 共享二进制帧；Some(Vec<u8>) 表示有最新帧待渲染
     frame: Arc<Mutex<Option<Vec<u8>>>>,
@@ -41,19 +58,51 @@ struct Backend {
     cb_ctx: Arc<Mutex<*mut c_void>>,
     width: u32,
     height: u32,
+    title: String,
+    style: WindowStyle,
 }
 
 unsafe impl Send for Backend {}
 unsafe impl Sync for Backend {}
 
 #[no_mangle]
-pub extern "C" fn gx_window_new(width: c_int, height: c_int, _title: *const c_char) -> *mut c_void {
+pub extern "C" fn gx_window_new(width: c_int, height: c_int, title: *const c_char) -> *mut c_void {
+    gx_window_new_ex(width, height, title, -1, 0, 0, 0.0)
+}
+
+unsafe fn cstr(s: *const c_char) -> String {
+    if s.is_null() {
+        return String::new();
+    }
+    std::ffi::CStr::from_ptr(s).to_string_lossy().into_owned()
+}
+
+/// 扩展版窗口创建：携带无边框/透明/置顶/不透明度配置。
+/// 各布尔参数为 0/1；decorated 为 -1(默认)/0/1；opacity<=0 或 >1 表示不设置。
+#[no_mangle]
+pub extern "C" fn gx_window_new_ex(
+    width: c_int,
+    height: c_int,
+    title: *const c_char,
+    decorated: c_int,
+    transparent: c_int,
+    always_on_top: c_int,
+    opacity: f32,
+) -> *mut c_void {
+    let title_str = unsafe { cstr(title) };
     let backend = Backend {
         frame: Arc::new(Mutex::new(None)),
         cb: Arc::new(Mutex::new(None)),
         cb_ctx: Arc::new(Mutex::new(std::ptr::null_mut())),
         width: width.max(1) as u32,
         height: height.max(1) as u32,
+        title: title_str,
+        style: WindowStyle {
+            decorated,
+            transparent: transparent != 0,
+            always_on_top: always_on_top != 0,
+            opacity,
+        },
     };
     Box::into_raw(Box::new(backend)) as *mut c_void
 }
@@ -89,6 +138,8 @@ pub extern "C" fn gx_window_run(handle: *mut c_void) -> c_int {
     }
     let backend = unsafe { &*(handle as *const Backend) };
     let (w, h) = (backend.width, backend.height);
+    let style = backend.style;
+    let title = backend.title.clone();
     // 启动时间探针：仅当 GX_STARTUP_PROBE 设置时开启，默认零开销。
     // 首帧渲染完成时经事件回调回传 kind="startup_first_frame" 及其 text 内的分阶段耗时。
     let probe = std::env::var_os("GX_STARTUP_PROBE").is_some();
@@ -100,6 +151,8 @@ pub extern "C" fn gx_window_run(handle: *mut c_void) -> c_int {
             state: &mut state,
             width: w,
             height: h,
+            title,
+            style,
             frame: backend.frame.clone(),
             cb: backend.cb.clone(),
             cb_ctx: backend.cb_ctx.clone(),
@@ -137,6 +190,8 @@ struct WinitApp<'a> {
     state: &'a mut Option<Renderer>,
     width: u32,
     height: u32,
+    title: String,
+    style: WindowStyle,
     frame: Arc<Mutex<Option<Vec<u8>>>>,
     cb: Arc<Mutex<EventCallback>>,
     cb_ctx: Arc<Mutex<*mut c_void>>,
@@ -152,12 +207,30 @@ impl winit::application::ApplicationHandler for WinitApp<'_> {
         if self.state.is_some() {
             return;
         }
-        let attrs = Window::default_attributes()
+        let title = if self.title.is_empty() {
+            "GX Rust Backend".to_string()
+        } else {
+            self.title.clone()
+        };
+        let mut attrs = Window::default_attributes()
             .with_inner_size(LogicalSize::new(self.width as f64, self.height as f64))
-            .with_title("PULSE - GX Rust Backend (binary protocol / cgo)")
+            .with_title(title)
             .with_resizable(false);
+        // 外观：Decorated=nil(-1) 用默认；0 无边框；1 有边框。
+        if self.style.decorated >= 0 {
+            attrs = attrs.with_decorations(self.style.decorated != 0);
+        }
+        if self.style.transparent {
+            attrs = attrs.with_transparent(true);
+        }
+        if self.style.always_on_top {
+            attrs = attrs.with_window_level(winit::window::WindowLevel::AlwaysOnTop);
+        }
         let window = Arc::new(el.create_window(attrs).expect("create window"));
         window.set_ime_allowed(true);
+        // opacity: winit 0.30 无跨平台窗口级 opacity API（各平台扩展不一），
+        // 透明效果请用 with_transparent + 场景节点的半透明 bg；此处不设置。
+        let _ = self.style.opacity;
         *self.state = Some(pollster::block_on(Renderer::new(window)));
         if self.probe {
             self.t_resumed_done = Some(std::time::Instant::now());

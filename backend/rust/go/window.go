@@ -58,12 +58,25 @@ func NewWindow() *Window {
 	return &Window{events: make(chan inputEvent, 64)}
 }
 
+// decoratedC 把 WindowConfig.Decorated(*bool) 翻译成 C ABI 三态：
+// -1 未设置(后端默认)，0 无边框，1 有边框。
+func decoratedC(v *bool) int {
+	if v == nil {
+		return -1
+	}
+	if *v {
+		return 1
+	}
+	return 0
+}
+
 // Open 实现 gxapp.Window。创建底层 Rust 窗口并注册事件回调。
 // wgpu surface 与 winit 事件循环绑定调用线程，故固定 OS 线程。
 func (w *Window) Open(cfg gxapp.WindowConfig) error {
 	runtime.LockOSThread()
 	w.cfg = cfg
-	w.handle = cWindowNew(cfg.Width, cfg.Height, cfg.Title)
+	w.handle = cWindowNewEx(cfg.Width, cfg.Height, cfg.Title,
+		decoratedC(cfg.Decorated), cfg.Transparent, cfg.AlwaysOnTop, cfg.Opacity)
 	if w.handle == nil {
 		runtime.UnlockOSThread() // 创建失败必须释放锁，否则该 OS 线程永久被占（评审 P0）
 		return fmt.Errorf("rustbackend: gx_window_new failed")

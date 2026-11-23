@@ -43,6 +43,7 @@ type glWindow struct {
 	frames int           // 已绘制帧数
 	opened bool
 	closed bool
+	transparent bool     // 透明 framebuffer：每帧清成 (0,0,0,0) 让场景透明区透出桌面
 }
 
 var _ gxapp.Window = (*glWindow)(nil)
@@ -58,6 +59,7 @@ func (g *glWindow) Open(cfg gxapp.WindowConfig) error {
 		cfg.Height = 600
 	}
 	g.cfg = cfg
+	g.transparent = cfg.Transparent
 
 	if err := glfw.Init(); err != nil {
 		return fmt.Errorf("glfw.Init: %w", err)
@@ -67,6 +69,23 @@ func (g *glWindow) Open(cfg gxapp.WindowConfig) error {
 	glfw.WindowHint(glfw.ContextVersionMinor, 3)
 	glfw.WindowHint(glfw.OpenGLProfile, glfw.OpenGLCoreProfile)
 	glfw.WindowHint(glfw.OpenGLForwardCompatible, glfw.True)
+
+	// 外观配置：无边框 / 透明 / 置顶。hints 必须在 CreateWindow 前设置。
+	// Decorated=nil 时不设置（用 GLFW 默认），显式值则据此设置。
+	if cfg.Decorated != nil {
+		v := glfw.False
+		if *cfg.Decorated {
+			v = glfw.True
+		}
+		glfw.WindowHint(glfw.Decorated, v)
+	}
+	if cfg.Transparent {
+		glfw.WindowHint(glfw.TransparentFramebuffer, glfw.True)
+	}
+	if cfg.AlwaysOnTop {
+		glfw.WindowHint(glfw.Floating, glfw.True)
+	}
+
 	win, err := glfw.CreateWindow(cfg.Width, cfg.Height, cfg.Title, nil, nil)
 	if err != nil {
 		glfw.Terminate()
@@ -173,6 +192,12 @@ func (g *glWindow) paintNow() {
 		return
 	}
 	w, h := g.win.GetFramebufferSize()
+	// 透明窗口：每帧先把 framebuffer 清成全透明，场景未覆盖/半透明区域才能透出
+	// 底层桌面；不透明窗口无需清除（场景根节点 bg 会铺满）。
+	if g.transparent {
+		gl.ClearColor(0, 0, 0, 0)
+		gl.Clear(gl.COLOR_BUFFER_BIT)
+	}
 	_, hits := skia.PaintTo(canvas, float32(w), float32(h), g.root, g.fonts)
 	g.hits = hits
 	g.context.FlushAndSubmit(sk.GrSyncCpuYes)

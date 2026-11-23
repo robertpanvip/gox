@@ -9,6 +9,7 @@ package rustbackend
 typedef void (*gx_event_cb)(const char* json, void* ctx);
 
 extern void*       gx_window_new(int width, int height, const char* title);
+extern void*       gx_window_new_ex(int width, int height, const char* title, int decorated, int transparent, int always_on_top, float opacity);
 extern int         gx_window_draw(void* handle, const uint8_t* buf, int len);
 extern void        gx_window_set_event_cb(void* handle, gx_event_cb cb, void* ctx);
 extern int         gx_window_run(void* handle);
@@ -57,6 +58,26 @@ func cWindowNew(width, height int, title string) unsafe.Pointer {
 	ct := C.CString(title)
 	defer C.free(unsafe.Pointer(ct))
 	return C.gx_window_new(C.int(width), C.int(height), ct)
+}
+
+// cWindowNewEx 携带外观配置创建窗口。decorated: -1=默认/0=无边框/1=有边框；
+// transparent/alwaysOnTop 为 0 或 1；opacity<=0 或 >1 表示不设置。
+func cWindowNewEx(width, height int, title string, decorated int, transparent, alwaysOnTop bool, opacity float32) unsafe.Pointer {
+	ct := C.CString(title)
+	defer C.free(unsafe.Pointer(ct))
+	return C.gx_window_new_ex(
+		C.int(width), C.int(height), ct,
+		C.int(decorated),
+		cBool(transparent), cBool(alwaysOnTop),
+		C.float(opacity),
+	)
+}
+
+func cBool(v bool) C.int {
+	if v {
+		return 1
+	}
+	return 0
 }
 
 func cWindowDraw(handle unsafe.Pointer, buf []byte) int {

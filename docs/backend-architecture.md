@@ -105,3 +105,14 @@ app, err := gxapp.OpenBackend(gxapp.Config{Backend: "rust", ...})
 - 后端向后兼容：老 `Draw(root)` 路径永久保留；`FramePresenter` 是可选增强。
 - 新增能力走「可选接口 + 检测」（如 `UIExecutor`），不强行塞进 `Window`，避免强迫
   所有后端实现用不到的能力。
+
+### 6.1 窗口外观配置与 C ABI 兼容
+
+- `WindowConfig` 的 `Decorated / Transparent / AlwaysOnTop / Opacity / IconPath` 是纯配置扩展，
+  老后端忽略新字段即可（零值 = 原行为），不破坏 `Window` 契约。
+- Rust 后端新增 `gx_window_new_ex(w,h,title,decorated,transparent,always_on_top,opacity)`，
+  旧的 `gx_window_new` 保留为兼容包装（内部转发，decorated=-1 用默认）。**改动 Rust 侧后必须
+  重新 `cargo build --release` 生成静态库**，否则 Go 侧 cgo 链接会因缺少新符号失败。静态库
+  是构建产物、不入 git，由各环境从源码构建（见 `backend/rust/BENCHMARK.md`）。
+- `Decorated *bool` 用指针三态（nil 默认 / false 无边框 / true 有边框），Go 侧 `decoratedC`
+  翻译成 C 的 -1/0/1，避免 bool 零值无法区分"未设置"与"明确关闭"的经典陷阱。

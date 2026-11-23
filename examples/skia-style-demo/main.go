@@ -4,6 +4,7 @@ package main
 
 import (
 	"fmt"
+	"os"
 	"time"
 
 	gxapp "github.com/robertpanvip/gox/runtime/app"
@@ -27,9 +28,15 @@ func main() {
 	barWidth := signal.New(60.0)   // transition 目标宽度
 	barColor := signal.New("#4ade80")
 
-	app, err := gxapp.OpenWith(gxapp.WindowConfig{
-		Title: "Skia Advanced Styles", Width: 900, Height: 1500,
-	}, openGL())
+	cfg := gxapp.WindowConfig{
+		Title: "Skia Advanced Styles", Width: 900, Height: 1600,
+	}
+	// GX_NODECOR=1 时验证无边框 + 透明窗口配置（不设 bg 的场景区可透出桌面）。
+	if os.Getenv("GX_NODECOR") == "1" {
+		cfg.Decorated = gxapp.NoDecorations()
+		cfg.Transparent = true
+	}
+	app, err := gxapp.OpenWith(cfg, openGL())
 	if err != nil {
 		panic(err)
 	}
@@ -37,7 +44,7 @@ func main() {
 
 	app.Render(func() any {
 		return widgets.Col(gxscene.Props{
-			"width": "900", "height": "1500", "padding": "20", "gap": "14", "bg": "#0b1020",
+			"width": "900", "height": "1600", "padding": "20", "gap": "14", "bg": "#0b1020",
 			"children": func() any {
 				return []any{
 					label("高级样式验证 · Skia", "#7dd3fc", "20"),
@@ -192,6 +199,53 @@ func main() {
 						"label": "选择文件…", "width": "200",
 						"onPick": widgets.BindPick(func([]string) {}),
 					}),
+
+					// ===== Context / Theme：运行时主题切换 =====
+					label("Context / Theme · 运行时切换主题", "#f472b6", "18"),
+					widgets.Row(gxscene.Props{
+						"width": "560", "gap": "10", "align-items": "center",
+						"children": func() any {
+							return []any{
+								widgets.Button(gxscene.Props{
+									"label": "深色", "variant": "secondary", "width": "80",
+									"onClick": gxscene.Handler(func(gxscene.EventContext) { widgets.SetTheme(widgets.DarkTheme) }),
+								}),
+								widgets.Button(gxscene.Props{
+									"label": "浅色", "variant": "secondary", "width": "80",
+									"onClick": gxscene.Handler(func(gxscene.EventContext) { widgets.SetTheme(widgets.LightTheme) }),
+								}),
+								// 当前主题名：dynChild 读 Context，切换后自动重绘。
+								gxscene.Render(gxscene.Template{Ops: []gxscene.Op{
+									{Code: gxscene.OpElem, Arg: "span"},
+									{Code: gxscene.OpAttr, Key: "font-size", Arg: "14"},
+									{Code: gxscene.OpAttr, Key: "color", Arg: "#cbd5e1"},
+									{Code: gxscene.OpChildText, Arg: "当前主题: "},
+									{Code: gxscene.OpClose},
+								}}),
+								// 主题名动态值单独一个 span（dynChild 插槽读 UseTheme）。
+								gxscene.Render(gxscene.Template{Ops: []gxscene.Op{
+									{Code: gxscene.OpElem, Arg: "span"},
+									{Code: gxscene.OpAttr, Key: "font-size", Arg: "14"},
+									{Code: gxscene.OpAttr, Key: "weight", Arg: "bold"},
+									{Code: gxscene.OpDynAttr, Key: "color", Slot: 0},
+									{Code: gxscene.OpDynChild, Slot: 1},
+									{Code: gxscene.OpClose},
+								}, N: 2},
+									func() any { return widgets.UseToken("accent")() },
+									func() any { return widgets.UseTheme()().Name },
+								),
+							}
+						},
+					}),
+					// 主题强调色块：dynAttr(bg) 读 UseToken("accent")。
+					gxscene.Render(gxscene.Template{Ops: []gxscene.Op{
+						{Code: gxscene.OpElem, Arg: "div"},
+						{Code: gxscene.OpAttr, Key: "width", Arg: "120"},
+						{Code: gxscene.OpAttr, Key: "height", Arg: "28"},
+						{Code: gxscene.OpAttr, Key: "border-radius", Arg: "8"},
+						{Code: gxscene.OpDynAttr, Key: "bg", Slot: 0},
+						{Code: gxscene.OpClose},
+					}, N: 1}, func() any { return widgets.UseToken("accent")() }),
 				}
 			},
 		})

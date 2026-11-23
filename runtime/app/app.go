@@ -34,10 +34,37 @@ type WindowConfig struct {
 	Y          int // 窗口左上角纵坐标；0 表示由后端决定
 	Resizable  bool
 	Fullscreen bool
+
+	// ---- 窗口外观（无边框 / 透明 / 置顶 / 图标）----
+	//
+	// Decorated 控制系统边框（标题栏/关闭按钮）。nil 表示未设置，由后端决定默认
+	// （通常为 true）；显式 false 得到无边框窗口。用指针是为了区分"未设置"与
+	// "明确不要边框"——普通 bool 零值无法区分，会把所有不设置的调用都变成无边框。
+	Decorated *bool
+	// Transparent 请求透明framebuffer：配合 Decorated=false 与场景里的透明背景
+	// 可做无背景悬浮面板。需要后端与合成器支持（GLFW: TRANSPARENT_FRAMEBUFFER，
+	// winit: with_transparent）；不支持时后端静默忽略。
+	Transparent bool
+	// AlwaysOnTop 请求窗口置顶（GLFW Floating / winit always-on-top）。
+	AlwaysOnTop bool
+	// Opacity 是窗口整体不透明度 0..1；<=0 或 >1 表示不设置（用后端默认 1）。
+	// 注意：这是窗口级 opacity（X11/Wayland 支持度不一），与 Transparent（framebuffer
+	// alpha 通道）是两种机制，可分别使用。
+	Opacity float32
+	// IconPath 是窗口图标图片路径（png）。为空表示用后端默认图标。
+	// 后端负责解码；解码失败静默忽略，不影响窗口创建。
+	IconPath string
+
 	// Backend 是后端提示（"headless" / "skia" / "wgpu" ...）。
 	// Open 忽略它（固定 Headless）；OpenWith 由调用方按此字段挑选 Window 实现。
 	Backend string
 }
+
+// NoDecorations 是构造 *bool(false) 的便捷函数，便于业务写 Decorated: app.NoDecorations() 得到无边框窗口。
+func NoDecorations() *bool { v := false; return &v }
+
+// WithDecorations 返回 true 指针，用于显式开启边框。
+func WithDecorations() *bool { v := true; return &v }
 
 // DefaultConfig 返回一份带常用默认值的配置（800×600、可调整、标题 "Gox"）。
 func DefaultConfig() WindowConfig {
