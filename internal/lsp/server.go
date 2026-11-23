@@ -234,6 +234,22 @@ func (s *Server) completion(body []byte) (any, *RPCError) {
 		return CompletionList{}, nil
 	}
 	sm := s.symbolMap(d)
+
+	// T4.2：JSX 组件补全——光标处于 `<` 之后（未闭合）时，只列出组件候选
+	// （大写开头的 func/type，即 GX 里 pub func/pub type 还原的导出名）。
+	if inJSXTagOpen(d.Text, p.Position.Line, p.Position.Character) {
+		items := make([]CompletionItem, 0)
+		seen := map[string]bool{}
+		for _, sym := range sm.Symbols {
+			if seen[sym.Name] || !isComponentName(sym.Name) || !isComponentKind(sym.Kind) {
+				continue
+			}
+			seen[sym.Name] = true
+			items = append(items, CompletionItem{Label: sym.Name, Kind: sym.Kind, Detail: sym.Detail})
+		}
+		return CompletionList{IsIncomplete: false, Items: items}, nil
+	}
+
 	items := make([]CompletionItem, 0, len(sm.Symbols))
 	seen := map[string]bool{}
 	for _, sym := range sm.Symbols {
@@ -417,4 +433,41 @@ func findIdentifierEdits(lines []string, replacements map[string]string) []TextE
 func mustJSON(v any) json.RawMessage {
 	data, _ := json.Marshal(v)
 	return data
+}
+
+// inJSXTagOpen 判断光标是否处于 "<" 之后、尚未输入 ">" / 空白的标签名位置，
+// 用于 T4.2 的 JSX 组件补全触发判定。逐行向左扫描到行首或遇到 '>' / 空白即停。
+func inJSXTagOpen(src string, line, col int) bool {
+	lines := strings.Split(src, "\n")
+	if line < 0 || line >= len(lines) {
+		return false
+	}
+	s := lines[line]
+	if col > len(s) {
+		col = len(s)
+	}
+	for i := col - 1; i >= 0; i-- {
+		c := s[i]
+		switch {
+		case c == '<':
+			return true
+		case c == '>' || c == ' ' || c == '\t':
+			return false
+		}
+	}
+	return false
+}
+
+// isComponentName 判断符号名是否可作 JSX 组件名（GX 导出名首字母大写）。
+func isComponentName(name string) bool {
+	if name == "" {
+		return false
+	}
+	c := name[0]
+	return c >= 'A' && c <= 'Z'
+}
+
+// isComponentKind 判断符号 kind 是否可能为组件（func=12 / type=5 / enum=10）。
+func isComponentKind(kind int) bool {
+	return kind == 12 || kind == 5 || kind == 10
 }

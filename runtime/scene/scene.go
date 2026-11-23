@@ -166,10 +166,42 @@ type slot struct {
 	attr  string // slotAttr 时的属性名
 	get   func() any
 	last  any
+	evals int               // 响应式 effect 驱动该插槽 getter 的求值次数（T4.5 可观测指标）
+	wired bool              // 是否已建立响应式 effect（T4.5 可观测指标）
 	node  *Node             // clone 后回填的实际节点
 	child *Instance         // slotComp 时挂载的子组件实例
 	ctrl  subtreeController // slotBranch/OpFor 时挂载的动态子树控制器
 	owner *Instance         // 所属实例，供挂载子实例时共享变更 sink
+}
+
+// PerfStats 是场景树的可观测性能指标（T4.5）。所有计数在响应式 effect 内累加，
+// effect 串行执行（见 signal.scheduleEffect），普通 int 无数据竞争。
+type PerfStats struct {
+	GetterEvals int // 各插槽 getter 被响应式 effect 求值的总次数（含写相同值）
+	Writes      int // 累计实际写入节点的次数（equalValue 裁剪后）
+	Updates     int // 命令式 Update() 调用次数
+	Slots       int // 插槽总数
+	WiredSlots  int // 已建立响应式 effect 的插槽数
+}
+
+// Perf 返回当前实例的性能快照（只读，无副作用）。子树各自记在自己的 Instance 上。
+func (i *Instance) Perf() PerfStats {
+	var s PerfStats
+	s.Writes, s.Updates, s.Slots = i.Writes, i.Updates, len(i.slots)
+	for _, sl := range i.slots {
+		s.GetterEvals += sl.evals
+		if sl.wired {
+			s.WiredSlots++
+		}
+	}
+	return s
+}
+
+// noteEval 记一次插槽 getter 求值（响应式路径调用）。
+func (i *Instance) noteEval(slot int) {
+	if slot >= 0 && slot < len(i.slots) {
+		i.slots[slot].evals++
+	}
 }
 
 // stableChildComp 返回该插槽当前作为「稳定组件子树」承载的实例，没有则返回 nil。
@@ -862,7 +894,11 @@ func (i *Instance) BindReactive(effect func(func()) Computation) {
 			if sl.get != nil {
 				slot := s
 				getter := sl.get
-				if c := effect(func() { i.SetPart(slot, getter()) }); c != nil {
+				i.slots[slot].wired = true
+				if c := effect(func() {
+					i.noteEval(slot)
+					i.SetPart(slot, getter())
+				}); c != nil {
 					i.comps = append(i.comps, c)
 				}
 			}
@@ -872,7 +908,11 @@ func (i *Instance) BindReactive(effect func(func()) Computation) {
 			}
 			slot := s
 			getter := sl.get
-			if c := effect(func() { i.SetPart(slot, getter()) }); c != nil {
+			i.slots[slot].wired = true
+			if c := effect(func() {
+				i.noteEval(slot)
+				i.SetPart(slot, getter())
+			}); c != nil {
 				i.comps = append(i.comps, c)
 			}
 		}
@@ -910,7 +950,11 @@ func (i *Instance) bindLeaves(effect func(func()) Computation) {
 		}
 		slot := s
 		getter := sl.get
-		if c := effect(func() { i.SetPart(slot, getter()) }); c != nil {
+		i.slots[slot].wired = true
+		if c := effect(func() {
+			i.noteEval(slot) // T4.5：记一次 getter 求值（响应式路径）
+			i.SetPart(slot, getter())
+		}); c != nil {
 			i.comps = append(i.comps, c)
 		}
 	}
@@ -994,7 +1038,9 @@ func (i *Instance) bindStructure(ctx *bindCtx) {
 				continue
 			}
 			getter := sl.get
+			i.slots[slot].wired = true
 			if c := ctx.effect(func() {
+				i.noteEval(slot)
 				i.SetPart(slot, getter())
 				if ctx.onDirty != nil && !ctx.silent {
 					ctx.onDirty()
