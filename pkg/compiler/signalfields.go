@@ -913,13 +913,35 @@ func checkSignalValueDeepWrite(toks []Token, b *Bindings, diags *[]GXDiagnostic)
 		if toks[i].Text != "." {
 			continue
 		}
-		// '.' 前须是 signal 变量读 `s ( )`：往前找非空白的 ')' '(' Ident。
-		rp := prevSig(toks, i-1)
-		if rp < 0 || toks[rp].Text != ")" {
+		// '.' 前是赋值目标链，往左剥掉所有索引 [...]，直到 signal 读调用 s()。
+		// 无索引：s().n = 2        （B4，原有逻辑）
+		// 带索引：rows()[0].name = "b"（C2，值变了但 signal 未写、UI 不刷新）
+		j := prevSig(toks, i-1)
+		if j < 0 {
 			continue
 		}
-		lp := prevSig(toks, rp-1)
-		if lp < 0 || toks[lp].Text != "(" {
+		indexed := false
+		steps := 0
+		for toks[j].Text == "]" {
+			lb := matchDelimBack(toks, j, "]")
+			if lb < 0 {
+				break
+			}
+			j = prevSig(toks, lb-1)
+			if j < 0 {
+				break
+			}
+			indexed = true
+			steps++
+			if steps > 8 { // 防御异常深链
+				break
+			}
+		}
+		if j < 0 || toks[j].Text != ")" {
+			continue
+		}
+		lp := matchDelimBack(toks, j, ")")
+		if lp < 0 || nextSig(toks, lp+1) != j { // 只认无参读 s()，跳过 s(v) 写调用
 			continue
 		}
 		id := prevSig(toks, lp-1)
@@ -938,10 +960,17 @@ func checkSignalValueDeepWrite(toks []Token, b *Bindings, diags *[]GXDiagnostic)
 		if op < 0 || !isAssignOp(toks[op].Text) && !compoundAssignOps[toks[op].Text] {
 			continue
 		}
+		msg := ""
+		if indexed {
+			// C2：切片元素字段赋值编译得过、值也变了，但没有 signal 写、slot 不刷新。
+			msg = "signal 持有的切片元素字段直接赋值不会触发刷新（" + exprText(toks, id, op) + "）；请整体替换后重新赋值 signal，如 " + toks[id].Text + "(新切片)"
+		} else {
+			msg = "signal 持有的复合值不支持字段直接赋值（" + toks[id].Text + "." + toks[field].Text + " = ...）；请整体替换 signal，如 " + toks[id].Text + "(新值)"
+		}
 		*diags = append(*diags, GXDiagnostic{
 			Pos:     toks[i].Pos,
 			Code:    "signal-deep-write",
-			Message: "signal 持有的复合值不支持字段直接赋值（" + toks[id].Text + "." + toks[field].Text + " = ...）；请整体替换 signal，如 " + toks[id].Text + "(新值)",
+			Message: msg,
 		})
 		i = op
 	}

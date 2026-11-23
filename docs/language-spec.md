@@ -190,6 +190,12 @@ println(doubled)                                   // → println(doubled())，�
 - **读取性能**：依赖追踪只在 effect/computed 重算期间需要，而这类场景是少数；普通读取走**无锁快路径**——用原子计数器 `activeObservers` 判断当前无 observer 重算时，直接原子读取当前值，跳过抓栈（goroutine id 解析）与加锁。signal 值用原子指针存储避免撕裂。实测读取 ~2 ns（约为普通变量的 2 倍），相较抓栈方案（~2900 ns）提速约 1400×；computed 缓存命中读 ~14 ns。
 - **import**：`Signal` 占位包名由 ImportManager 统一解析为 `import Signal "<module>/runtime/signal"`；源码已用别名导入则复用。
 
+**已知边界与绕法**（能跑但需按规则写，编译器不改写也不会自动报警的三处）：
+
+- **signal 作实参传的是当前值**：裸标识符读一律补 `()`，所以 `show(n)` → `show(n())`，传进去的是当前值而非 getter，`show` 内部拿不到响应式。这是函数式 signal 的既定语义（读即解包），不是 bug。想传 getter 保鲜，用 `func() T { return n }` 包一层、或改用 §11.1 的 struct `signal` 字段 / 组件 `Props`（getter-map）传递。
+- **props getter 只读**：`Get[T](props, "k")` 返回 `func() T`，只能读；`rows(append(rows(), x))` 带参写会编译错（`want ()`）。这是单向数据流的设计选择——组件内要改父状态，由父级额外传一个 `func(...)` 回调，而不是写 prop getter 本身。
+- **signal 持复合值的「深写」不刷新、且已诊断化**：`signal s = S{n:1}; s.n = 2` 与 `signal rows = []Row{...}; rows[0].name = "b"` 会改写为 `s().n = 2` / `rows()[0].name = "b"`——值确实变了，但没有调用 signal 写函数、依赖它的 slot 不刷新。编译器对这两种形态报 `signal-deep-write` 诊断并给出修法：整体替换后重新赋值（`s(S{n:2})` / `rows(新切片)`）；只读（如插值里的 `rows()[0].name`）与普通非 signal 变量的字段赋值不受影响。
+
 ### 11.1 struct signal 字段（响应式 props）
 
 struct 的字段可以声明为 `signal`，编译器生成一个 getter 字段（`Signal.Signal[T]`），并自动改写读写。这样持有该 struct 的地方（含组件/持有者函数）读到的是**实时值**而非构造时的一次性快照——值可由外部 signal 驱动保鲜。
