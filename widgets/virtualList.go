@@ -29,13 +29,21 @@ func parseFloat(s string) (float64, error) {
 // 叠加后：项屏幕 y = (first*itemHeight + 局部偏移) - scrollTop，落入视口才可见。
 //
 // Props:
-//   - count           int 或 func() any→int，总项数
-//   - item-height     number/string，单项高度（默认 40）
-//   - viewport-height number/string，视口高度（默认 400）
-//   - scroll-top      func() any → float64，当前滚动偏移（响应式 getter）
-//   - overscan        视口上下额外渲染的项数（默认 3）
-//   - render-item     func(int) *Instance，渲染第 index 项
-//   - width / bg      容器样式
+//   - count            int 或 func() any→int，总项数
+//   - item-height      number/string，等高档的单项高度（默认 40）
+//   - viewport-height  number/string，视口高度（默认 400）
+//   - scroll-top       func() any → float64，当前滚动偏移（响应式 getter）
+//   - overscan         视口上下额外渲染的项数（默认 3）
+//   - render-item      func(int) *Instance，渲染第 index 项
+//   - height           可选 func(int) float64 / func(int) any —— 第 i 项真实高度。
+//                      提供后启用不定高模式：内部维护前缀和 offsets 并用二分查找
+//                      可见区间，spacer 高度 = 首项之前的累计高度。
+//   - estimate-height  可选 number，height(i) 未知时的估算高度（默认 item-height）
+//   - width / bg       容器样式
+//
+// 不定高模式：scrollTop → item 的映射由前缀和 + 二分查找完成，替代等高的除法。
+// 高度来源当前为显式 height(i)（精确、无跳动）；后端测量回填的钩子见 x-measure
+// 预留（后续版本接入），届时可在不传 height 的情况下由后端实测自动修正。
 func VirtualList(props gxscene.Props) *gxscene.Instance {
 	countGet := gxscene.Get[int](props, "count")
 	scrollGet := gxscene.Get[float64](props, "scroll-top")
@@ -45,25 +53,90 @@ func VirtualList(props gxscene.Props) *gxscene.Instance {
 	overscan := propInt(props, "overscan", 3)
 	renderItemAny := gxscene.Get[any](props, "render-item")
 
-	// 可见窗口 [first, last)。
-	visibleIndices := func() []int {
+	// 不定高支持：
+	//   - "height"        func(int) float64 / func(int) any —— 返回第 i 项真实高度
+	//   - "estimate-height" 未知项的估算高度（默认沿用 item-height）
+	// 未提供 "height" 时退化为原来的等高等距路径（零额外开销、完全兼容）。
+	heightAny := gxscene.Get[any](props, "height")
+	estimate := propFloat(props, "estimate-height", itemHeight)
+	variableHeight := heightAny != nil && heightAny() != nil
+
+	// itemHeightAt 返回第 i 项高度：优先用显式 height(i)，否则固定 itemHeight。
+	itemHeightAt := func(i int) float64 {
+		if !variableHeight {
+			return itemHeight
+		}
+		switch fn := heightAny().(type) {
+		case func(int) float64:
+			if h := fn(i); h > 0 {
+				return h
+			}
+		case func(int) any:
+			switch h := fn(i).(type) {
+			case float64:
+				if h > 0 { return h }
+			case int:
+				if h > 0 { return float64(h) }
+			}
+		}
+		return estimate
+	}
+
+	// offsets[i] = 第 0..i-1 项累计高度；offsets[n] = 总高度。
+	// 每次求值重算（count 通常几千，O(n) 可忽略），保证 height(i) 依赖的数据变化时即时生效。
+	buildOffsets := func(n int) []float64 {
+		off := make([]float64, n+1)
+		for i := 0; i < n; i++ {
+			off[i+1] = off[i] + itemHeightAt(i)
+		}
+		return off
+	}
+
+	// firstIndexAt 用二分查找 scrollTop 落在哪一项（offsets[k] <= st < offsets[k+1]）。
+	firstIndexAt := func(off []float64, st float64) int {
+		lo, hi := 0, len(off)-1
+		for lo < hi {
+			mid := int(uint(lo+hi) >> 1)
+			if off[mid+1] <= st {
+				lo = mid + 1
+			} else {
+				hi = mid
+			}
+		}
+		return lo
+	}
+
+	// windowAt 返回可见区间 [first,last) 与首项之前的累计高度 spacer。
+	windowAt := func() (first, last int, spacer float64) {
 		count := countGet()
 		if count <= 0 {
-			return nil
+			return 0, 0, 0
 		}
 		st := scrollGet()
 		if st < 0 {
 			st = 0
 		}
-		first := int(st/itemHeight) - overscan
+		off := buildOffsets(count)
+		first = firstIndexAt(off, st) - overscan
 		if first < 0 {
 			first = 0
 		}
-		span := int(viewportHeight/itemHeight) + 2*overscan + 1
-		last := first + span
+		// last：第一个 offsets[k] >= st+viewport 的 k，再加 overscan。
+		bottom := st + viewportHeight
+		last = firstIndexAt(off, bottom) + 1 + overscan
 		if last > count {
 			last = count
 		}
+		if last < first {
+			last = first
+		}
+		spacer = off[first]
+		return
+	}
+
+	// 可见窗口 [first, last)。
+	visibleIndices := func() []int {
+		first, last, _ := windowAt()
 		out := make([]int, 0, last-first)
 		for i := first; i < last; i++ {
 			out = append(out, i)
@@ -125,16 +198,9 @@ func VirtualList(props gxscene.Props) *gxscene.Instance {
 
 	return gxscene.Render(gxscene.Template{Ops: ops, N: 3},
 		func() any { return fmt.Sprintf("%g", scrollGet()) }, // slot 0: scroll-top
-		func() any { // slot 1: spacer height——独立从 scrollTop 计算，不依赖 For 求值顺序
-			st := scrollGet()
-			if st < 0 {
-				st = 0
-			}
-			first := int(st/itemHeight) - overscan
-			if first < 0 {
-				first = 0
-			}
-			return fmt.Sprintf("%g", float64(first)*itemHeight)
+		func() any { // slot 1: spacer height = 可见首项之前的累计高度（不等高时为前缀和）
+			_, _, spacer := windowAt()
+			return fmt.Sprintf("%g", spacer)
 		},
 		func() any { return forCtl }, // slot 2: *For
 	)

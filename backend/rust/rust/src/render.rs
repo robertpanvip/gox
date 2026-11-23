@@ -329,10 +329,52 @@ struct ShapeDraw {
     canvas: Option<std::sync::Arc<Vec<crate::canvas::CanvasOp>>>,
 }
 
+/// 苹果风格滚动条的几何（overlay，不占布局；画在容器右内侧）。
+#[derive(Clone, Debug, PartialEq)]
+struct ScrollBar {
+    /// track 左上角与尺寸（track 覆盖整个容器高度，宽 TRACK_W）
+    x: f32, y: f32, track_h: f32,
+    /// thumb 顶与高
+    thumb_y: f32, thumb_h: f32,
+    /// 透明度 0..1（淡入淡出由 render 阶段按滚动活动度驱动）
+    alpha: f32,
+}
+
+/// macOS 滚动条常量：细、圆头、半透明、overlay。
+const SB_TRACK_W: f32 = 8.0;   // track 宽
+const SB_THUMB_MIN: f32 = 32.0; // thumb 最小高度
+
+/// 由容器几何与内容高度算滚动条。内容未溢出返回 None（不显示）。
+/// 纯函数，便于单测。
+fn scrollbar_geometry(
+    cx: f32, cy: f32, cw: f32, ch: f32,
+    content_h: f32, scroll_top: f32, alpha: f32,
+) -> Option<ScrollBar> {
+    let max_scroll = content_h - ch;
+    if max_scroll <= 0.5 || ch <= 0.0 || cw <= 0.0 {
+        return None; // 内容未溢出：不显示滚动条
+    }
+    let thumb_h = SB_THUMB_MIN.max(ch * ch / content_h).min(ch);
+    let travel = ch - thumb_h; // thumb 可移动的垂直距离
+    let st = scroll_top.max(0.0).min(max_scroll);
+    let thumb_y = cy + travel * (st / max_scroll);
+    // track 贴在容器右内侧，留 2px 边距；thumb 与 track 同宽、居中。
+    Some(ScrollBar {
+        x: cx + cw - SB_TRACK_W - 2.0,
+        y: cy,
+        track_h: ch,
+        thumb_y,
+        thumb_h,
+        alpha: alpha.max(0.0).min(1.0),
+    })
+}
+
 #[derive(Clone)]
 struct DisplayList {
     shapes: Vec<ShapeDraw>,
     texts: Vec<TextDraw>,
+    /// 需要显示滚动条的容器几何（由 emit 计算内容高度后生成）
+    scrollbars: Vec<ScrollBar>,
     /// (x, y, w, h, node_id, event, is_overlay, clip)
     hitboxes: Vec<(f32, f32, f32, f32, String, String, bool, ClipRect)>,
     /// (x, y, w, h, node_id)
@@ -341,7 +383,7 @@ struct DisplayList {
 
 impl DisplayList {
     fn new() -> Self {
-        DisplayList { shapes: vec![], texts: vec![], hitboxes: vec![], inputs: vec![] }
+        DisplayList { shapes: vec![], texts: vec![], scrollbars: vec![], hitboxes: vec![], inputs: vec![] }
     }
     /// 把镜像场景树编译成绘制指令。
     /// 布局交给 Taffy 0.5（完整 Flexbox 引擎）——
@@ -393,6 +435,7 @@ impl DisplayList {
             ctx: &mut BuildCtx,
             node: &crate::scene::SceneNode,
             is_root: bool,
+            parent_scrollable: bool,
             inherited_color: (u8, u8, u8),
             inherited_size: f32,
             avail_w: f32, avail_h: f32,
@@ -402,8 +445,12 @@ impl DisplayList {
             let size = p("font-size").and_then(parse_px).unwrap_or(inherited_size);
 
             if node.typ == NodeType::Text {
+                let mut ts = Style::default();
+                // overflow 容器的子树不参与压缩，否则内容被压进视口、永不溢出，
+                // 滚动与滚动条都失效（标准滚动容器语义：子项 flex-shrink:0）。
+                if parent_scrollable { ts.flex_shrink = 0.0; }
                 return ctx.taffy.new_leaf_with_context(
-                    Style::default(),
+                    ts,
                     TextMeasure { text: node.text.clone(), size },
                 ).expect("taffy text leaf");
             }
@@ -424,6 +471,8 @@ impl DisplayList {
                 gap: Size { width: length(gap), height: length(gap) },
                 align_items: align_of(p("align-items")),
                 justify_content: justify_of(p("justify-content")),
+                // overflow 容器的直接子项不压缩，保证内容可溢出 → 滚动可生效。
+                flex_shrink: if parent_scrollable { 0.0 } else { 1.0 },
                 ..Default::default()
             };
             // inset：top/right/bottom/left（NaN=auto 跳过）。与 Skia 语义一致。
@@ -450,15 +499,16 @@ impl DisplayList {
                 }
             }
             flatten(node, &mut kids);
+            let child_scrollable = st.overflow != crate::style::Overflow::Visible;
             let child_nodes: Vec<taffy::NodeId> = kids.iter()
-                .map(|c| build(ctx, c, false, color, size, avail_w, avail_h))
+                .map(|c| build(ctx, c, false, child_scrollable, color, size, avail_w, avail_h))
                 .collect();
 
             ctx.taffy.new_with_children(style, &child_nodes).expect("taffy container")
         }
 
         let mut ctx = BuildCtx { taffy };
-        let root_node = build(&mut ctx, root, true, (226, 232, 240), 16.0, avail_w, avail_h);
+        let root_node = build(&mut ctx, root, true, false, (226, 232, 240), 16.0, avail_w, avail_h);
         ctx.taffy.compute_layout_with_measure(
             root_node,
             Size { width: AvailableSpace::Definite(avail_w), height: AvailableSpace::Definite(avail_h) },
@@ -533,6 +583,8 @@ impl DisplayList {
         }
 
         // ---- emit：主树（跳过浮层）→ 遮罩 → 浮层，保证绘制层级 ----
+        // 返回子树在"未施加本容器 scroll 偏移前"的绝对内容底边 Y，
+        // 供 overflow 容器计算内容高度（内容高度 = 子树底边 - 容器顶）。
         fn emit(
             node: &crate::scene::SceneNode,
             tnode: taffy::NodeId,
@@ -545,10 +597,10 @@ impl DisplayList {
             avail_w: f32, avail_h: f32,
             skip_overlays: bool,
             parent_clip: ClipRect,
-        ) {
+        ) -> f32 {
             // 主树遍历时跳过浮层子树（它们由后续的遮罩/浮层遍单独绘制，保证层级）。
             if skip_overlays && is_overlay(node) {
-                return;
+                return oy;
             }
             let p = |k: &str| node.props.get(k).map(|s| s.as_str());
             let color = p("color").map(parse_color).unwrap_or(inherited_color);
@@ -580,7 +632,7 @@ impl DisplayList {
                 if !clip_rejects(my_clip, x, y, size * 4.0, size * 1.35) {
                     dl.texts.push(TextDraw { id: node.id.clone(), text: node.text.clone(), x, y, size, color, clip: my_clip });
                 }
-                return;
+                return y + size * 1.35;
             }
 
             if node.typ == NodeType::Div {
@@ -624,9 +676,30 @@ impl DisplayList {
 
             let mut kids: Vec<&crate::scene::SceneNode> = Vec::new();
             flat_children(node, &mut kids);
+            let mut subtree_bottom = y + h; // 至少到自身底边
             for (i, c) in kids.iter().enumerate() {
                 let child_tnode = ctx.taffy.child_at_index(tnode, i).expect("taffy child");
-                emit(c, child_tnode, ctx, dl, color, size, child_ox, child_oy, overrides, avail_w, avail_h, skip_overlays, my_clip);
+                let cb = emit(c, child_tnode, ctx, dl, color, size, child_ox, child_oy, overrides, avail_w, avail_h, skip_overlays, my_clip);
+                if cb > subtree_bottom {
+                    subtree_bottom = cb;
+                }
+            }
+
+            // overflow 容器：内容未滚动底边 = 子树底边 + scrollTop（还原子树被减去的偏移）。
+            // 内容高度 = 未滚动底边 - 容器顶。溢出则生成滚动条几何（alpha 由 render 驱动）。
+            if node.typ == NodeType::Div && st.overflow != crate::style::Overflow::Visible {
+                let content_h = (subtree_bottom + st.scroll_top - y).max(h);
+                if let Some(sb) = scrollbar_geometry(x, y, w, h, content_h, st.scroll_top, 0.0) {
+                    dl.scrollbars.push(sb);
+                }
+            }
+
+            // 返回给父的"未施加本节点 scroll 前"的内容底边：
+            // 本节点子树坐标是 child_oy = y - scroll_top，加回 scroll_top 得到父坐标系下的位置。
+            if node.typ == NodeType::Div && st.overflow != crate::style::Overflow::Visible {
+                subtree_bottom + st.scroll_top
+            } else {
+                subtree_bottom
             }
         }
 
@@ -699,6 +772,11 @@ pub struct Renderer {
     animator: crate::style::Animator,
     /// 动画时钟原点
     anim_origin: std::time::Instant,
+    /// 苹果滚动条淡入淡出：当前 alpha、上一次观测到的首个滚动条 scrollTop、
+    /// 最近一次滚动发生的时刻（用于滚停后延迟淡出）。
+    scrollbar_alpha: f32,
+    scrollbar_last_top: f32,
+    scrollbar_last_activity: std::time::Instant,
     /// 自上次 render 以来是否收到新帧数据（无变化帧跳过昂贵的布局/光栅化/文本整形）
     frame_dirty: bool,
     /// 按稳定 node_id 缓存的字形：只 shape 新增/内容变化的文本，其余跨帧复用。
@@ -859,6 +937,9 @@ struct VSOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f };
             display: DisplayList::new(),
             animator: crate::style::Animator::new(),
             anim_origin: std::time::Instant::now(),
+            scrollbar_alpha: 0.0,
+            scrollbar_last_top: 0.0,
+            scrollbar_last_activity: std::time::Instant::now(),
             frame_dirty: true,
             glyph_cache: std::collections::HashMap::new(),
             cached_areas_dirty: true,
@@ -981,6 +1062,24 @@ struct VSOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f };
         );
     }
 
+    /// 把苹果风格滚动条画进主 Pixmap：thumb 圆角、半透明，随 alpha 淡入淡出。
+    /// track 本身不画底色（macOS overlay 滚动条平时不可见，仅滚动时浮现 thumb）。
+    fn paint_scrollbars(&self, pm: &mut tiny_skia::Pixmap, bars: &[ScrollBar]) {
+        use tiny_skia::{Color, FillRule, Paint, Transform};
+        for b in bars {
+            let alpha = self.scrollbar_alpha; // 淡入淡出由 render 阶段统一驱动
+            if alpha <= 0.01 { continue; }
+            let r = SB_TRACK_W * 0.5; // 圆头（胶囊形）
+            if let Some(path) = round_rect_path(b.x, b.thumb_y, SB_TRACK_W, b.thumb_h, r) {
+                let a = (alpha * 0.55 * 255.0) as u8; // 半透明（macOS thumb 约 0.4~0.6）
+                let mut p = Paint::default();
+                p.set_color(Color::from_rgba8(120, 120, 128, a)); // 中性灰
+                p.anti_alias = true;
+                pm.fill_path(&path, &p, FillRule::Winding, Transform::identity(), None);
+            }
+        }
+    }
+
     fn paint_shapes(&mut self, dl: &DisplayList, bg: (u8, u8, u8)) {
         use tiny_skia::{Color, FillRule, Paint, Pixmap, Stroke, Transform};
         let bpr = self.bg_bpr as usize;
@@ -1030,6 +1129,10 @@ struct VSOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f };
                 }
             }
         }
+        // 苹果风格滚动条画在内容之上（overlay），参与整体淡入淡出。
+        if !dl.scrollbars.is_empty() {
+            self.paint_scrollbars(&mut pm, &dl.scrollbars);
+        }
         let src = pm.data();
         for y in 0..self.height as usize {
             let row = &src[y * self.width as usize * 4..(y + 1) * self.width as usize * 4];
@@ -1058,6 +1161,31 @@ struct VSOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f };
             let animated = self.animator.apply(scene);
             let dl = DisplayList::from_scene(&animated, self.width as f32, self.height as f32);
             let bg = self.bg;
+
+            // 滚动条淡入淡出：以首个滚动条的 thumb_y 作为滚动位置信号。
+            // 位置变化（或首次出现）视为活动 → alpha 拉满并刷新时间戳。
+            // 注意：无变化帧跳过 Pixmap 重绘，因此淡出要借助"仍在重绘的帧"（如动画）
+            // 才会推进；纯静止时滚动条保持在最后状态（详见文档诚实边界）。
+            let bar_pos = dl.scrollbars.first().map(|b| b.thumb_y).unwrap_or(0.0);
+            let has_bar = !dl.scrollbars.is_empty();
+            let now = std::time::Instant::now();
+            if has_bar && (bar_pos - self.scrollbar_last_top).abs() > 0.1 {
+                self.scrollbar_last_top = bar_pos;
+                self.scrollbar_last_activity = now;
+            }
+            let idle_ms = now.duration_since(self.scrollbar_last_activity).as_millis();
+            // 滚动后 ~1.2s 开始淡出，再 ~0.5s 淡到 0。
+            let target_alpha = if !has_bar {
+                0.0
+            } else if idle_ms < 1200 {
+                1.0
+            } else if idle_ms < 1700 {
+                1.0 - (idle_ms - 1200) as f32 / 500.0
+            } else {
+                0.0
+            };
+            self.scrollbar_alpha = target_alpha;
+
             self.display = dl.clone();
             self.paint_shapes(&dl, bg);
 
@@ -1213,6 +1341,127 @@ pub fn bench_frame(buf: &[u8], width: f32, height: f32, iters: u32) -> Option<u6
     // 防止编译器优化掉结果。
     std::hint::black_box(sink);
     Some(ns)
+}
+
+#[cfg(test)]
+mod scrollbar_tests {
+    use super::*;
+
+    #[test]
+    fn no_scrollbar_when_content_fits() {
+        // 内容高度 <= 容器高度：不显示滚动条。
+        assert!(scrollbar_geometry(0.0, 0.0, 100.0, 200.0, 180.0, 0.0, 1.0).is_none());
+        assert!(scrollbar_geometry(0.0, 0.0, 100.0, 200.0, 200.0, 0.0, 1.0).is_none());
+    }
+
+    #[test]
+    fn scrollbar_thumb_geometry() {
+        // 容器 100×200，内容高 600 → maxScroll=400。
+        // thumb_h = 200*200/600 = 66.67（> 最小 32）。
+        // scrollTop=0 → thumb 在顶；scrollTop=400 → thumb 在底。
+        let top = scrollbar_geometry(0.0, 0.0, 100.0, 200.0, 600.0, 0.0, 1.0).unwrap();
+        assert!((top.thumb_h - 66.67).abs() < 1.0, "thumb_h={}", top.thumb_h);
+        assert!((top.thumb_y - 0.0).abs() < 0.01, "thumb_y at top={}", top.thumb_y);
+        assert!((top.y - 0.0).abs() < 0.01);
+        assert!((top.x - (100.0 - SB_TRACK_W - 2.0)).abs() < 0.01, "track 贴右内侧");
+
+        let bottom = scrollbar_geometry(0.0, 0.0, 100.0, 200.0, 600.0, 400.0, 1.0).unwrap();
+        let expected_y = 200.0 - top.thumb_h; // travel = ch - thumb_h
+        assert!((bottom.thumb_y - expected_y).abs() < 0.01, "thumb_y at bottom={}", bottom.thumb_y);
+
+        // 中途 scrollTop=200 → thumb 走一半行程。
+        let mid = scrollbar_geometry(0.0, 0.0, 100.0, 200.0, 600.0, 200.0, 1.0).unwrap();
+        assert!((mid.thumb_y - expected_y / 2.0).abs() < 0.5, "thumb_y at mid={}", mid.thumb_y);
+    }
+
+    #[test]
+    fn thumb_min_height_clamped() {
+        // 内容极大 → thumb 高被最小高度 32 兜底，且不超容器高。
+        let sb = scrollbar_geometry(0.0, 0.0, 100.0, 200.0, 100000.0, 0.0, 1.0).unwrap();
+        assert!((sb.thumb_h - SB_THUMB_MIN).abs() < 0.01, "thumb_h={}", sb.thumb_h);
+    }
+
+    #[test]
+    fn scroll_top_clamped_to_range() {
+        // scrollTop 超出 [0,maxScroll] 时 thumb 不越界。
+        let over = scrollbar_geometry(0.0, 50.0, 100.0, 200.0, 600.0, 9999.0, 1.0).unwrap();
+        assert!(over.thumb_y <= 50.0 + 200.0 - over.thumb_h + 0.01);
+        let under = scrollbar_geometry(0.0, 50.0, 100.0, 200.0, 600.0, -100.0, 1.0).unwrap();
+        assert!((under.thumb_y - 50.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn alpha_clamped() {
+        let a = scrollbar_geometry(0.0, 0.0, 100.0, 200.0, 600.0, 0.0, 2.0).unwrap();
+        assert!((a.alpha - 1.0).abs() < 0.01);
+        let b = scrollbar_geometry(0.0, 0.0, 100.0, 200.0, 600.0, 0.0, -1.0).unwrap();
+        assert!((b.alpha - 0.0).abs() < 0.01);
+    }
+
+    /// 构造一个 overflow=scroll 容器（100×100）内含总高 500 的子树，跑 from_scene。
+    fn overflow_scene(scroll_top: f32) -> crate::scene::SceneNode {
+        use crate::binprotocol::NodeType;
+        let mut kids = Vec::new();
+        for i in 0..5 {
+            kids.push(crate::scene::SceneNode {
+                typ: NodeType::Div, kind: "div".into(), id: format!("item{}", i),
+                text: String::new(),
+                props: [("height".to_string(), "100".to_string())].into_iter().collect(),
+                events: vec![], children: vec![],
+            });
+        }
+        let mut props: std::collections::HashMap<String, String> = [
+            ("width".to_string(), "100".to_string()),
+            ("height".to_string(), "100".to_string()),
+            ("overflow".to_string(), "scroll".to_string()),
+        ].into_iter().collect();
+        props.insert("scroll-top".to_string(), format!("{}", scroll_top));
+        crate::scene::SceneNode {
+            typ: NodeType::Div, kind: "div".into(), id: "vp".into(), text: String::new(),
+            props, events: vec![], children: kids,
+        }
+    }
+
+    #[test]
+    fn from_scene_emits_scrollbar_for_overflow() {
+        let dl = DisplayList::from_scene(&overflow_scene(0.0), 800.0, 600.0);
+        assert_eq!(dl.scrollbars.len(), 1, "溢出容器应生成一个滚动条");
+        let sb = &dl.scrollbars[0];
+        // 容器 100 高，内容 500 高 → thumb_h = 100*100/500 = 20 → 被最小高度 32 兜底。
+        assert!((sb.thumb_h - SB_THUMB_MIN).abs() < 0.01, "thumb_h={}", sb.thumb_h);
+    }
+
+    #[test]
+    fn from_scene_no_scrollbar_when_no_overflow() {
+        // 容器高 100，只放 1 个高 100 的子项 → 不溢出，无滚动条。
+        use crate::binprotocol::NodeType;
+        let vp = crate::scene::SceneNode {
+            typ: NodeType::Div, kind: "div".into(), id: "vp".into(), text: String::new(),
+            props: [
+                ("width".to_string(), "100".to_string()),
+                ("height".to_string(), "100".to_string()),
+                ("overflow".to_string(), "auto".to_string()),
+            ].into_iter().collect(),
+            events: vec![],
+            children: vec![crate::scene::SceneNode {
+                typ: NodeType::Div, kind: "div".into(), id: "one".into(), text: String::new(),
+                props: [("height".to_string(), "100".to_string())].into_iter().collect(),
+                events: vec![], children: vec![],
+            }],
+        };
+        let dl = DisplayList::from_scene(&vp, 800.0, 600.0);
+        assert!(dl.scrollbars.is_empty(), "未溢出不应有滚动条");
+    }
+
+    #[test]
+    fn scrollbar_moves_with_scroll() {
+        let top = DisplayList::from_scene(&overflow_scene(0.0), 800.0, 600.0);
+        let mid = DisplayList::from_scene(&overflow_scene(200.0), 800.0, 600.0);
+        assert_eq!(top.scrollbars.len(), 1);
+        assert_eq!(mid.scrollbars.len(), 1);
+        assert!(mid.scrollbars[0].thumb_y > top.scrollbars[0].thumb_y,
+            "滚动后 thumb 应下移: {} -> {}", top.scrollbars[0].thumb_y, mid.scrollbars[0].thumb_y);
+    }
 }
 
 #[cfg(test)]

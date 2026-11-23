@@ -289,6 +289,22 @@ Host 是变化驱动的（signal→effect→Draw），无变化时不会请求�
 
 **为何不做像素级 layer blit（诚实边界）**：Skia 后端受 go-skia v0.1.0 绑定限制——无离屏 raster surface、Bitmap 未导出像素分配、画布不可读，无法实现；Rust 后端虽有完整 tiny-skia `Pixmap`，但文本走 glyphon 独立管线（按屏幕坐标逐帧 shape，非可平移位图），把文本塞进离屏位图需绕开 glyphon、牺牲 CJK/字体质量。因此选择"复用已算结果、只重算变化项"而非"搬运像素"：收益来自省掉字形整形与布局之外的重复工作，不牺牲渲染质量。
 
+### 2.6 不定高虚拟列表与苹果风格滚动条
+
+**不定高列表（组件层 `widgets/virtualList.go`）**：原实现假设所有 item 等高（`scrollTop / itemHeight` 直接算索引）。新增可选 `height(i)` 回调 + `estimate-height`：
+
+- 内部维护前缀和 `offsets[i] = 前 i 项累计高度`，用二分查找把 `scrollTop` 映射到 item 索引；spacer 高度 = 可见首项之前的累计高度 `offsets[first]`。
+- `scrollTop` 与 `height(i)` 依赖的数据每次求值时重算 offsets（O(n)，count 通常几千可忽略），保证数据变化即时生效。
+- 未提供 `height` 时完全退回原等高路径，零开销、向后兼容（Table 等现有调用方不受影响）。
+- 高度来源当前为**显式 `height(i)`**（精确、无跳动）。后端测量回填的钩子（`x-measure`）留待后续版本：打通"后端布局实测 → 事件回流 → offsets 修正"闭环后才能支持不传 height 的自动测量模式。
+
+**苹果风格滚动条（Rust 后端）**：`overflow: scroll/auto` 容器在内容高度超过视口时显示 overlay 滚动条：
+
+- `emit` 递归返回子树内容底边，由此算出容器内容总高度；生成滚动条几何（纯函数 `scrollbar_geometry()`，可单测）。
+- macOS 视觉：细（8px）、圆头、半透明胶囊 thumb，贴在容器右内侧，不占布局；thumb 高 = `容器高² / 内容高`（最小 32px），位置随 `scrollTop / maxScroll` 联动。
+- 关键修复：`overflow` 容器的直接子项设 `flex-shrink: 0`——否则 Taffy 默认会把子项压缩进视口、内容永不溢出，滚动与滚动条都失效。这是滚动容器的标准语义。
+- **淡出边界（诚实）**：滚动时 thumb 淡入；滚停约 1.2s 后开始淡出。但当前帧缓存在"无新帧"时跳过 Pixmap 重绘，纯静止状态下淡出无法自行推进，会停在最后的 alpha——需要仍在重绘的帧（如动画）推进。要做到系统级自动淡出，需允许滚动条层独立逐帧重绘，属于后续优化，不牺牲当前帧缓存收益。
+
 ## 3. 拆成两个项目如何跑通
 
 假设后端项目为 `github.com/yourorg/gox-desktop`，module 独立。
