@@ -28,7 +28,7 @@ func main() {
 	barColor := signal.New("#4ade80")
 
 	app, err := gxapp.OpenWith(gxapp.WindowConfig{
-		Title: "Skia Advanced Styles", Width: 640, Height: 560,
+		Title: "Skia Advanced Styles", Width: 900, Height: 1500,
 	}, openGL())
 	if err != nil {
 		panic(err)
@@ -37,7 +37,7 @@ func main() {
 
 	app.Render(func() any {
 		return widgets.Col(gxscene.Props{
-			"width": "640", "height": "560", "padding": "20", "gap": "14", "bg": "#0b1020",
+			"width": "900", "height": "1500", "padding": "20", "gap": "14", "bg": "#0b1020",
 			"children": func() any {
 				return []any{
 					label("高级样式验证 · Skia", "#7dd3fc", "20"),
@@ -104,6 +104,93 @@ func main() {
 								},
 							})
 						},
+					}),
+
+					// ===== 企业级组件（Tooltip/Form/TimePicker/Table/FilePicker） =====
+					label("企业级组件 · Tooltip / Form / TimePicker / Table / FilePicker", "#c084fc", "18"),
+
+					// 5) Tooltip：state 初始打开，首帧即展示气泡（hover 触发在其它场景）。
+					widgets.Tooltip(gxscene.Props{
+						"state":     widgets.NewPopoverState(true),
+						"placement": "bottom",
+						"trigger":   func() any { return label("  ⓘ 悬停我 ", "#e2e8f0", "14") },
+						"content":   func() any { return label("  这是一条提示气泡 Tooltip  ", "#f8fafc", "13") },
+						"width":     "200",
+					}),
+
+					// 6) Form + FormItem：标题/必填/字段错误/提交按钮。
+					widgets.Form(gxscene.Props{
+						"title":    "账户设置",
+						"width":    "560",
+						"onSubmit": widgets.BindSubmit(func() {}),
+						"children": func() any {
+							return widgets.Col(gxscene.Props{
+								"width": "540", "gap": "8",
+								"children": func() any {
+									return []any{
+										widgets.FormItem(gxscene.Props{
+											"label": "邮箱", "name": "email", "required": true,
+											"hint": "我们不会公开你的邮箱",
+											"error": func() any { return "邮箱格式不正确" },
+											"children": func() any {
+												return widgets.Input(gxscene.Props{
+													"value": func() any { return "demo@gox.dev" }, "width": "260",
+												})
+											},
+										}),
+										widgets.FormItem(gxscene.Props{
+											"label": "昵称", "name": "nick",
+											"children": func() any {
+												return widgets.Input(gxscene.Props{
+													"value": func() any { return "Gox 用户" }, "width": "260",
+												})
+											},
+										}),
+									}
+								},
+							})
+						},
+					}),
+
+					// 7) TimePicker：带秒的 24 小时制。
+					widgets.Row(gxscene.Props{
+						"width": "560", "gap": "10", "align-items": "center",
+						"children": func() any {
+							return []any{
+								label("TimePicker:", "#94a3b8", "14"),
+								widgets.TimePicker(gxscene.Props{
+									"value":        func() any { return "09:30:15" },
+									"with-seconds": true, "width": "110",
+								}),
+							}
+						},
+					}),
+
+					// 8) Table：3 列 8 行，斑马纹 + 可排序列头。
+					widgets.Table(gxscene.Props{
+						"columns": []widgets.TableColumn{
+							{Key: "name", Title: "姓名", Width: "120", Sortable: true},
+							{Key: "role", Title: "角色", Width: "120"},
+							{Key: "city", Title: "城市", Width: "120"},
+						},
+						"rows": func() any {
+							names := []string{"张三", "李四", "王五", "赵六", "钱七", "孙八", "周九", "吴十"}
+							rows := make([]any, len(names))
+							for i, n := range names {
+								rows[i] = []string{n, "工程师", []string{"北京", "上海", "深圳", "杭州"}[i%4]}
+							}
+							return rows
+						},
+						"scroll-top":      func() float64 { return 0 },
+						"row-height":      30,
+						"viewport-height": 250,
+						"width":           "560",
+					}),
+
+					// 9) FilePicker：点击才弹原生对话框，截图不会触发，安全展示。
+					widgets.FilePicker(gxscene.Props{
+						"label": "选择文件…", "width": "200",
+						"onPick": widgets.BindPick(func([]string) {}),
 					}),
 				}
 			},
