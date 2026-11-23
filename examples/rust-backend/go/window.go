@@ -31,11 +31,11 @@ type Window struct {
 	handle unsafe.Pointer
 	cfg    gxapp.WindowConfig
 
-	hasBase   bool            // Rust 侧是否已建立基线镜像树
-	events    chan inputEvent
+	hasBase    bool // Rust 侧是否已建立基线镜像树
+	events     chan inputEvent
 	dispatcher func(ev InputEvent)
-	mu        sync.Mutex
-	closed    bool
+	mu         sync.Mutex
+	closed     bool
 }
 
 // 编译期断言：本后端采用 Frame 契约。
@@ -87,6 +87,7 @@ func (w *Window) BindApp(app *gxapp.App) {
 
 // Present 实现 gxapp.FramePresenter：首帧全量快照，后续用 frame.Changes 发增量。
 // 后端不再反向访问 App——Changes 由 Host 随帧交付，Version 可用于去重/排序。
+// frame.FullSync=true（上次 Present 失败后的恢复帧）时忽略 Changes，用 Root 全量重建。
 func (w *Window) Present(frame *gxapp.Frame) error {
 	if w.handle == nil || frame == nil || frame.Root == nil {
 		return nil
@@ -97,7 +98,7 @@ func (w *Window) Present(frame *gxapp.Frame) error {
 
 	var data []byte
 	var err error
-	if w.hasBase && len(frame.Changes) > 0 {
+	if w.hasBase && !frame.FullSync && len(frame.Changes) > 0 {
 		if delta, ok := serializeDelta(frame.Changes, root, uint32(w.cfg.Width), uint32(w.cfg.Height)); ok {
 			data = delta
 		}

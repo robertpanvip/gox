@@ -14,7 +14,9 @@
 | **协议变更**（契约面变了） | `Window` 接口增删方法或改签名、**已有** `Node` 字段语义变化或删除、`NodeType` 枚举变化、`Handler`/`EventContext` 签名变化、`WindowConfig` 字段语义变化 | **必须跟着实现** |
 | **additive 字段/方法**（协议面扩展但向后兼容） | 新增 `Node.ID`（整数身份）/`Changes()`、合成事件 等——只加不删、不改已有签名，旧后端忽略即可 | **不用动**（可选采用） |
 
-**协议面**就是第 2 节列出的那几样：`gxapp.Window`、`gxapp.WindowConfig`、`gxscene.Node` / `NodeType`、事件约定（`Handlers` / `Handler` / `EventContext`）。它们是后端唯一依赖的东西，其余 host 代码对后端透明。host **不定义绘制后端接口**——曾有的 `gxscene.Backend interface{Paint(root) string}` 已删除（返回字符串只适合文本，对 Skia/wgpu 是误导）；`TextBackend` 降级为具体文本工具，不是要实现的协议。
+**协议面**就是第 2 节列出的那几样：`gxapp.Window`（窗口生命周期）、`gxapp.FramePresenter`（可选的场景提交）、`gxapp.UIExecutor`（可选的 UI 线程投递）、`gxapp.WindowConfig`、`gxscene.Node` / `NodeType`、事件约定（`Handlers` / `Handler` / `EventContext`）。它们是后端唯一依赖的东西，其余 host 代码对后端透明。
+
+需澄清「host 不定义绘制后端接口」的准确含义（避免误导）：host **不定义具体的渲染器抽象**（如何实现布局/命中/绘制），也不替后端做这些事；它只定义**窗口生命周期**（`Window`）与**场景树提交协议**（`FramePresenter`/`Frame`）。曾有的 `gxscene.Backend interface{Paint(root) string}` 已删除（返回字符串只适合文本，对 Skia/wgpu 是误导）；`TextBackend` 降级为具体文本工具，不是要实现的协议。线程执行环境同理：host 不管理具体 GUI 线程，只通过 `UIExecutor` 要求后端把绘制回调投递到正确的执行环境。
 
 其中 `SyntheticEvent` / `DispatchBubble` / `DispatchCapture` / `NormalizeEventName` / `Modifier`（§2.3）以及 `Node.ID` / `Changes()`（§2.4）属于 **additive 扩展**：它们只新增类型、字段与方法，`Window`/`Handler` 的既有签名一个没动，因此归入"additive 字段/方法"一类 —— 后端不采用就完全无感。
 
@@ -57,12 +59,14 @@ host 内置的 `HeadlessWindow` + `TextBackend` 只是参考实现/占位实现�
 - Signal 可在任意 goroutine 写入；响应式 effect 的调度由 `runtime/signal` 负责。
 - 但**所有 Scene Mutation**（effect body 里的 `SetPart`/子树 graft、`App.Update()`）与 **Backend Draw**（`Window.Draw` / `FramePresenter.Present` 遍历 Node）都在 Host 的 `commitGate` 内串行执行，二者绝不并发。`commitGate` 基于 goroutine id 可重入——effect body 内同步写 signal 触发的嵌套 effect 不会自锁。
 - 结论：**后端遍历 `*Node` 时，Node 树一定处于一次完整 Mutation 提交后的稳定状态**，不会有 effect 并发写入。后端无需自己加锁保护读树。
-- `QueueDispatcher` 负责把 Draw 派发到 UI 线程；`commitGate` 负责 Node 读写的互斥。两者正交、缺一不可（只调度 Draw 而不串行 Mutation 仍然会竞争）。
+- 派发器负责把 Draw 请求投递到正确的执行环境，`commitGate` 负责 Node 读写的互斥。两者正交、缺一不可（只调度 Draw 而不串行 Mutation 仍然会竞争）。
+
+**谁保证 UI 操作发生在正确的 OS Thread？——后端，不是 Host。** Host 不猜测线程、也不比较 goroutine id（goroutine 可在 OS Thread 间迁移，goid 相等不能证明线程亲和）。真实 GUI 后端实现 `UIExecutor.Post`，用它自己的事件循环（`postMessage` / `glfw.PostEmptyEvent` / 平台 run loop 等）把绘制回调投递到正确线程；需要锁定 OS Thread 的框架由后端自己负责。Host 侧用 `app.SetUIExecutor(exec)` 或 `NewUIExecutorDispatcher(exec)` 接入。旧的 `QueueDispatcher`（goroutine id + post 函数）保留仅作源码兼容，已标注弃用；`post == nil` 不再静默同线程降级，而是安全失败（不绘制），避免在不正确的线程调用后端。
 
 **② 更新的所有权——Frame 提交。**
 
 - Host 负责把响应式变化提交成 `Frame{Root, Changes, Version}`（见 §2.4），通过 `FramePresenter.Present` 主动推给后端。增量提交是 Host 的职责，后端不反向访问 App。
-- Draw 与 Update 等所有绘制入口统一经过 `FrameDispatcher`（`InlineDispatcher` 同步 / `QueueDispatcher` 投递 UI 线程），不存在绕过派发器的绘制路径。
+- Draw 与 Update 等所有绘制入口统一经过 `FrameDispatcher`（`InlineDispatcher` 同步 / `UIExecutorDispatcher` 投递 UI 线程），不存在绕过派发器的绘制路径。需要本次同步绘制的确定错误时用 `DrawNow()`（同步执行并返回本次错误）；`Draw()` 返回最近一次绘制的错误，异步派发下不保证属于本次请求。
 
 **③ Node 与 App 的所有权——生命周期。**
 
@@ -100,8 +104,14 @@ type Node struct {
     Handlers map[string]any     // 事件处理器：key=JSX 原样事件名，value=handler 原值
     Children []*Node
     Text     string             // 仅 NodeText 使用
+    ID       NodeID             // host 分配的稳定整数身份；0 表示尚未分配
 }
 ```
+
+`ID`（`NodeID` 为整数类型）是节点的稳定身份（详见 §2.4）：clone 骨架时分配，节点移出
+树后不再复用。后端可用它作命中/焦点/布局缓存的 map key，也可完全忽略——它只是身份
+标识，不携带布局语义。后端私有状态（布局结果等）不放在 Node 上，用 `map[NodeID]any`
+自行维护。
 
 `Type` 三态：
 
@@ -160,17 +170,25 @@ host **不定义绘制后端接口**（旧 `gxscene.Backend interface{Paint}` �
 Host 把每帧的完整提交打包成 `gxapp.Frame`，通过可选的 `gxapp.FramePresenter` 接口主动推给后端——后端**无需反向持有 App**：
 ```go
 type Frame struct {
-    Root    *gxscene.Node      // 当前完整场景树（建/重建全量镜像）
-    Changes []gxscene.Change   // 自上次 Present 以来的有序增量（需 EnableChanges）
-    Version uint64             // 单调递增提交序号（去重/排序/判漏帧）
+    Root     *gxscene.Node      // 当前完整场景树（建/重建全量镜像）
+    Changes  []gxscene.Change   // 自上次成功 Present 以来的有序增量（FramePresenter 自动启用）
+    Version  uint64             // Host 提交序号，单调递增（去重/排序/判漏帧；非成功序号）
+    FullSync bool               // true：忽略 Changes，必须用 Root 全量重建镜像
 }
 type FramePresenter interface { Present(frame *Frame) error }
 ```
-后端实现 `Present` 即自动生效（App.drawNow 检测到后优先调用，否则回退 `Draw(root)` 兼容路径，老后端零改动）：
+后端实现 `Present` 即自动生效（App.drawNow 检测到后优先调用，否则回退 `Draw(root)` 兼容路径，老后端零改动；FramePresenter 模式由 Host 自动打开变更记录，无需调用 `EnableChanges`）：
 ```go
 func (w *Backend) Present(frame *gxapp.Frame) error {
-    if !w.hasBase { w.buildMirror(frame.Root); w.hasBase = true } // 首帧全量
-    for _, ch := range frame.Changes { w.apply(ch) }              // 后续增量
+    // 首帧、FullSync 或本地镜像丢失时，用 Root 建全量基线。
+    if !w.hasBase || frame.FullSync {
+        w.buildMirror(frame.Root)
+        w.hasBase = true
+        w.appliedVersion = frame.Version
+        return nil
+    }
+    for _, ch := range frame.Changes { w.apply(ch) } // 常规增量
+    w.appliedVersion = frame.Version
     return nil
 }
 ```
@@ -193,7 +211,15 @@ for _, ch := range app.TakeChanges() { // 取走自上帧以来的有序变更
 }
 ```
 
-**全量与补丁的关系**：`Frame.Root` 永远是最新完整快照，`Frame.Changes` 是两次 Present 之间的差量。后端正常路径只需 apply Changes；当镜像丢失、Version 不连续或遇到无法处理的 Change 时，用 Root 重建全量基线。首帧（Version=1）Changes 可能为空，必须用 Root 建基线。
+**全量与补丁的关系**：`Frame.Root` 永远是最新完整快照，`Frame.Changes` 是两次**成功** Present 之间的差量。后端正常路径只需 apply Changes；当 `FullSync=true`、本地镜像丢失、Version 不连续或遇到无法处理的 Change 时，用 Root 重建全量基线。首帧（Version=1）Changes 可能为空，必须用 Root 建基线。
+
+**Version 与失败恢复契约**（Host 评审 P0/文档统一）：`Version` 是 **Host 提交序号**，每次提交尝试都递增，不保证对应一次成功提交——例如 Version 1 成功、Version 2 的 `Present` 返回错误、Version 3 成功，后端会看到 1 和 3 但不经历 2。判断连续性不要只看 Version，后端应用成功后自行记录 `AppliedVersion`。`Present` 失败时 Host **不消费** Changes 缓冲（避免永久丢帧），并在下一帧置 `FullSync=true`：后端收到后必须忽略 Changes、用 Root 全量重建，从而恢复到一致状态。因此后端恢复策略应是：
+
+1. 成功 apply 后更新本地 `AppliedVersion = frame.Version`；
+2. 遇到 `FullSync=true` 无条件全量重建；
+3. 发现 `frame.Version` 与 `AppliedVersion+1` 不连续（中间帧失败），等待 `FullSync` 帧或用 Root 重建，而非猜测缺失的补丁。
+
+`Frame.Root` 消费契约：Root 是可变指针，仅在 `Present` 调用期间稳定；后端必须在 `Present` 返回前完成读取，需要异步延迟时必须自行复制。Host 不复制整棵树。`FramePresenter` 自动启用增量记录这一行为，对老 Draw 兼容路径无影响（未实现 `Present` 的后端仍按零开销全量 Draw）。
 
 **`ChangeKind` 全表与字段语义**（`BeforeID` 为空表示末尾）：
 
