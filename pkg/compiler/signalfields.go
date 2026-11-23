@@ -901,7 +901,55 @@ func silentIndexedSignalField(toks []Token, i, limit int, tbl signalFieldTable, 
 // 判定基于 receiver 的推断类型 + signalFieldTable；普通字段、外部包符号、
 // 已是调用 `p.name(...)` 都不改。this transform 在 transformSignals 之后、
 // external 之前运行——此时字段仍是小写、类型已是 Signal.Signal[T]。
+// checkSignalValueDeepWrite 检测 signal 持有复合值时的字段深写：`signal s = S{...}; s.n = 2`
+// 会被改写为 `s().n = 2`，Go 报 "cannot assign to s().n"，信息不指向 GX 写法。
+// 给带坐标的诊断，提示整体替换 signal。signal 字段自身的写（p.name = v，p 是普通
+// struct 变量、name 是 signal 字段）不在此列——p 不是 signal 变量，不会命中。
+func checkSignalValueDeepWrite(toks []Token, b *Bindings, diags *[]GXDiagnostic) {
+	if b == nil || diags == nil {
+		return
+	}
+	for i := 0; i < len(toks); i++ {
+		if toks[i].Text != "." {
+			continue
+		}
+		// '.' 前须是 signal 变量读 `s ( )`：往前找非空白的 ')' '(' Ident。
+		rp := prevSig(toks, i-1)
+		if rp < 0 || toks[rp].Text != ")" {
+			continue
+		}
+		lp := prevSig(toks, rp-1)
+		if lp < 0 || toks[lp].Text != "(" {
+			continue
+		}
+		id := prevSig(toks, lp-1)
+		if id < 0 || toks[id].Kind != Ident || isGoKeyword(toks[id].Text) {
+			continue
+		}
+		if !isSignalRefAt(b, toks[id].Text, toks[id].Pos) {
+			continue
+		}
+		// '.' 后是字段名，再跟赋值/复合赋值符。
+		field := nextSig(toks, i+1)
+		if field < 0 || toks[field].Kind != Ident || isGoKeyword(toks[field].Text) {
+			continue
+		}
+		op := nextSig(toks, field+1)
+		if op < 0 || !isAssignOp(toks[op].Text) && !compoundAssignOps[toks[op].Text] {
+			continue
+		}
+		*diags = append(*diags, GXDiagnostic{
+			Pos:     toks[i].Pos,
+			Code:    "signal-deep-write",
+			Message: "signal 持有的复合值不支持字段直接赋值（" + toks[id].Text + "." + toks[field].Text + " = ...）；请整体替换 signal，如 " + toks[id].Text + "(新值)",
+		})
+		i = op
+	}
+}
+
 func rewriteSignalFieldRefs(toks []Token, b *Bindings, tbl signalFieldTable, diags *[]GXDiagnostic) []Token {
+	// B4：signal 持有复合值的字段深写（s.n = 2）——即使本文件无 signal 字段表也要报。
+	checkSignalValueDeepWrite(toks, b, diags)
 	if !tbl.hasSignalFields() {
 		return toks
 	}
@@ -1505,6 +1553,34 @@ func wrapLitBody(toks []Token, lit compositeLitInfo, b *Bindings, tbl signalFiel
 
 // wrapLitSeg 处理单个字段段 [s,e)（`field : value`）：先递归处理 value 内部嵌套
 // 字面量得到 newVal，再按三档生成载荷；非 signal 字段只递归下探、原样搬运。
+// stripSoleSignalShorthand 处理 `P{v}` 位置简写（P 唯一字段是 signal 字段）：
+// 段 [s,e) 去空白后若恰是 `Ident ( )` 且 Ident 是 signal 读，则剥掉 () 保留
+// getter 本身，使 P{v()} → P{v}（signal 字段需要 Signal[T] 而非读出的 T）。
+// 非该形态返回 (nil, false)。
+func stripSoleSignalShorthand(toks []Token, s, e int, b *Bindings) ([]Token, bool) {
+	idx := -1
+	for k := s; k < e; k++ {
+		if toks[k].Kind == Space || toks[k].Kind == Newline || toks[k].Kind == Comment {
+			continue
+		}
+		if idx < 0 {
+			idx = k
+			continue
+		}
+		// 首个有效 token 后只允许 '(' ')'（signal 读调用）或空白。
+		if toks[k].Text != "(" && toks[k].Text != ")" {
+			return nil, false
+		}
+	}
+	if idx < 0 || toks[idx].Kind != Ident || isGoKeyword(toks[idx].Text) {
+		return nil, false
+	}
+	if b == nil || !isSignalRefAt(b, toks[idx].Text, toks[idx].Pos) {
+		return nil, false
+	}
+	return []Token{toks[idx]}, true
+}
+
 func wrapLitSeg(toks []Token, typeName string, seg [2]int, b *Bindings, tbl signalFieldTable) ([]Token, bool) {
 	s, e := seg[0], seg[1]
 	// 段内找顶层 ':'（字段值可能是复合字面量，须按深度跳过内部 ':'）。
@@ -1525,6 +1601,15 @@ func wrapLitSeg(toks []Token, typeName string, seg [2]int, b *Bindings, tbl sign
 		}
 	}
 	if colon < 0 {
+		// B7：位置简写 `P{v}`（P 只有一个字段且是 signal 字段）——transformSignals
+		// 已把 signal 变量 v 补成 v()（string），但 signal 字段要的是 getter 本身
+		// （Signal[string]）。仅当类型恰有一个字段且它是 signal 字段时安全剥 ()。
+		// 多字段布局简写无法确定 v 落在哪个位置，保持原样（显式键 P{a: v} 可用）。
+		if len(tbl.all[typeName]) == 1 && len(tbl.sig[typeName]) == 1 {
+			if stripped, ok := stripSoleSignalShorthand(toks, s, e, b); ok {
+				return stripped, true
+			}
+		}
 		return wrapLitsInRange(toks, s, e, b, tbl)
 	}
 	nameIdx := nextSigIn(toks, s, colon)

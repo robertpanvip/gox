@@ -92,7 +92,10 @@ func parseLambdaAt(toks []Token, arrowIdx int) *lambdaExpr {
 	// 花括号 body `() => { stmt; stmt }`：lambdaBodyEnd 的深度扫描会把整块
 	// { ... } 纳入 body（内部的 ) ; 换行因深度>0 不终止）。标记后由
 	// buildLambdaParts 生成 `func(){ ... }`（不再包裹 return）。
-	if toks[bodyFrom].Text == "{" {
+	// 例外（B8）：`Signal.computed(() => { x: a, y: b })` 的 body 是对象字面量
+	// 而非语句块——`x: a` 不是合法 Go 语句。此时不标 blockBody，让它走
+	// `return {...}` 并由 objectlit 阶段转成匿名 struct。
+	if toks[bodyFrom].Text == "{" && !isObjectLiteralBody(toks, bodyFrom, bodyTo) {
 		l.blockBody = true
 	}
 	l.bodyFrom, l.bodyTo = bodyFrom, bodyTo
@@ -107,6 +110,39 @@ func parseLambdaAt(toks []Token, arrowIdx int) *lambdaExpr {
 //   - 分号 / 换行（语句结束）
 //
 // 注意：body 内的函数调用参数逗号因深度 >0 被跳过。
+// isObjectLiteralBody 判断 lambda 的花括号 body 是否为对象字面量 `{ k: v, ... }`
+// 而非语句块。对象字面量的特征：花括号内首个有效 token 是标识符且紧跟 ':'
+// （如 `{ x: a, y: b }`）；语句块首 token 多为关键字 / 声明 / 调用，或含 ';'、':='、
+// return 等语句元素。用于 B8：computed(() => { x: a, y: b }) 应生成返回对象的 lambda。
+func isObjectLiteralBody(toks []Token, from, to int) bool {
+	if from >= to || toks[from].Text != "{" {
+		return false
+	}
+	i := nextSigIn(toks, from+1, to)
+	if i < 0 || toks[i].Kind != Ident || isGoKeyword(toks[i].Text) {
+		return false
+	}
+	// 首个标识符后必须紧跟 ':'（标签语句 `L: for` 也满足，但后面是关键字，下面排除）。
+	j := nextSigIn(toks, i+1, to)
+	if j < 0 || toks[j].Text != ":" {
+		return false
+	}
+	// 含语句分隔符 / 短声明 / return 的不是对象字面量。
+	for k := from + 1; k < to && k < len(toks); k++ {
+		switch toks[k].Text {
+		case ";", ":=", "return", "if", "for", "switch", "var", "const", "defer", "go":
+			return false
+		}
+	}
+	// 标签语句 `L: for` / `L: {` 形态：':' 后是控制关键字或 '{'，排除。
+	if k := nextSigIn(toks, j+1, to); k >= 0 {
+		if isGoKeyword(toks[k].Text) || toks[k].Text == "{" {
+			return false
+		}
+	}
+	return true
+}
+
 func lambdaBodyEnd(toks []Token, start int) int {
 	depth := 0
 	for i := start; i < len(toks); i++ {
