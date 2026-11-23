@@ -77,6 +77,25 @@ _ = w.DrawLog() // 最近一帧的绘制指令（观测面）
 
 高级样式（`position:absolute` + inset、`overflow` + 虚拟滚动、`transition` 动画、`box-shadow`、`transform`、`opacity`）的完整约定见 [docs/STYLE.md](../../docs/STYLE.md)，两个后端语义一致。
 
+## 预制控件库（`widgets` 子包）
+
+`backend/skia/widgets` 提供一组跨后端通用的预制组件。组件是纯函数 `func(gxscene.Props) *gxscene.Instance`，产出「带样式属性的场景树」，后端零侵入；深色主题统一管理在 `Theme*` / `tones`。所有交互组件都是**受控**的：业务用 signal 持有状态，通过 `Bind*` 把 setter 包装成事件 handler 回传。
+
+| 分类 | 组件 | 关键 props |
+|---|---|---|
+| 基础 | `Button` / `Input` / `Text` / `Heading` / `Divider` | `label` `variant` `value` `onInput` `level` |
+| 容器 | `Card` / `Row` / `Col` / `VirtualList` | `title` `children` `gap` `count` `render-item` |
+| 反馈展示 | `Badge` / `Tag` / `Progress` / `Avatar` / `Stat` / `Alert` / `EmptyState` / `Skeleton` / `Spinner` | `label` `tone` `value` `title` |
+| 表单交互 | `Checkbox` / `Switch` / `RadioGroup` / `Slider` | `checked` / `value` + `onChange`(BindBool/BindValue/BindNumber) |
+| 导航选择 | `Tabs` / `Segmented` / `Select` | `value` `tabs`/`segments`/`options` `onChange` |
+| 浮层 | `Popover` | `state`/`open` `trigger` `content` `placement` |
+
+事件绑定辅助：`BindInput(func(string))`、`BindBool(func(bool))`、`BindValue(func(string))`、`BindNumber(func(float64))`，与受控 signal 配合形成闭环。
+
+`Select` 基于 `Popover` 浮层底座实现（锚点定位 + 遮罩 + 选中关闭），是 Dropdown/Menu 的通用形态。`VirtualList` 只渲染可见窗口项（+ overscan），节点数与数据量解耦。
+
+完整用法与可运行示例见 `examples/skia-gallery/`（含 [preview.png](../../examples/skia-gallery/preview.png) 全组件截图）。
+
 ## 切到独立仓库
 
 1. 把本 `backend/skia/` 目录整体移到新仓库 `gox-skia-backend`。
