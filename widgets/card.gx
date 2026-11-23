@@ -14,11 +14,11 @@ package widgets
 import gxscene "github.com/robertpanvip/gox/runtime/scene"
 
 pub func Card(props gxscene.Props) *gxscene.Instance {
-	title := gxscene.Get[string](props, "title")
-	width := gxscene.Get[string](props, "width")
-	padding := gxscene.Get[string](props, "padding")
-	tone := gxscene.Get[string](props, "tone")
-	children := gxscene.Child(props)
+	title := gxscene.get[string](props, "title")
+	width := gxscene.get[string](props, "width")
+	padding := gxscene.get[string](props, "padding")
+	tone := gxscene.get[string](props, "tone")
+	children := gxscene.child(props)
 
 	pad := padding()
 	if pad == "" {

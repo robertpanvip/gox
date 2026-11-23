@@ -18,11 +18,11 @@ import (
 //	weight normal/bold（默认 normal）
 //	align  left/center/right
 func Text(props gxscene.Props) *gxscene.Instance {
-	value := gxscene.Get[string](props, "value")
-	tone := gxscene.Get[string](props, "tone")
-	size := gxscene.Get[string](props, "size")
-	weight := gxscene.Get[string](props, "weight")
-	align := gxscene.Get[string](props, "align")
+	value := gxscene.get[string](props, "value")
+	tone := gxscene.get[string](props, "tone")
+	size := gxscene.get[string](props, "size")
+	weight := gxscene.get[string](props, "weight")
+	align := gxscene.get[string](props, "align")
 
 	sz := size()
 	if sz == "" {
@@ -40,7 +40,7 @@ func Text(props gxscene.Props) *gxscene.Instance {
 		ops = append(ops, attr("text-align", a))
 	}
 	ops = append(ops, closeEl())
-	return gxscene.Render(gxscene.Template{Ops: ops, N: 2},
+	return gxscene.render(gxscene.Template{Ops: ops, N: 2},
 		func() any {
 			if c := resolveColor(tone()); c != "" {
 				return c
@@ -81,9 +81,9 @@ func resolveColor(tone string) string {
 
 // Heading 预制标题。props: value, level(1/2/3), tone。
 func Heading(props gxscene.Props) *gxscene.Instance {
-	value := gxscene.Get[string](props, "value")
-	level := gxscene.Get[int](props, "level")
-	tone := gxscene.Get[string](props, "tone")
+	value := gxscene.get[string](props, "value")
+	level := gxscene.get[int](props, "level")
+	tone := gxscene.get[string](props, "tone")
 
 	sz := "18"
 	switch level() {
@@ -98,7 +98,7 @@ func Heading(props gxscene.Props) *gxscene.Instance {
 		el("span"), attr("font-size", sz), attr("weight", "bold"),
 		dynAttr("color", 0), dynChild(1), closeEl(),
 	}
-	return gxscene.Render(gxscene.Template{Ops: ops, N: 2},
+	return gxscene.render(gxscene.Template{Ops: ops, N: 2},
 		func() any {
 			if c := resolveColor(tone()); c != "" {
 				return c
@@ -116,9 +116,9 @@ func Heading(props gxscene.Props) *gxscene.Instance {
 //	tone    背景强调色
 //	size    直径（默认 40）
 func Avatar(props gxscene.Props) *gxscene.Instance {
-	text := gxscene.Get[string](props, "text")
-	name := gxscene.Get[string](props, "name")
-	tone := gxscene.Get[string](props, "tone")
+	text := gxscene.get[string](props, "text")
+	name := gxscene.get[string](props, "name")
+	tone := gxscene.get[string](props, "tone")
 	size := propFloat(props, "size", 40)
 	d := fmtNum(size)
 
@@ -137,7 +137,7 @@ func Avatar(props gxscene.Props) *gxscene.Instance {
 		attr("color", "#07130f"), dynChild(textSlot), closeEl(),
 		closeEl(),
 	}
-	return gxscene.Render(gxscene.Template{Ops: ops, N: nSlots},
+	return gxscene.render(gxscene.Template{Ops: ops, N: nSlots},
 		func() any {
 			if c := resolveColor(tone()); c != "" {
 				return c
@@ -165,11 +165,11 @@ func Avatar(props gxscene.Props) *gxscene.Instance {
 //	tone    主数值/变化量颜色
 //	width   宽度
 func Stat(props gxscene.Props) *gxscene.Instance {
-	value := gxscene.Get[string](props, "value")
-	label := gxscene.Get[string](props, "label")
-	delta := gxscene.Get[string](props, "delta")
-	tone := gxscene.Get[string](props, "tone")
-	width := gxscene.Get[string](props, "width")
+	value := gxscene.get[string](props, "value")
+	label := gxscene.get[string](props, "label")
+	delta := gxscene.get[string](props, "delta")
+	tone := gxscene.get[string](props, "tone")
+	width := gxscene.get[string](props, "width")
 
 	accent := toneColor(tone())
 	hasDelta := delta() != ""
@@ -204,16 +204,16 @@ func Stat(props gxscene.Props) *gxscene.Instance {
 		getters = append(getters, func() any { return delta() })
 		n = 3
 	}
-	return gxscene.Render(gxscene.Template{Ops: ops, N: n}, getters...)
+	return gxscene.render(gxscene.Template{Ops: ops, N: n}, getters...)
 }
 
 // Tag 预制标签（彩色小 chip，与 Badge 不同：Tag 带实色背景）。props:
 //
 //	label string, tone 颜色, outline bool（描边风格）
 func Tag(props gxscene.Props) *gxscene.Instance {
-	label := gxscene.Get[string](props, "label")
-	tone := gxscene.Get[string](props, "tone")
-	outline := gxscene.Get[bool](props, "outline")
+	label := gxscene.get[string](props, "label")
+	tone := gxscene.get[string](props, "tone")
+	outline := gxscene.get[bool](props, "outline")
 
 	const (
 		bgSlot = iota
@@ -230,7 +230,7 @@ func Tag(props gxscene.Props) *gxscene.Instance {
 		dynAttr("border", borderSlot), attr("border-width", "1"),
 		dynChild(textSlot), closeEl(),
 	}
-	return gxscene.Render(gxscene.Template{Ops: ops, N: nSlots},
+	return gxscene.render(gxscene.Template{Ops: ops, N: nSlots},
 		func() any {
 			if outline() {
 				return ThemeInputBg
@@ -256,7 +256,7 @@ func Tag(props gxscene.Props) *gxscene.Instance {
 // Spinner 预制加载指示器（旋转环用多层圆点近似，避免依赖 transform 动画）。
 // props: size(直径,默认 24), tone。渲染为一个圆环背景 + 高亮扇区色块。
 func Spinner(props gxscene.Props) *gxscene.Instance {
-	tone := gxscene.Get[string](props, "tone")
+	tone := gxscene.get[string](props, "tone")
 	size := propFloat(props, "size", 24)
 	d := fmtNum(size)
 	ops := []gxscene.Op{
@@ -265,9 +265,9 @@ func Spinner(props gxscene.Props) *gxscene.Instance {
 		attr("border-radius", fmtNum(size/2)),
 		attr("border-width", fmtNum(size/5)),
 		attr("border", ThemeBorder), dynAttr("color", 0),
-		gxscene.Op{Code: gxscene.OpChildText, Arg: "◌"}, closeEl(),
+		gxscene.Op{Code: gxscene.opChildText, Arg: "◌"}, closeEl(),
 	}
-	return gxscene.Render(gxscene.Template{Ops: ops, N: 1},
+	return gxscene.render(gxscene.Template{Ops: ops, N: 1},
 		func() any { return toneColor(tone()) },
 	)
 }

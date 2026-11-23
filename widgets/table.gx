@@ -46,16 +46,16 @@ type TableColumn struct {
 // Table 构造一个表格实例。
 func Table(props gxscene.Props) *gxscene.Instance {
 	cols := tableColumns(props)
-	rowsGet := gxscene.Get[any](props, "rows")
-	scrollGet := gxscene.Get[float64](props, "scroll-top")
-	onSort := gxscene.Get[gxscene.Handler](props, "on-sort")
-	onSelect := gxscene.Get[gxscene.Handler](props, "on-select")
+	rowsGet := gxscene.get[any](props, "rows")
+	scrollGet := gxscene.get[float64](props, "scroll-top")
+	onSort := gxscene.get[gxscene.Handler](props, "on-sort")
+	onSelect := gxscene.get[gxscene.Handler](props, "on-select")
 	striped := boolGet(props, "striped", true)
-	width := gxscene.Get[string](props, "width")
+	width := gxscene.get[string](props, "width")
 
 	rowHeight := propFloat(props, "row-height", 40)
 	viewportHeight := propFloat(props, "viewport-height", 400)
-	renderCellAny := gxscene.Get[any](props, "render-cell")
+	renderCellAny := gxscene.get[any](props, "render-cell")
 
 	// 单元格文本：优先 render-cell；否则行是 []string / []any 时按列取。
 	cellText := func(row any, col int) string {
@@ -93,7 +93,7 @@ func Table(props gxscene.Props) *gxscene.Instance {
 		for i := range cols {
 			items[i] = i
 		}
-		cellFor := gxscene.NewFor(
+		cellFor := gxscene.newFor(
 			func() []any { return items },
 			func(v any) any { return v },
 			func(v any) *gxscene.Instance {
@@ -103,25 +103,25 @@ func Table(props gxscene.Props) *gxscene.Instance {
 		)
 		ops := []gxscene.Op{
 			el("div"), attr("gx-role", "table-row"),
-			attr("gx-row-index", strconv.Itoa(index)),
+			attr("gx-row-index", strconv.itoa(index)),
 			attr("flex-direction", "row"), attr("align-items", "center"),
-			attr("height", fmt.Sprintf("%g", rowHeight)),
+			attr("height", fmt.sprintf("%g", rowHeight)),
 			attr("border-bottom", AppleSeparator), attr("border-width", "1"),
 		}
 		if striped() && index%2 == 1 {
 			ops = append(ops, attr("bg", AppleElevated)) // 斑马纹：交替行抬起一层
 		}
 		// 行点击 → on-select（列单元格点击会冒泡到此；事件名相同按命中就近派发）。
-		ops = append(ops, gxscene.Op{Code: gxscene.OpEvent, Key: "onClick", Slot: 0})
-		ops = append(ops, gxscene.Op{Code: gxscene.OpFor, Slot: 1}, closeEl())
-		return gxscene.Render(gxscene.Template{Ops: ops, N: 2},
+		ops = append(ops, gxscene.Op{Code: gxscene.opEvent, Key: "onClick", Slot: 0})
+		ops = append(ops, gxscene.Op{Code: gxscene.opFor, Slot: 1}, closeEl())
+		return gxscene.render(gxscene.Template{Ops: ops, N: 2},
 			func() any {
 				h := onSelect()
 				if h == nil {
 					return gxscene.Handler(func(gxscene.EventContext) {})
 				}
 				idx := index
-				return gxscene.Handler(func(ctx gxscene.EventContext) { emitValue(h, ctx, strconv.Itoa(idx)) })
+				return gxscene.Handler(func(ctx gxscene.EventContext) { emitValue(h, ctx, strconv.itoa(idx)) })
 			},
 			func() any { return cellFor },
 		)
@@ -132,7 +132,7 @@ func Table(props gxscene.Props) *gxscene.Instance {
 	for i := range cols {
 		headItems[i] = i
 	}
-	headFor := gxscene.NewFor(
+	headFor := gxscene.newFor(
 		func() []any { return headItems },
 		func(v any) any { return v },
 		func(v any) *gxscene.Instance {
@@ -160,12 +160,12 @@ func Table(props gxscene.Props) *gxscene.Instance {
 		// 表头：填充色与数据行形成层次；整表由外层容器统一描边+圆角。
 		el("div"), attr("gx-role", "table-head"),
 		attr("flex-direction", "row"), attr("align-items", "center"),
-		attr("height", fmt.Sprintf("%g", rowHeight)),
+		attr("height", fmt.sprintf("%g", rowHeight)),
 		attr("bg", AppleFill),
 		attr("border-bottom", AppleSeparator2), attr("border-width", "1"),
-		gxscene.Op{Code: gxscene.OpFor, Slot: headSlot},
+		gxscene.Op{Code: gxscene.opFor, Slot: headSlot},
 		closeEl(),
-		gxscene.Op{Code: gxscene.OpComp, Arg: "TableBody", Slot: listSlot},
+		gxscene.Op{Code: gxscene.opComp, Arg: "TableBody", Slot: listSlot},
 		closeEl(),
 	)
 
@@ -178,7 +178,7 @@ func Table(props gxscene.Props) *gxscene.Instance {
 		"width":           width(),
 	})
 
-	return gxscene.Render(gxscene.Template{Ops: ops, N: nSlots},
+	return gxscene.render(gxscene.Template{Ops: ops, N: nSlots},
 		func() any { return headFor },
 		func() any { return list },
 	)
@@ -238,7 +238,7 @@ func valueTextOf(v any) string {
 	if s, ok := v.(string); ok {
 		return s
 	}
-	return fmt.Sprint(v)
+	return fmt.sprint(v)
 }
 
 func tableHeadCell(col TableColumn, onSort gxscene.Handler) *gxscene.Instance {
@@ -256,13 +256,13 @@ func tableHeadCell(col TableColumn, onSort gxscene.Handler) *gxscene.Instance {
 		attr("flex-direction", "row"), attr("align-items", "center"),
 		attr("font-size", "12"), attr("weight", "bold"), attr("color", AppleLabel2),
 		attr("text-align", align),
-		gxscene.Op{Code: gxscene.OpChildText, Arg: col.Title},
+		gxscene.Op{Code: gxscene.opChildText, Arg: col.Title},
 	}
 	if col.Sortable {
 		// 排序标记直接拼在标题后（避免独立 flex item 被折行），整格同色。
 		ops = append(ops,
-			gxscene.Op{Code: gxscene.OpChildText, Arg: " ⇅"},
-			gxscene.Op{Code: gxscene.OpEvent, Key: "onClick", Slot: 0},
+			gxscene.Op{Code: gxscene.opChildText, Arg: " ⇅"},
+			gxscene.Op{Code: gxscene.opEvent, Key: "onClick", Slot: 0},
 		)
 	}
 	ops = append(ops, closeEl())
@@ -279,7 +279,7 @@ func tableHeadCell(col TableColumn, onSort gxscene.Handler) *gxscene.Instance {
 			})
 		})
 	}
-	return gxscene.Render(gxscene.Template{Ops: ops, N: n}, getters...)
+	return gxscene.render(gxscene.Template{Ops: ops, N: n}, getters...)
 }
 
 func tableCell(text string, col TableColumn, colIndex int) *gxscene.Instance {
@@ -301,7 +301,7 @@ func tableCell(text string, col TableColumn, colIndex int) *gxscene.Instance {
 		attr("width", w), attr("padding", "10"),
 		attr("font-size", "13"), attr("weight", weight), attr("color", textColor),
 		attr("text-align", align),
-		gxscene.Op{Code: gxscene.OpChildText, Arg: text}, closeEl(),
+		gxscene.Op{Code: gxscene.opChildText, Arg: text}, closeEl(),
 	}
-	return gxscene.Render(gxscene.Template{Ops: ops, N: 0})
+	return gxscene.render(gxscene.Template{Ops: ops, N: 0})
 }

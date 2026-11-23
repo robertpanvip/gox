@@ -55,7 +55,7 @@ func normalizeErrors(v any) map[string]string {
 		out := make(map[string]string, len(x))
 		for i, s := range x {
 			if s != "" {
-				out[strconv.Itoa(i)] = s
+				out[strconv.itoa(i)] = s
 			}
 		}
 		return out
@@ -79,15 +79,15 @@ func BindSubmit(fn func()) gxscene.Handler {
 //	width     string     宽度
 //	gap       string     字段间距（默认 "12"）
 func Form(props gxscene.Props) *gxscene.Instance {
-	uid := "form-" + strconv.FormatUint(formSeq.Add(1), 10)
+	uid := "form-" + strconv.formatUint(formSeq.Add(1), 10)
 
-	childrenGet := gxscene.Get[any](props, "children")
+	childrenGet := gxscene.get[any](props, "children")
 	errorsGet := errorMapGet(props, "errors")
-	title := gxscene.Get[string](props, "title")
-	width := gxscene.Get[string](props, "width")
-	gap := gxscene.Get[string](props, "gap")
-	submitLabel := gxscene.Get[string](props, "submit-label")
-	onSubmit := gxscene.Get[gxscene.Handler](props, "onSubmit")
+	title := gxscene.get[string](props, "title")
+	width := gxscene.get[string](props, "width")
+	gap := gxscene.get[string](props, "gap")
+	submitLabel := gxscene.get[string](props, "submit-label")
+	onSubmit := gxscene.get[gxscene.Handler](props, "onSubmit")
 
 	g := gap()
 	if g == "" {
@@ -125,18 +125,18 @@ func Form(props gxscene.Props) *gxscene.Instance {
 		ops = append(ops,
 			el("div"), attr("gx-role", "form-title"),
 			attr("font-size", "16"), attr("weight", "bold"), attr("color", ThemeText),
-			gxscene.Op{Code: gxscene.OpChildText, Arg: t}, closeEl(),
+			gxscene.Op{Code: gxscene.opChildText, Arg: t}, closeEl(),
 		)
 	}
-	ops = append(ops, gxscene.Op{Code: gxscene.OpElem, Arg: "div"})
-	ops = append(ops, gxscene.Op{Code: gxscene.OpComp, Arg: "FormFields", Slot: childrenSlot})
+	ops = append(ops, gxscene.Op{Code: gxscene.opElem, Arg: "div"})
+	ops = append(ops, gxscene.Op{Code: gxscene.opComp, Arg: "FormFields", Slot: childrenSlot})
 	ops = append(ops, closeEl())
 	// 错误摘要：固定容器 + dynChild 返回标量文本（不返回 *Instance，否则被
 	// stableChildComp 判为稳定子树而不建 effect，signal 变化无法刷新）。
 	ops = append(ops,
 		el("div"), attr("gx-role", "form-errors"),
 		attr("flex-direction", "column"), attr("gap", "4"),
-		gxscene.Op{Code: gxscene.OpDynChild, Slot: errorsSlot},
+		gxscene.Op{Code: gxscene.opDynChild, Slot: errorsSlot},
 		closeEl(),
 	)
 	// 无提交按钮时不声明 submitSlot：否则该 slot 落进 compile 的防御分支
@@ -151,8 +151,8 @@ func Form(props gxscene.Props) *gxscene.Instance {
 			attr("variant", "primary"), attr("bg", ThemeAccent),
 			attr("color", "#ffffff"), attr("border-radius", RadiusControl),
 			attr("padding", "10"), attr("width", "100"),
-			gxscene.Op{Code: gxscene.OpEvent, Key: "onClick", Slot: submitSlot},
-			gxscene.Op{Code: gxscene.OpChildText, Arg: sl}, closeEl(),
+			gxscene.Op{Code: gxscene.opEvent, Key: "onClick", Slot: submitSlot},
+			gxscene.Op{Code: gxscene.opChildText, Arg: sl}, closeEl(),
 		)
 	}
 	ops = append(ops, closeEl())
@@ -175,7 +175,7 @@ func Form(props gxscene.Props) *gxscene.Instance {
 			return h
 		})
 	}
-	return gxscene.Render(gxscene.Template{Ops: ops, N: n}, getters...)
+	return gxscene.render(gxscene.Template{Ops: ops, N: n}, getters...)
 }
 
 // submitLabelRaw 报告业务是否显式传了 "submit-label" 键（用于决定是否给默认按钮）。
@@ -217,13 +217,13 @@ func errorSummaryText(errs map[string]string) string {
 //	width    string
 //	hint     string     辅助说明（可选）
 func FormItem(props gxscene.Props) *gxscene.Instance {
-	label := gxscene.Get[string](props, "label")
-	name := gxscene.Get[string](props, "name")
+	label := gxscene.get[string](props, "label")
+	name := gxscene.get[string](props, "name")
 	required := boolGet(props, "required", false)
 	errorGet := stringGet(props, "error")
-	hint := gxscene.Get[string](props, "hint")
-	width := gxscene.Get[string](props, "width")
-	childrenGet := gxscene.Get[any](props, "children")
+	hint := gxscene.get[string](props, "hint")
+	width := gxscene.get[string](props, "width")
+	childrenGet := gxscene.get[any](props, "children")
 
 	const (
 		childrenSlot = iota
@@ -246,12 +246,12 @@ func FormItem(props gxscene.Props) *gxscene.Instance {
 			el("div"), attr("gx-role", "form-label"),
 			attr("flex-direction", "row"), attr("gap", "4"),
 			attr("font-size", "13"), attr("color", ThemeText),
-			gxscene.Op{Code: gxscene.OpChildText, Arg: l},
+			gxscene.Op{Code: gxscene.opChildText, Arg: l},
 		)
 		if required() {
 			ops = append(ops,
 				el("span"), attr("color", toneColor("danger")),
-				gxscene.Op{Code: gxscene.OpChildText, Arg: "*"}, closeEl(),
+				gxscene.Op{Code: gxscene.opChildText, Arg: "*"}, closeEl(),
 			)
 		}
 		ops = append(ops, closeEl())
@@ -259,7 +259,7 @@ func FormItem(props gxscene.Props) *gxscene.Instance {
 	// 控件子树
 	ops = append(ops,
 		el("div"),
-		gxscene.Op{Code: gxscene.OpComp, Arg: "FormItemControl", Slot: childrenSlot},
+		gxscene.Op{Code: gxscene.opComp, Arg: "FormItemControl", Slot: childrenSlot},
 		closeEl(),
 	)
 	// 错误文本（动态）；hint 作为静态辅助说明
@@ -267,7 +267,7 @@ func FormItem(props gxscene.Props) *gxscene.Instance {
 		ops = append(ops,
 			el("div"), attr("gx-role", "form-hint"),
 			attr("font-size", "12"), attr("color", ThemeMuted),
-			gxscene.Op{Code: gxscene.OpChildText, Arg: h}, closeEl(),
+			gxscene.Op{Code: gxscene.opChildText, Arg: h}, closeEl(),
 		)
 	}
 	// 错误文本：固定节点 + dynChild 返回标量（可被 effect 刷新；返回 *Instance
@@ -275,12 +275,12 @@ func FormItem(props gxscene.Props) *gxscene.Instance {
 	ops = append(ops,
 		el("div"), attr("gx-role", "form-field-error"),
 		attr("color", toneColor("danger")), attr("font-size", "12"),
-		gxscene.Op{Code: gxscene.OpDynChild, Slot: errorSlot},
+		gxscene.Op{Code: gxscene.opDynChild, Slot: errorSlot},
 		closeEl(),
 	)
 	ops = append(ops, closeEl())
 
-	return gxscene.Render(gxscene.Template{Ops: ops, N: nSlots},
+	return gxscene.render(gxscene.Template{Ops: ops, N: nSlots},
 		func() any {
 			if v, ok := childrenGet().(*gxscene.Instance); ok {
 				return v

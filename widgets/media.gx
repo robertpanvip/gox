@@ -31,12 +31,12 @@ func Img(props gxscene.Props) *gxscene.Instance {
 	}
 	// 透传所有字符串属性（src/width/height/object-fit/border-radius/alt…）。
 	for _, k := range []string{"src", "width", "height", "object-fit", "border-radius", "bg", "opacity"} {
-		if v := gxscene.Get[string](props, k)(); v != "" {
+		if v := gxscene.get[string](props, k)(); v != "" {
 			ops = append(ops, attr(k, v))
 		}
 	}
 	ops = append(ops, closeEl())
-	return gxscene.Render(gxscene.Template{Ops: ops, N: 0})
+	return gxscene.render(gxscene.Template{Ops: ops, N: 0})
 }
 
 // Canvas 画布组件：用声明式 Op 列表描述命令式绘制，编码进 canvas-ops。
@@ -52,7 +52,7 @@ func Img(props gxscene.Props) *gxscene.Instance {
 func Canvas(props gxscene.Props) *gxscene.Instance {
 	ops := []gxscene.Op{el("canvas")}
 	for _, k := range []string{"width", "height", "bg", "border-radius", "opacity"} {
-		if v := gxscene.Get[string](props, k)(); v != "" {
+		if v := gxscene.get[string](props, k)(); v != "" {
 			ops = append(ops, attr(k, v))
 		}
 	}
@@ -66,5 +66,5 @@ func Canvas(props gxscene.Props) *gxscene.Instance {
 		}
 	}
 	ops = append(ops, attr(canvas.PropKey, canvas.Encode(drawOps)), closeEl())
-	return gxscene.Render(gxscene.Template{Ops: ops, N: 0})
+	return gxscene.render(gxscene.Template{Ops: ops, N: 0})
 }

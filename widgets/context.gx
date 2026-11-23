@@ -28,7 +28,7 @@ type Context[T any] struct {
 
 // NewContext 创建一个默认值为 def 的 Context。
 func NewContext[T any](def T) *Context[T] {
-	return &Context[T]{def: signal.New(def)}
+	return &Context[T]{def: signal.new(def)}
 }
 
 // Use 返回读取「当前作用域 context 值」的 getter，可直接作为 GX 动态插槽使用：
@@ -39,7 +39,7 @@ func NewContext[T any](def T) *Context[T] {
 // 注意：Use 必须在「建树期 / 响应式重算期」调用才有作用域可查；拿到 getter 后
 // 可长期保存，它捕获的绑定不随后续求值改变（与 React useContext 的快照一致）。
 func (c *Context[T]) Use() func() T {
-	if v, ok := signal.LookupValue(signal.GetOwner(), c); ok {
+	if v, ok := signal.lookupValue(signal.getOwner(), c); ok {
 		switch sig := v.(type) {
 		case *valueCell[T]:
 			return sig.get
@@ -85,10 +85,10 @@ type valueCell[T any] struct {
 func (c *Context[T]) Provider(props gxscene.Props) *gxscene.Instance {
 	cell := makeCell[T](props["value"])
 
-	childrenGet := gxscene.Get[any](props, "children")
+	childrenGet := gxscene.get[any](props, "children")
 	var inst *gxscene.Instance
 	// 在独立 Owner 下建子树并挂值：子树组件 Use() 沿 Owner 链命中本 cell。
-	_ = signal.CreateRoot(func(o *signal.Owner) {
+	_ = signal.createRoot(func(o *signal.Owner) {
 		o.ProvideValue(c, cell)
 		var v any
 		if childrenGet != nil {
@@ -101,7 +101,7 @@ func (c *Context[T]) Provider(props gxscene.Props) *gxscene.Instance {
 
 	if inst == nil {
 		// 无有效子树时仍返回一个空容器，保持组件契约（总是返回 *Instance）。
-		inst = gxscene.Render(gxscene.Template{Ops: []gxscene.Op{
+		inst = gxscene.render(gxscene.Template{Ops: []gxscene.Op{
 			el("div"), attr("gx-role", "context-provider"), closeEl(),
 		}})
 		return inst
@@ -109,7 +109,7 @@ func (c *Context[T]) Provider(props gxscene.Props) *gxscene.Instance {
 
 	// 用一层透明容器承载子树，便于测试/调试识别 Provider 边界；
 	// 子树实例原样嫁接，不复制、不重建，保住其局部状态与响应式接线。
-	return gxscene.Render(gxscene.Template{
+	return gxscene.render(gxscene.Template{
 		Ops: []gxscene.Op{el("div"), attr("gx-role", "context-provider"), dynChild(0), closeEl()},
 		N:   1,
 	}, func() any { return inst })

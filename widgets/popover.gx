@@ -49,7 +49,7 @@ type PopoverState struct {
 }
 
 func NewPopoverState(initial bool) *PopoverState {
-	return &PopoverState{open: signal.New(initial)}
+	return &PopoverState{open: signal.new(initial)}
 }
 
 func (s *PopoverState) Open()             { s.open(true) }
@@ -71,15 +71,15 @@ func (s *PopoverState) Getter() func() bool { return func() bool { return s.open
 //   - offset       string（像素，缺省 "6"）
 //   - width        string（浮层宽度，缺省按内容）
 func Popover(props gxscene.Props) *gxscene.Instance {
-	uid := "popover-" + strconv.FormatUint(popoverSeq.Add(1), 10)
+	uid := "popover-" + strconv.formatUint(popoverSeq.Add(1), 10)
 
-	stateGet := gxscene.Get[*PopoverState](props, "state")
-	openGet := gxscene.Get[bool](props, "open")
-	placement := gxscene.Get[string](props, "placement")
-	offset := gxscene.Get[string](props, "offset")
-	width := gxscene.Get[string](props, "width")
-	triggerGet := gxscene.Get[any](props, "trigger")
-	contentGet := gxscene.Get[any](props, "content")
+	stateGet := gxscene.get[*PopoverState](props, "state")
+	openGet := gxscene.get[bool](props, "open")
+	placement := gxscene.get[string](props, "placement")
+	offset := gxscene.get[string](props, "offset")
+	width := gxscene.get[string](props, "width")
+	triggerGet := gxscene.get[any](props, "trigger")
+	contentGet := gxscene.get[any](props, "content")
 
 	// 变更回调：受控模式调业务 onOpenChange；非受控模式写内部 state。
 	setOpen := func(v bool) {
@@ -106,17 +106,17 @@ func Popover(props gxscene.Props) *gxscene.Instance {
 
 	ops := []gxscene.Op{
 		// 根透明包装
-		{Code: gxscene.OpElem, Arg: "div"},
-		{Code: gxscene.OpAttr, Key: "gx-role", Arg: "anchor"},
-		{Code: gxscene.OpAttr, Key: "gx-anchor-id", Arg: uid},
-		{Code: gxscene.OpAttr, Key: "flex-direction", Arg: "column"},
+		{Code: gxscene.opElem, Arg: "div"},
+		{Code: gxscene.opAttr, Key: "gx-role", Arg: "anchor"},
+		{Code: gxscene.opAttr, Key: "gx-anchor-id", Arg: uid},
+		{Code: gxscene.opAttr, Key: "flex-direction", Arg: "column"},
 		// trigger 子组件挂在此 div 下
-		{Code: gxscene.OpElem, Arg: "div"},
-		{Code: gxscene.OpComp, Arg: "PopoverTrigger", Slot: triggerSlot},
-		{Code: gxscene.OpClose},
+		{Code: gxscene.opElem, Arg: "div"},
+		{Code: gxscene.opComp, Arg: "PopoverTrigger", Slot: triggerSlot},
+		{Code: gxscene.opClose},
 		// 浮层开关分支
-		{Code: gxscene.OpBranch, Slot: branchSlot},
-		{Code: gxscene.OpClose},
+		{Code: gxscene.opBranch, Slot: branchSlot},
+		{Code: gxscene.opClose},
 	}
 
 	// content getter 返回 *Instance；在 branch builder 内重建子树，其内部 signal 由
@@ -139,7 +139,7 @@ func Popover(props gxscene.Props) *gxscene.Instance {
 	// branch 选择器：open ? 1(浮层) : 0(空)
 	// 注意：OpBranch 插槽需要 *gxscene.Branch 控制器本身（不是 BranchGetter 的 getter），
 	// 由 Render 的 applyAll 在响应式接线时调用其 Resolve 动态挂载子树。
-	branch := gxscene.NewBranch(
+	branch := gxscene.newBranch(
 		func() int {
 			if isOpen() {
 				return 1
@@ -160,35 +160,35 @@ func Popover(props gxscene.Props) *gxscene.Instance {
 			}
 			floatOps := []gxscene.Op{
 				// 遮罩：全屏，点击关闭
-				{Code: gxscene.OpElem, Arg: "div"},
-				{Code: gxscene.OpAttr, Key: "gx-role", Arg: "scrim"},
-				{Code: gxscene.OpEvent, Key: "onClick", Slot: 0},
-				{Code: gxscene.OpClose},
+				{Code: gxscene.opElem, Arg: "div"},
+				{Code: gxscene.opAttr, Key: "gx-role", Arg: "scrim"},
+				{Code: gxscene.opEvent, Key: "onClick", Slot: 0},
+				{Code: gxscene.opClose},
 				// 浮层内容
-				{Code: gxscene.OpElem, Arg: "div"},
-				{Code: gxscene.OpAttr, Key: "gx-role", Arg: "popover"},
-				{Code: gxscene.OpAttr, Key: "gx-anchor", Arg: uid},
-				{Code: gxscene.OpAttr, Key: "gx-placement", Arg: p},
-				{Code: gxscene.OpAttr, Key: "gx-offset", Arg: off},
-				{Code: gxscene.OpAttr, Key: "bg", Arg: AppleMaterialReg},
-				{Code: gxscene.OpAttr, Key: "border-radius", Arg: RadiusCard},
-				{Code: gxscene.OpAttr, Key: "border", Arg: AppleHairline},
-				{Code: gxscene.OpAttr, Key: "border-width", Arg: "1"},
-				{Code: gxscene.OpAttr, Key: "box-shadow", Arg: ShadowFloat},
-				{Code: gxscene.OpAttr, Key: "flex-direction", Arg: "column"},
-				{Code: gxscene.OpAttr, Key: "padding", Arg: "6"},
+				{Code: gxscene.opElem, Arg: "div"},
+				{Code: gxscene.opAttr, Key: "gx-role", Arg: "popover"},
+				{Code: gxscene.opAttr, Key: "gx-anchor", Arg: uid},
+				{Code: gxscene.opAttr, Key: "gx-placement", Arg: p},
+				{Code: gxscene.opAttr, Key: "gx-offset", Arg: off},
+				{Code: gxscene.opAttr, Key: "bg", Arg: AppleMaterialReg},
+				{Code: gxscene.opAttr, Key: "border-radius", Arg: RadiusCard},
+				{Code: gxscene.opAttr, Key: "border", Arg: AppleHairline},
+				{Code: gxscene.opAttr, Key: "border-width", Arg: "1"},
+				{Code: gxscene.opAttr, Key: "box-shadow", Arg: ShadowFloat},
+				{Code: gxscene.opAttr, Key: "flex-direction", Arg: "column"},
+				{Code: gxscene.opAttr, Key: "padding", Arg: "6"},
 			}
 			if w := width(); w != "" {
-				floatOps = append(floatOps, gxscene.Op{Code: gxscene.OpAttr, Key: "width", Arg: w})
+				floatOps = append(floatOps, gxscene.Op{Code: gxscene.opAttr, Key: "width", Arg: w})
 			}
 			// content 子树：用 OpComp 挂在浮层 div 下（在 builder 内静态构造，slot 0 局部于本 builder 的模板）
 			floatOps = append(floatOps,
-				gxscene.Op{Code: gxscene.OpElem, Arg: "div"},
-				gxscene.Op{Code: gxscene.OpComp, Arg: "PopoverContent", Slot: 1},
-				gxscene.Op{Code: gxscene.OpClose},
-				gxscene.Op{Code: gxscene.OpClose},
+				gxscene.Op{Code: gxscene.opElem, Arg: "div"},
+				gxscene.Op{Code: gxscene.opComp, Arg: "PopoverContent", Slot: 1},
+				gxscene.Op{Code: gxscene.opClose},
+				gxscene.Op{Code: gxscene.opClose},
 			)
-			return gxscene.Render(gxscene.Template{Ops: floatOps, N: 2},
+			return gxscene.render(gxscene.Template{Ops: floatOps, N: 2},
 				// slot 0: scrim onClick → 关闭（事件 getter 返回 handler 原值）
 				func() any {
 					return gxscene.Handler(func(gxscene.EventContext) { setOpen(false) })
@@ -199,7 +199,7 @@ func Popover(props gxscene.Props) *gxscene.Instance {
 		},
 	)
 
-	return gxscene.Render(gxscene.Template{Ops: ops, N: nSlots},
+	return gxscene.render(gxscene.Template{Ops: ops, N: nSlots},
 		// slot 0: trigger 子树
 		func() any { return buildTrigger() },
 		// slot 1: 分支控制器

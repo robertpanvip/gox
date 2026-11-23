@@ -34,15 +34,15 @@ var tooltipSeq atomic.Uint64
 
 // Tooltip 构造一个悬浮提示组件实例。
 func Tooltip(props gxscene.Props) *gxscene.Instance {
-	uid := "tooltip-" + strconv.FormatUint(tooltipSeq.Add(1), 10)
+	uid := "tooltip-" + strconv.formatUint(tooltipSeq.Add(1), 10)
 
-	stateGet := gxscene.Get[*PopoverState](props, "state")
-	openGet := gxscene.Get[bool](props, "open")
-	placement := gxscene.Get[string](props, "placement")
-	offset := gxscene.Get[string](props, "offset")
-	width := gxscene.Get[string](props, "width")
-	triggerGet := gxscene.Get[any](props, "trigger")
-	contentGet := gxscene.Get[any](props, "content")
+	stateGet := gxscene.get[*PopoverState](props, "state")
+	openGet := gxscene.get[bool](props, "open")
+	placement := gxscene.get[string](props, "placement")
+	offset := gxscene.get[string](props, "offset")
+	width := gxscene.get[string](props, "width")
+	triggerGet := gxscene.get[any](props, "trigger")
+	contentGet := gxscene.get[any](props, "content")
 
 	// 变更回调与开关查询：优先内部 state，否则走受控 open/onOpenChange。
 	setOpen := func(v bool) {
@@ -75,11 +75,11 @@ func Tooltip(props gxscene.Props) *gxscene.Instance {
 		attr("flex-direction", "column"),
 		// trigger 包装：hover 事件挂在这一层，命中子树冒泡至此或命中本节点均可。
 		el("div"),
-		gxscene.Op{Code: gxscene.OpEvent, Key: "onMouseEnter", Slot: enterSlot},
-		gxscene.Op{Code: gxscene.OpEvent, Key: "onMouseLeave", Slot: leaveSlot},
-		gxscene.Op{Code: gxscene.OpComp, Arg: "TooltipTrigger", Slot: triggerSlot},
+		gxscene.Op{Code: gxscene.opEvent, Key: "onMouseEnter", Slot: enterSlot},
+		gxscene.Op{Code: gxscene.opEvent, Key: "onMouseLeave", Slot: leaveSlot},
+		gxscene.Op{Code: gxscene.opComp, Arg: "TooltipTrigger", Slot: triggerSlot},
 		closeEl(),
-		gxscene.Op{Code: gxscene.OpBranch, Slot: branchSlot},
+		gxscene.Op{Code: gxscene.opBranch, Slot: branchSlot},
 		closeEl(),
 	}
 
@@ -90,7 +90,7 @@ func Tooltip(props gxscene.Props) *gxscene.Instance {
 		return nil
 	}
 
-	branch := gxscene.NewBranch(
+	branch := gxscene.newBranch(
 		func() int {
 			if isOpen() {
 				return 1
@@ -127,18 +127,18 @@ func Tooltip(props gxscene.Props) *gxscene.Instance {
 				floatOps = append(floatOps, attr("width", w))
 			}
 			floatOps = append(floatOps,
-				gxscene.Op{Code: gxscene.OpElem, Arg: "div"},
-				gxscene.Op{Code: gxscene.OpComp, Arg: "TooltipContent", Slot: 0},
+				gxscene.Op{Code: gxscene.opElem, Arg: "div"},
+				gxscene.Op{Code: gxscene.opComp, Arg: "TooltipContent", Slot: 0},
 				closeEl(),
 				closeEl(),
 			)
-			return gxscene.Render(gxscene.Template{Ops: floatOps, N: 1},
+			return gxscene.render(gxscene.Template{Ops: floatOps, N: 1},
 				func() any { return buildChild(contentGet()) },
 			)
 		},
 	)
 
-	return gxscene.Render(gxscene.Template{Ops: ops, N: nSlots},
+	return gxscene.render(gxscene.Template{Ops: ops, N: nSlots},
 		func() any { return buildChild(triggerGet()) },
 		func() any { return branch },
 		func() any {

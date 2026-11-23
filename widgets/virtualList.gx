@@ -12,7 +12,7 @@ import (
 )
 
 func parseFloat(s string) (float64, error) {
-	return strconv.ParseFloat(strings.TrimSuffix(strings.TrimSpace(s), "px"), 64)
+	return strconv.parseFloat(strings.trimSuffix(strings.trimSpace(s), "px"), 64)
 }
 
 // VirtualList 虚拟滚动列表。核心性能约定：无论数据总量多大，场景树里只存在
@@ -45,19 +45,19 @@ func parseFloat(s string) (float64, error) {
 // 高度来源当前为显式 height(i)（精确、无跳动）；后端测量回填的钩子见 x-measure
 // 预留（后续版本接入），届时可在不传 height 的情况下由后端实测自动修正。
 func VirtualList(props gxscene.Props) *gxscene.Instance {
-	countGet := gxscene.Get[int](props, "count")
-	scrollGet := gxscene.Get[float64](props, "scroll-top")
+	countGet := gxscene.get[int](props, "count")
+	scrollGet := gxscene.get[float64](props, "scroll-top")
 
 	itemHeight := propFloat(props, "item-height", 40)
 	viewportHeight := propFloat(props, "viewport-height", 400)
 	overscan := propInt(props, "overscan", 3)
-	renderItemAny := gxscene.Get[any](props, "render-item")
+	renderItemAny := gxscene.get[any](props, "render-item")
 
 	// 不定高支持：
 	//   - "height"        func(int) float64 / func(int) any —— 返回第 i 项真实高度
 	//   - "estimate-height" 未知项的估算高度（默认沿用 item-height）
 	// 未提供 "height" 时退化为原来的等高等距路径（零额外开销、完全兼容）。
-	heightAny := gxscene.Get[any](props, "height")
+	heightAny := gxscene.get[any](props, "height")
 	estimate := propFloat(props, "estimate-height", itemHeight)
 	variableHeight := heightAny != nil && heightAny() != nil
 
@@ -155,14 +155,14 @@ func VirtualList(props gxscene.Props) *gxscene.Instance {
 			}
 		}
 		if child == nil {
-			child = gxscene.Render(gxscene.Template{Ops: []gxscene.Op{
-				el("div"), attr("width", "100"), attr("height", fmt.Sprintf("%g", itemHeight)), closeEl(),
+			child = gxscene.render(gxscene.Template{Ops: []gxscene.Op{
+				el("div"), attr("width", "100"), attr("height", fmt.sprintf("%g", itemHeight)), closeEl(),
 			}})
 		}
 		return child
 	}
 
-	forCtl := gxscene.NewFor(
+	forCtl := gxscene.newFor(
 		func() []any {
 			idx := visibleIndices()
 			out := make([]any, len(idx))
@@ -179,7 +179,7 @@ func VirtualList(props gxscene.Props) *gxscene.Instance {
 	// 内层 spacer（动态高度 = firstIdx*itemHeight）把可见项推到全局位置。
 	ops := []gxscene.Op{
 		el("div"),
-		attr("height", fmt.Sprintf("%g", viewportHeight)),
+		attr("height", fmt.sprintf("%g", viewportHeight)),
 		attr("overflow", "scroll"),
 	}
 	if v, ok := propStringVal(props, "width"); ok {
@@ -188,19 +188,19 @@ func VirtualList(props gxscene.Props) *gxscene.Instance {
 	if v, ok := propStringVal(props, "bg"); ok {
 		ops = append(ops, attr("bg", v))
 	}
-	ops = append(ops, gxscene.Op{Code: gxscene.OpDynAttr, Key: "scroll-top", Slot: 0})
+	ops = append(ops, gxscene.Op{Code: gxscene.opDynAttr, Key: "scroll-top", Slot: 0})
 	// spacer：高度由 firstIdx 决定（在 For 的 each 求值后得到）。
-	ops = append(ops, gxscene.Op{Code: gxscene.OpElem, Arg: "div"})
-	ops = append(ops, gxscene.Op{Code: gxscene.OpDynAttr, Key: "height", Slot: 1})
+	ops = append(ops, gxscene.Op{Code: gxscene.opElem, Arg: "div"})
+	ops = append(ops, gxscene.Op{Code: gxscene.opDynAttr, Key: "height", Slot: 1})
 	ops = append(ops, closeEl())
 	// 可见项 For。
-	ops = append(ops, gxscene.Op{Code: gxscene.OpFor, Slot: 2}, closeEl())
+	ops = append(ops, gxscene.Op{Code: gxscene.opFor, Slot: 2}, closeEl())
 
-	return gxscene.Render(gxscene.Template{Ops: ops, N: 3},
-		func() any { return fmt.Sprintf("%g", scrollGet()) }, // slot 0: scroll-top
+	return gxscene.render(gxscene.Template{Ops: ops, N: 3},
+		func() any { return fmt.sprintf("%g", scrollGet()) }, // slot 0: scroll-top
 		func() any { // slot 1: spacer height = 可见首项之前的累计高度（不等高时为前缀和）
 			_, _, spacer := windowAt()
-			return fmt.Sprintf("%g", spacer)
+			return fmt.sprintf("%g", spacer)
 		},
 		func() any { return forCtl }, // slot 2: *For
 	)

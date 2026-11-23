@@ -42,15 +42,15 @@ const (
 
 // TimePicker 构造一个时间选择器实例。
 func TimePicker(props gxscene.Props) *gxscene.Instance {
-	uid := "timepicker-" + strconv.FormatUint(timePickerSeq.Add(1), 10)
+	uid := "timepicker-" + strconv.formatUint(timePickerSeq.Add(1), 10)
 
 	value := stringGet(props, "value")
-	onChange := gxscene.Get[gxscene.Handler](props, "onChange")
+	onChange := gxscene.get[gxscene.Handler](props, "onChange")
 	withSeconds := boolGet(props, "with-seconds", false)
 	hour12 := boolGet(props, "hour12", false)
-	width := gxscene.Get[string](props, "width")
-	tone := gxscene.Get[string](props, "tone")
-	placeholder := gxscene.Get[string](props, "placeholder")
+	width := gxscene.get[string](props, "width")
+	tone := gxscene.get[string](props, "tone")
+	placeholder := gxscene.get[string](props, "placeholder")
 
 	w := width()
 	if w == "" {
@@ -62,18 +62,18 @@ func TimePicker(props gxscene.Props) *gxscene.Instance {
 	}
 
 	// 当前打开的段（段号+1；0 表示全关）——用 signal 驱动 Branch 切换菜单内容。
-	openSeg := signal.New(0)
+	openSeg := signal.new(0)
 
 	// 解析当前值成时/分/秒（无效片段返回 -1，显示 placeholder）。
 	parse := func() [3]int {
 		var out [3]int
 		out[0], out[1], out[2] = -1, -1, -1
-		parts := strings.Split(strings.TrimSpace(value()), ":")
+		parts := strings.split(strings.trimSpace(value()), ":")
 		for i, p := range parts {
 			if i > 2 {
 				break
 			}
-			if n, err := strconv.Atoi(p); err == nil {
+			if n, err := strconv.atoi(p); err == nil {
 				out[i] = n
 			}
 		}
@@ -96,9 +96,9 @@ func TimePicker(props gxscene.Props) *gxscene.Instance {
 		}
 		var s string
 		if withSeconds() {
-			s = fmt.Sprintf("%02d:%02d:%02d", hh, mm, ss)
+			s = fmt.sprintf("%02d:%02d:%02d", hh, mm, ss)
 		} else {
-			s = fmt.Sprintf("%02d:%02d", hh, mm)
+			s = fmt.sprintf("%02d:%02d", hh, mm)
 		}
 		openSeg(0) // 选中后关闭浮层
 		emitValue(onChange(), ctx, s)
@@ -110,13 +110,13 @@ func TimePicker(props gxscene.Props) *gxscene.Instance {
 			return ph
 		}
 		if !hour12() {
-			return fmt.Sprintf("%02d", h)
+			return fmt.sprintf("%02d", h)
 		}
 		v := h % 12
 		if v == 0 {
 			v = 12
 		}
-		return fmt.Sprintf("%02d", v)
+		return fmt.sprintf("%02d", v)
 	}
 	segText := func(seg timeSegment) string {
 		v := parse()[int(seg)]
@@ -127,12 +127,12 @@ func TimePicker(props gxscene.Props) *gxscene.Instance {
 			if v < 0 {
 				return ph
 			}
-			return fmt.Sprintf("%02d", v)
+			return fmt.sprintf("%02d", v)
 		default:
 			if v < 0 {
 				return ph
 			}
-			return fmt.Sprintf("%02d", v)
+			return fmt.sprintf("%02d", v)
 		}
 	}
 
@@ -163,20 +163,20 @@ func TimePicker(props gxscene.Props) *gxscene.Instance {
 	}
 	for i := range segments {
 		ops = append(ops,
-			gxscene.Op{Code: gxscene.OpElem, Arg: "div"},
-			gxscene.Op{Code: gxscene.OpComp, Arg: "TimeSegment", Slot: i},
-			gxscene.Op{Code: gxscene.OpClose},
+			gxscene.Op{Code: gxscene.opElem, Arg: "div"},
+			gxscene.Op{Code: gxscene.opComp, Arg: "TimeSegment", Slot: i},
+			gxscene.Op{Code: gxscene.opClose},
 		)
 		// 段间冒号分隔符（静态节点，不占 getter 插槽）。
 		if i < len(segments)-1 {
 			ops = append(ops,
 				el("span"), attr("color", AppleLabel2),
 				attr("font-size", "18"), attr("weight", "bold"),
-				gxscene.Op{Code: gxscene.OpChildText, Arg: ":"}, closeEl(),
+				gxscene.Op{Code: gxscene.opChildText, Arg: ":"}, closeEl(),
 			)
 		}
 	}
-	ops = append(ops, gxscene.Op{Code: gxscene.OpBranch, Slot: menuSlot})
+	ops = append(ops, gxscene.Op{Code: gxscene.opBranch, Slot: menuSlot})
 	ops = append(ops, closeEl())
 
 	// 菜单 Branch 必须是稳定对象（getter 每次返回同一指针），否则 signal 变化时
@@ -188,7 +188,7 @@ func TimePicker(props gxscene.Props) *gxscene.Instance {
 
 	// 与 Select/Popover 一致：不在此处接线，由 App.Render 或测试显式 BindReactive，
 	// 避免 app 场景重复订阅。
-	return gxscene.Render(gxscene.Template{Ops: ops, N: nSlots}, getters...)
+	return gxscene.render(gxscene.Template{Ops: ops, N: nSlots}, getters...)
 }
 
 // timeSegmentTrigger 一个段触发器：点击时把 openSeg 设为该段(+1)或关闭(0)。
@@ -203,20 +203,20 @@ func timeSegmentTrigger(seg timeSegment, text func() string, width, tone string,
 	)
 	ops := []gxscene.Op{
 		el("div"), attr("gx-role", "time-segment"),
-		attr("gx-time-segment", fmt.Sprintf("%d", seg)),
+		attr("gx-time-segment", fmt.sprintf("%d", seg)),
 		attr("width", width),
 		attr("border-width", "1"), attr("border-radius", RadiusControl),
 		attr("padding", "10"),
 		attr("align-items", "center"), attr("justify-content", "center"),
-		gxscene.Op{Code: gxscene.OpDynAttr, Key: "bg", Slot: bgSlot},
-		gxscene.Op{Code: gxscene.OpDynAttr, Key: "border", Slot: borderSlot},
-		gxscene.Op{Code: gxscene.OpEvent, Key: "onClick", Slot: clickSlot},
+		gxscene.Op{Code: gxscene.opDynAttr, Key: "bg", Slot: bgSlot},
+		gxscene.Op{Code: gxscene.opDynAttr, Key: "border", Slot: borderSlot},
+		gxscene.Op{Code: gxscene.opEvent, Key: "onClick", Slot: clickSlot},
 		el("span"), attr("font-size", "18"), attr("weight", "bold"),
-		gxscene.Op{Code: gxscene.OpDynChild, Slot: textSlot}, closeEl(),
+		gxscene.Op{Code: gxscene.opDynChild, Slot: textSlot}, closeEl(),
 		closeEl(),
 	}
 	isOpen := func() bool { return openSeg() == int(seg)+1 }
-	return gxscene.Render(gxscene.Template{Ops: ops, N: nSlots},
+	return gxscene.render(gxscene.Template{Ops: ops, N: nSlots},
 		func() any {
 			return gxscene.Handler(func(gxscene.EventContext) {
 				want := int(seg) + 1
@@ -245,7 +245,7 @@ func timeSegmentTrigger(seg timeSegment, text func() string, width, tone string,
 
 // timePickerMenu 根据 openSeg 生成选项浮层。selector = openSeg（0 关闭）。
 func timePickerMenu(openSeg signal.Signal[int], onChange func() gxscene.Handler, emit func(gxscene.EventContext, timeSegment, int), hour12, withSeconds bool, tone, width string) *gxscene.Branch {
-	return gxscene.NewBranch(
+	return gxscene.newBranch(
 		func() int { return openSeg() },
 		// [0] 关闭
 		func() *gxscene.Instance { return nil },
@@ -265,7 +265,7 @@ func timeOptionsMenu(seg timeSegment, emit func(gxscene.EventContext, timeSegmen
 	for i, n := range values {
 		items[i] = n
 	}
-	forCtl := gxscene.NewFor(
+	forCtl := gxscene.newFor(
 		func() []any { return items },
 		func(v any) any { return v },
 		func(v any) *gxscene.Instance {
@@ -279,20 +279,20 @@ func timeOptionsMenu(seg timeSegment, emit func(gxscene.EventContext, timeSegmen
 		attr("border", AppleHairline), attr("border-width", "1"),
 		attr("box-shadow", ShadowFloat), attr("padding", "4"),
 		attr("flex-wrap", "wrap"), attr("width", menuWidth(width)),
-		gxscene.Op{Code: gxscene.OpFor, Slot: 0},
+		gxscene.Op{Code: gxscene.opFor, Slot: 0},
 		closeEl(),
 	}
-	return gxscene.Render(gxscene.Template{Ops: ops, N: 1},
+	return gxscene.render(gxscene.Template{Ops: ops, N: 1},
 		func() any { return forCtl },
 	)
 }
 
 func menuWidth(segW string) string {
-	f, err := strconv.Atoi(segW)
+	f, err := strconv.atoi(segW)
 	if err != nil || f <= 0 {
 		return "180"
 	}
-	return strconv.Itoa(f*3 + 12)
+	return strconv.itoa(f*3 + 12)
 }
 
 func timeOptionItem(seg timeSegment, n int, emit func(gxscene.EventContext, timeSegment, int), tone string) *gxscene.Instance {
@@ -303,10 +303,10 @@ func timeOptionItem(seg timeSegment, n int, emit func(gxscene.EventContext, time
 		attr("align-items", "center"), attr("justify-content", "center"),
 		attr("border-radius", RadiusSmall), attr("color", ThemeText),
 		attr("font-size", "13"),
-		gxscene.Op{Code: gxscene.OpEvent, Key: "onClick", Slot: clickSlot},
-		gxscene.Op{Code: gxscene.OpChildText, Arg: fmt.Sprintf("%02d", n)}, closeEl(),
+		gxscene.Op{Code: gxscene.opEvent, Key: "onClick", Slot: clickSlot},
+		gxscene.Op{Code: gxscene.opChildText, Arg: fmt.sprintf("%02d", n)}, closeEl(),
 	}
-	return gxscene.Render(gxscene.Template{Ops: ops, N: 1},
+	return gxscene.render(gxscene.Template{Ops: ops, N: 1},
 		func() any {
 			s := seg
 			v := n

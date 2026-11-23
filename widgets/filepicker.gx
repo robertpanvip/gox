@@ -94,12 +94,12 @@ func BindPick(fn func([]string)) gxscene.Handler {
 // 交互：点击 → 调 FileDialog.OpenFile → 有结果 emit paths 给 onPick，否则 onCancel。
 // 组件本身无状态；对话框实现由装配层注册。
 func FilePicker(props gxscene.Props) *gxscene.Instance {
-	label := gxscene.Get[string](props, "label")
-	width := gxscene.Get[string](props, "width")
-	accent := toneColor(gxscene.Get[string](props, "tone")())
+	label := gxscene.get[string](props, "label")
+	width := gxscene.get[string](props, "width")
+	accent := toneColor(gxscene.get[string](props, "tone")())
 	disabled := boolGet(props, "disabled", false)
-	onPick := gxscene.Get[gxscene.Handler](props, "onPick")
-	onCancel := gxscene.Get[gxscene.Handler](props, "onCancel")
+	onPick := gxscene.get[gxscene.Handler](props, "onPick")
+	onCancel := gxscene.get[gxscene.Handler](props, "onCancel")
 	optsGet := fileOptionsGet(props)
 
 	l := label()
@@ -123,11 +123,11 @@ func FilePicker(props gxscene.Props) *gxscene.Instance {
 	}
 	// disabled 在 handler 内即时读取（见下），无需动态属性插槽。
 	ops = append(ops,
-		gxscene.Op{Code: gxscene.OpEvent, Key: "onClick", Slot: clickSlot},
-		gxscene.Op{Code: gxscene.OpChildText, Arg: l}, closeEl(),
+		gxscene.Op{Code: gxscene.opEvent, Key: "onClick", Slot: clickSlot},
+		gxscene.Op{Code: gxscene.opChildText, Arg: l}, closeEl(),
 	)
 
-	return gxscene.Render(gxscene.Template{Ops: ops, N: 1},
+	return gxscene.render(gxscene.Template{Ops: ops, N: 1},
 		func() any {
 			return gxscene.Handler(func(ctx gxscene.EventContext) {
 				if disabled() {

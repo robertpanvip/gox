@@ -159,7 +159,7 @@ func toFloat(v any) (float64, bool) {
 
 // fmtNum 用紧凑格式输出数值（整数不带小数点），用于写进样式属性。
 func fmtNum(f float64) string {
-	return strconv.FormatFloat(f, 'f', -1, 64)
+	return strconv.formatFloat(f, 'f', -1, 64)
 }
 
 // clamp 把 v 限制在 [lo, hi]。
@@ -175,7 +175,7 @@ func clamp(v, lo, hi float64) float64 {
 
 // optionLabel 返回选项显示文本，Label 为空时回退 Value。
 func optionLabel(o Option) string {
-	if strings.TrimSpace(o.Label) != "" {
+	if strings.trimSpace(o.Label) != "" {
 		return o.Label
 	}
 	return o.Value

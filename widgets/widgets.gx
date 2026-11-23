@@ -77,8 +77,8 @@ func toneColor(tone string) string {
 // ---------- 焦点与光标状态（全局，signal 驱动重绘）----------
 
 var (
-	focusToken = signal.New("")   // 当前聚焦输入框的 token；空串表示无焦点
-	blinkOn    = signal.New(true) // 光标是否可见
+	focusToken = signal.new("")   // 当前聚焦输入框的 token；空串表示无焦点
+	blinkOn    = signal.new(true) // 光标是否可见
 	inputSeq   atomic.Uint64      // token 生成器
 )
 
@@ -87,7 +87,7 @@ func init() {
 	// 聚合 effect 重跑 → Update → Draw。窗口关闭后 effect 被 Dispose，写 signal
 	// 不再触发任何重绘，goroutine 本身无副作用。
 	go func() {
-		t := time.NewTicker(530 * time.Millisecond)
+		t := time.newTicker(530 * time.millisecond)
 		defer t.Stop()
 		for range t.C {
 			blinkOn(!blinkOn())
@@ -108,10 +108,10 @@ func defaultOnInput(_ gxscene.EventContext) {}
 //	height  像素高度（默认按内容，padding 撑开）
 //	onClick Handler 事件
 func Button(props gxscene.Props) *gxscene.Instance {
-	label := gxscene.Get[string](props, "label")
-	variant := gxscene.Get[string](props, "variant")
-	width := gxscene.Get[string](props, "width")
-	height := gxscene.Get[string](props, "height")
+	label := gxscene.get[string](props, "label")
+	variant := gxscene.get[string](props, "variant")
+	width := gxscene.get[string](props, "width")
+	height := gxscene.get[string](props, "height")
 
 	bgSlot, colorSlot, borderSlot := 0, 1, 2
 	clickSlot, labelSlot := 3, 4
@@ -163,11 +163,11 @@ func Button(props gxscene.Props) *gxscene.Instance {
 	}
 	ops = append(ops, event("onClick", clickSlot), dynChild(labelSlot), closeEl())
 
-	return gxscene.Render(gxscene.Template{Ops: ops, N: n},
+	return gxscene.render(gxscene.Template{Ops: ops, N: n},
 		func() any { return bgGetter() },
 		func() any { return colorGetter() },
 		func() any { return borderGetter() },
-		func() any { return gxscene.Get[gxscene.Handler](props, "onClick")() },
+		func() any { return gxscene.get[gxscene.Handler](props, "onClick")() },
 		func() any { return label() },
 	)
 }
@@ -188,15 +188,15 @@ func Button(props gxscene.Props) *gxscene.Instance {
 // 里会被反复重建，随机 token 每重建一次就变、焦点会丢；id 跨重建不变。未传 id 时
 // 才按组件序号兜底生成（这种情形下的焦点稳定性由调用方负责）。
 func Input(props gxscene.Props) *gxscene.Instance {
-	id := gxscene.Get[string](props, "id")
+	id := gxscene.get[string](props, "id")
 	focusID := id()
 	if focusID == "" {
-		focusID = "input-" + strconv.FormatUint(inputSeq.Add(1), 10)
+		focusID = "input-" + strconv.formatUint(inputSeq.Add(1), 10)
 	}
-	value := gxscene.Get[string](props, "value")
-	placeholder := gxscene.Get[string](props, "placeholder")
-	width := gxscene.Get[string](props, "width")
-	tone := gxscene.Get[string](props, "tone")
+	value := gxscene.get[string](props, "value")
+	placeholder := gxscene.get[string](props, "placeholder")
+	width := gxscene.get[string](props, "width")
+	tone := gxscene.get[string](props, "tone")
 
 	w := width()
 	if w == "" {
@@ -243,7 +243,7 @@ func Input(props gxscene.Props) *gxscene.Instance {
 		return placeholder()
 	}
 
-	return gxscene.Render(gxscene.Template{Ops: ops, N: nSlots},
+	return gxscene.render(gxscene.Template{Ops: ops, N: nSlots},
 		func() any { // border
 			if focused() {
 				return accent
@@ -265,7 +265,7 @@ func Input(props gxscene.Props) *gxscene.Instance {
 		func() any { return text() },
 		func() any { return value() },
 		func() any {
-			h := gxscene.Get[gxscene.Handler](props, "onInput")()
+			h := gxscene.get[gxscene.Handler](props, "onInput")()
 			if h == nil {
 				return gxscene.Handler(defaultOnInput)
 			}
@@ -306,7 +306,7 @@ func Focus(n *gxscene.Node) {
 		focusToken("")
 		return
 	}
-	focusToken(fmt.Sprint(n.Props["gx-input-id"]))
+	focusToken(fmt.sprint(n.Props["gx-input-id"]))
 }
 
 // Blur 清空焦点。
@@ -330,7 +330,7 @@ func FocusedInputIn(root *gxscene.Node) *gxscene.Node {
 			return
 		}
 		if n.Props != nil {
-			if v, ok := n.Props["gx-input-id"]; ok && fmt.Sprint(v) == id {
+			if v, ok := n.Props["gx-input-id"]; ok && fmt.sprint(v) == id {
 				found = n
 				return
 			}
@@ -367,7 +367,7 @@ func dispatchText(n *gxscene.Node, next string) bool {
 	}
 	fn(gxscene.EventContext{
 		Synthetic: &gxscene.SyntheticEvent{
-			Type:       gxscene.EvInput,
+			Type:       gxscene.evInput,
 			NativeName: "onInput",
 			Target:     n,
 			Data:       map[string]any{"text": next},
@@ -403,9 +403,9 @@ func InputBackspace(n *gxscene.Node) bool {
 
 // Badge 预制小徽章。props: label, tone, dot（是否前置圆点）。
 func Badge(props gxscene.Props) *gxscene.Instance {
-	label := gxscene.Get[string](props, "label")
-	tone := gxscene.Get[string](props, "tone")
-	dot := gxscene.Get[bool](props, "dot")
+	label := gxscene.get[string](props, "label")
+	tone := gxscene.get[string](props, "tone")
+	dot := gxscene.get[bool](props, "dot")
 
 	colorSlot, labelSlot := 0, 1
 	ops := []gxscene.Op{
@@ -421,7 +421,7 @@ func Badge(props gxscene.Props) *gxscene.Instance {
 		)
 	}
 	ops = append(ops, dynChild(labelSlot), closeEl())
-	return gxscene.Render(gxscene.Template{Ops: ops, N: 2},
+	return gxscene.render(gxscene.Template{Ops: ops, N: 2},
 		func() any { return toneColor(tone()) },
 		func() any { return label() },
 	)
@@ -429,16 +429,16 @@ func Badge(props gxscene.Props) *gxscene.Instance {
 
 // Progress 预制进度条。props: value(0-100), width, tone, label。
 func Progress(props gxscene.Props) *gxscene.Instance {
-	value := gxscene.Get[int](props, "value")
-	width := gxscene.Get[string](props, "width")
-	tone := gxscene.Get[string](props, "tone")
-	label := gxscene.Get[string](props, "label")
+	value := gxscene.get[int](props, "value")
+	width := gxscene.get[string](props, "width")
+	tone := gxscene.get[string](props, "tone")
+	label := gxscene.get[string](props, "label")
 
 	w := width()
 	if w == "" {
 		w = "300"
 	}
-	trackW, _ := strconv.Atoi(w)
+	trackW, _ := strconv.atoi(w)
 	accent := toneColor(tone())
 
 	const (
@@ -455,7 +455,7 @@ func Progress(props gxscene.Props) *gxscene.Instance {
 		dynAttr("width", fillSlot), closeEl(),
 		closeEl(), closeEl(),
 	}
-	return gxscene.Render(gxscene.Template{Ops: ops, N: nSlots},
+	return gxscene.render(gxscene.Template{Ops: ops, N: nSlots},
 		func() any {
 			v := value()
 			if v < 0 {
@@ -464,7 +464,7 @@ func Progress(props gxscene.Props) *gxscene.Instance {
 			if v > 100 {
 				v = 100
 			}
-			return strconv.Itoa(trackW * v / 100)
+			return strconv.itoa(trackW * v / 100)
 		},
 		func() any { return label() },
 	)
@@ -472,13 +472,13 @@ func Progress(props gxscene.Props) *gxscene.Instance {
 
 // Divider 预制分隔线。props: width（默认 100% 由父撑开）。
 func Divider(props gxscene.Props) *gxscene.Instance {
-	width := gxscene.Get[string](props, "width")
+	width := gxscene.get[string](props, "width")
 	ops := []gxscene.Op{el("div"), attr("bg", ThemeBorder), attr("height", "1")}
 	if w := width(); w != "" {
 		ops = append(ops, attr("width", w))
 	}
 	ops = append(ops, closeEl())
-	return gxscene.Render(gxscene.Template{Ops: ops, N: 0})
+	return gxscene.render(gxscene.Template{Ops: ops, N: 0})
 }
 
 // Row 预制横向 flex 容器。props: gap, align, justify, children。
@@ -503,11 +503,11 @@ var flexStyleKeys = []string{
 }
 
 func flexBox(props gxscene.Props, dir string) *gxscene.Instance {
-	gap := gxscene.Get[string](props, "gap")
-	align := gxscene.Get[string](props, "align")
-	justify := gxscene.Get[string](props, "justify")
-	width := gxscene.Get[string](props, "width")
-	children := gxscene.Child(props)
+	gap := gxscene.get[string](props, "gap")
+	align := gxscene.get[string](props, "align")
+	justify := gxscene.get[string](props, "justify")
+	width := gxscene.get[string](props, "width")
+	children := gxscene.child(props)
 
 	ops := []gxscene.Op{el("div"), attr("flex-direction", dir)}
 	if g := gap(); g != "" {
@@ -531,7 +531,7 @@ func flexBox(props gxscene.Props, dir string) *gxscene.Instance {
 		}
 	}
 	ops = append(ops, dynChild(0), closeEl())
-	return gxscene.Render(gxscene.Template{Ops: ops, N: 1},
+	return gxscene.render(gxscene.Template{Ops: ops, N: 1},
 		func() any { return children() },
 	)
 }
@@ -542,13 +542,13 @@ func propToStyleString(v any) (string, bool) {
 	case string:
 		return x, true
 	case int:
-		return fmt.Sprintf("%d", x), true
+		return fmt.sprintf("%d", x), true
 	case int64:
-		return fmt.Sprintf("%d", x), true
+		return fmt.sprintf("%d", x), true
 	case float64:
-		return strconv.FormatFloat(x, 'g', -1, 64), true
+		return strconv.formatFloat(x, 'g', -1, 64), true
 	case float32:
-		return strconv.FormatFloat(float64(x), 'g', -1, 32), true
+		return strconv.formatFloat(float64(x), 'g', -1, 32), true
 	default:
 		return "", false
 	}

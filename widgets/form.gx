@@ -108,10 +108,10 @@ func emitNumber(h gxscene.Handler, ctx gxscene.EventContext, v float64) {
 //	tone     强调色（默认 primary）
 //	size     方框边长（默认 18）
 func Checkbox(props gxscene.Props) *gxscene.Instance {
-	checked := gxscene.Get[bool](props, "checked")
-	label := gxscene.Get[string](props, "label")
-	tone := gxscene.Get[string](props, "tone")
-	onChange := gxscene.Get[gxscene.Handler](props, "onChange")
+	checked := gxscene.get[bool](props, "checked")
+	label := gxscene.get[string](props, "label")
+	tone := gxscene.get[string](props, "tone")
+	onChange := gxscene.get[gxscene.Handler](props, "onChange")
 	box := fmtNum(propFloat(props, "size", 18))
 
 	const (
@@ -134,14 +134,14 @@ func Checkbox(props gxscene.Props) *gxscene.Instance {
 		el("span"), attr("position", "absolute"), attr("top", "-2"), attr("left", "2"),
 		attr("font-size", "13"), attr("weight", "bold"), attr("color", "#07130f"),
 		dynAttr("opacity", markOpacitySlot),
-		gxscene.Op{Code: gxscene.OpChildText, Arg: "✓"}, closeEl(),
+		gxscene.Op{Code: gxscene.opChildText, Arg: "✓"}, closeEl(),
 		closeEl(),
 		// 标签
 		el("span"), attr("font-size", "14"), attr("color", ThemeText),
 		dynChild(labelTextSlot), closeEl(),
 		closeEl(),
 	}
-	return gxscene.Render(gxscene.Template{Ops: ops, N: nSlots},
+	return gxscene.render(gxscene.Template{Ops: ops, N: nSlots},
 		func() any { // 0 onClick
 			return gxscene.Handler(func(ctx gxscene.EventContext) {
 				emitChecked(onChange(), ctx, !checked())
@@ -173,10 +173,10 @@ func Checkbox(props gxscene.Props) *gxscene.Instance {
 
 // Switch 开关。props: checked, onChange(BindBool), label, tone, width(轨道宽,默认44)。
 func Switch(props gxscene.Props) *gxscene.Instance {
-	checked := gxscene.Get[bool](props, "checked")
-	label := gxscene.Get[string](props, "label")
-	tone := gxscene.Get[string](props, "tone")
-	onChange := gxscene.Get[gxscene.Handler](props, "onChange")
+	checked := gxscene.get[bool](props, "checked")
+	label := gxscene.get[string](props, "label")
+	tone := gxscene.get[string](props, "tone")
+	onChange := gxscene.get[gxscene.Handler](props, "onChange")
 	trackW := propFloat(props, "width", 44)
 
 	const trackH, thumb = 24.0, 18.0
@@ -211,7 +211,7 @@ func Switch(props gxscene.Props) *gxscene.Instance {
 		dynChild(labelSlot), closeEl(),
 		closeEl(),
 	}
-	return gxscene.Render(gxscene.Template{Ops: ops, N: nSlots},
+	return gxscene.render(gxscene.Template{Ops: ops, N: nSlots},
 		func() any {
 			return gxscene.Handler(func(ctx gxscene.EventContext) {
 				emitChecked(onChange(), ctx, !checked())
@@ -245,12 +245,12 @@ func Switch(props gxscene.Props) *gxscene.Instance {
 //	tone       强调色
 //	gap        间距（默认 10）
 func RadioGroup(props gxscene.Props) *gxscene.Instance {
-	value := gxscene.Get[string](props, "value")
+	value := gxscene.get[string](props, "value")
 	options := optionsFrom(props, "options")
-	onChange := gxscene.Get[gxscene.Handler](props, "onChange")
-	direction := gxscene.Get[string](props, "direction")
-	tone := gxscene.Get[string](props, "tone")
-	gap := gxscene.Get[string](props, "gap")
+	onChange := gxscene.get[gxscene.Handler](props, "onChange")
+	direction := gxscene.get[string](props, "direction")
+	tone := gxscene.get[string](props, "tone")
+	gap := gxscene.get[string](props, "gap")
 
 	dir := direction()
 	if dir == "" {
@@ -261,7 +261,7 @@ func RadioGroup(props gxscene.Props) *gxscene.Instance {
 		g = "10"
 	}
 
-	forCtl := gxscene.NewFor(
+	forCtl := gxscene.newFor(
 		func() []any {
 			opts := options()
 			out := make([]any, len(opts))
@@ -276,10 +276,10 @@ func RadioGroup(props gxscene.Props) *gxscene.Instance {
 	ops := []gxscene.Op{
 		el("div"), attr("gx-role", "radiogroup"),
 		attr("flex-direction", dir), attr("gap", g),
-		gxscene.Op{Code: gxscene.OpFor, Slot: 0},
+		gxscene.Op{Code: gxscene.opFor, Slot: 0},
 		closeEl(),
 	}
-	return gxscene.Render(gxscene.Template{Ops: ops, N: 1},
+	return gxscene.render(gxscene.Template{Ops: ops, N: 1},
 		func() any { return forCtl },
 	)
 }
@@ -301,11 +301,11 @@ func radioItem(o Option, value func() string, tone string, onChange gxscene.Hand
 		closeEl(),
 		// 标签
 		el("span"), attr("font-size", "14"), dynAttr("color", 3),
-		gxscene.Op{Code: gxscene.OpChildText, Arg: optionLabel(o)}, closeEl(),
+		gxscene.Op{Code: gxscene.opChildText, Arg: optionLabel(o)}, closeEl(),
 		closeEl(),
 	}
 	disabled := o.Disabled
-	return gxscene.Render(gxscene.Template{Ops: ops, N: 4},
+	return gxscene.render(gxscene.Template{Ops: ops, N: 4},
 		func() any {
 			return gxscene.Handler(func(ctx gxscene.EventContext) {
 				if disabled {
@@ -350,10 +350,10 @@ func radioItem(o Option, value func() string, tone string, onChange gxscene.Hand
 // 交互用"分段命中条"：轨道上覆盖若干等宽透明区段，点击某段即把值落到该段，
 // 不依赖点击坐标换算，跨后端稳定。视觉层由填充条 + 滑块给出。
 func Slider(props gxscene.Props) *gxscene.Instance {
-	value := gxscene.Get[float64](props, "value")
-	onChange := gxscene.Get[gxscene.Handler](props, "onChange")
-	tone := gxscene.Get[string](props, "tone")
-	label := gxscene.Get[string](props, "label")
+	value := gxscene.get[float64](props, "value")
+	onChange := gxscene.get[gxscene.Handler](props, "onChange")
+	tone := gxscene.get[string](props, "tone")
+	label := gxscene.get[string](props, "label")
 	min := numberGet(props, "min", 0)
 	max := numberGet(props, "max", 100)
 	step := propFloat(props, "step", 1)
@@ -384,7 +384,7 @@ func Slider(props gxscene.Props) *gxscene.Instance {
 	}
 
 	// 命中段用 OpFor 渲染，key 用段号。
-	hitFor := gxscene.NewFor(
+	hitFor := gxscene.newFor(
 		func() []any {
 			out := make([]any, segments)
 			for i := range out {
@@ -438,14 +438,14 @@ func Slider(props gxscene.Props) *gxscene.Instance {
 		attr("transition", "left 120ms linear"),
 		dynAttr("left", thumbLeftSlot), closeEl(),
 		// 命中段
-		gxscene.Op{Code: gxscene.OpFor, Slot: hitForSlot},
+		gxscene.Op{Code: gxscene.opFor, Slot: hitForSlot},
 		closeEl(),
 	)
 
-	return gxscene.Render(gxscene.Template{Ops: ops, N: nSlots},
+	return gxscene.render(gxscene.Template{Ops: ops, N: nSlots},
 		func() any { return fmtNum(pct() * width) },             // 0 fill width
 		func() any { return fmtNum(pct() * (width - thumb)) },   // 1 thumb left
-		func() any { return fmt.Sprintf("%s  %s", label(), fmtNum(curValue())) }, // 2 标题+值
+		func() any { return fmt.sprintf("%s  %s", label(), fmtNum(curValue())) }, // 2 标题+值
 		func() any { return hitFor },                            // 3 hit segments
 		func() any { return toneColor(tone()) },                 // 4 fill bg
 	)
@@ -460,7 +460,7 @@ func sliderHitSegment(i int, segW, trackH, target float64, onChange gxscene.Hand
 		attr("height", fmtNum(trackH+16)), attr("opacity", "0"),
 		event("onClick", 0), closeEl(),
 	}
-	return gxscene.Render(gxscene.Template{Ops: ops, N: 1},
+	return gxscene.render(gxscene.Template{Ops: ops, N: 1},
 		func() any {
 			return gxscene.Handler(func(ctx gxscene.EventContext) {
 				emitNumber(onChange, ctx, target)

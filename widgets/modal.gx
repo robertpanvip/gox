@@ -55,7 +55,7 @@ type ModalState struct {
 }
 
 func NewModalState(initial bool) *ModalState {
-	return &ModalState{open: signal.New(initial)}
+	return &ModalState{open: signal.new(initial)}
 }
 
 func (s *ModalState) Open()        { s.open(true) }
@@ -97,13 +97,13 @@ func Modal(props gxscene.Props) *gxscene.Instance {
 	// 唯一 id 写入根 attr：既便于外部引用，也让模板编译缓存按实例区分骨架，
 	// 避免同结构模板（如 Portal）共用 slot 骨架导致的动态插槽绑定错位。
 	uid := modalSeqName("modal")
-	stateGet := gxscene.Get[*ModalState](props, "state")
+	stateGet := gxscene.get[*ModalState](props, "state")
 	openGet := boolGet(props, "open", false)
-	title := gxscene.Get[string](props, "title")
-	contentGet := gxscene.Get[any](props, "content")
-	actionsGet := gxscene.Get[any](props, "actions")
-	width := gxscene.Get[string](props, "width")
-	scrimColor := gxscene.Get[string](props, "scrim")
+	title := gxscene.get[string](props, "title")
+	contentGet := gxscene.get[any](props, "content")
+	actionsGet := gxscene.get[any](props, "actions")
+	width := gxscene.get[string](props, "width")
+	scrimColor := gxscene.get[string](props, "scrim")
 
 	setOpen := func(v bool) {
 		if st := stateGet(); st != nil {
@@ -144,7 +144,7 @@ func Modal(props gxscene.Props) *gxscene.Instance {
 		nSlots
 	)
 
-	branch := gxscene.NewBranch(
+	branch := gxscene.newBranch(
 		func() int {
 			if isOpen() {
 				return 1
@@ -158,63 +158,63 @@ func Modal(props gxscene.Props) *gxscene.Instance {
 			// 这样 N 与 Op 严格一一对应，避免动态模板骨架导致的插槽错位。
 			ops := []gxscene.Op{
 				// 遮罩
-				{Code: gxscene.OpElem, Arg: "div"},
-				{Code: gxscene.OpAttr, Key: "gx-role", Arg: "scrim"},
-				{Code: gxscene.OpAttr, Key: "bg", Arg: scrim},
-				{Code: gxscene.OpEvent, Key: "onClick", Slot: scrimClickSlot},
-				{Code: gxscene.OpClose},
+				{Code: gxscene.opElem, Arg: "div"},
+				{Code: gxscene.opAttr, Key: "gx-role", Arg: "scrim"},
+				{Code: gxscene.opAttr, Key: "bg", Arg: scrim},
+				{Code: gxscene.opEvent, Key: "onClick", Slot: scrimClickSlot},
+				{Code: gxscene.opClose},
 				// 模态面板（协议层负责居中）
-				{Code: gxscene.OpElem, Arg: "div"},
-				{Code: gxscene.OpAttr, Key: "gx-role", Arg: "modal"},
-				{Code: gxscene.OpAttr, Key: "width", Arg: w},
-				{Code: gxscene.OpAttr, Key: "bg", Arg: AppleMaterialThick},
-				{Code: gxscene.OpAttr, Key: "border-radius", Arg: RadiusModal},
-				{Code: gxscene.OpAttr, Key: "border", Arg: AppleHairline},
-				{Code: gxscene.OpAttr, Key: "border-width", Arg: "1"},
-				{Code: gxscene.OpAttr, Key: "box-shadow", Arg: ShadowModal},
-				{Code: gxscene.OpAttr, Key: "padding", Arg: Space6},
-				{Code: gxscene.OpAttr, Key: "flex-direction", Arg: "column"},
-				{Code: gxscene.OpAttr, Key: "gap", Arg: Space4},
+				{Code: gxscene.opElem, Arg: "div"},
+				{Code: gxscene.opAttr, Key: "gx-role", Arg: "modal"},
+				{Code: gxscene.opAttr, Key: "width", Arg: w},
+				{Code: gxscene.opAttr, Key: "bg", Arg: AppleMaterialThick},
+				{Code: gxscene.opAttr, Key: "border-radius", Arg: RadiusModal},
+				{Code: gxscene.opAttr, Key: "border", Arg: AppleHairline},
+				{Code: gxscene.opAttr, Key: "border-width", Arg: "1"},
+				{Code: gxscene.opAttr, Key: "box-shadow", Arg: ShadowModal},
+				{Code: gxscene.opAttr, Key: "padding", Arg: Space6},
+				{Code: gxscene.opAttr, Key: "flex-direction", Arg: "column"},
+				{Code: gxscene.opAttr, Key: "gap", Arg: Space4},
 				// 标题栏（row：标题 + 关闭按钮）
-				{Code: gxscene.OpElem, Arg: "div"},
-				{Code: gxscene.OpAttr, Key: "flex-direction", Arg: "row"},
-				{Code: gxscene.OpAttr, Key: "align-items", Arg: "center"},
-				{Code: gxscene.OpAttr, Key: "justify-content", Arg: "space-between"},
-				{Code: gxscene.OpElem, Arg: "span"},
-				{Code: gxscene.OpAttr, Key: "font-size", Arg: "19"},
-				{Code: gxscene.OpAttr, Key: "weight", Arg: "bold"},
-				{Code: gxscene.OpAttr, Key: "color", Arg: AppleLabel},
-				{Code: gxscene.OpDynChild, Slot: titleSlot},
-				{Code: gxscene.OpClose},
+				{Code: gxscene.opElem, Arg: "div"},
+				{Code: gxscene.opAttr, Key: "flex-direction", Arg: "row"},
+				{Code: gxscene.opAttr, Key: "align-items", Arg: "center"},
+				{Code: gxscene.opAttr, Key: "justify-content", Arg: "space-between"},
+				{Code: gxscene.opElem, Arg: "span"},
+				{Code: gxscene.opAttr, Key: "font-size", Arg: "19"},
+				{Code: gxscene.opAttr, Key: "weight", Arg: "bold"},
+				{Code: gxscene.opAttr, Key: "color", Arg: AppleLabel},
+				{Code: gxscene.opDynChild, Slot: titleSlot},
+				{Code: gxscene.opClose},
 				// 关闭按钮（×）
-				{Code: gxscene.OpElem, Arg: "button"},
-				{Code: gxscene.OpAttr, Key: "gx-role", Arg: "modal-close"},
-				{Code: gxscene.OpAttr, Key: "width", Arg: "26"},
-				{Code: gxscene.OpAttr, Key: "height", Arg: "26"},
-				{Code: gxscene.OpAttr, Key: "border-radius", Arg: RadiusPill},
-				{Code: gxscene.OpAttr, Key: "bg", Arg: AppleFill},
-				{Code: gxscene.OpAttr, Key: "color", Arg: AppleLabel2},
-				{Code: gxscene.OpAttr, Key: "font-size", Arg: "14"},
-				{Code: gxscene.OpAttr, Key: "align-items", Arg: "center"},
-				{Code: gxscene.OpAttr, Key: "justify-content", Arg: "center"},
-				{Code: gxscene.OpEvent, Key: "onClick", Slot: closeClickSlot},
-				{Code: gxscene.OpDynAttr, Key: "opacity", Slot: closeOpacitySlot},
-				{Code: gxscene.OpChildText, Arg: "×"},
-				{Code: gxscene.OpClose},
-				{Code: gxscene.OpClose}, // 标题栏
+				{Code: gxscene.opElem, Arg: "button"},
+				{Code: gxscene.opAttr, Key: "gx-role", Arg: "modal-close"},
+				{Code: gxscene.opAttr, Key: "width", Arg: "26"},
+				{Code: gxscene.opAttr, Key: "height", Arg: "26"},
+				{Code: gxscene.opAttr, Key: "border-radius", Arg: RadiusPill},
+				{Code: gxscene.opAttr, Key: "bg", Arg: AppleFill},
+				{Code: gxscene.opAttr, Key: "color", Arg: AppleLabel2},
+				{Code: gxscene.opAttr, Key: "font-size", Arg: "14"},
+				{Code: gxscene.opAttr, Key: "align-items", Arg: "center"},
+				{Code: gxscene.opAttr, Key: "justify-content", Arg: "center"},
+				{Code: gxscene.opEvent, Key: "onClick", Slot: closeClickSlot},
+				{Code: gxscene.opDynAttr, Key: "opacity", Slot: closeOpacitySlot},
+				{Code: gxscene.opChildText, Arg: "×"},
+				{Code: gxscene.opClose},
+				{Code: gxscene.opClose}, // 标题栏
 				// 内容区
-				{Code: gxscene.OpElem, Arg: "div"},
-				{Code: gxscene.OpAttr, Key: "flex-direction", Arg: "column"},
-				{Code: gxscene.OpDynChild, Slot: contentSlot},
-				{Code: gxscene.OpClose},
+				{Code: gxscene.opElem, Arg: "div"},
+				{Code: gxscene.opAttr, Key: "flex-direction", Arg: "column"},
+				{Code: gxscene.opDynChild, Slot: contentSlot},
+				{Code: gxscene.opClose},
 				// 底部操作区
-				{Code: gxscene.OpElem, Arg: "div"},
-				{Code: gxscene.OpAttr, Key: "flex-direction", Arg: "row"},
-				{Code: gxscene.OpAttr, Key: "justify-content", Arg: "flex-end"},
-				{Code: gxscene.OpAttr, Key: "gap", Arg: Space2},
-				{Code: gxscene.OpDynChild, Slot: actionsSlot},
-				{Code: gxscene.OpClose},
-				{Code: gxscene.OpClose}, // modal panel
+				{Code: gxscene.opElem, Arg: "div"},
+				{Code: gxscene.opAttr, Key: "flex-direction", Arg: "row"},
+				{Code: gxscene.opAttr, Key: "justify-content", Arg: "flex-end"},
+				{Code: gxscene.opAttr, Key: "gap", Arg: Space2},
+				{Code: gxscene.opDynChild, Slot: actionsSlot},
+				{Code: gxscene.opClose},
+				{Code: gxscene.opClose}, // modal panel
 			}
 
 			getters := []func() any{
@@ -243,17 +243,17 @@ func Modal(props gxscene.Props) *gxscene.Instance {
 					return "0"
 				},
 			}
-			return gxscene.Render(gxscene.Template{Ops: ops, N: nSlots}, getters...)
+			return gxscene.render(gxscene.Template{Ops: ops, N: nSlots}, getters...)
 		},
 	)
 
-	return gxscene.Render(gxscene.Template{
+	return gxscene.render(gxscene.Template{
 		Ops: []gxscene.Op{
-			{Code: gxscene.OpElem, Arg: "div"}, // 透明根
-			{Code: gxscene.OpAttr, Key: "gx-modal-id", Arg: uid},
-			{Code: gxscene.OpAttr, Key: "flex-direction", Arg: "column"},
-			{Code: gxscene.OpBranch, Slot: 0},
-			{Code: gxscene.OpClose},
+			{Code: gxscene.opElem, Arg: "div"}, // 透明根
+			{Code: gxscene.opAttr, Key: "gx-modal-id", Arg: uid},
+			{Code: gxscene.opAttr, Key: "flex-direction", Arg: "column"},
+			{Code: gxscene.opBranch, Slot: 0},
+			{Code: gxscene.opClose},
 		},
 		N: 1,
 	}, func() any { return branch })
@@ -271,7 +271,7 @@ func Modal(props gxscene.Props) *gxscene.Instance {
 func Portal(props gxscene.Props) *gxscene.Instance {
 	uid := modalSeqName("portal")
 	openGet := boolGet(props, "open", false)
-	children := gxscene.Child(props)
+	children := gxscene.child(props)
 	_, hasOpen := props["open"]
 	isOpen := func() bool {
 		if !hasOpen {
@@ -280,7 +280,7 @@ func Portal(props gxscene.Props) *gxscene.Instance {
 		return openGet()
 	}
 
-	branch := gxscene.NewBranch(
+	branch := gxscene.newBranch(
 		func() int {
 			if isOpen() {
 				return 1
@@ -289,30 +289,30 @@ func Portal(props gxscene.Props) *gxscene.Instance {
 		},
 		func() *gxscene.Instance { return nil },
 		func() *gxscene.Instance {
-			return gxscene.Render(gxscene.Template{
+			return gxscene.render(gxscene.Template{
 				Ops: []gxscene.Op{
-					{Code: gxscene.OpElem, Arg: "div"},
-					{Code: gxscene.OpAttr, Key: "gx-role", Arg: "portal"},
+					{Code: gxscene.opElem, Arg: "div"},
+					{Code: gxscene.opAttr, Key: "gx-role", Arg: "portal"},
 					// 铺满画布作为子树的定位上下文：子树用 absolute + inset 相对它定位。
-					{Code: gxscene.OpAttr, Key: "position", Arg: "absolute"},
-					{Code: gxscene.OpAttr, Key: "top", Arg: "0"},
-					{Code: gxscene.OpAttr, Key: "left", Arg: "0"},
-					{Code: gxscene.OpAttr, Key: "right", Arg: "0"},
-					{Code: gxscene.OpAttr, Key: "bottom", Arg: "0"},
-					{Code: gxscene.OpDynChild, Slot: 0},
-					{Code: gxscene.OpClose},
+					{Code: gxscene.opAttr, Key: "position", Arg: "absolute"},
+					{Code: gxscene.opAttr, Key: "top", Arg: "0"},
+					{Code: gxscene.opAttr, Key: "left", Arg: "0"},
+					{Code: gxscene.opAttr, Key: "right", Arg: "0"},
+					{Code: gxscene.opAttr, Key: "bottom", Arg: "0"},
+					{Code: gxscene.opDynChild, Slot: 0},
+					{Code: gxscene.opClose},
 				},
 				N: 1,
 			}, func() any { return children() })
 		},
 	)
-	return gxscene.Render(gxscene.Template{
+	return gxscene.render(gxscene.Template{
 		Ops: []gxscene.Op{
-			{Code: gxscene.OpElem, Arg: "div"},
-			{Code: gxscene.OpAttr, Key: "gx-portal-id", Arg: uid},
-			{Code: gxscene.OpAttr, Key: "flex-direction", Arg: "column"},
-			{Code: gxscene.OpBranch, Slot: 0},
-			{Code: gxscene.OpClose},
+			{Code: gxscene.opElem, Arg: "div"},
+			{Code: gxscene.opAttr, Key: "gx-portal-id", Arg: uid},
+			{Code: gxscene.opAttr, Key: "flex-direction", Arg: "column"},
+			{Code: gxscene.opBranch, Slot: 0},
+			{Code: gxscene.opClose},
 		},
 		N: 1,
 	}, func() any { return branch })
@@ -320,5 +320,5 @@ func Portal(props gxscene.Props) *gxscene.Instance {
 
 // modalSeqName 生成一个稳定 id（预留给需要锚点引用的扩展）。
 func modalSeqName(prefix string) string {
-	return prefix + "-" + strconv.FormatUint(modalSeq.Add(1), 10)
+	return prefix + "-" + strconv.formatUint(modalSeq.Add(1), 10)
 }

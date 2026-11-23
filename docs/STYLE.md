@@ -198,8 +198,12 @@ Context **可以跨文件共享**，且共享的是同一个响应式实例（�
 
 GX 语法本是 Go 的超集——`.gx` 里既能写 JSX，也能直接写原生 Go。组件因此分两种写法，同包混编、测试零改动：
 
-- **JSX 写法**（如 `card.gx`）：`pub func` + JSX + `gxscene.Get`。属性/文本/子节点编译成 `OpAttr`/`OpChildText`/`OpDynChild`+getter，事件 `onXxx={...}` 编译成 `OpEvent`，`if`/`<For>` 编译成 `OpBranch`/`OpFor`。适合纯展示/布局组件。
+- **JSX 写法**（如 `card.gx`）：`pub func` + JSX + `gxscene.get`。属性/文本/子节点编译成 `OpAttr`/`OpChildText`/`OpDynChild`+getter，事件 `onXxx={...}` 编译成 `OpEvent`，`if`/`<For>` 编译成 `OpBranch`/`OpFor`。适合纯展示/布局组件。
 - **原生 Go 写法**（其余大多数组件）：手写 `gxscene.Op` 数组 + 事件/focus/浮层等命令式逻辑，整段放进 `.gx` 原样透传。适合依赖 `Owner/CreateRoot`（Context/Theme Provider）、稳定 `*Branch` 对象（Tooltip/TimePicker/Select 浮层）、焦点状态机（Input）等 JSX 抽象层不覆盖的运行时底层能力。
+
+### 组件库源码遵循 GX 大小写规范
+
+组件库 `.gx` 是 GX 源码，同样遵守 `agent.md` §1 的大小写分流：**外部 Go 包的函数/方法/opcode 常量写小写**（`gxscene.get` / `gxscene.render` / `gxscene.opElem` / `signal.new` / `fmt.sprintf`），由编译器 `upperFirst` 还原成 Go 导出名；**类型名与全大写缩写保持大写**（`gxscene.Props` / `gxscene.Instance` / `gxscene.Op` / `signal.Signal` / `atomic.Uint64`）；**本包导出的组件/API 名**（`Button` / `Text` / `NewContext`）是 Go 包对外契约与 JSX 组件约定，保持大写；注释描述的是 Go API 真实名字，也保留大写。从 Go 机械迁移的组件曾把外部符号原样带成大写，现已统一改小写——产物逐字节不变（纯源码风格），并由 `pkg/compiler/widgets_lowercase_test.go` 锁定。
 
 ### 切片提升改为按需（默认行为）
 

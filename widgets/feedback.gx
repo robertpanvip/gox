@@ -17,10 +17,10 @@ import (
 //	tone     info/success/warning/danger（决定左侧色条与图标色）
 //	width    宽度
 func Alert(props gxscene.Props) *gxscene.Instance {
-	title := gxscene.Get[string](props, "title")
-	message := gxscene.Get[string](props, "message")
-	tone := gxscene.Get[string](props, "tone")
-	width := gxscene.Get[string](props, "width")
+	title := gxscene.get[string](props, "title")
+	message := gxscene.get[string](props, "message")
+	tone := gxscene.get[string](props, "tone")
+	width := gxscene.get[string](props, "width")
 
 	accent := toneColor(tone())
 	const (
@@ -49,7 +49,7 @@ func Alert(props gxscene.Props) *gxscene.Instance {
 		closeEl(),
 		closeEl(),
 	)
-	return gxscene.Render(gxscene.Template{Ops: ops, N: nSlots},
+	return gxscene.render(gxscene.Template{Ops: ops, N: nSlots},
 		func() any { return title() },
 		func() any { return message() },
 	)
@@ -57,10 +57,10 @@ func Alert(props gxscene.Props) *gxscene.Instance {
 
 // EmptyState 空状态占位。props: icon, title, description, width。
 func EmptyState(props gxscene.Props) *gxscene.Instance {
-	icon := gxscene.Get[string](props, "icon")
-	title := gxscene.Get[string](props, "title")
-	desc := gxscene.Get[string](props, "description")
-	width := gxscene.Get[string](props, "width")
+	icon := gxscene.get[string](props, "icon")
+	title := gxscene.get[string](props, "title")
+	desc := gxscene.get[string](props, "description")
+	width := gxscene.get[string](props, "width")
 
 	const (
 		titleSlot = iota
@@ -81,14 +81,14 @@ func EmptyState(props gxscene.Props) *gxscene.Instance {
 	}
 	ops = append(ops,
 		el("span"), attr("font-size", "34"), attr("color", ThemeMuted),
-		gxscene.Op{Code: gxscene.OpChildText, Arg: ic}, closeEl(),
+		gxscene.Op{Code: gxscene.opChildText, Arg: ic}, closeEl(),
 		el("span"), attr("font-size", "16"), attr("weight", "bold"),
 		attr("color", ThemeText), dynChild(titleSlot), closeEl(),
 		el("span"), attr("font-size", "13"), attr("color", ThemeMuted),
 		dynChild(descSlot), closeEl(),
 		closeEl(),
 	)
-	return gxscene.Render(gxscene.Template{Ops: ops, N: nSlots},
+	return gxscene.render(gxscene.Template{Ops: ops, N: nSlots},
 		func() any { return title() },
 		func() any { return desc() },
 	)
@@ -96,10 +96,10 @@ func EmptyState(props gxscene.Props) *gxscene.Instance {
 
 // Skeleton 骨架屏占位块。props: width, height, tone, radius。
 func Skeleton(props gxscene.Props) *gxscene.Instance {
-	tone := gxscene.Get[string](props, "tone")
-	width := gxscene.Get[string](props, "width")
-	height := gxscene.Get[string](props, "height")
-	radius := gxscene.Get[string](props, "radius")
+	tone := gxscene.get[string](props, "tone")
+	width := gxscene.get[string](props, "width")
+	height := gxscene.get[string](props, "height")
+	radius := gxscene.get[string](props, "radius")
 
 	ops := []gxscene.Op{
 		el("div"), attr("gx-role", "skeleton"),
@@ -118,5 +118,5 @@ func Skeleton(props gxscene.Props) *gxscene.Instance {
 		r = "4"
 	}
 	ops = append(ops, attr("border-radius", r), closeEl())
-	return gxscene.Render(gxscene.Template{Ops: ops, N: 0})
+	return gxscene.render(gxscene.Template{Ops: ops, N: 0})
 }

@@ -30,16 +30,16 @@ import (
 //	├── trigger: 按钮（显示选中 label + 下拉箭头）
 //	└── content: 菜单（OpFor 选项，每项点击 → onChange + 关闭浮层）
 func Select(props gxscene.Props) *gxscene.Instance {
-	value := gxscene.Get[string](props, "value")
+	value := gxscene.get[string](props, "value")
 	options := optionsFrom(props, "options")
-	onChange := gxscene.Get[gxscene.Handler](props, "onChange")
-	placeholder := gxscene.Get[string](props, "placeholder")
-	width := gxscene.Get[string](props, "width")
-	menuWidth := gxscene.Get[string](props, "menu-width")
-	tone := gxscene.Get[string](props, "tone")
-	placement := gxscene.Get[string](props, "placement")
-	disabled := gxscene.Get[bool](props, "disabled")
-	stateGet := gxscene.Get[*PopoverState](props, "state")
+	onChange := gxscene.get[gxscene.Handler](props, "onChange")
+	placeholder := gxscene.get[string](props, "placeholder")
+	width := gxscene.get[string](props, "width")
+	menuWidth := gxscene.get[string](props, "menu-width")
+	tone := gxscene.get[string](props, "tone")
+	placement := gxscene.get[string](props, "placement")
+	disabled := gxscene.get[bool](props, "disabled")
+	stateGet := gxscene.get[*PopoverState](props, "state")
 
 	ph := placeholder()
 	if ph == "" {
@@ -93,13 +93,13 @@ func selectTrigger(value func() string, options []Option, placeholder, width, to
 		dynAttr("color", colorSlot),
 		el("span"), attr("font-size", "14"), dynChild(textSlot), closeEl(),
 		el("span"), attr("font-size", "12"), attr("color", ThemeMuted),
-		gxscene.Op{Code: gxscene.OpChildText, Arg: "▾"}, closeEl(),
+		gxscene.Op{Code: gxscene.opChildText, Arg: "▾"}, closeEl(),
 		closeEl(),
 	}
 	if disabled {
 		// 覆盖静态 opacity（后置属性生效）——用动态插槽更稳，这里直接改静态值。
 		for i := range ops {
-			if ops[i].Code == gxscene.OpAttr && ops[i].Key == "opacity" {
+			if ops[i].Code == gxscene.opAttr && ops[i].Key == "opacity" {
 				ops[i].Arg = "0.5"
 			}
 		}
@@ -113,7 +113,7 @@ func selectTrigger(value func() string, options []Option, placeholder, width, to
 		}
 		return placeholder
 	}
-	return gxscene.Render(gxscene.Template{Ops: ops, N: nSlots},
+	return gxscene.render(gxscene.Template{Ops: ops, N: nSlots},
 		func() any { return labelOf() },
 		func() any {
 			if value() == "" {
@@ -125,7 +125,7 @@ func selectTrigger(value func() string, options []Option, placeholder, width, to
 }
 
 func selectMenu(value func() string, options func() []Option, onChange func() gxscene.Handler, st *PopoverState, width string) *gxscene.Instance {
-	forCtl := gxscene.NewFor(
+	forCtl := gxscene.newFor(
 		func() []any {
 			os := options()
 			out := make([]any, len(os))
@@ -143,10 +143,10 @@ func selectMenu(value func() string, options func() []Option, onChange func() gx
 		el("div"), attr("gx-role", "select-menu"),
 		attr("flex-direction", "column"), attr("gap", "2"),
 		attr("width", width), attr("padding", "4"),
-		gxscene.Op{Code: gxscene.OpFor, Slot: 0},
+		gxscene.Op{Code: gxscene.opFor, Slot: 0},
 		closeEl(),
 	}
-	return gxscene.Render(gxscene.Template{Ops: ops, N: 1},
+	return gxscene.render(gxscene.Template{Ops: ops, N: 1},
 		func() any { return forCtl },
 	)
 }
@@ -169,13 +169,13 @@ func selectOptionItem(o Option, value func() string, onChange func() gxscene.Han
 		event("onClick", clickSlot),
 		dynAttr("bg", bgSlot), dynAttr("color", colorSlot),
 		el("span"), attr("font-size", "14"),
-		gxscene.Op{Code: gxscene.OpChildText, Arg: optionLabel(o)}, closeEl(),
+		gxscene.Op{Code: gxscene.opChildText, Arg: optionLabel(o)}, closeEl(),
 		el("span"), attr("font-size", "13"), attr("weight", "bold"),
 		dynChild(checkSlot), closeEl(),
 		closeEl(),
 	}
 	disabled := o.Disabled
-	return gxscene.Render(gxscene.Template{Ops: ops, N: nSlots},
+	return gxscene.render(gxscene.Template{Ops: ops, N: nSlots},
 		func() any {
 			return gxscene.Handler(func(ctx gxscene.EventContext) {
 				if disabled {
