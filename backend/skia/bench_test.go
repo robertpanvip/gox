@@ -4,8 +4,13 @@ import (
 	"fmt"
 	"testing"
 
+	sk "github.com/pekim/go-skia"
 	gxscene "github.com/robertpanvip/gox/runtime/scene"
 )
+
+func skCanvas(w, h int) sk.Canvas {
+	return sk.NewCanvasWithDimensions(int32(w), int32(h), sk.NewSurfaceProps())
+}
 
 // benchMeasure 与 Rust 后端文本估算同口径：ASCII 0.56em，CJK 1em（这里统一按 ASCII 近似），
 // 排除真实字体 shaping 差异，专注对比布局引擎（Yoga vs Taffy）的纯布局成本。
@@ -78,4 +83,73 @@ func BenchmarkSkiaLayout(b *testing.B) {
 			}
 		})
 	}
+}
+
+// BenchmarkFrameCacheReuse 量化帧缓存收益：
+//   - Full：每帧全量 computeLayout + paintWithLayout（旧行为）
+//   - Cached：内容无变化，整帧复用（新行为，只拍快照比对）
+// 两者节点规模相同，差值即"没变化不重算"省下的成本。
+func BenchmarkFrameCacheReuse(b *testing.B) {
+	root := makeBenchTree(30)
+	const W, H = 800, 600
+
+	b.Run("Full", func(b *testing.B) {
+		canvas := skCanvas(W, H)
+		defer canvas.Delete()
+		var log DrawLog
+		var hits []HitBox
+		p := &painter{canvas: canvas, width: W, height: H, log: &log, hits: &hits}
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			canvas.Clear(bgWhite())
+			p.layout = computeLayout(root, W, H, benchMeasure)
+			p.paintWithLayout(root)
+			log = log[:0]
+			hits = hits[:0]
+		}
+	})
+
+	b.Run("Cached", func(b *testing.B) {
+		canvas := skCanvas(W, H)
+		defer canvas.Delete()
+		cache := FrameCache{}
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			_, _ = renderCached(&cache, canvas, root, W, H, nil)
+		}
+	})
+}
+
+// BenchmarkDirtyRect 测"内容变化导致缓存无法复用"时的缓存路径开销（快照+布局+脏区判定+绘制）。
+// 与 Full 对比：在合成 measure（Skia 绘制调用极廉价）下两者接近；真实字体 shaping/阴影
+// 昂贵时，小而集中的脏区（如滚动条带）通过跳过不相交节点的 Skia 调用才体现收益。
+func BenchmarkDirtyRect(b *testing.B) {
+	root := makeBenchTree(30)
+	const W, H = 800, 600
+
+	// 找第一个文本节点作为改动目标。
+	var target *gxscene.Node
+	var walk func(*gxscene.Node)
+	walk = func(n *gxscene.Node) {
+		if n.Type == gxscene.NodeText && target == nil {
+			target = n
+		}
+		for _, c := range n.Children { walk(c) }
+	}
+	walk(root)
+
+	b.Run("LocalDirty", func(b *testing.B) {
+		canvas := skCanvas(W, H)
+		defer canvas.Delete()
+		cache := FrameCache{}
+		b.ReportAllocs()
+		i := 0
+		b.ResetTimer()
+		for ; i < b.N; i++ {
+			target.Text = fmt.Sprintf("metric %d", i%100)
+			_, _ = renderCached(&cache, canvas, root, W, H, nil)
+		}
+	})
 }

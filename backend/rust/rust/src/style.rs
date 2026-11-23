@@ -275,6 +275,9 @@ impl Animator {
 
     pub fn set_now(&mut self, now_ms: u128) { self.now_ms = now_ms; }
 
+    /// 是否仍有进行中的动画。无变化帧可据此决定是否需要继续重绘。
+    pub fn is_active(&self) -> bool { !self.anims.is_empty() }
+
     /// 返回当前插值值（若动画已结束则返回 to 并移除动画）。
     fn sample(&mut self, key: &(String, String)) -> Option<f32> {
         let now = self.now_ms;
@@ -406,6 +409,22 @@ mod tests {
         let out = a.apply(&n);
         let v: f32 = out.props["width"].parse().unwrap();
         assert!((v - 200.0).abs() < 0.1, "结束应=200, got {}", v);
+    }
+
+    #[test]
+    fn animator_is_active_tracks_running_anims() {
+        let mut a = Animator::new();
+        assert!(!a.is_active(), "初始无动画");
+        let n = node(&[("transition", "width 200ms linear"), ("width", "0")]);
+        a.set_now(0);
+        a.apply(&n);
+        let mut target = node(&[("transition", "width 200ms linear"), ("width", "100")]);
+        a.set_now(0);
+        a.apply(&target); // 启动 0→100
+        assert!(a.is_active(), "动画进行中应为 active");
+        a.set_now(1000); // 超过 duration
+        let _ = a.apply(&target); // sample 到期移除动画
+        assert!(!a.is_active(), "动画结束后应回到 inactive（允许无变化帧跳过重算）");
     }
 
     #[test]

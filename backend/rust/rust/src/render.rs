@@ -657,6 +657,12 @@ pub struct Renderer {
     animator: crate::style::Animator,
     /// 动画时钟原点
     anim_origin: std::time::Instant,
+    /// 自上次 render 以来是否收到新帧数据（无变化帧跳过昂贵的布局/光栅化/文本整形）
+    frame_dirty: bool,
+    /// 缓存的文本 buffer：无变化帧直接复用，避免每帧重建+shape
+    cached_buffers: Vec<Buffer>,
+    /// 缓存的文本区域屏幕坐标（与 cached_buffers 一一对应，供命中/调试）
+    cached_areas_dirty: bool,
     /// 最近光标位置（MouseInput 事件不带坐标）
     cursor: (f32, f32),
     window: std::sync::Arc<Window>,
@@ -809,6 +815,9 @@ struct VSOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f };
             display: DisplayList::new(),
             animator: crate::style::Animator::new(),
             anim_origin: std::time::Instant::now(),
+            frame_dirty: true,
+            cached_buffers: Vec::new(),
+            cached_areas_dirty: true,
             cursor: (0.0, 0.0),
             window,
         }
@@ -828,12 +837,16 @@ struct VSOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f };
                     .map(|s| parse_color(s))
                     .unwrap_or((11, 16, 32));
                 self.scene = Some(root);
+                self.frame_dirty = true;
+                self.cached_areas_dirty = true;
                 return true;
             }
         } else if let Some(delta) = DeltaView::parse(bytes) {
             // 增量动作：按 nodeID 打补丁
             if let Some(root) = self.scene.as_mut() {
                 delta.apply(root);
+                self.frame_dirty = true;
+                self.cached_areas_dirty = true;
                 return true;
             }
         }
@@ -987,28 +1000,39 @@ struct VSOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f };
 
     pub fn render(&mut self) {
         let Some(scene) = self.scene.as_ref() else { return; };
-        // transition：按当前时间推进动画，得到本帧属性被覆盖的场景树副本。
+        // transition：按当前时间推进动画。动画进行中必须逐帧重算（插值值在变）。
         let now_ms = self.anim_origin.elapsed().as_millis();
         self.animator.set_now(now_ms);
-        let animated = self.animator.apply(scene);
-        let dl = DisplayList::from_scene(&animated, self.width as f32, self.height as f32);
-        let bg = self.bg;
-        self.display = dl.clone();
-        self.paint_shapes(&dl, bg);
+        let animating = self.animator.is_active();
+        let need_rebuild = self.frame_dirty || animating || self.cached_areas_dirty;
 
-        // 文本：每个 text 一个 buffer
-        let mut buffers: Vec<Buffer> = Vec::new();
-        for t in &dl.texts {
-            let mut b = Buffer::new(&mut self.font_system, Metrics::new(t.size, t.size * 1.35));
-            b.set_size(&mut self.font_system, Some(700.0), Some(80.0));
-            let attrs = Attrs::new().family(Family::SansSerif);
-            b.set_text(&mut self.font_system, &t.text, &attrs, Shaping::Advanced);
-            b.shape_until_scroll(&mut self.font_system, false);
-            buffers.push(b);
-        }
         self.viewport.update(&self.queue, Resolution { width: self.config.width, height: self.config.height });
-        let areas: Vec<TextArea> = dl.texts.iter().zip(buffers.iter()).map(|(t, b)| {
-            // 有 overflow 裁剪祖先时，用 clip 矩形收紧 glyphon 的可视边界。
+
+        if need_rebuild {
+            // —— 有变化 / 动画中：全量重算布局、背景光栅化、文本整形 ——
+            let animated = self.animator.apply(scene);
+            let dl = DisplayList::from_scene(&animated, self.width as f32, self.height as f32);
+            let bg = self.bg;
+            self.display = dl.clone();
+            self.paint_shapes(&dl, bg);
+
+            // 文本：每个 text 一个 buffer，缓存下来供无变化帧复用（避免每帧 shape）。
+            let mut buffers: Vec<Buffer> = Vec::new();
+            for t in &dl.texts {
+                let mut b = Buffer::new(&mut self.font_system, Metrics::new(t.size, t.size * 1.35));
+                b.set_size(&mut self.font_system, Some(700.0), Some(80.0));
+                let attrs = Attrs::new().family(Family::SansSerif);
+                b.set_text(&mut self.font_system, &t.text, &attrs, Shaping::Advanced);
+                b.shape_until_scroll(&mut self.font_system, false);
+                buffers.push(b);
+            }
+            self.cached_buffers = buffers;
+            self.frame_dirty = false;
+            self.cached_areas_dirty = false;
+        }
+
+        // 从当前 DisplayList + 缓存 buffers 组装 areas（有无变化都要做，因为 prepare 每帧消费 areas）。
+        let areas: Vec<TextArea> = self.display.texts.iter().zip(self.cached_buffers.iter()).map(|(t, b)| {
             let bounds = match t.clip {
                 Some((cx, cy, cw, ch)) => TextBounds {
                     left: (cx - t.x - 20.0) as i32, top: (cy - t.y - 20.0) as i32,
@@ -1086,10 +1110,13 @@ struct VSOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f };
     }
 
     pub fn resize(&mut self, w: u32, h: u32) {
-        // 简化：仅更新 surface 配置（种子 demo 固定尺寸）
+        // 简化：仅更新 surface 配置（种子 demo 固定尺寸）。
         self.config.width = w.max(1);
         self.config.height = h.max(1);
         self.surface.configure(&self.device, &self.config);
+        // 尺寸相关缓存失效：下一帧必须重算布局与文本。
+        self.frame_dirty = true;
+        self.cached_areas_dirty = true;
     }
 
     pub fn window(&self) -> &Window {

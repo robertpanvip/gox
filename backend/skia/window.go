@@ -39,6 +39,8 @@ type Window struct {
 	hits []HitBox
 	// anim 是 transition 插值引擎；跨帧持有动画状态。
 	anim *Animator
+	// cache 跨帧持有布局结果/内容快照，实现"无变化不重算 + 脏矩形局部重绘"。
+	cache FrameCache
 }
 
 var _ gxapp.Window = (*Window)(nil) // 编译期断言：满足 host 后端契约
@@ -78,10 +80,12 @@ func (w *Window) Open(cfg gxapp.WindowConfig) error {
 	w.fonts = make(map[int]sk.Font)
 	w.log = nil
 	w.anim = NewAnimator()
+	w.cache = FrameCache{} // 新画布：丢弃上一帧缓存
 	return nil
 }
 
-// Draw 把当前场景树绘制一帧：遍历 Node 树 → 布局 → 逐条调用真实 Skia 绘制 API。
+// Draw 把当前场景树绘制一帧：布局 → 逐条调用真实 Skia 绘制 API。
+// 经帧缓存编排：内容无变化时整帧复用，有变化时只重绘脏矩形区域。
 func (w *Window) Draw(root *gxscene.Node) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -94,22 +98,14 @@ func (w *Window) Draw(root *gxscene.Node) error {
 		return nil
 	}
 
-	p := &painter{
-		canvas: w.canvas,
-		width:  float32(w.width),
-		height: float32(w.height),
-		fonts:  w.fonts,
-		log:    &w.log,
-		hits:   &w.hits,
-	}
-	w.canvas.Clear(sk.ColorSetARGB(255, 255, 255, 255))
 	// transition：应用本帧动画覆盖（临时写 props），绘制后恢复，避免污染 host 树。
+	// 快照在 apply 之后拍——动画值随时间变化会自然触发重绘，不会误命中缓存。
 	if w.anim != nil {
 		restore := w.anim.apply(root, time.Now())
-		p.paintFrame(root, float32(w.width), float32(w.height))
+		w.log, w.hits = renderCached(&w.cache, w.canvas, root, float32(w.width), float32(w.height), w.fonts)
 		restore()
 	} else {
-		p.paintFrame(root, float32(w.width), float32(w.height))
+		w.log, w.hits = renderCached(&w.cache, w.canvas, root, float32(w.width), float32(w.height), w.fonts)
 	}
 	w.frames++
 	return nil
@@ -183,6 +179,7 @@ func (w *Window) HitTest(x, y float32) *gxscene.Node {
 
 // PaintTo 用本后端一致的 painter 把场景树画到任意 Skia canvas（供真实窗口复用布局/绘制协议）。
 // width/height 为像素尺寸；返回本帧命中矩形。fonts 由调用方长期持有以复用字体缓存。
+// 无缓存全量路径；需要帧缓存的真实窗口请用 PaintToCached。
 func PaintTo(canvas sk.Canvas, width, height float32, root *gxscene.Node, fonts map[int]sk.Font) (DrawLog, []HitBox) {
 	var log DrawLog
 	var hits []HitBox
@@ -193,4 +190,17 @@ func PaintTo(canvas sk.Canvas, width, height float32, root *gxscene.Node, fonts 
 	canvas.Clear(sk.ColorSetARGB(255, 255, 255, 255))
 	p.paintFrame(root, width, height)
 	return log, hits
+}
+
+// PaintToCached 是带帧缓存的绘制入口，供真实 GUI 窗口（glWindow 等）使用。
+// cache 由调用方跨帧持有（通常嵌在窗口结构里）；窗口尺寸变化或重建画布时传新 &FrameCache{}。
+// 内容无变化时画布完全不动并返回上帧 log/hits；有变化时只重绘脏矩形区域。
+func PaintToCached(cache *FrameCache, canvas sk.Canvas, width, height float32, root *gxscene.Node, fonts map[int]sk.Font) (DrawLog, []HitBox) {
+	if canvas.IsNil() || root == nil {
+		return nil, nil
+	}
+	if cache == nil {
+		return PaintTo(canvas, width, height, root, fonts)
+	}
+	return renderCached(cache, canvas, root, width, height, fonts)
 }

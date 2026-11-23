@@ -64,6 +64,21 @@ type painter struct {
 	// 离屏后端不设置它，因此零开销、零行为变化。
 	hits   *[]HitBox
 	layout layoutCache // 本帧的布局结果，由 paintFrame 在绘制前一次性算出
+	// clip 非 nil 时表示当前只绘制该脏区：不相交的节点跳过 Skia 调用（log/hits 仍记录）。
+	// nil 表示全量绘制。由 renderCached 的脏矩形局部重绘路径设置。
+	clip *dirtyRect
+}
+
+// shouldDraw 报告节点的绘制矩形是否与当前脏区相交。nil clip 恒为 true。
+// 阴影/描边的绘制可能超出 box，检查时按 2px 容差外扩，避免边缘残影。
+func (p *painter) shouldDraw(box layoutBox) bool {
+	if p.clip == nil {
+		return true
+	}
+	r := boxToRect(box)
+	const pad float32 = 2
+	r = dirtyRect{r.x - pad, r.y - pad, r.w + 2*pad, r.h + 2*pad}
+	return r.w > 0 && r.h > 0 && r.intersects(*p.clip) && (!box.HasClip || dirtyRect{box.ClipX, box.ClipY, box.ClipW, box.ClipH}.intersects(*p.clip))
 }
 
 // HitBox 是一个节点在最近一帧中的屏幕矩形，供事件命中测试使用。
@@ -98,16 +113,25 @@ func hitFrom(n *gxscene.Node, box layoutBox) HitBox {
 }
 
 // paintFrame 为一帧做布局并绘制整棵树。入口（Window.Draw / PaintTo）调用它。
+// 这是无缓存的全量路径，保留给不需要帧缓存的直接调用方与测试。
 func (p *painter) paintFrame(root *gxscene.Node, availW, availH float32) {
 	if root == nil {
 		return
 	}
 	// 两阶段第一步：Yoga 布局，算出每个节点的绝对矩形。
 	p.layout = computeLayout(root, availW, availH, skiaFontMeasurer())
-	// 两阶段第二步：按矩形逐个调用 Skia 绘制原语。
+	p.paintWithLayout(root)
+}
+
+// paintWithLayout 仅按 p.layout 绘制整棵树（不再重算布局）。
+// 供帧缓存路径复用：布局已在外部算好，这里只做绘制 + 浮层补画。
+func (p *painter) paintWithLayout(root *gxscene.Node) {
+	if root == nil {
+		return
+	}
+	// 主树：按矩形逐个调用 Skia 绘制原语。
 	p.paintTree(root, defaultTextStyle())
-	// 第三阶段：浮层。主树绘制时跳过浮层/遮罩，这里按"普通内容 → 遮罩 → 浮层"
-	// 的顺序补画，保证浮层永远在最上层、遮罩拦截浮层之外的点击。
+	// 浮层：按"普通内容 → 遮罩 → 浮层"补画，保证层级正确。
 	p.paintOverlays(root, defaultTextStyle())
 }
 
@@ -249,50 +273,56 @@ func (p *painter) paintChildrenClipped(n *gxscene.Node, box layoutBox, eff textS
 // paintElement 按 Yoga 给出的矩形画元素背景，并记录命中矩形。
 func (p *painter) paintElement(n *gxscene.Node, box layoutBox) {
 	s := parseStyle(n.Props)
-	h := maxF(box.H, 1)
-	rect := sk.RectMakeXYWH(box.X, box.Y, box.W, h)
-	// box-shadow：在背景之前画多层半透明圆角矩形近似（与 Rust 端同算法）。
-	if s.hasShadow {
-		p.paintShadow(s.shadow, box, s.radius)
+	draw := p.shouldDraw(box)
+	if draw {
+		h := maxF(box.H, 1)
+		rect := sk.RectMakeXYWH(box.X, box.Y, box.W, h)
+		// box-shadow：在背景之前画多层半透明圆角矩形近似（与 Rust 端同算法）。
+		if s.hasShadow {
+			p.paintShadow(s.shadow, box, s.radius)
+		}
+		if s.hasBg {
+			paint := sk.NewPaint()
+			paint.SetColor(sk.Color(s.bg))
+			paint.SetAntiAlias(true)
+			if r := radiusClamp(s.radius, box.W, h); r > 0 {
+				p.canvas.DrawRoundRect(rect, r, r, paint)
+			} else {
+				p.canvas.DrawRect(rect, paint)
+			}
+			paint.Delete()
+		}
+		// img 原语：<img src="..."> 在背景之后、描边之前绘制。src 由 runtime/imgutil
+		// 解析（data URI / 本地路径 / http），object-fit 控制映射，border-radius 裁剪。
+		// 解码结果按 src 缓存，响应式重绘不重复解码（见 image.go）。
+		if n.Kind == "img" {
+			if src, _ := n.Props["src"].(string); src != "" {
+				paintImage(p, n, box, src, s)
+			}
+		}
+		// canvas 原语：命令式绘制指令走 Props["canvas-ops"]（runtime/canvas 协议），
+		// 在背景之后解释执行，坐标相对本节点布局盒。
+		if n.Kind == "canvas" {
+			paintCanvas(p, n, box)
+		}
+		// 描边：用 stroke 样式沿矩形（或圆角矩形）边缘绘制。
+		if s.hasBorder && s.borderWidth > 0 {
+			paint := sk.NewPaint()
+			paint.SetColor(sk.Color(s.border))
+			paint.SetStyle(sk.PaintStyleStroke)
+			paint.SetStrokeWidth(s.borderWidth)
+			paint.SetAntiAlias(true)
+			if r := radiusClamp(s.radius, box.W, h); r > 0 {
+				p.canvas.DrawRoundRect(rect, r, r, paint)
+			} else {
+				p.canvas.DrawRect(rect, paint)
+			}
+			paint.Delete()
+		}
 	}
+	// log/hits 始终记录完整（不受脏区裁剪影响），保证对调用方/命中测试透明。
 	if s.hasBg {
-		paint := sk.NewPaint()
-		paint.SetColor(sk.Color(s.bg))
-		paint.SetAntiAlias(true)
-		if r := radiusClamp(s.radius, box.W, h); r > 0 {
-			p.canvas.DrawRoundRect(rect, r, r, paint)
-		} else {
-			p.canvas.DrawRect(rect, paint)
-		}
-		paint.Delete()
 		*p.log = append(*p.log, DrawOp{Kind: "rect", Name: n.Kind, X: box.X, Y: box.Y, W: box.W, H: box.H, ARGB: s.bg})
-	}
-	// 描边：用 stroke 样式沿矩形（或圆角矩形）边缘绘制。
-	// img 原语：<img src="..."> 在背景之后、描边之前绘制。src 由 runtime/imgutil
-	// 解析（data URI / 本地路径 / http），object-fit 控制映射，border-radius 裁剪。
-	// 解码结果按 src 缓存，响应式重绘不重复解码（见 image.go）。
-	if n.Kind == "img" {
-		if src, _ := n.Props["src"].(string); src != "" {
-			paintImage(p, n, box, src, s)
-		}
-	}
-	// canvas 原语：命令式绘制指令走 Props["canvas-ops"]（runtime/canvas 协议），
-	// 在背景之后解释执行，坐标相对本节点布局盒。
-	if n.Kind == "canvas" {
-		paintCanvas(p, n, box)
-	}
-	if s.hasBorder && s.borderWidth > 0 {
-		paint := sk.NewPaint()
-		paint.SetColor(sk.Color(s.border))
-		paint.SetStyle(sk.PaintStyleStroke)
-		paint.SetStrokeWidth(s.borderWidth)
-		paint.SetAntiAlias(true)
-		if r := radiusClamp(s.radius, box.W, h); r > 0 {
-			p.canvas.DrawRoundRect(rect, r, r, paint)
-		} else {
-			p.canvas.DrawRect(rect, paint)
-		}
-		paint.Delete()
 	}
 	if p.hits != nil {
 		*p.hits = append(*p.hits, hitFrom(n, box))
@@ -353,21 +383,23 @@ func (p *painter) paintText(n *gxscene.Node, box layoutBox, st textStyle) {
 	if n.Text == "" {
 		return
 	}
-	paint := sk.NewPaint()
-	paint.SetColor(sk.Color(st.color))
-	paint.SetAntiAlias(true)
-	baseline := box.Y + float32(st.fontSize)
-	// 按字体分段绘制：go-skia 不做自动字体回退，中文等缺字需用 CJK fallback 字体。
-	// 每段的落笔 x = 前面各段实测宽度之和，与 skiaFontMeasurer 的宽度累加口径一致。
-	x := box.X
-	for _, r := range splitRuns(n.Text, st.fontSize, st.bold) {
-		if r.text == "" || r.font.IsNil() {
-			continue
+	if p.shouldDraw(box) {
+		paint := sk.NewPaint()
+		paint.SetColor(sk.Color(st.color))
+		paint.SetAntiAlias(true)
+		baseline := box.Y + float32(st.fontSize)
+		// 按字体分段绘制：go-skia 不做自动字体回退，中文等缺字需用 CJK fallback 字体。
+		// 每段的落笔 x = 前面各段实测宽度之和，与 skiaFontMeasurer 的宽度累加口径一致。
+		x := box.X
+		for _, r := range splitRuns(n.Text, st.fontSize, st.bold) {
+			if r.text == "" || r.font.IsNil() {
+				continue
+			}
+			p.canvas.DrawString(r.text, x, baseline, r.font, paint)
+			x += r.font.MeasureText([]byte(r.text), uint32(len(r.text)), sk.TextEncodingUTF8, nil)
 		}
-		p.canvas.DrawString(r.text, x, baseline, r.font, paint)
-		x += r.font.MeasureText([]byte(r.text), uint32(len(r.text)), sk.TextEncodingUTF8, nil)
+		paint.Delete()
 	}
-	paint.Delete()
 
 	lineH := box.H
 	if lineH <= 0 {

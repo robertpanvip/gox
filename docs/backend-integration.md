@@ -261,6 +261,25 @@ app.SetChildDiffer(nil) // 恢复 host 内建
 
 > 三样都不触碰命中/布局/绘制：ID 是身份、Changes 是"什么变了"的数据描述、布局缓存归后端自建 map[NodeID]any。决策与实现仍 100% 归后端。
 
+### 2.5 帧缓存与脏矩形（后端可选，Skia 后端已实现）
+
+Host 是变化驱动的（signal→effect→Draw），无变化时不会请求帧。但**一旦 Draw 被调用**，后端是否重算完全由后端决定。Skia 后端（`backend/skia`）提供了一套可复用的帧缓存范式，Rust 后端有同构实现：
+
+**三层递进**（additive，不改 Window 接口、不改 Host 协议）：
+
+1. **整帧复用**：每帧对整棵树拍"内容快照"（`nodeStamp`：type/kind/text/props 稳定签名/子节点 ID 序列），与上一帧完全一致时**画布完全不动**，直接返回上帧的 DrawLog/HitBoxes。`FrameCache.shouldReuse` + `renderCached`。
+   - 无变化帧跳过 Yoga 布局 + 全部 Skia 绘制。基准（30 卡片树）：`~660μs → ~170μs`，约 **4×**。
+2. **布局差分 + 脏矩形**：有变化时仍需全量 Yoga（flex 局部变化会影响兄弟），但对比新旧 `layoutCache` 得出几何变化节点的矩形（旧∪新、阴影/描边外扩、overflow 裁剪区），只清+画这些脏区；`painter.shouldDraw` 跳过与脏区不相交节点的 Skia 调用。脏区 >25% 画布或 >4 块时自动退化全量（避免多遍遍历开销反超）。
+3. **GUI 接入**：真实窗口用 `skia.PaintToCached(cache, canvas, ...)`，cache 跨帧持有；`glWindow` 已有的 `dirty` 标志与 Host 的 Draw 触发语义一致——无新帧时连 render pass 都不必提交（Rust 端同理：`apply_frame` 置 `frame_dirty`，无变化且无动画时复用缓存 buffers/pixmap，仅重放 blit）。
+
+**正确性要点**：
+- 节点原地更新、根指针跨帧稳定（见 `scene.Instance.Update`），故 `*Node` 可作缓存 key；变化节点会改 props/text → 快照签名不等 → 触发重算。
+- handler（func）不计入签名（其求值结果已写回 Props/Text），换绑不触发绘制。
+- transition 动画期间 props 每帧变 → 每帧重绘，不会误命中缓存（Rust 端另有 `Animator::is_active()` 判定）。
+- 观测面：`FrameCache.CacheStats()` 返回复用/重绘帧数。
+
+**Rust 后端对应**：Go 侧 `Present` 在无 Changes 时不再发全量快照（有基线即跳过），Rust 侧 `Renderer` 用 `frame_dirty` + 缓存 `cached_buffers` 避免无变化帧重建文本 buffer 与光栅化 pixmap；resize 时置脏强制重算。
+
 ## 3. 拆成两个项目如何跑通
 
 假设后端项目为 `github.com/yourorg/gox-desktop`，module 独立。
