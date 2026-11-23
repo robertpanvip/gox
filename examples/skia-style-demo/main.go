@@ -27,6 +27,7 @@ func main() {
 	scrollTop := signal.New(0.0)
 	barWidth := signal.New(60.0)   // transition 目标宽度
 	barColor := signal.New("#4ade80")
+	fruit := signal.New("苹果 Apple") // Select 当前选中值
 
 	cfg := gxapp.WindowConfig{
 		Title: "Skia Advanced Styles", Width: 900, Height: 1600,
@@ -168,6 +169,23 @@ func main() {
 								widgets.TimePicker(gxscene.Props{
 									"value":        func() any { return "09:30:15" },
 									"with-seconds": true, "width": "110",
+								}),
+							}
+						},
+					}),
+
+					// 7b) Select：下拉选择，signal 驱动当前值 + 回写。
+					widgets.Row(gxscene.Props{
+						"width": "560", "gap": "10", "align-items": "center",
+						"children": func() any {
+							return []any{
+								label("Select:", "#94a3b8", "14"),
+								widgets.Select(gxscene.Props{
+									"value":       func() any { return fruit() },
+									"options":     []string{"苹果 Apple", "香蕉 Banana", "橙子 Orange", "葡萄 Grape"},
+									"placeholder": "选择一种水果",
+									"width":       "200",
+									"onChange":    widgets.BindValue(func(v string) { fruit(v) }),
 								}),
 							}
 						},

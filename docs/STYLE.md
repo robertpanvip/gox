@@ -192,6 +192,26 @@ Context **可以跨文件共享**，且共享的是同一个响应式实例（�
 - rust（winit）：新增 C ABI `gx_window_new_ex(w,h,title,decorated,transparent,always_on_top,opacity)`；`gx_window_new` 保留为兼容包装。Backend 存配置，`WinitApp::resumed` 应用 `with_decorations/with_transparent/with_window_level`；title 参数也真正生效（此前写死）。
 - `GX_NODECOR=1` 运行 skia-style-demo 可验证无边框+透明配置（截图 `preview-context-theme.png` 含 Context/Theme 演示区）。
 
+## 12. 用 GX 编写组件库（自举）
+
+widgets 标准库正在从"手写 `gxscene.Op` 数组"迁移到"用 GX 语言本身书写"。样板是 `widgets/card.gx`：
+
+- **源文件** `widgets/card.gx` 用 JSX + `pub` + `gxscene.Get` 表达组件，是可读的事实来源。
+- **产物** `widgets/card.go` 由 `make gxbuild`（遍历 `widgets/*.gx` 转译为同目录同名 `.go`）生成并提交——Go 工具链只认 `.go`，故源与产物共存，**改完 `.gx` 必须重跑 `make gxbuild`** 保持同步。
+- 转译产物与手写实现行为等价：JSX 的属性/文本/子节点分别编译成 `OpAttr`/`OpChildText`/`OpDynChild`+getter，事件 `onXxx={...}` 编译成 `OpEvent`，`if`/`<For>` 编译成 `OpBranch`/`OpFor`。已验证产物可重复生成（diff 稳定）、全量测试零回归。
+
+**迁移边界（哪些能用纯 JSX 表达，哪些保留 Go）**：
+
+| 组件类别 | 能否用 GX 源 | 说明 |
+|---|---|---|
+| 纯展示/布局（Card/Text/Badge/Divider/Row/Col/Stat…） | ✅ 直接转 | JSX + `gxscene.Get` 足够 |
+| 列表/条件（Table 表头、选项菜单） | ✅ `<For>`/`if` | 编译成 `OpFor`/`OpBranch` |
+| 依赖**稳定 Branch 对象**（Tooltip/TimePicker/Select 浮层） | ⚠️ 需增强 | menu getter 每次需返回同一 `*Branch` 指针，JSX 的内联 BranchGetter 会重建；暂留 Go |
+| 依赖 **Owner/CreateRoot**（Context/Theme Provider） | ❌ 保留 Go | `ProvideValue`/`LookupValue`/owner 栈是运行时底层 API，JSX 抽象层不暴露 |
+| 焦点状态机（Input 的 InputChar/Backspace） | ⚠️ 部分 | 场景树可用 JSX，焦点/键盘派发逻辑留 Go |
+
+即"能用 JSX 表达的逐步转，涉及运行时底层的保留 Go"——两者同包混编，测试零改动。
+
 ## 验证
 
 - 单元测试：两端各有解析 / 定位 / 裁剪 / 插值 / 阴影单测（Go `go test ./...`、Rust `cargo test`）。

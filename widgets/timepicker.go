@@ -140,10 +140,11 @@ func TimePicker(props gxscene.Props) *gxscene.Instance {
 		segments = append(segments, segSecond)
 	}
 	segNodes := make([]func() any, 0, len(segments))
+	accent := toneColor(tone())
 	for _, seg := range segments {
 		s := seg
 		segNodes = append(segNodes, func() any {
-			return timeSegmentTrigger(s, func() string { return segText(s) }, w, tone(), openSeg, uid)
+			return timeSegmentTrigger(s, func() string { return segText(s) }, w, accent, openSeg, uid)
 		})
 	}
 
@@ -155,7 +156,7 @@ func TimePicker(props gxscene.Props) *gxscene.Instance {
 		el("div"),
 		attr("gx-role", "timepicker"),
 		attr("gx-timepicker-id", uid),
-		attr("flex-direction", "row"), attr("align-items", "center"), attr("gap", "2"),
+		attr("flex-direction", "row"), attr("align-items", "center"), attr("gap", "6"),
 	}
 	for i := range segments {
 		ops = append(ops,
@@ -163,6 +164,14 @@ func TimePicker(props gxscene.Props) *gxscene.Instance {
 			gxscene.Op{Code: gxscene.OpComp, Arg: "TimeSegment", Slot: i},
 			gxscene.Op{Code: gxscene.OpClose},
 		)
+		// 段间冒号分隔符（静态节点，不占 getter 插槽）。
+		if i < len(segments)-1 {
+			ops = append(ops,
+				el("span"), attr("color", AppleLabel2),
+				attr("font-size", "18"), attr("weight", "bold"),
+				gxscene.Op{Code: gxscene.OpChildText, Arg: ":"}, closeEl(),
+			)
+		}
 	}
 	ops = append(ops, gxscene.Op{Code: gxscene.OpBranch, Slot: menuSlot})
 	ops = append(ops, closeEl())
@@ -180,24 +189,30 @@ func TimePicker(props gxscene.Props) *gxscene.Instance {
 }
 
 // timeSegmentTrigger 一个段触发器：点击时把 openSeg 设为该段(+1)或关闭(0)。
+// 视觉：柔和填充块 + 大圆角，当前打开的段用强调色描边与淡色底，数字字号放大。
 func timeSegmentTrigger(seg timeSegment, text func() string, width, tone string, openSeg signal.Signal[int], uid string) *gxscene.Instance {
 	const (
 		clickSlot = iota
 		textSlot
+		bgSlot
+		borderSlot
 		nSlots
 	)
 	ops := []gxscene.Op{
 		el("div"), attr("gx-role", "time-segment"),
 		attr("gx-time-segment", fmt.Sprintf("%d", seg)),
-		attr("width", width), attr("bg", ThemeInputBg),
-		attr("border", ThemeBorder), attr("border-width", "1"),
-		attr("border-radius", RadiusSmall), attr("padding", "8"),
+		attr("width", width),
+		attr("border-width", "1"), attr("border-radius", RadiusControl),
+		attr("padding", "10"),
 		attr("align-items", "center"), attr("justify-content", "center"),
+		gxscene.Op{Code: gxscene.OpDynAttr, Key: "bg", Slot: bgSlot},
+		gxscene.Op{Code: gxscene.OpDynAttr, Key: "border", Slot: borderSlot},
 		gxscene.Op{Code: gxscene.OpEvent, Key: "onClick", Slot: clickSlot},
-		el("span"), attr("font-size", "14"), attr("weight", "bold"),
+		el("span"), attr("font-size", "18"), attr("weight", "bold"),
 		gxscene.Op{Code: gxscene.OpDynChild, Slot: textSlot}, closeEl(),
 		closeEl(),
 	}
+	isOpen := func() bool { return openSeg() == int(seg)+1 }
 	return gxscene.Render(gxscene.Template{Ops: ops, N: nSlots},
 		func() any {
 			return gxscene.Handler(func(gxscene.EventContext) {
@@ -210,6 +225,18 @@ func timeSegmentTrigger(seg timeSegment, text func() string, width, tone string,
 			})
 		},
 		func() any { return text() }, // 动态文本：value 变化时刷新
+		func() any { // 打开段用强调色淡底，其余用控件填充
+			if isOpen() {
+				return tone
+			}
+			return AppleFill
+		},
+		func() any { // 打开段描边强调色，其余细描边
+			if isOpen() {
+				return tone
+			}
+			return AppleSeparator
+		},
 	)
 }
 

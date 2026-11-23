@@ -5,6 +5,7 @@ import (
 
 	gxapp "github.com/robertpanvip/gox/runtime/app"
 	gxscene "github.com/robertpanvip/gox/runtime/scene"
+	"github.com/robertpanvip/gox/widgets"
 )
 
 // fixedMeasure 是测试用的确定性文本测宽：每个字符 10px，行高固定 20px。
@@ -286,5 +287,41 @@ func TestFragmentTransparentInRow(t *testing.T) {
 	}
 	if !near(ba.Y, bb.Y, 0.5) {
 		t.Errorf("透明包装后应同一行：a.Y=%.1f b.Y=%.1f", ba.Y, bb.Y)
+	}
+}
+
+// TestInputNaturalHeight：Input 不得写死 height=20（border-box 下被 padding 吃光，
+// 内容区为 0，文字塞不下）。用真实 widgets.Input 跑布局，断言外框高度能容纳
+// 文字行高 + 上下 padding（约 40px），且文字子节点高度 > 0。
+func TestInputNaturalHeight(t *testing.T) {
+	inp := widgets.Input(gxscene.Props{
+		"value": func() any { return "Hello" },
+		"width": "240",
+	})
+	root := inp.Root()
+	// 找到 input 容器节点
+	var inputNode *gxscene.Node
+	var walk func(*gxscene.Node)
+	walk = func(n *gxscene.Node) {
+		if n == nil {
+			return
+		}
+		if _, ok := n.Props["gx-input-id"]; ok {
+			inputNode = n
+		}
+		for _, c := range n.Children {
+			walk(c)
+		}
+	}
+	walk(root)
+	if inputNode == nil {
+		t.Fatal("未生成 input 节点")
+	}
+	cache := computeLayout(root, 800, 600, fixedMeasure)
+	box := cache[inputNode]
+	// fixedMeasure 行高按 fontSize*1.3：文字 15px → 19.5；padding 上下各 10 → 39.5。
+	// 允许一定浮动，但绝不能回到写死 20 的塌陷值。
+	if box.H < 30 {
+		t.Errorf("Input 高度 = %.1f，应 ≥ 30（文字行高+padding），修复前写死 20 会塌陷", box.H)
 	}
 }

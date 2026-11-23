@@ -103,10 +103,10 @@ func Table(props gxscene.Props) *gxscene.Instance {
 			attr("gx-row-index", strconv.Itoa(index)),
 			attr("flex-direction", "row"), attr("align-items", "center"),
 			attr("height", fmt.Sprintf("%g", rowHeight)),
-			attr("border-bottom", ThemeBorder), attr("border-width", "1"),
+			attr("border-bottom", AppleSeparator), attr("border-width", "1"),
 		}
 		if striped() && index%2 == 1 {
-			ops = append(ops, attr("bg", ThemePanel))
+			ops = append(ops, attr("bg", AppleElevated)) // 斑马纹：交替行抬起一层
 		}
 		// 行点击 → on-select（列单元格点击会冒泡到此；事件名相同按命中就近派发）。
 		ops = append(ops, gxscene.Op{Code: gxscene.OpEvent, Key: "onClick", Slot: 0})
@@ -146,15 +146,20 @@ func Table(props gxscene.Props) *gxscene.Instance {
 	ops := []gxscene.Op{
 		el("div"), attr("gx-role", "table"),
 		attr("flex-direction", "column"),
+		// 整表作为一张卡片：细描边 + 圆角 + 柔和阴影，与页面底拉开层次。
+		attr("border", AppleSeparator), attr("border-width", "1"),
+		attr("border-radius", RadiusControl), attr("box-shadow", ShadowCard),
 	}
 	if w := width(); w != "" {
 		ops = append(ops, attr("width", w))
 	}
 	ops = append(ops,
+		// 表头：填充色与数据行形成层次；整表由外层容器统一描边+圆角。
 		el("div"), attr("gx-role", "table-head"),
 		attr("flex-direction", "row"), attr("align-items", "center"),
 		attr("height", fmt.Sprintf("%g", rowHeight)),
-		attr("bg", ThemeBg), attr("border-bottom", ThemeBorder), attr("border-width", "1"),
+		attr("bg", AppleFill),
+		attr("border-bottom", AppleSeparator2), attr("border-width", "1"),
 		gxscene.Op{Code: gxscene.OpFor, Slot: headSlot},
 		closeEl(),
 		gxscene.Op{Code: gxscene.OpComp, Arg: "TableBody", Slot: listSlot},
@@ -244,12 +249,14 @@ func tableHeadCell(col TableColumn, onSort gxscene.Handler) *gxscene.Instance {
 	}
 	ops := []gxscene.Op{
 		el("div"), attr("gx-role", "table-head-cell"),
-		attr("width", w), attr("padding", "8"),
-		attr("font-size", "13"), attr("weight", "bold"), attr("color", ThemeText),
+		attr("width", w), attr("padding", "10"),
+		attr("flex-direction", "row"), attr("align-items", "center"),
+		attr("font-size", "12"), attr("weight", "bold"), attr("color", AppleLabel2),
 		attr("text-align", align),
 		gxscene.Op{Code: gxscene.OpChildText, Arg: col.Title},
 	}
 	if col.Sortable {
+		// 排序标记直接拼在标题后（避免独立 flex item 被折行），整格同色。
 		ops = append(ops,
 			gxscene.Op{Code: gxscene.OpChildText, Arg: " ⇅"},
 			gxscene.Op{Code: gxscene.OpEvent, Key: "onClick", Slot: 0},
@@ -272,7 +279,7 @@ func tableHeadCell(col TableColumn, onSort gxscene.Handler) *gxscene.Instance {
 	return gxscene.Render(gxscene.Template{Ops: ops, N: n}, getters...)
 }
 
-func tableCell(text string, col TableColumn, _ int) *gxscene.Instance {
+func tableCell(text string, col TableColumn, colIndex int) *gxscene.Instance {
 	align := col.Align
 	if align == "" {
 		align = "left"
@@ -281,10 +288,15 @@ func tableCell(text string, col TableColumn, _ int) *gxscene.Instance {
 	if w == "" {
 		w = "120"
 	}
+	// 首列主文字高亮加粗，其余列次要色——建立阅读层级。
+	textColor, weight := AppleLabel2, "normal"
+	if colIndex == 0 {
+		textColor, weight = ThemeText, "bold"
+	}
 	ops := []gxscene.Op{
 		el("div"), attr("gx-role", "table-cell"),
-		attr("width", w), attr("padding", "8"),
-		attr("font-size", "13"), attr("color", ThemeText),
+		attr("width", w), attr("padding", "10"),
+		attr("font-size", "13"), attr("weight", weight), attr("color", textColor),
 		attr("text-align", align),
 		gxscene.Op{Code: gxscene.OpChildText, Arg: text}, closeEl(),
 	}

@@ -215,7 +215,11 @@ func Input(props gxscene.Props) *gxscene.Instance {
 		el("input"),
 		attr("gx-input-id", focusID),
 		attr("bg", ThemeInputBg), attr("border-radius", RadiusControl),
-		attr("border-width", "1"), attr("padding", "10"), attr("height", "20"),
+		// 不设固定 height：border-box 下 height=20 会被上下 padding=10 吃光，
+		// 内容区为 0，15px 文字与光标都塞不下，输入框看起来跟文字一样高。
+		// 改为靠 padding + 文字自然撑高（约 40px），与 Button 一致；skia(Yoga)
+		// 与 rust(taffy) 两端同为 border-box，修法通用。
+		attr("border-width", "1"), attr("padding", "10"),
 		attr("flex-direction", "row"), attr("align-items", "center"), attr("width", w),
 		dynAttr("border", borderSlot),
 		dynAttr("value", valueSlot),
@@ -392,36 +396,7 @@ func InputBackspace(n *gxscene.Node) bool {
 // ---------- Card / Badge / Progress / Divider ----------
 
 // Card 预制圆角卡片容器。props: title, width, padding, tone（左侧强调条颜色），children。
-func Card(props gxscene.Props) *gxscene.Instance {
-	title := gxscene.Get[string](props, "title")
-	width := gxscene.Get[string](props, "width")
-	padding := gxscene.Get[string](props, "padding")
-	tone := gxscene.Get[string](props, "tone")
-	children := gxscene.Child(props)
-
-	pad := padding()
-	if pad == "" {
-		pad = "16"
-	}
-	ops := []gxscene.Op{
-		el("div"), attr("bg", ThemePanel), attr("border", AppleSeparator),
-		attr("border-width", "1"), attr("border-radius", RadiusCard),
-		attr("box-shadow", ShadowCard),
-		attr("padding", pad), attr("flex-direction", "column"), attr("gap", "8"),
-	}
-	if w := width(); w != "" {
-		ops = append(ops, attr("width", w))
-	}
-	ops = append(ops,
-		el("span"), attr("color", toneColor(tone())), attr("font-size", "12"), attr("weight", "bold"),
-		dynChild(0), closeEl(),
-		dynChild(1), closeEl(),
-	)
-	return gxscene.Render(gxscene.Template{Ops: ops, N: 2},
-		func() any { return title() },
-		func() any { return children() },
-	)
-}
+// Card 已迁移到 card.gx（GX 语言编写），编译产物为 card.go。
 
 // Badge 预制小徽章。props: label, tone, dot（是否前置圆点）。
 func Badge(props gxscene.Props) *gxscene.Instance {
