@@ -168,7 +168,13 @@ Context **可以跨文件共享**，且共享的是同一个响应式实例（�
 - 一处 `theme.labelCtx.set("x")`，另一个文件里 `theme.labelCtx.use()` 的消费者随订阅重绘——跨文件的 Set/Use 走的是同一个 signal 通道。
 - 构建走跨文件项目模式：`gox build main.gx -root <项目根> -replace github.com/robertpanvip/gox=<gox路径> -check`。运行时 import（`runtime/scene` 等）恒指向 gox module，不会被项目 module 前缀污染（已有回归测试 `TestBuildRuntimeImportUsesGoxModule`）。
 
-注意：`pub var` 导出的是包级单例，天然是"应用级共享"。若要多套并存的子树隔离，仍用 `Provider`（在同一文件里包子树），两者不冲突。
+**同一个 Context、不同子树各有各的值**（示例 `examples/crossfile-context` 已完整演示）：`pub var` 是包级单例，但 `Provider` 会为子树挂独立值，两者不冲突。把 `ctx.provider(p)` 也用 `pub func` 封成组件（如 `theme.Provide`），即可跨文件使用：
+
+- 兄弟子树各给不同值 → 各自读到各自的（A/B 互不串台）。
+- 嵌套 Provider → 内层就近覆盖，内层之外的部分仍读外层值。
+- 没有 Provider 的子树 → 读 `setDefault` 写的全局默认；改全局只重绘这些子树，带 Provider 的不受影响。
+
+集成测试 `TestIntegrationContextSubtreeIsolation` 覆盖兄弟隔离/嵌套覆盖/全局回落的运行值。
 
 ## 11. 窗口外观配置（无边框 / 透明 / 置顶 / 图标）
 

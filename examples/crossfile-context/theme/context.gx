@@ -1,15 +1,30 @@
 package theme
 
-import "github.com/robertpanvip/gox/widgets"
+import (
+    gxscene "github.com/robertpanvip/gox/runtime/scene"
+    "github.com/robertpanvip/gox/widgets"
+)
 
 // 跨文件共享的关键：pub var 导出的是同一个 *Context 实例（指针）。
-// 所有 import 本包的文件读写的是同一个上下文通道，Set 一处、全树消费者可见。
-// 小写源名 labelCtx / accentCtx → 编译器按 GX 模块导出表还原为 LabelCtx / AccentCtx。
-pub var labelCtx = widgets.NewContext[string]("default-label")
-pub var accentCtx = widgets.NewContext[string]("#000000")
+// 所有 import 本包的文件读写的是同一个上下文通道。
+// 小写源名 labelCtx → 编译器按 GX 模块导出表还原为 LabelCtx。
+pub var labelCtx = widgets.NewContext[string]("fallback")
 
-// pub func 也可跨文件调用：写主题的工具函数
-pub func apply(label string, accent string) {
-    labelCtx.set(label)
-    accentCtx.set(accent)
+// consumer 组件（跨文件导出）：建树期 .use() 读当前作用域的值。
+pub func Label(props gxscene.Props) *gxscene.Instance {
+    v := labelCtx.use()
+    return <b class="label">{v()}</b>
 }
+
+// provider 组件（跨文件导出）：把 ctx.Provider 的方法形态封成组件。
+// 同一个 Context，不同子树 provider 给不同值 → 各自子树读到各自的值。
+pub func Provide(props gxscene.Props) *gxscene.Instance {
+    p := gxscene.Props{
+        "value":    gxscene.Get[string](props, "v"),
+        "children": gxscene.Get[any](props, "children"),
+    }
+    return labelCtx.provider(p)
+}
+
+// pub func 工具：写全局默认（无 Provider 子树读到它）
+pub func setDefault(label string) { labelCtx.set(label) }

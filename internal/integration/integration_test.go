@@ -1320,3 +1320,71 @@ func main() {
 		t.Errorf("不得打印函数地址, got:\n%s", out)
 	}
 }
+
+// 同一 Context、不同子树各有各的值：兄弟隔离 + 嵌套就近覆盖 + 无 Provider 读全局。
+// 对应 examples/crossfile-context 的语义（单文件版，验证 GX 语法层还原与运行值）。
+func TestIntegrationContextSubtreeIsolation(t *testing.T) {
+	src := `package main
+
+import (
+    gxscene "github.com/robertpanvip/gox/runtime/scene"
+    "github.com/robertpanvip/gox/runtime/signal"
+    "github.com/robertpanvip/gox/widgets"
+    "fmt"
+)
+
+var ctx = widgets.NewContext[string]("GLOBAL")
+
+pub func Label(props gxscene.Props) *gxscene.Instance {
+    v := ctx.use()
+    return <b>{v()}</b>
+}
+
+pub func Provide(props gxscene.Props) *gxscene.Instance {
+    p := gxscene.Props{
+        "value": gxscene.Get[string](props, "v"),
+        "children": gxscene.Get[any](props, "children"),
+    }
+    return ctx.provider(p)
+}
+
+func main() {
+    view := <div>
+        <span class="a"><Provide v="A"><Label/></Provide></span>
+        <span class="b"><Provide v="B"><Label/></Provide></span>
+        <span class="nest"><Provide v="OUT"><Label/><Provide v="IN"><Label/></Provide></Provide></span>
+        <span class="g"><Label/></span>
+    </div>
+    view.BindReactive(signal.Effect)
+    fmt.println(view)
+}
+`
+	out := runGX(t, src)
+	// 逐个片段断言各子树读到的值，确认互不串台
+	checks := []struct {
+		name, fragment, want string
+	}{
+		{"兄弟A", `class="a"`, `"A"`},
+		{"兄弟B", `class="b"`, `"B"`},
+		{"嵌套外层", `class="nest"`, `"OUT"`},
+		{"嵌套内层", `"IN"`, `"IN"`},
+		{"全局", `class="g"`, `"GLOBAL"`},
+	}
+	for _, c := range checks {
+		idx := strings.Index(out, c.fragment)
+		if idx < 0 {
+			t.Errorf("%s: 输出缺少片段 %q, got:\n%s", c.name, c.fragment, out)
+			continue
+		}
+		seg := out[idx:]
+		if len(seg) > 400 {
+			seg = seg[:400]
+		}
+		if !strings.Contains(seg, c.want) {
+			t.Errorf("%s: 片段应读到 %s, got:\n%s", c.name, c.want, seg)
+		}
+	}
+	if strings.Contains(out, "0x") {
+		t.Errorf("不得打印函数地址, got:\n%s", out)
+	}
+}

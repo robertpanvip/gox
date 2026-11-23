@@ -1,10 +1,11 @@
-// 跨文件共享 Context：定义在一个 .gx 文件里，另一个文件 import 后读写同一实例。
+// 跨文件共享 Context：同一个 Context 实例，跨文件导出，不同子树各有各的值。
 // 构建：gox build examples/crossfile-context/main.gx -root examples/crossfile-context \
 //       -replace github.com/robertpanvip/gox=<gox 本地路径> -check
 //
-// 机制：GX 跨文件模块用 pub 导出符号，调用方写小写源名（theme.labelCtx），
-// 编译器查导出表还原成大写（theme.LabelCtx）。pub var 导出的是同一个 Context
-// 指针——这就是"跨文件共享"：不是值拷贝，是共享同一个响应式通道。
+// 机制：GX 跨文件模块用 pub 导出符号，调用方写小写源名（theme.labelCtx /
+// theme.Provide），编译器查导出表还原成大写。pub var 导出的是同一个 Context
+// 指针——所以 Set 一处全树可见；但 Provider 会为子树挂独立值，实现
+// "同一 Context、不同子树各有各的值"（兄弟隔离 + 嵌套就近覆盖）。
 package main
 
 import (
@@ -14,23 +15,31 @@ import (
     "fmt"
 )
 
-// Label 是 consumer：建树期 .use() 读的是跨文件共享的 Context。
-pub func Label(props gxscene.Props) *gxscene.Instance {
-    text := theme.labelCtx.use()
-    return <b class="label">{text()}</b>
-}
-
 func main() {
-    // 一处写入（跨文件调 theme.apply）
-    theme.apply("shared-hello", "#0a84ff")
+    // 全局默认值（无任何 Provider 的子树读到它，即下面的 global 段）
+    theme.setDefault("GLOBAL")
 
+    // siblings: 兄弟子树各自 Provider 给 A/B；nested: OUT 内嵌 IN 就近覆盖；
+    // global: 无 Provider，读全局默认。
     view := <div id="app">
-        <Label/>
+        <section class="siblings">
+            <div class="a"><theme.Provide v="A"><theme.Label/></theme.Provide></div>
+            <div class="b"><theme.Provide v="B"><theme.Label/></theme.Provide></div>
+        </section>
+        <section class="nested">
+            <theme.Provide v="OUT">
+                <span>outer:</span><theme.Label/>
+                <theme.Provide v="IN"><theme.Label/></theme.Provide>
+            </theme.Provide>
+        </section>
+        <section class="global">
+            <theme.Label/>
+        </section>
     </div>
     view.BindReactive(signal.Effect)
     fmt.println(view)
 
-    // 再写一次，另一个文件定义的 Context 通道驱动本文件组件重绘
-    theme.labelCtx.set("changed-across-files")
+    // 改全局默认：只有无 Provider 的 global 段重绘；带 Provider 的子树不受影响
+    theme.setDefault("GLOBAL-2")
     fmt.println(view)
 }
