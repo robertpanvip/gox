@@ -247,6 +247,9 @@ fn clip_rect_xywh(c: ClipRect, x: f32, y: f32, w: f32, h: f32) -> Option<(f32, f
 
 #[derive(Clone)]
 struct TextDraw {
+    /// 稳定节点 ID：作为字形缓存 key，滚动时同一 item 的 ID 不变，
+    /// 使未变文本的字形 buffer 可跨帧复用（只 shape 新增/变化项）。
+    id: String,
     text: String,
     x: f32,
     y: f32,
@@ -269,18 +272,43 @@ impl ObjectFit {
     }
 }
 
-/// 文本序列签名：把每个文本的 (内容, 字号) 编码成可比较字符串。
-/// 用于判定 glyphon buffer 缓存是否仍匹配——滚动时视口边缘 item 进出会
-/// 改变 dl.texts 内容，只有签名完全一致才能安全复用按序缓存的字形 buffer。
-fn text_sig(texts: &[TextDraw]) -> String {
-    let mut s = String::with_capacity(texts.len() * 16);
-    for t in texts {
-        s.push_str(&t.text);
-        s.push('@');
-        s.push_str(&format!("{:.2}", t.size));
-        s.push(';');
-    }
+/// 单条文本的内容签名：字形 buffer 只取决于 (内容, 字号)，与坐标/颜色无关。
+/// 缓存按 node_id 索引，同一 ID 签名不变即可复用其 buffer。
+fn text_sig(t: &TextDraw) -> String {
+    let mut s = String::with_capacity(t.text.len() + 16);
+    s.push_str(&t.text);
+    s.push('@');
+    s.push_str(&format!("{:.2}", t.size));
     s
+}
+
+/// 按稳定 node_id 缓存的字形条目：签名变了才需要重新 shape。
+#[derive(Clone)]
+struct GlyphEntry {
+    sig: String,
+    buffer: Buffer,
+}
+
+/// 字形增量复用计划（纯逻辑，便于单测）：
+/// 返回本帧需要重新 shape 的文本下标，以及需要从缓存淘汰的 node_id。
+/// - 当前文本的 id 不在缓存，或签名变化 → 需要 shape（新增项 / 内容变化）
+/// - 缓存里有但当前帧不再出现 → 淘汰（滚出视口的项）
+fn plan_glyphs(
+    texts: &[TextDraw],
+    cache: &std::collections::HashMap<String, GlyphEntry>,
+) -> (Vec<usize>, Vec<String>) {
+    let mut shaped = Vec::new();
+    let mut live = std::collections::HashSet::with_capacity(texts.len());
+    for (i, t) in texts.iter().enumerate() {
+        live.insert(t.id.clone());
+        let sig = text_sig(t);
+        let hit = cache.get(&t.id).map(|e| e.sig == sig).unwrap_or(false);
+        if !hit {
+            shaped.push(i);
+        }
+    }
+    let evicted = cache.keys().filter(|id| !live.contains(*id)).cloned().collect();
+    (shaped, evicted)
 }
 
 #[derive(Clone)]
@@ -550,7 +578,7 @@ impl DisplayList {
                 // (font_size, line_height=1.35×size) 自行处理行盒内基线，故这里不加
                 // 任何 size 比例的魔法偏移——否则紧凑容器（如 Input 高 20px）里文字会偏下。
                 if !clip_rejects(my_clip, x, y, size * 4.0, size * 1.35) {
-                    dl.texts.push(TextDraw { text: node.text.clone(), x, y, size, color, clip: my_clip });
+                    dl.texts.push(TextDraw { id: node.id.clone(), text: node.text.clone(), x, y, size, color, clip: my_clip });
                 }
                 return;
             }
@@ -673,19 +701,12 @@ pub struct Renderer {
     anim_origin: std::time::Instant,
     /// 自上次 render 以来是否收到新帧数据（无变化帧跳过昂贵的布局/光栅化/文本整形）
     frame_dirty: bool,
-    /// 缓存的文本 buffer：无变化帧直接复用，避免每帧重建+shape
-    cached_buffers: Vec<Buffer>,
-    /// cached_buffers 对应的文本签名（text@size 序列）。
-    /// 纯滚动帧里 emit 会按 clip 过滤文本——视口边缘 item 进出会让 dl.texts
-    /// 数量或顺序变化。仅比长度不够（滚出+滚入可能数量相同但内容不同），
-    /// 必须比对内容签名才能安全复用字形 buffer。
-    cached_text_sig: String,
-    /// 缓存的文本区域屏幕坐标（与 cached_buffers 一一对应，供命中/调试）
+    /// 按稳定 node_id 缓存的字形：只 shape 新增/内容变化的文本，其余跨帧复用。
+    /// 虚拟列表滚动跨 item 边界时只有进出视口的 1 个 ID 变化，其余全部命中，
+    /// 比"整段签名一致才全复用"更精确——任何内容变化帧都能复用未变的项。
+    glyph_cache: std::collections::HashMap<String, GlyphEntry>,
+    /// 缓存的文本区域屏幕坐标（供命中/调试）
     cached_areas_dirty: bool,
-    /// 最近一帧是否为"纯滚动帧"（只改 scroll-top/scroll-left）。
-    /// 纯滚动不改变布局/文本/字形，render 可复用缓存的 glyphon buffer，
-    /// 跳过最昂贵的 set_text + shape_until_scroll。
-    scroll_only: bool,
     /// 最近光标位置（MouseInput 事件不带坐标）
     cursor: (f32, f32),
     window: std::sync::Arc<Window>,
@@ -839,10 +860,8 @@ struct VSOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f };
             animator: crate::style::Animator::new(),
             anim_origin: std::time::Instant::now(),
             frame_dirty: true,
-            cached_buffers: Vec::new(),
-            cached_text_sig: String::new(),
+            glyph_cache: std::collections::HashMap::new(),
             cached_areas_dirty: true,
-            scroll_only: false,
             cursor: (0.0, 0.0),
             window,
         }
@@ -864,17 +883,13 @@ struct VSOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f };
                 self.scene = Some(root);
                 self.frame_dirty = true;
                 self.cached_areas_dirty = true;
-                self.scroll_only = false; // 全量帧：不能假设可复用字形
                 return true;
             }
         } else if let Some(delta) = DeltaView::parse(bytes) {
             // 增量动作：按 nodeID 打补丁
             if let Some(root) = self.scene.as_mut() {
-                // 必须在 apply 之前判断：apply 消费的是 &self（不可变借），但先算好
-                // 纯滚动标志语义更清晰，也避免将来 apply 改成消耗型时出错。
-                let scroll_only = delta.is_scroll_only();
                 delta.apply(root);
-                self.scroll_only = scroll_only;
+                // 字形复用按 node_id + 内容签名逐项判定，无需区分是否纯滚动帧。
                 self.frame_dirty = true;
                 self.cached_areas_dirty = true;
                 return true;
@@ -1046,46 +1061,43 @@ struct VSOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f };
             self.display = dl.clone();
             self.paint_shapes(&dl, bg);
 
-            // 文本：每个 text 一个 buffer，缓存下来供无变化帧复用（避免每帧 shape）。
-            //
-            // 纯滚动帧优化（半分层）：只改 scroll-top/scroll-left 时，节点结构、
-            // 文本内容和字号都没变——变化的只是绘制坐标（已体现在新 dl.texts 的
-            // x/y 与主 Pixmap 里）。glyphon 的 Buffer 存的是整形后的字形，位置由
-            // 每帧的 TextArea.left/top 提供，因此 buffer 可安全跨帧复用，跳过最
-            // 昂贵的 set_text + shape_until_scroll（文本密集列表里这是主要开销）。
-            //
-            // 正确性：emit 会按 clip 过滤文本，滚动时视口边缘 item 进出会改变
-            // dl.texts 的内容/顺序。故用「text@size 内容签名」判定——只有当前
-            // 文本序列与缓存时完全一致（顺序、内容、字号都相同）才复用。仅比
-            // 长度不够：滚出+滚入可能数量相同但内容不同，会配错字形。
-            // 动画帧不能复用：animator 可能改了字号/文本等驱动属性。
-            let cur_sig = text_sig(&dl.texts);
-            let can_reuse_glyphs = self.scroll_only
-                && !animating
-                && cur_sig == self.cached_text_sig;
-            if can_reuse_glyphs {
-                #[cfg(debug_assertions)]
-                eprintln!("[rust-backend] scroll-only: reuse {} glyph buffers", self.cached_buffers.len());
-            } else {
-                let mut buffers: Vec<Buffer> = Vec::with_capacity(dl.texts.len());
-                for t in &dl.texts {
-                    let mut b = Buffer::new(&mut self.font_system, Metrics::new(t.size, t.size * 1.35));
-                    b.set_size(&mut self.font_system, Some(700.0), Some(80.0));
-                    let attrs = Attrs::new().family(Family::SansSerif);
-                    b.set_text(&mut self.font_system, &t.text, &attrs, Shaping::Advanced);
-                    b.shape_until_scroll(&mut self.font_system, false);
-                    buffers.push(b);
-                }
-                self.cached_buffers = buffers;
-                self.cached_text_sig = cur_sig;
+            // 字形增量复用（按稳定 node_id）：
+            // glyphon 的 Buffer 只取决于 (文本, 字号)，与坐标/颜色无关。每帧按
+            // dl.texts 的 node_id 查缓存：ID 与签名都在 → 直接复用；新 ID 或内容
+            // 变了 → 只 shape 这一个；最后淘汰当前帧不再出现的 ID（滚出视口）。
+            // 虚拟列表用 index 作 key、节点 ID 稳定，跨 item 边界时只有 1 个新 ID
+            // 需要 shape，其余全部命中——比"整段签名一致才全复用"精确得多，且对
+            // 任意内容变化帧都生效（不再限于纯滚动帧）。动画改的是坐标/颜色时
+            // 签名不变可安全复用；若真改了字号/文本，签名变化会触发重新 shape。
+            let (shaped_idx, evicted) = plan_glyphs(&dl.texts, &self.glyph_cache);
+            let shaped = shaped_idx.len();
+            for i in shaped_idx {
+                let t = &dl.texts[i];
+                let mut b = Buffer::new(&mut self.font_system, Metrics::new(t.size, t.size * 1.35));
+                b.set_size(&mut self.font_system, Some(700.0), Some(80.0));
+                let attrs = Attrs::new().family(Family::SansSerif);
+                b.set_text(&mut self.font_system, &t.text, &attrs, Shaping::Advanced);
+                b.shape_until_scroll(&mut self.font_system, false);
+                self.glyph_cache.insert(t.id.clone(), GlyphEntry { sig: text_sig(t), buffer: b });
+            }
+            for id in evicted {
+                self.glyph_cache.remove(&id);
+            }
+            #[cfg(debug_assertions)]
+            if shaped > 0 || shaped < dl.texts.len() {
+                eprintln!("[rust-backend] glyph reuse: {} reused, {} shaped",
+                    dl.texts.len().saturating_sub(shaped), shaped);
             }
             self.frame_dirty = false;
             self.cached_areas_dirty = false;
-            self.scroll_only = false;
         }
 
-        // 从当前 DisplayList + 缓存 buffers 组装 areas（有无变化都要做，因为 prepare 每帧消费 areas）。
-        let areas: Vec<TextArea> = self.display.texts.iter().zip(self.cached_buffers.iter()).map(|(t, b)| {
+        // 从当前 DisplayList + 按 ID 缓存的 buffers 组装 areas（有无变化都要做，因为 prepare 每帧消费 areas）。
+        let areas: Vec<TextArea> = self.display.texts.iter().filter_map(|t| {
+            let b = match self.glyph_cache.get(&t.id) {
+                Some(e) => &e.buffer,
+                None => return None, // 理论上不会发生；防御性跳过缺字形的项
+            };
             let bounds = match t.clip {
                 Some((cx, cy, cw, ch)) => TextBounds {
                     left: (cx - t.x - 20.0) as i32, top: (cy - t.y - 20.0) as i32,
@@ -1093,7 +1105,7 @@ struct VSOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f };
                 },
                 None => TextBounds { left: -20, top: -20, right: 720, bottom: self.height as i32 },
             };
-            TextArea {
+            Some(TextArea {
                 buffer: b,
                 left: t.x,
                 top: t.y,
@@ -1101,7 +1113,7 @@ struct VSOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f };
                 bounds,
                 default_color: Color::rgb(t.color.0, t.color.1, t.color.2),
                 custom_glyphs: &[],
-            }
+            })
         }).collect();
         self.text_renderer.prepare(
             &self.device, &self.queue, &mut self.font_system, &mut self.atlas,
@@ -1170,9 +1182,7 @@ struct VSOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f };
         // 尺寸相关缓存失效：下一帧必须重算布局与文本。
         self.frame_dirty = true;
         self.cached_areas_dirty = true;
-        self.scroll_only = false;
-        self.cached_buffers.clear(); // 避免与旧尺寸残留帧误命中字形复用
-        self.cached_text_sig.clear();
+        self.glyph_cache.clear(); // 字号不变，但清空避免与旧尺寸残留帧误命中
     }
 
     pub fn window(&self) -> &Window {
@@ -1209,34 +1219,87 @@ pub fn bench_frame(buf: &[u8], width: f32, height: f32, iters: u32) -> Option<u6
 mod text_sig_tests {
     use super::*;
 
-    fn td(text: &str, size: f32) -> TextDraw {
+    fn td(id: &str, text: &str, size: f32) -> TextDraw {
         TextDraw {
-            text: text.into(), x: 0.0, y: 0.0, size,
+            id: id.into(), text: text.into(), x: 0.0, y: 0.0, size,
             color: (0, 0, 0), clip: None,
         }
     }
 
-    #[test]
-    fn same_sequence_same_sig() {
-        let a = [td("A", 16.0), td("B", 16.0)];
-        let b = [td("A", 16.0), td("B", 16.0)];
-        assert_eq!(text_sig(&a), text_sig(&b));
+    /// 用一组 (id,text,size) 构造"上一帧缓存"：只需签名，buffer 用空占位。
+    fn cache_of(items: &[(&str, &str, f32)]) -> std::collections::HashMap<String, GlyphEntry> {
+        let mut m = std::collections::HashMap::new();
+        for (id, text, size) in items {
+            let t = td(id, text, *size);
+            // buffer 对 plan_glyphs 的判定无影响，这里用 new 占位即可。
+            let mut fs = FontSystem::new();
+            m.insert((*id).into(), GlyphEntry {
+                sig: text_sig(&t),
+                buffer: Buffer::new(&mut fs, Metrics::new(*size, *size * 1.35)),
+            });
+        }
+        m
     }
 
     #[test]
-    fn content_order_size_change_sig() {
-        let a = [td("A", 16.0), td("B", 16.0)];
-        // 内容变化
-        assert_ne!(text_sig(&a), text_sig(&[td("A", 16.0), td("C", 16.0)]));
-        // 顺序变化（数量相同、内容相同——这正是滚动进出可能踩到的坑）
-        assert_ne!(text_sig(&a), text_sig(&[td("B", 16.0), td("A", 16.0)]));
-        // 字号变化
-        assert_ne!(text_sig(&a), text_sig(&[td("A", 16.0), td("B", 20.0)]));
-        // 数量变化
-        assert_ne!(text_sig(&a), text_sig(&[td("A", 16.0)]));
-        // 坐标变化不影响签名（滚动就是只改坐标）
-        let moved = [TextDraw { x: 3.0, y: -6.0, ..td("A", 16.0) }, TextDraw { x: 3.0, y: -6.0, ..td("B", 16.0) }];
+    fn sig_depends_only_on_text_and_size() {
+        // 签名只看文本+字号，与 id/坐标/颜色无关——这是按 ID 复用的正确性基础。
+        let a = td("a", "A", 16.0);
+        let moved = TextDraw { id: "b".into(), x: 99.0, y: -6.0, color: (255, 0, 0), ..a.clone() };
         assert_eq!(text_sig(&a), text_sig(&moved));
+        assert_ne!(text_sig(&a), text_sig(&td("a", "B", 16.0)));   // 内容变
+        assert_ne!(text_sig(&a), text_sig(&td("a", "A", 20.0)));   // 字号变
+    }
+
+    #[test]
+    fn unchanged_texts_need_no_shape() {
+        // 小幅滚动：ID 和文本都没变 → 全部复用，零 shape。
+        let cache = cache_of(&[("a", "A", 16.0), ("b", "B", 16.0)]);
+        let cur = [td("a", "A", 16.0), td("b", "B", 16.0)];
+        let (shaped, evicted) = plan_glyphs(&cur, &cache);
+        assert!(shaped.is_empty(), "未变文本应零 shape");
+        assert!(evicted.is_empty());
+    }
+
+    #[test]
+    fn scroll_boundary_shapes_only_new_item() {
+        // 虚拟列表跨 item 边界：滚出 "a"、滚入 "c"，"b" 未变 →
+        // 只有 "c" 需要 shape，"a" 被淘汰，"b" 复用。
+        let cache = cache_of(&[("a", "A", 16.0), ("b", "B", 16.0)]);
+        let cur = [td("b", "B", 16.0), td("c", "C", 16.0)];
+        let (shaped, evicted) = plan_glyphs(&cur, &cache);
+        assert_eq!(shaped, vec![1], "只有滚入的 c 需要 shape");
+        assert_eq!(evicted, vec!["a".to_string()], "滚出的 a 应被淘汰");
+    }
+
+    #[test]
+    fn content_change_shapes_only_changed_item() {
+        // 某一项文本变化：只有该项重新 shape，其余复用。
+        let cache = cache_of(&[("a", "A", 16.0), ("b", "B", 16.0)]);
+        let cur = [td("a", "A", 16.0), td("b", "B2", 16.0)];
+        let (shaped, evicted) = plan_glyphs(&cur, &cache);
+        assert_eq!(shaped, vec![1], "内容变的 b 需重新 shape");
+        assert!(evicted.is_empty());
+    }
+
+    #[test]
+    fn reorder_keeps_identity() {
+        // 顺序变化但 ID+内容不变（如 For 重排）：全部复用，零 shape——
+        // 这正是整段签名方案会误判为全量重建的场景。
+        let cache = cache_of(&[("a", "A", 16.0), ("b", "B", 16.0)]);
+        let cur = [td("b", "B", 16.0), td("a", "A", 16.0)];
+        let (shaped, evicted) = plan_glyphs(&cur, &cache);
+        assert!(shaped.is_empty(), "重排不应触发 shape");
+        assert!(evicted.is_empty());
+    }
+
+    #[test]
+    fn cold_cache_shapes_all() {
+        let cache = cache_of(&[]);
+        let cur = [td("a", "A", 16.0), td("b", "B", 16.0)];
+        let (shaped, evicted) = plan_glyphs(&cur, &cache);
+        assert_eq!(shaped, vec![0, 1]);
+        assert!(evicted.is_empty());
     }
 }
 

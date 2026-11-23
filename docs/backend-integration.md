@@ -278,15 +278,16 @@ Host 是变化驱动的（signal→effect→Draw），无变化时不会请求�
 - transition 动画期间 props 每帧变 → 每帧重绘，不会误命中缓存（Rust 端另有 `Animator::is_active()` 判定）。
 - 观测面：`FrameCache.CacheStats()` 返回复用/重绘帧数。
 
-**Rust 后端对应**：Go 侧 `Present` 在无 Changes 时不再发全量快照（有基线即跳过），Rust 侧 `Renderer` 用 `frame_dirty` + 缓存 `cached_buffers` 避免无变化帧重建文本 buffer 与光栅化 pixmap；resize 时置脏强制重算。
+**Rust 后端对应**：Go 侧 `Present` 在无 Changes 时不再发全量快照（有基线即跳过），Rust 侧 `Renderer` 用 `frame_dirty` 避免无变化帧重建布局与光栅化 pixmap；resize 时置脏强制重算。
 
-**纯滚动帧优化（Rust，半分层）**：持续滚动（如 720px/s @ 120Hz = 每帧 6px）是最容易退化的场景——`scroll-top` 每帧变会让整帧复用失效，且全树绘制坐标随滚动偏移改变，脏区覆盖整个视口而退化全量。Rust 后端对这类帧做定向优化：
+**按 node_id 增量复用字形（Rust）**：持续滚动（如 720px/s @ 120Hz = 每帧 6px）是最容易退化的场景——`scroll-top` 每帧变会让整帧复用失效，且全树绘制坐标随滚动偏移改变，脏区覆盖整个视口而退化全量。Rust 后端为每个文本节点按**稳定 `node_id`** 缓存整形结果：
 
-- `DeltaView::is_scroll_only()` 判断一个 GRX2 增量帧是否**只**改 `scroll-top`/`scroll-left`（其它属性、文本、结构动作一律不算）。
-- 纯滚动帧里，节点结构、文本内容、字号都未变，变的只是绘制坐标（已由 `from_scene` emit 到新的 `dl.texts` 位置）。glyphon `Buffer` 存的是整形后的字形、位置由每帧 `TextArea.left/top` 提供，故可跨帧复用，`render()` 跳过最昂贵的 `set_text + shape_until_scroll`（文本密集列表的主要开销）。
-- 动画帧（`Animator::is_active()`）或字形数量不匹配时保守退回重建；resize 清空 buffer + `scroll_only`。
+- `emit` 时每个 `TextDraw` 带上 `node.id`。glyphon `Buffer` 只取决于 (文本, 字号)，与坐标/颜色无关——`text_sig(t)` 即此签名。
+- 每帧 `plan_glyphs()` 对比当前 texts 与缓存：ID 在缓存且签名一致 → 直接复用其 buffer；新 ID 或内容/字号变化 → 只 shape 这几项；缓存里当前帧不再出现的 ID（滚出视口）→ 淘汰。绘制位置由每帧 `TextArea.left/top` 提供，故复用 buffer 无需重算位置。
+- 这比"整段签名一致才全复用"精确得多：虚拟列表用 index 作 key、节点 ID 稳定，跨 item 边界时也只 shape 进出的那 1 项，其余全部命中；For 重排、局部内容变化同样只重算受影响项。动画只改坐标/颜色时签名不变可复用，改了字号/文本则签名变化自动重算；resize 清空缓存。
+- 纯逻辑 `plan_glyphs()` 可单测：覆盖复用命中、跨边界只 shape 新增项、内容变化、重排、冷缓存全量等场景。
 
-**为何不做像素级 layer blit（诚实边界）**：Skia 后端受 go-skia v0.1.0 绑定限制——无离屏 raster surface、Bitmap 未导出像素分配、画布不可读，无法实现；Rust 后端虽有完整 tiny-skia `Pixmap`，但文本走 glyphon 独立管线（按屏幕坐标逐帧 shape，非可平移位图），把文本塞进离屏位图需绕开 glyphon、牺牲 CJK/字体质量。因此选择"跳过昂贵重算"而非"搬运像素"：收益来自省掉 Taffy 布局之外的字形整形，不牺牲渲染质量。虚拟滚动跨 item 边界的帧会同时改 spacer 高度 + For 结构，`is_scroll_only` 返回 false 走全量，属正确降级。
+**为何不做像素级 layer blit（诚实边界）**：Skia 后端受 go-skia v0.1.0 绑定限制——无离屏 raster surface、Bitmap 未导出像素分配、画布不可读，无法实现；Rust 后端虽有完整 tiny-skia `Pixmap`，但文本走 glyphon 独立管线（按屏幕坐标逐帧 shape，非可平移位图），把文本塞进离屏位图需绕开 glyphon、牺牲 CJK/字体质量。因此选择"复用已算结果、只重算变化项"而非"搬运像素"：收益来自省掉字形整形与布局之外的重复工作，不牺牲渲染质量。
 
 ## 3. 拆成两个项目如何跑通
 
