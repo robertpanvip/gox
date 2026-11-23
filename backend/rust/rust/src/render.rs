@@ -255,6 +255,20 @@ struct TextDraw {
     clip: ClipRect,
 }
 
+/// object-fit：图片如何映射进布局盒（与 Skia 端 image.go 语义一致）。
+#[derive(Clone, Copy, PartialEq)]
+enum ObjectFit { Fill, Contain, Cover }
+
+impl ObjectFit {
+    fn parse(s: Option<&str>) -> Self {
+        match s.unwrap_or("").trim().to_ascii_lowercase().as_str() {
+            "contain" => ObjectFit::Contain,
+            "cover" => ObjectFit::Cover,
+            _ => ObjectFit::Fill,
+        }
+    }
+}
+
 #[derive(Clone)]
 struct ShapeDraw {
     x: f32,
@@ -267,6 +281,10 @@ struct ShapeDraw {
     border: Option<((u8, u8, u8), f32)>,
     shadow: Option<crate::style::BoxShadow>,
     clip: ClipRect,
+    /// img 原语：解码后的图片 + object-fit；None 表示普通矩形。
+    img: Option<(std::sync::Arc<tiny_skia::Pixmap>, ObjectFit)>,
+    /// canvas 原语：命令式绘制指令；None 表示普通节点。
+    canvas: Option<std::sync::Arc<Vec<crate::canvas::CanvasOp>>>,
 }
 
 #[derive(Clone)]
@@ -531,11 +549,27 @@ impl DisplayList {
                     (parse_color(c), bw)
                 });
                 if !clip_rejects(my_clip, x, y, w, h) {
+                    // img 原语：<img src> 走原生解码（data URI / 本地路径），与 Go 端
+                    // runtime/imgutil 的 src 语义一致。解码按 src 缓存（image.rs）。
+                    let img = if node.kind.eq_ignore_ascii_case("img") {
+                        p("src").and_then(|src| crate::image::load(src))
+                            .map(|pix| (std::sync::Arc::new(pix), ObjectFit::parse(p("object-fit"))))
+                    } else {
+                        None
+                    };
+                    // canvas 原语：解析 Props["canvas-ops"]（runtime/canvas 协议）。
+                    let canvas = if node.kind.eq_ignore_ascii_case("canvas") {
+                        let ops = crate::canvas::decode(p("canvas-ops").unwrap_or(""));
+                        if ops.is_empty() { None } else { Some(std::sync::Arc::new(ops)) }
+                    } else {
+                        None
+                    };
                     dl.shapes.push(ShapeDraw {
                         x, y, w, h,
                         bg: bg.unwrap_or((0, 0, 0)), bg_present: bg.is_some(), radius, border,
                         shadow: st.shadow.clone(),
                         clip: my_clip,
+                        img, canvas,
                     });
                 }
                 if let Some(ev) = node.events.iter().find(|e| e.starts_with("on")) {
@@ -814,6 +848,81 @@ struct VSOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f };
         self.cursor
     }
 
+    /// 按 object-fit 把图片绘制进 (rx,ry,rw,rh)，radius>0 时用圆角 Mask 裁剪。
+    fn draw_image_fit_impl(
+        pm: &mut tiny_skia::Pixmap,
+        pix: &tiny_skia::Pixmap,
+        fit: ObjectFit,
+        rx: f32, ry: f32, rw: f32, rh: f32, radius: f32,
+    ) {
+        let iw = pix.width() as f32;
+        let ih = pix.height() as f32;
+        if iw <= 0.0 || ih <= 0.0 || rw <= 0.0 || rh <= 0.0 {
+            return;
+        }
+        // 计算目标区（object-fit）：fill 铺满；contain 完整放入；cover 铺满并裁剪。
+        let (dx, dy, dw, dh) = if fit == ObjectFit::Fill {
+            (rx, ry, rw, rh)
+        } else {
+            let ar = iw / ih;
+            let bar = rw / rh;
+            if fit == ObjectFit::Contain {
+                if ar > bar {
+                    let h = rw / ar;
+                    (rx, ry + (rh - h) / 2.0, rw, h)
+                } else {
+                    let w = rh * ar;
+                    (rx + (rw - w) / 2.0, ry, w, rh)
+                }
+            } else { // Cover
+                if ar > bar {
+                    let w = rh * ar;
+                    (rx + (rw - w) / 2.0, ry, w, rh)
+                } else {
+                    let h = rw / ar;
+                    (rx, ry + (rh - h) / 2.0, rw, h)
+                }
+            }
+        };
+        let dw_i = dw.max(1.0) as u32;
+        let dh_i = dh.max(1.0) as u32;
+        // 缩放绘制到与目标同尺寸的临时 Pixmap（draw_pixmap 用 Transform 缩放）。
+        let mut tmp = match tiny_skia::Pixmap::new(dw_i, dh_i) {
+            Some(v) => v,
+            None => return,
+        };
+        let sx = dw / iw;
+        let sy = dh / ih;
+        let ts = tiny_skia::Transform::from_scale(sx, sy);
+        tmp.draw_pixmap(
+            0, 0, pix.as_ref(),
+            &tiny_skia::PixmapPaint::default(),
+            ts, None,
+        );
+        let paint = tiny_skia::PixmapPaint::default();
+        if radius > 0.0 {
+            // 圆角：生成同形状 Mask，按目标区合成。
+            if let Some(path) = round_rect_path(0.0, 0.0, dw_i as f32, dh_i as f32, radius) {
+                let mut mask = tiny_skia::Mask::new(dw_i, dh_i).unwrap();
+                mask.fill_path(
+                    &path,
+                    tiny_skia::FillRule::Winding,
+                    true,
+                    tiny_skia::Transform::identity(),
+                );
+                pm.draw_pixmap(
+                    dx as i32, dy as i32, tmp.as_ref(), &paint,
+                    tiny_skia::Transform::identity(), Some(&mask),
+                );
+                return;
+            }
+        }
+        pm.draw_pixmap(
+            dx as i32, dy as i32, tmp.as_ref(), &paint,
+            tiny_skia::Transform::identity(), None,
+        );
+    }
+
     fn paint_shapes(&mut self, dl: &DisplayList, bg: (u8, u8, u8)) {
         use tiny_skia::{Color, FillRule, Paint, Pixmap, Stroke, Transform};
         let bpr = self.bg_bpr as usize;
@@ -841,6 +950,14 @@ struct VSOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f };
                     p.set_color(Color::from_rgba8(s.bg.0, s.bg.1, s.bg.2, 255));
                     p.anti_alias = true;
                     pm.fill_path(&path, &p, FillRule::Winding, Transform::identity(), None);
+                }
+                // img：object-fit 缩放绘制，圆角时用同形状 Mask 裁剪，与 Skia 端一致。
+                if let Some((pix, fit)) = &s.img {
+                    Self::draw_image_fit_impl(&mut pm, pix, *fit, rx, ry, rw, rh, s.radius);
+                }
+                // canvas 原语：命令式指令画到主 pm，坐标相对本节点裁剪后的盒。
+                if let Some(ops) = &s.canvas {
+                    crate::canvas::paint(&mut pm, ops, rx, ry);
                 }
                 if let Some((c, bw)) = s.border {
                     let mut p = Paint::default();

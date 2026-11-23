@@ -8,7 +8,7 @@ import (
 	gxapp "github.com/robertpanvip/gox/runtime/app"
 	gxscene "github.com/robertpanvip/gox/runtime/scene"
 	"github.com/robertpanvip/gox/runtime/signal"
-	widgets "github.com/robertpanvip/gox-backend-skia/widgets"
+	widgets "github.com/robertpanvip/gox/widgets"
 )
 
 // toAnySlice 把子树列表转成 host 约定的 []any（embedValue 只识别该切片类型）。

@@ -1,4 +1,12 @@
-// PULSE —— 独立 Rust 渲染后端技术验证
+// PULSE —— 纯 Rust 渲染技术栈验证（spike），不是 GX 后端 demo
+//
+// 定位：本程序只验证 winit/wgpu/tiny-skia/glyphon/Taffy 这套渲染栈能否独立工作
+// （尤其 IME preedit），它自己维护 Model/按钮/命中测试，不走 GX 协议。
+//
+// 真正的 GX Rust 后端在 ../rust/src/lib.rs（静态库，消费 GRX1/GRX2 场景协议），
+// 配套的完整 GX 组件库 demo 在 ../go/cmd/demo——它用 gox/widgets 构建场景树，
+// 经 FramePresenter → GRX 协议 → Rust 渲染，才是"用 GX 库驱动 Rust 后端"的正式验证。
+// 两者不要混淆：要验证后端请用 go/cmd/demo；要验证 IME/GPU 技术栈用本程序。
 //
 // 技术栈（全部 Rust，无 CGO / 无 Go 核心依赖）：
 //   - winit 0.30   窗口 + 原生 IME（Preedit / Commit）

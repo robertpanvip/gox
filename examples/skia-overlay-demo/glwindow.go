@@ -9,7 +9,7 @@ import (
 	"github.com/go-gl/glfw/v3.3/glfw"
 	sk "github.com/pekim/go-skia"
 	skia "github.com/robertpanvip/gox-backend-skia"
-	"github.com/robertpanvip/gox-backend-skia/widgets"
+	"github.com/robertpanvip/gox/widgets"
 	gxapp "github.com/robertpanvip/gox/runtime/app"
 	gxscene "github.com/robertpanvip/gox/runtime/scene"
 )

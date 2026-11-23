@@ -7,7 +7,7 @@ import (
     gxscene "github.com/robertpanvip/gox/runtime/scene"
     gxapp "github.com/robertpanvip/gox/runtime/app"
     "github.com/robertpanvip/gox/runtime/signal"
-    widgets "github.com/robertpanvip/gox-backend-skia/widgets"
+    widgets "github.com/robertpanvip/gox/widgets"
     "fmt"
     "time"
 )

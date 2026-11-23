@@ -13,6 +13,8 @@
 //! draw() 只写共享 frame（Arc<Mutex>），线程安全。
 
 mod binprotocol;
+mod canvas;
+mod image;
 mod protocol;
 mod render;
 mod scene;

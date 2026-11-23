@@ -73,6 +73,36 @@ box-shadow: "offsetX offsetY blur spread color"
 
 `runtime/scene/for.go` 中 `For` 控制器运行时新建的两个透明包装节点（`#frag` 项包装、`#root` 根包装）**漏设 `Type: NodeFragment`**，零值恰为 `NodeText`。后果：任何理解 Type 语义的后端会把整棵列表项子树当空文本跳过——虚拟列表/For 列表在下游完全不渲染。已修复并加注释，host 全量回归通过。
 
+## 8. img 与 canvas 原语（两端原生实现）
+
+组件库分层：`div`/`img`/`canvas`/虚拟滚动/`popover` 属**后端原生层**（性能优先，各后端用各自渲染栈实现）；`button`/`card`/`input` 等属 **GX 通用组件层**（`gox/widgets`，后端无关，纯 gxscene 场景树组合）。后者由前者组合而成，一套组件在两端渲染。
+
+### img
+
+`<img src="...">` 产出 `Kind="img"` 的 NodeDiv，`src` 走 Props 透传，两端用同一个 `runtime/imgutil` 语义解析来源：
+
+| src 形式 | 支持 |
+|---|---|
+| `data:image/png;base64,...` | 两端都支持（推荐，自包含） |
+| 本地文件路径 | 两端都支持 |
+| `http(s)://...` | Go 侧支持（带 5s 超时）；Rust 侧需 Go adapter 预转成 data URI |
+
+样式属性：`width`/`height`、`object-fit`（`fill` 默认 / `contain` / `cover`）、`border-radius`（圆角裁剪）。两端解码结果按 src 缓存，响应式重绘不重复解码。GX 侧用 `widgets.Img(props)` 构建。
+
+### canvas
+
+`<canvas>` 产出 `Kind="canvas"` 的 NodeDiv；命令式绘制指令编码成 JSON 放 `Props["canvas-ops"]`（`runtime/canvas` 协议，**零 wire 协议改动**，随 Props 全量透传）。指令集（两端一致）：`rect` / `circle` / `line` / `path`。坐标相对 canvas 节点布局盒左上角，颜色语义与 CSS 一致。**文本不在 canvas 内**——用声明式 `<text>` 节点叠加，跨后端天然一致。
+
+GX 侧用 `widgets.Canvas(props)` 构建（`ops` 传 `[]canvas.Op`）。两端绘制：Skia 用 `DrawPath`/`DrawCircle` 等原生 API；Rust 用 tiny-skia `fill_path`/`stroke_path`。
+
+### 验证
+
+- `runtime/imgutil`、`runtime/canvas`：来源解析与指令编解码单测。
+- skia：`image_test.go` / `canvas_test.go`，DrawLog 可观测。
+- Rust：`image.rs` / `canvas.rs` 单测（data URI 解码、path 解析、全指令不 panic）。
+- 跨语言：`backend/rust/go/widgets_e2e_test.go`、`image.go`、`mirror_consistency_test.go`——GX 组件库场景树经 GRX1/GRX2 喂给 Rust 镜像探针，节点数与属性严格一致。
+- 正式 GX 后端 demo：`backend/rust/go/cmd/demo`（widgets 构建场景 → FramePresenter → GRX 协议 → Rust 渲染）。`backend/rust/src/main.rs` 是纯 Rust 渲染栈 spike（IME/GPU），非 GX 后端 demo。
+
 ## 验证
 
 - 单元测试：两端各有解析 / 定位 / 裁剪 / 插值 / 阴影单测（Go `go test ./...`、Rust `cargo test --release`）。

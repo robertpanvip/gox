@@ -8,7 +8,7 @@ import (
 	gxapp "github.com/robertpanvip/gox/runtime/app"
 	gxscene "github.com/robertpanvip/gox/runtime/scene"
 	rb "github.com/robertpanvip/gox-backend-rust"
-	widgets "github.com/robertpanvip/gox-backend-skia/widgets"
+	widgets "github.com/robertpanvip/gox/widgets"
 )
 
 func textNode(value string, color, size string) *gxscene.Instance {

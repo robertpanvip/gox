@@ -8,10 +8,11 @@ import (
 	"time"
 
 	rb "github.com/robertpanvip/gox-backend-rust"
-	widgets "github.com/robertpanvip/gox-backend-skia/widgets"
 	gxapp "github.com/robertpanvip/gox/runtime/app"
+	"github.com/robertpanvip/gox/runtime/canvas"
 	gxscene "github.com/robertpanvip/gox/runtime/scene"
 	"github.com/robertpanvip/gox/runtime/signal"
+	widgets "github.com/robertpanvip/gox/widgets"
 )
 
 // textNode 用 Template 造一个带样式的文本组件（host 没有独立 Text 构造函数）。
@@ -119,6 +120,23 @@ func main() {
 					}),
 					// 分隔线（预制 Divider）
 					widgets.Divider(gxscene.Props{"width": "360"}),
+					// canvas 原语：用预制 Canvas 组件画一张折线图（Rust 端 tiny-skia / Skia 端原生绘制）
+					widgets.Canvas(gxscene.Props{
+						"width": "360", "height": "70", "bg": "#0b1020", "border-radius": "8",
+						"ops": func() []canvas.Op {
+							return []canvas.Op{
+								{Kind: canvas.OpLine, X1: 0, Y1: 60, X2: 360, Y2: 60, Stroke: "#334155", StrokeWidth: 1},
+								{Kind: canvas.OpLine, X1: 0, Y1: 30, X2: 360, Y2: 30, Stroke: "#334155", StrokeWidth: 1},
+								{Kind: canvas.OpPath, D: "M0 55 L60 40 L120 48 L180 20 L240 35 L300 12 L360 25", Stroke: "#2dd4bf", StrokeWidth: 2},
+								{Kind: canvas.OpCircle, CX: 300, CY: 12, R: 4, Fill: "#fb923c"},
+							}
+						},
+					}),
+					// 交互组件验证（预制 Slider / Switch / Segmented）
+					widgets.Slider(gxscene.Props{"value": func() float64 { return float64(load()) }, "min": 0, "max": 100, "width": "360",
+						"onChange": widgets.BindNumber(func(v float64) { load(int(v)) })}),
+					widgets.Switch(gxscene.Props{"label": "启用实时刷新", "checked": true}),
+					widgets.Segmented(gxscene.Props{"options": []string{"CPU", "MEM", "NET"}, "value": "CPU"}),
 					// 输入框（预制 Input，稳定 id + 受控 value）
 					widgets.Input(gxscene.Props{
 						"id": "demo-input", "value": name,

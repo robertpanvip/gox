@@ -268,6 +268,19 @@ func (p *painter) paintElement(n *gxscene.Node, box layoutBox) {
 		*p.log = append(*p.log, DrawOp{Kind: "rect", Name: n.Kind, X: box.X, Y: box.Y, W: box.W, H: box.H, ARGB: s.bg})
 	}
 	// 描边：用 stroke 样式沿矩形（或圆角矩形）边缘绘制。
+	// img 原语：<img src="..."> 在背景之后、描边之前绘制。src 由 runtime/imgutil
+	// 解析（data URI / 本地路径 / http），object-fit 控制映射，border-radius 裁剪。
+	// 解码结果按 src 缓存，响应式重绘不重复解码（见 image.go）。
+	if n.Kind == "img" {
+		if src, _ := n.Props["src"].(string); src != "" {
+			paintImage(p, n, box, src, s)
+		}
+	}
+	// canvas 原语：命令式绘制指令走 Props["canvas-ops"]（runtime/canvas 协议），
+	// 在背景之后解释执行，坐标相对本节点布局盒。
+	if n.Kind == "canvas" {
+		paintCanvas(p, n, box)
+	}
 	if s.hasBorder && s.borderWidth > 0 {
 		paint := sk.NewPaint()
 		paint.SetColor(sk.Color(s.border))

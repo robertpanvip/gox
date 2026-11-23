@@ -1,0 +1,67 @@
+// Img / Canvas 是 GX 通用组件层的图片与画布组件。
+//
+// 与其他 widgets 一样，它们只产出一个后端无关的 gxscene 场景树节点，真正的
+// 绘制由各后端原生层完成（skia/image.go、rust/image.rs、skia/canvas.go、
+// rust/canvas.rs）：
+//   - Img    产出 Kind="img" 的 NodeDiv，src/object-fit 走 Props 透传；
+//   - Canvas 产出 Kind="canvas" 的 NodeDiv，绘制指令编码进 Props["canvas-ops"]。
+//
+// 这样"组件结构"用 GX 表达（可验证 GX 库），"性能绘制"由后端各自实现——
+// 正是两端组件库分层的设计意图。
+
+package widgets
+
+import (
+	"github.com/robertpanvip/gox/runtime/canvas"
+	gxscene "github.com/robertpanvip/gox/runtime/scene"
+)
+
+// Img 图片组件。
+// 常用 props：
+//   - src: 数据来源（data URI / 本地路径 / http URL，由 runtime/imgutil 解析）
+//   - width/height: 显示尺寸
+//   - object-fit: "fill"(默认) / "contain" / "cover"
+//   - border-radius: 圆角裁剪
+func Img(props gxscene.Props) *gxscene.Instance {
+	ops := []gxscene.Op{
+		el("img"),
+	}
+	// 透传所有字符串属性（src/width/height/object-fit/border-radius/alt…）。
+	for _, k := range []string{"src", "width", "height", "object-fit", "border-radius", "bg", "opacity"} {
+		if v := gxscene.Get[string](props, k)(); v != "" {
+			ops = append(ops, attr(k, v))
+		}
+	}
+	ops = append(ops, closeEl())
+	return gxscene.Render(gxscene.Template{Ops: ops, N: 0})
+}
+
+// Canvas 画布组件：用声明式 Op 列表描述命令式绘制，编码进 canvas-ops。
+// 文本请用普通 Text 节点叠加在 Canvas 上（跨后端一致）。
+//
+//	widgets.Canvas(gxscene.Props{
+//	    "width": "200", "height": "100",
+//	    "ops": []canvas.Op{
+//	        {Kind: canvas.OpRect, X: 0, Y: 0, W: 200, H: 100, Fill: "#1e293b", Radius: 8},
+//	        {Kind: canvas.OpCircle, CX: 100, CY: 50, R: 30, Fill: "#38bdf8"},
+//	    },
+//	})
+func Canvas(props gxscene.Props) *gxscene.Instance {
+	ops := []gxscene.Op{el("canvas")}
+	for _, k := range []string{"width", "height", "bg", "border-radius", "opacity"} {
+		if v := gxscene.Get[string](props, k)(); v != "" {
+			ops = append(ops, attr(k, v))
+		}
+	}
+	var drawOps []canvas.Op
+	if v, ok := props["ops"]; ok {
+		switch o := v.(type) {
+		case []canvas.Op:
+			drawOps = o
+		case func() []canvas.Op:
+			drawOps = o()
+		}
+	}
+	ops = append(ops, attr(canvas.PropKey, canvas.Encode(drawOps)), closeEl())
+	return gxscene.Render(gxscene.Template{Ops: ops, N: 0})
+}

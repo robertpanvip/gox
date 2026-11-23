@@ -3,7 +3,7 @@
 // 它是一组「组件函数」——签名为 func(gxscene.Props) *gxscene.Instance，与 GX
 // 编译器对大写组件名的调用约定完全一致。因此 GX 侧只需：
 //
-//	import widgets "github.com/robertpanvip/gox-backend-skia/widgets"
+//	import widgets "github.com/robertpanvip/gox/widgets"
 //	<widgets.button label="Go" variant="primary" onClick={...}/>
 //
 // 全部外观（配色、圆角、描边、间距、字号）都预制在这里，业务 JSX 只描述语义。
