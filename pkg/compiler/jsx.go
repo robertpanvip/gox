@@ -291,6 +291,26 @@ func (p *jsxParser) ws() {
 	}
 }
 
+// atLineComment 判断当前是否是行注释起始（'//'）。只在行首或前面是空白时成立，
+// 避免把文本节点里的 URL（如 http://x）或 `a//b` 误当注释。
+func (p *jsxParser) atLineComment() bool {
+	if p.cur() != '/' || p.next() != '/' {
+		return false
+	}
+	if p.i == 0 {
+		return true
+	}
+	prev := p.src[p.i-1]
+	return isHSpace(prev) || prev == '\n' || prev == '\r'
+}
+
+// skipLineComment 吞掉从当前 '//' 到行尾（不含换行）的注释内容。
+func (p *jsxParser) skipLineComment() {
+	for !p.eof() && p.cur() != '\n' && p.cur() != '\r' {
+		p.advance()
+	}
+}
+
 func (p *jsxParser) readName() string {
 	start := p.i
 	for !p.eof() && isJSXNameChar(p.cur()) {
@@ -387,6 +407,12 @@ func (p *jsxParser) parseElement() *jsxNode {
 	n := &jsxNode{name: name, pos: nodePos, component: isComponentName(name)}
 	for !p.eof() {
 		p.ws()
+		// 属性行尾注释（class="a" // 类名）：跳过到行尾，避免注释文字被当成
+		// 下一个属性名，生成 OpAttr{Key:"类名",Arg:"true"} 假属性（A7）。
+		if p.atLineComment() {
+			p.skipLineComment()
+			continue
+		}
 		if p.eof() {
 			break
 		}
@@ -431,6 +457,12 @@ func (p *jsxParser) parseElement() *jsxNode {
 
 func (p *jsxParser) parseChildren(n *jsxNode) {
 	for !p.eof() {
+		// 子节点行注释（> // 头注、</span> // 尾注）：跳过到行尾，避免被当成
+		// 可见文本节点渲染出来（A7）。
+		if p.atLineComment() {
+			p.skipLineComment()
+			continue
+		}
 		if p.cur() == '<' && p.next() == '/' {
 			p.advance()
 			p.advance()
@@ -475,6 +507,10 @@ func (p *jsxParser) parseChildren(n *jsxNode) {
 		cpos := p.pos()
 		var b strings.Builder
 		for !p.eof() && p.cur() != '<' && p.cur() != '{' {
+			// 文本里的行注释（x // 尾注）：停下交给主循环跳过，别写进文本节点（A7）。
+			if p.atLineComment() {
+				break
+			}
 			// 若当前积累的文本全是空白，且遇到 if 关键字，则停下交给下一轮解析条件块。
 			if strings.TrimSpace(b.String()) == "" && p.atIfKeyword() {
 				break
