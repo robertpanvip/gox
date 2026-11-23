@@ -798,6 +798,10 @@ pub struct Renderer {
     cached_areas_dirty: bool,
     /// 最近光标位置（MouseInput 事件不带坐标）
     cursor: (f32, f32),
+    /// 当前 hover/active 命中的节点 ID（伪状态样式 &:hover/&:active 用）。
+    /// lib.rs 在 CursorMoved / MouseInput 事件里经 set_hover/set_active 更新。
+    hovered_id: Option<String>,
+    active_id: Option<String>,
     window: std::sync::Arc<Window>,
 }
 
@@ -956,6 +960,8 @@ struct VSOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f };
             glyph_cache: std::collections::HashMap::new(),
             cached_areas_dirty: true,
             cursor: (0.0, 0.0),
+            hovered_id: None,
+            active_id: None,
             window,
         }
     }
@@ -1002,6 +1008,34 @@ struct VSOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f };
     /// 取走本帧布局导出的实测尺寸（回流到 Host）。取后清空，避免重复回传。
     pub fn take_measured(&mut self) -> Vec<(String, f32, f32)> {
         std::mem::take(&mut self.pending_measured)
+    }
+
+    /// 命中测试：返回坐标处的 node_id（供 hover/active 伪状态使用）。
+    /// 与 hit_click 共用同一命中规则（浮层优先、最小面积、裁剪检查）。
+    pub fn hit_node_id(&self, x: f32, y: f32) -> Option<String> {
+        self.display.hit(x, y).map(|h| h.4.clone())
+    }
+
+    /// 设置 hover 节点；返回 true 表示发生了变化（调用方据此决定 request_redraw）。
+    pub fn set_hover(&mut self, id: Option<String>) -> bool {
+        if self.hovered_id == id {
+            false
+        } else {
+            self.hovered_id = id;
+            self.frame_dirty = true; // 状态变了必须重算样式覆盖
+            true
+        }
+    }
+
+    /// 设置 active 节点（鼠标按下/抬起）；返回是否变化。
+    pub fn set_active(&mut self, id: Option<String>) -> bool {
+        if self.active_id == id {
+            false
+        } else {
+            self.active_id = id;
+            self.frame_dirty = true;
+            true
+        }
     }
 
     /// 按 object-fit 把图片绘制进 (rx,ry,rw,rh)，radius>0 时用圆角 Mask 裁剪。
@@ -1176,7 +1210,14 @@ struct VSOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f };
         if need_rebuild {
             // —— 有变化 / 动画中：全量重算布局、背景光栅化、文本整形 ——
             let animated = self.animator.apply(scene);
-            let dl = DisplayList::from_scene(&animated, self.width as f32, self.height as f32);
+            // 伪状态样式：按当前 hover/active 命中把 &:hover/&:active 子表覆盖进
+            // 临时树（不改常驻镜像树）。hover 命中已由 hit_node_id 边沿检测维护。
+            let styled = crate::style::apply_pseudo_state(
+                &animated,
+                self.hovered_id.as_deref(),
+                self.active_id.as_deref(),
+            );
+            let dl = DisplayList::from_scene(&styled, self.width as f32, self.height as f32);
             let bg = self.bg;
 
             // 滚动条淡入淡出：以首个滚动条的 thumb_y 作为滚动位置信号。

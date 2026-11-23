@@ -23,9 +23,16 @@ if [ "${#LIBS[@]}" -eq 0 ]; then
   exit 1
 fi
 
+# LDFLAGS 实际链接的是 target/release/libgxbackend_rust.a（cargo 生成的硬链接），
+# 也要一并纳入——它与 deps/ 下的是同一 inode，但显式列出更稳妥。
+LIBS+=(target/release/libgxbackend_rust.a)
+
 for lib in "${LIBS[@]}"; do
-  # 只对含 bitcode section 的库动手，避免无谓重写。
-  if objdump -h "$lib" 2>/dev/null | grep -qE '\.llvmbc|\.llvmcmd'; then
+  [ -f "$lib" ] || continue
+  # 先存 objdump 结果再 grep：避免 pipefail 下 grep -q 提前退出触发 objdump SIGPIPE，
+  # 导致条件恒假、剥离被静默跳过（曾踩过这个坑）。
+  sections="$(objdump -h "$lib" 2>/dev/null || true)"
+  if printf '%s' "$sections" | grep -qE '\.llvmbc|\.llvmcmd'; then
     echo "[rust-backend] strip LTO sections from $(basename "$lib")"
     objcopy --remove-section=.llvmbc --remove-section=.llvmcmd "$lib"
   fi

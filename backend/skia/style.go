@@ -1,6 +1,7 @@
 package skia
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
 	"strconv"
@@ -72,9 +73,9 @@ const (
 	propLeft     = "left"
 
 	// 溢出与滚动
-	propOverflow    = "overflow"
-	propScrollTop   = "scroll-top"
-	propScrollLeft  = "scroll-left"
+	propOverflow   = "overflow"
+	propScrollTop  = "scroll-top"
+	propScrollLeft = "scroll-left"
 
 	// 变换与动画
 	propTransform  = "transform"
@@ -156,8 +157,8 @@ const (
 type easing int
 
 const (
-	easeLinear easing = iota
-	easeDefault // "ease" = cubic-bezier(.25,.1,.25,1)
+	easeLinear  easing = iota
+	easeDefault        // "ease" = cubic-bezier(.25,.1,.25,1)
 	easeIn
 	easeOut
 	easeInOut
@@ -237,6 +238,16 @@ func defaultStyle() style {
 		color: argb(255, 0, 0, 0), fontSize: 16, padding: 4,
 		opacity: 1, transform: transformSpec{scale: 1},
 	}
+}
+
+// parseStyleWithState 先按强制伪状态覆盖 props，再解析。供 headless 验证
+// hover/active 样式：给定一个带 "&:hover" 子表的 props 与 state="hover"，
+// 返回的 style 反映子表覆盖后的值。state="" 时等价于 parseStyle。
+func parseStyleWithState(props map[string]any, state string) style {
+	if state != "" {
+		props = applyPseudoStyle(props, state)
+	}
+	return parseStyle(props)
 }
 
 // parseStyle 把 Node.Props 解析成 style。所有解析失败都静默回退默认值。
@@ -413,6 +424,49 @@ func parseStyle(props map[string]any) style {
 	return s
 }
 
+// applyPseudoStyle 按强制伪状态把子表覆盖进 props 的副本（headless 验证用）。
+// host 展平后 props 含 "&:hover"/"&:active" 的 JSON 串；本函数把它展开并覆盖
+// 同名普通属性，语义与 Rust 的 style::apply_pseudo_state 对齐。
+// Skia 无真实鼠标事件，此函数供测试/特殊宿主显式指定状态，不改动入参。
+func applyPseudoStyle(props map[string]any, state string) map[string]any {
+	out := make(map[string]any, len(props))
+	for k, v := range props {
+		out[k] = v
+	}
+	// 只认 &:hover / &:active（host 已把 $: 规整为 &:）。
+	var key string
+	switch state {
+	case "hover":
+		key = "&:hover"
+	case "active":
+		key = "&:active"
+	default:
+		return out
+	}
+	raw, ok := out[key]
+	if !ok {
+		return out
+	}
+	var obj map[string]any
+	switch x := raw.(type) {
+	case string:
+		if err := json.Unmarshal([]byte(x), &obj); err != nil {
+			return out
+		}
+	case map[string]any:
+		obj = x
+	default:
+		return out
+	}
+	for k, v := range obj {
+		switch x := v.(type) {
+		case string, float64, bool:
+			out[k] = x
+		}
+	}
+	return out
+}
+
 // propNumAuto 取 inset：数值或 px；"auto"/缺省返回 NaN。
 func propNumAuto(v any) float32 {
 	if v == nil {
@@ -437,26 +491,36 @@ func parseTransform(s string) transformSpec {
 			inner := s[i+len("translate(") : i+j]
 			parts := strings.Split(inner, ",")
 			if len(parts) >= 1 {
-				if v, ok := propNum(parts[0]); ok { t.translateX = float32(v) }
+				if v, ok := propNum(parts[0]); ok {
+					t.translateX = float32(v)
+				}
 			}
 			if len(parts) >= 2 {
-				if v, ok := propNum(parts[1]); ok { t.translateY = float32(v) }
+				if v, ok := propNum(parts[1]); ok {
+					t.translateY = float32(v)
+				}
 			}
 		}
 	}
 	if i := strings.Index(low, "translatex("); i >= 0 {
 		if j := strings.Index(s[i:], ")"); j > 0 {
-			if v, ok := propNum(s[i+len("translatex(") : i+j]); ok { t.translateX = float32(v) }
+			if v, ok := propNum(s[i+len("translatex(") : i+j]); ok {
+				t.translateX = float32(v)
+			}
 		}
 	}
 	if i := strings.Index(low, "translatey("); i >= 0 {
 		if j := strings.Index(s[i:], ")"); j > 0 {
-			if v, ok := propNum(s[i+len("translatey(") : i+j]); ok { t.translateY = float32(v) }
+			if v, ok := propNum(s[i+len("translatey(") : i+j]); ok {
+				t.translateY = float32(v)
+			}
 		}
 	}
 	if i := strings.Index(low, "scale("); i >= 0 {
 		if j := strings.Index(s[i:], ")"); j > 0 {
-			if v, ok := propNum(s[i+len("scale(") : i+j]); ok && v > 0 { t.scale = float32(v) }
+			if v, ok := propNum(s[i+len("scale(") : i+j]); ok && v > 0 {
+				t.scale = float32(v)
+			}
 		}
 	}
 	return t
@@ -485,11 +549,17 @@ func parseBoxShadow(s string) (boxShadow, bool) {
 		return boxShadow{}, false
 	}
 	sh := boxShadow{offsetX: nums[0], offsetY: nums[1]}
-	if len(nums) >= 3 { sh.blur = nums[2] }
-	if len(nums) >= 4 { sh.spread = nums[3] }
+	if len(nums) >= 3 {
+		sh.blur = nums[2]
+	}
+	if len(nums) >= 4 {
+		sh.spread = nums[3]
+	}
 	sh.color = argb(90, 0, 0, 0) // 默认半透明黑
 	if colorStr != "" {
-		if c, ok := parseColor(colorStr); ok { sh.color = c }
+		if c, ok := parseColor(colorStr); ok {
+			sh.color = c
+		}
 	}
 	return sh, true
 }
@@ -512,9 +582,13 @@ func parseTransition(s string) []transitionItem {
 			t := strings.ToLower(tok)
 			switch {
 			case strings.HasSuffix(t, "ms"):
-				if v, err := strconv.ParseFloat(strings.TrimSuffix(t, "ms"), 32); err == nil { it.duration = float32(v) }
+				if v, err := strconv.ParseFloat(strings.TrimSuffix(t, "ms"), 32); err == nil {
+					it.duration = float32(v)
+				}
 			case strings.HasSuffix(t, "s"):
-				if v, err := strconv.ParseFloat(strings.TrimSuffix(t, "s"), 32); err == nil { it.duration = float32(v * 1000) }
+				if v, err := strconv.ParseFloat(strings.TrimSuffix(t, "s"), 32); err == nil {
+					it.duration = float32(v * 1000)
+				}
 			case t == "linear":
 				it.easing = easeLinear
 			case t == "ease-in":
@@ -527,7 +601,9 @@ func parseTransition(s string) []transitionItem {
 				it.easing = easeDefault
 			default:
 				// 首个非关键字 token 视为属性名（支持 all）。
-				if it.property == "" { it.property = t }
+				if it.property == "" {
+					it.property = t
+				}
 			}
 		}
 		if it.property != "" && it.duration > 0 {
@@ -595,8 +671,13 @@ func parseColor(s string) (uint32, bool) {
 			v, err := strconv.ParseUint(h, 16, 32)
 			if err == nil {
 				// CSS #rrggbbaa：末两位是 alpha；兼容旧 AARRGGBB（首两位非 0 时按旧式）。
-				r := uint32(v >> 24 & 0xff); g := uint32(v >> 16 & 0xff); b := uint32(v >> 8 & 0xff); a := uint32(v & 0xff)
-				if a == 0 { a = 255 } // 避免旧式 #rrggbbaa 里 alpha=00 被误判；调用方通常传非 0
+				r := uint32(v >> 24 & 0xff)
+				g := uint32(v >> 16 & 0xff)
+				b := uint32(v >> 8 & 0xff)
+				a := uint32(v & 0xff)
+				if a == 0 {
+					a = 255
+				} // 避免旧式 #rrggbbaa 里 alpha=00 被误判；调用方通常传非 0
 				return argb(a, r, g, b), true
 			}
 		}
@@ -609,7 +690,10 @@ func parseColor(s string) (uint32, bool) {
 			b, e3 := strconv.ParseUint(strings.TrimSpace(parts[2]), 10, 8)
 			a, e4 := strconv.ParseFloat(strings.TrimSpace(parts[3]), 32)
 			if e1 == nil && e2 == nil && e3 == nil && e4 == nil {
-				av := uint32(a * 255); if a > 1 { av = uint32(a) }
+				av := uint32(a * 255)
+				if a > 1 {
+					av = uint32(a)
+				}
 				return argb(av, uint32(r), uint32(g), uint32(b)), true
 			}
 		}
@@ -641,7 +725,11 @@ var namedColors = map[string]uint32{
 
 // easingValue 把缓动进度 t（0..1）映射为插值权重。
 func easingValue(e easing, t float32) float32 {
-	if t < 0 { t = 0 } else if t > 1 { t = 1 }
+	if t < 0 {
+		t = 0
+	} else if t > 1 {
+		t = 1
+	}
 	switch e {
 	case easeLinear:
 		return t
@@ -650,7 +738,9 @@ func easingValue(e easing, t float32) float32 {
 	case easeOut:
 		return 1 - (1-t)*(1-t)*(1-t)
 	case easeInOut:
-		if t < 0.5 { return 4 * t * t * t }
+		if t < 0.5 {
+			return 4 * t * t * t
+		}
 		return 1 - float32(math.Pow(float64(-2*t+2), 3)/2)
 	default: // ease
 		// cubic-bezier(.25,.1,.25,1) 的近似

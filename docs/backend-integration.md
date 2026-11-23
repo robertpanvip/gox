@@ -324,6 +324,53 @@ jump += offsets[anchor] - oldOff   // 视口上方项变高 → 补偿，视觉�
 - 关键修复：`overflow` 容器的直接子项设 `flex-shrink: 0`——否则 Taffy 默认会把子项压缩进视口、内容永不溢出，滚动与滚动条都失效。这是滚动容器的标准语义。
 - **淡出边界（诚实）**：滚动时 thumb 淡入；滚停约 1.2s 后开始淡出。但当前帧缓存在"无新帧"时跳过 Pixmap 重绘，纯静止状态下淡出无法自行推进，会停在最后的 alpha——需要仍在重绘的帧（如动画）推进。要做到系统级自动淡出，需允许滚动条层独立逐帧重绘，属于后续优化，不牺牲当前帧缓存收益。
 
+### 2.7 受限样式表与伪状态样式（`&:hover` / `&:active`）
+
+样式从「任意字符串 props」收敛为**受限 CSS sheet**：`gxscene.Style` 是一个 map 类型，
+key 只能是白名单属性（`StylePropNames`）或受支持的伪状态（`&:hover`/`&:active`/
+`&:focus`/`&:disabled`）；其余 key 由 `Style.Validate()` 拒绝。值为标量。
+
+**写法**（Go、GX、JSON 三种等价）：
+
+```go
+// Go：字段即白名单，伪状态是值为 Style 的特殊 key
+gxscene.Style{
+    "bg": "#3b82f6", "color": "#fff", "padding": "11",
+    "&:hover":  gxscene.Style{"bg": "#2563eb"},
+    "&:active": gxscene.Style{"bg": "#1d4ed8", "transform": "scale(.98)"},
+}
+```
+```jsx
+// GX：带引号 key 的 JSON 对象字面量 → 编译期改写为 gxscene.parseStyle("...")
+<div style={{"bg":"#fff","&:hover":{"bg":"#eee"}}}>x</div>
+```
+`style` 也能直接接 JSON 字符串：`style='{"bg":"#fff","&:hover":{"bg":"#eee"}}'`。
+key 无引号的对象字面量（如 `{{ color: "red" }}`）仍报 `attr-unsupported`——它会降级成
+匿名 struct 静默错值，必须避免。
+
+**展平契约（host）**：`style` 属性写入 `Node.Props` 时由 `Instance.writeAttr` 展平：
+
+- 普通属性 → 直出为同名 props；
+- 伪状态子表 → 编码成 `props["&:hover"] = ` `{"bg":"#eee"}`（JSON 串，key 统一为 `&:`）；
+- `style` key 本身不进 Props。
+
+增量更新时，上次写入但本次消失的 key 写空串（后端无属性删除语义，空串使旧值失效）。
+`$:xxx` 是 `&:xxx` 的兼容别名，展平时统一规整为 `&:`，后端只见到一种形式。
+
+**状态检测（框架自动，零业务侵入）**：
+
+- **Rust（完整链路）**：`Renderer` 持有 `hovered_id`/`active_id`。`CursorMoved` 用
+  `hit_node_id()`（复用 click 的命中规则：浮层优先/最小面积/裁剪）做 enter/leave 边沿
+  检测；`MouseInput` 按下设 active、抬起清除，`CursorLeft` 清 hover。状态变化才
+  `request_redraw`。渲染前 `style::apply_pseudo_state()` 把命中节点的伪状态子表覆盖进
+  临时树副本（与 `Animator::apply` 同构，不改常驻镜像树），active 覆盖 hover 同名属性。
+- **Skia（headless 验证后端）**：无真实鼠标事件；`parseStyleWithState(props, state)`
+  在解析前按显式状态覆盖子表，供测试/特殊宿主验证。无状态时 `&:` key 被安全忽略。
+
+**边界**：伪状态当前只作用于节点自身（`&` 语义），不支持后代选择器、不嵌套子伪状态；
+`&:focus`/`&:disabled` 的子表解析已就绪，但焦点/禁用状态载体尚未接入链路（后续扩展点），
+当前不生效。hover/active 覆盖发生在布局前，改尺寸类属性（width/padding 等）会触发重排。
+
 ## 3. 拆成两个项目如何跑通
 
 假设后端项目为 `github.com/yourorg/gox-desktop`，module 独立。

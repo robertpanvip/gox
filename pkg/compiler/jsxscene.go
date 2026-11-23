@@ -1,6 +1,7 @@
 package compiler
 
 import (
+	"encoding/json"
 	"strconv"
 	"strings"
 )
@@ -417,12 +418,19 @@ func walkScene(n *jsxNode, ops *[]sceneOp, getters *[]sceneGetter, slotCounter *
 		if msg, _ := suspiciousAttr(a.name); msg != "" {
 			ctx.report("attr-unknown", a.pos, msg)
 		}
-		// A2/A3：class/style 传对象字面量（class={{ active: true }}）不是 GX/后端
-		// 支持的写法——对象会被降级成匿名 struct 塞进属性值，静默错值（后端拿到
-		// 无意义的 struct）。给出带坐标的诊断，提示改用条件表达式或静态拼接。
-		if (a.name == "class" || a.name == "style") && a.kind == attrExpr && isObjectLitText(a.value) {
-			ctx.reportAttrUnsupported(a.pos, a.name,
-				a.name+" 不支持对象字面量；请用条件表达式（cond ? \"a\" : \"b\"）或静态字符串拼接")
+		// A2/A3：class/style 传对象字面量原本会降级成匿名 struct 静默错值（后端拿到
+		// 无意义 struct）。现对 style 开一个特例：若对象字面量文本是**合法 JSON**
+		// （key 带引号，如 style={{"&:hover":{"bg":"#eee"}}}），把它重写成
+		// gxscene.parseStyle("...") ——返回受限 Style，由 host 展平为后端 props。
+		// 非 JSON 的对象字面量（如 {{ color: "red" }}，key 无引号）仍报原诊断。
+		// class 无样式表语义，保持原诊断不变。
+		if a.kind == attrExpr && isObjectLitText(a.value) {
+			if a.name == "style" && json.Valid([]byte(a.value)) {
+				a.value = "gxscene.parseStyle(" + strconv.Quote(a.value) + ")"
+			} else if a.name == "class" || a.name == "style" {
+				ctx.reportAttrUnsupported(a.pos, a.name,
+					a.name+" 不支持对象字面量；style 请用带引号 key 的 JSON（如 {\"&:hover\":{\"bg\":\"#eee\"}}）或条件表达式")
+			}
 		}
 		// B10：双引号字符串里的 ${...} 不会被 GX 模板串展开（模板串用反引号），
 		// 会原样进属性值且变量未被引用（declared and not used）。给明确诊断。

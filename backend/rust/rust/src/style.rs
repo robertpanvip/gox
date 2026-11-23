@@ -244,6 +244,68 @@ pub fn easing_value(e: Easing, t: f32) -> f32 {
     }
 }
 
+// ---------- 伪状态样式覆盖（&:hover / &:active） ----------
+//
+// host 把样式表展平后，普通属性直出为 props，伪状态子表编码成
+// props["&:hover"] = `{"bg":"#2563eb"}` 这样的 JSON 串。本节在布局/绘制前，
+// 按当前命中的 hovered/active 节点把对应子表覆盖进一棵临时树副本，
+// 与 Animator::apply 同构——不污染常驻镜像树，下一帧状态变了自动还原。
+
+/// 把某个节点的伪状态子表覆盖进它的 props。伪状态 key 用 "&:"，兼容旧 "$:"。
+/// 返回是否发生了覆盖（供调用方决定是否要重建 DisplayList）。
+fn overlay_pseudo(props: &mut std::collections::HashMap<String, String>, pseudo: &str) -> bool {
+    let val = props
+        .get(pseudo)
+        .or_else(|| props.get(&pseudo.replacen("&:", "$:", 1)))
+        .cloned();
+    let Some(json) = val else { return false; };
+    let Ok(obj) = serde_json::from_str::<serde_json::Value>(&json) else { return false; };
+    let Some(map) = obj.as_object() else { return false; };
+    let mut changed = false;
+    for (k, v) in map {
+        let s = match v {
+            serde_json::Value::String(x) => x.clone(),
+            serde_json::Value::Number(x) => x.to_string(),
+            serde_json::Value::Bool(x) => x.to_string(),
+            _ => continue,
+        };
+        props.insert(k.clone(), s);
+        changed = true;
+    }
+    changed
+}
+
+/// 按当前 hovered/active 节点生成一棵 props 被伪状态覆盖的临时树。
+/// active 优先级高于 hover（两者命中同一节点时后覆盖）。
+/// 未命中或节点无伪状态子表时返回clone（语义等价，调用方统一处理）。
+pub fn apply_pseudo_state(
+    root: &SceneNode,
+    hovered: Option<&str>,
+    active: Option<&str>,
+) -> SceneNode {
+    fn walk(n: &SceneNode, hovered: Option<&str>, active: Option<&str>) -> SceneNode {
+        let mut out = n.clone();
+        let id = n.id.as_str();
+        if Some(id) == hovered || Some(id) == active {
+            // hover 先、active 后：active 覆盖 hover 同名属性。
+            // focus/disabled 的状态载体（焦点/禁用）尚未接入，留作后续扩展点；
+            // 不能在此无条件套用，否则 hover 命中会让 focus 样式错误生效。
+            if Some(id) == hovered {
+                overlay_pseudo(&mut out.props, "&:hover");
+            }
+            if Some(id) == active {
+                overlay_pseudo(&mut out.props, "&:active");
+            }
+        }
+        for c in &mut out.children {
+            let old = c.clone();
+            *c = walk(&old, hovered, active);
+        }
+        out
+    }
+    walk(root, hovered, active)
+}
+
 // ---------- transition 插值引擎 ----------
 
 /// 正在进行的单属性动画。
@@ -344,6 +406,38 @@ mod tests {
             typ: NodeType::Div, kind: "div".into(), id: "n1".into(), text: String::new(),
             props: p, events: vec![], children: vec![],
         }
+    }
+
+    #[test]
+    fn apply_pseudo_state_overlays_hover_and_active() {
+        let mut n = node(&[]);
+        n.id = "btn".into();
+        n.props.insert("bg".into(), "#fff".into());
+        n.props.insert("&:hover".into(), r##"{"bg":"#eee","color":"#333"}"##.into());
+        n.props.insert("&:active".into(), r##"{"bg":"#ddd"}"##.into());
+        let mut child = node(&[]);
+        child.id = "label".into();
+        child.props.insert("bg".into(), "#000".into());
+        n.children.push(child);
+
+        // 无命中：原样
+        let plain = apply_pseudo_state(&n, None, None);
+        assert_eq!(plain.props["bg"], "#fff");
+        assert!(!plain.props.contains_key("color"));
+
+        // hover：子表覆盖 bg + 新增 color
+        let hov = apply_pseudo_state(&n, Some("btn"), None);
+        assert_eq!(hov.props["bg"], "#eee");
+        assert_eq!(hov.props["color"], "#333");
+        assert_eq!(hov.children[0].props["bg"], "#000", "未命中子节点不受影响");
+
+        // hover + active：active 覆盖同名 bg
+        let act = apply_pseudo_state(&n, Some("btn"), Some("btn"));
+        assert_eq!(act.props["bg"], "#ddd");
+        assert_eq!(act.props["color"], "#333", "hover 的非冲突属性保留");
+
+        // 原树不被污染
+        assert_eq!(n.props["bg"], "#fff");
     }
 
     #[test]

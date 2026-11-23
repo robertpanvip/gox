@@ -298,7 +298,13 @@ impl winit::application::ApplicationHandler for WinitApp<'_> {
             }
             WindowEvent::CloseRequested => el.exit(),
             WindowEvent::CursorMoved { position, .. } => {
-                renderer.set_cursor(position.x as f32, position.y as f32);
+                let (x, y) = (position.x as f32, position.y as f32);
+                renderer.set_cursor(x, y);
+                // 伪状态 hover：命中节点变化时才 request_redraw（边沿检测，避免每帧重绘）。
+                let hit = renderer.hit_node_id(x, y);
+                if renderer.set_hover(hit) {
+                    renderer.window().request_redraw();
+                }
             }
             WindowEvent::MouseInput {
                 state: ElementState::Pressed,
@@ -306,10 +312,31 @@ impl winit::application::ApplicationHandler for WinitApp<'_> {
                 ..
             } => {
                 let (x, y) = renderer.cursor();
+                // active 伪状态：按下命中的节点进入 active（active 优先于 hover）。
+                let hit = renderer.hit_node_id(x, y);
+                if renderer.set_active(hit) {
+                    renderer.window().request_redraw();
+                }
                 if let Some(ev) = renderer.hit_click(x, y) {
                     fire(&self.cb, &self.cb_ctx, &ev.to_json());
                 } else if let Some(ev) = renderer.hit_input(x, y) {
                     fire(&self.cb, &self.cb_ctx, &ev.to_json());
+                }
+            }
+            WindowEvent::MouseInput {
+                state: ElementState::Released,
+                button: MouseButton::Left,
+                ..
+            } => {
+                // 松开：退出 active，回到仅 hover 状态。
+                if renderer.set_active(None) {
+                    renderer.window().request_redraw();
+                }
+            }
+            WindowEvent::CursorLeft { .. } => {
+                // 光标离开窗口：退出 hover（否则会停在最后的 hover 态）。
+                if renderer.set_hover(None) {
+                    renderer.window().request_redraw();
                 }
             }
             WindowEvent::Ime(ime) => match ime {

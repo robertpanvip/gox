@@ -229,6 +229,10 @@ type slot struct {
 
 	refElem *Element // slotRef 建树时创建的句柄，Dispose 时标记销毁并回调 nil
 	refCb   any      // slotRef 的回调原值 func(*Element)，Dispose 时回填 nil
+
+	// styleKeys 是上次把 Style 值展平到 node.Props 时写入的 key 集合。
+	// style 内容变化时用它清理已消失的 key（写空串使后端旧样式失效）。
+	styleKeys []string
 }
 
 // PerfStats 是场景树的可观测性能指标（T4.5）。所有计数在响应式 effect 内累加，
@@ -347,7 +351,14 @@ func compile(t Template) *compiledTemplate {
 			if cur.Props == nil {
 				cur.Props = map[string]any{}
 			}
-			cur.Props[op.Key] = op.Arg
+			// 静态 style 字符串（style='{"bg":"..."}'）同样展平为后端 props。
+			if flat, ok := flattenStyle(op.Key, op.Arg); ok {
+				for k, pv := range flat {
+					cur.Props[k] = pv
+				}
+			} else {
+				cur.Props[op.Key] = op.Arg
+			}
 		case OpChildText:
 			idx := childOfStack(cur)
 			n := cur.Children[idx]
@@ -859,7 +870,7 @@ func (i *Instance) applyAll() {
 		case slotChild:
 			embedValue(s, v)
 		case slotAttr:
-			s.node.Props[s.attr] = v
+			i.writeAttr(s, v, false)
 		case slotEvent:
 			// handler 原样存入 Handlers——前端不解释、不校验签名、不进 Props。
 			if s.node.Handlers == nil {
@@ -968,8 +979,7 @@ func (i *Instance) Update() int {
 			embedValue(s, v)
 			i.recordChildTransition(s.node, old, wasText)
 		case slotAttr:
-			s.node.Props[s.attr] = v
-			i.record(ChangeSetAttr, s.node, s.attr, v)
+			i.writeAttr(s, v, true)
 		case slotEvent:
 			// 事件 handler 换绑（SetGetter/命令式改绑）时更新槽位。
 			if s.node.Handlers == nil {
@@ -1061,6 +1071,70 @@ func equalValue(a, b any) bool {
 	return reflect.DeepEqual(a, b)
 }
 
+// flattenStyle 把任意属性候选值解释为 Style 的展平结果。
+// 仅当 key=="style" 且值能解释为样式表时返回 (展平map, true)；否则 (nil, false)。
+func flattenStyle(key string, v any) (map[string]any, bool) {
+	if key != "style" {
+		return nil, false
+	}
+	var st Style
+	switch x := v.(type) {
+	case Style:
+		st = x
+	case map[string]any:
+		st = Style(x)
+	case string:
+		parsed, err := ParseStyle(x)
+		if err != nil {
+			return nil, false
+		}
+		st = parsed
+	default:
+		return nil, false
+	}
+	out := map[string]any{}
+	for k, pv := range st.Props() {
+		out[k] = pv
+	}
+	return out, true
+}
+
+// writeAttr 把一个 slotAttr 值写入 node.Props，并在 record 模式发增量。
+// 对 Style 值做展平：新增/变更的 key 写入新值，上次写入但本次消失的 key 写空串
+// （后端无属性删除语义，空串使该样式值失效，等价于回退默认）。
+// withRecord=true 时每个变化的 key 都发 ChangeSetAttr。
+func (i *Instance) writeAttr(s *slot, v any, withRecord bool) {
+	flat, isStyle := flattenStyle(s.attr, v)
+	if !isStyle {
+		s.node.Props[s.attr] = v
+		if withRecord {
+			i.record(ChangeSetAttr, s.node, s.attr, v)
+		}
+		s.styleKeys = nil
+		return
+	}
+	// 消失的旧 key → 空串。
+	for _, k := range s.styleKeys {
+		if _, ok := flat[k]; !ok {
+			s.node.Props[k] = ""
+			if withRecord {
+				i.record(ChangeSetAttr, s.node, k, "")
+			}
+		}
+	}
+	// 新增/变更的 key。
+	keys := make([]string, 0, len(flat))
+	for k, pv := range flat {
+		s.node.Props[k] = pv
+		if withRecord {
+			i.record(ChangeSetAttr, s.node, k, pv)
+		}
+		keys = append(keys, k)
+	}
+	s.styleKeys = keys
+	delete(s.node.Props, "style") // style 本身不是后端属性
+}
+
 // SetPart 是 Update 的单插槽版本：直接写入一个值，绕过 getter（命令式更新）。
 func (i *Instance) SetPart(slot int, v any) {
 	if slot < 0 || slot >= len(i.slots) {
@@ -1101,8 +1175,7 @@ func (i *Instance) SetPart(slot int, v any) {
 		embedValue(s, v)
 		i.recordChildTransition(s.node, old, wasText)
 	case slotAttr:
-		s.node.Props[s.attr] = v
-		i.record(ChangeSetAttr, s.node, s.attr, v)
+		i.writeAttr(s, v, true)
 	case slotComp:
 		mountComp(s, v)
 		i.record(ChangeReplaceChildren, s.node, "", nil)
