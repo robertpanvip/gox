@@ -114,29 +114,31 @@ func TestCanvasContextNonCanvasAndDead(t *testing.T) {
 	}
 }
 
-// TestRAFQueue 验证 RAF 队列语义：登记顺序、take 清空、hasRAF。
+// drain 用测试辅助：执行本帧所有 RAF。
+func drain(inst *Instance) {
+	inst.DrainRAF(func(fn func()) { fn() })
+}
+
+// TestRAFQueue 验证 RAF 队列语义：登记顺序、drain 清空、hasRAF、句柄唯一。
 func TestRAFQueue(t *testing.T) {
 	inst, _ := refCanvas(t)
 	defer inst.Dispose()
 
 	var order []int
-	inst.RequestAnimationFrame(func() { order = append(order, 1) })
-	inst.RequestAnimationFrame(func() { order = append(order, 2) })
+	h1 := inst.RequestAnimationFrame(func() { order = append(order, 1) })
+	h2 := inst.RequestAnimationFrame(func() { order = append(order, 2) })
+	if h1 == 0 || h2 == 0 || h1 == h2 {
+		t.Fatalf("RAF 句柄应非零且互异，got %v %v", h1, h2)
+	}
 	if !inst.HasRAF() {
 		t.Fatal("登记后 HasRAF 应为 true")
 	}
-	fns := inst.TakeRAF()
-	if len(fns) != 2 {
-		t.Fatalf("应有 2 个 RAF 回调，got %d", len(fns))
-	}
-	for _, fn := range fns {
-		fn()
-	}
+	drain(inst)
 	if len(order) != 2 || order[0] != 1 || order[1] != 2 {
 		t.Fatalf("RAF 应按登记顺序执行，got %v", order)
 	}
 	if inst.HasRAF() {
-		t.Fatal("TakeRAF 后 HasRAF 应为 false")
+		t.Fatal("drain 后 HasRAF 应为 false")
 	}
 }
 
@@ -146,14 +148,120 @@ func TestElementRAF(t *testing.T) {
 	defer inst.Dispose()
 
 	called := false
-	el.RequestAnimationFrame(func() { called = true })
+	if h := el.RequestAnimationFrame(func() { called = true }); h == 0 {
+		t.Fatal("el.RequestAnimationFrame 应返回有效句柄")
+	}
 	if !inst.HasRAF() {
 		t.Fatal("el.RequestAnimationFrame 应入队")
 	}
-	for _, fn := range inst.TakeRAF() {
-		fn()
-	}
+	drain(inst)
 	if !called {
 		t.Fatal("RAF 回调未执行")
+	}
+}
+
+// TestRAFCancel 验证取消：pending 中取消后不执行，其它回调照常。
+func TestRAFCancel(t *testing.T) {
+	inst, _ := refCanvas(t)
+	defer inst.Dispose()
+
+	var ran []int
+	inst.RequestAnimationFrame(func() { ran = append(ran, 1) })
+	h2 := inst.RequestAnimationFrame(func() { ran = append(ran, 2) })
+	inst.RequestAnimationFrame(func() { ran = append(ran, 3) })
+	inst.CancelAnimationFrame(h2)
+
+	drain(inst)
+	if len(ran) != 2 || ran[0] != 1 || ran[1] != 3 {
+		t.Fatalf("取消的回调不应执行，got %v", ran)
+	}
+}
+
+// TestRAFCancelSemantics 验证取消幂等、未知句柄、已执行句柄 no-op、
+// 以及同批里取消尚未执行的回调。
+func TestRAFCancelSemantics(t *testing.T) {
+	inst, _ := refCanvas(t)
+	defer inst.Dispose()
+
+	// 未知句柄 / 0 句柄取消是 no-op。
+	inst.CancelAnimationFrame(0)
+	inst.CancelAnimationFrame(RAFHandle(999999))
+
+	// 场景 A：同批里前一个回调取消后一个尚未执行的回调。
+	{
+		inst, _ := refCanvas(t)
+		var ran []int
+		var h2SameBatch RAFHandle
+		inst.RequestAnimationFrame(func() {
+			ran = append(ran, 1)
+			inst.CancelAnimationFrame(h2SameBatch) // 取消同批未执行的回调
+		})
+		h2SameBatch = inst.RequestAnimationFrame(func() { ran = append(ran, 2) })
+		drain(inst)
+		if len(ran) != 1 || ran[0] != 1 {
+			t.Fatalf("同批取消应跳过第二个回调，got %v", ran)
+		}
+		inst.Dispose()
+	}
+	// 场景 B：drain 前取消 + 重复取消幂等。
+	{
+		inst, _ := refCanvas(t)
+		called := 0
+		h := inst.RequestAnimationFrame(func() { called++ })
+		inst.CancelAnimationFrame(h)
+		inst.CancelAnimationFrame(h) // 幂等
+		drain(inst)
+		if called != 0 {
+			t.Fatalf("取消后不应执行，got %d", called)
+		}
+		inst.Dispose()
+	}
+}
+
+// TestRAFCancelRunningNoop 验证回调开始执行后再取消为 no-op（浏览器语义）。
+func TestRAFCancelRunningNoop(t *testing.T) {
+	inst, _ := refCanvas(t)
+	defer inst.Dispose()
+
+	var hSelf RAFHandle
+	calls := 0
+	hSelf = inst.RequestAnimationFrame(func() {
+		calls++
+		inst.CancelAnimationFrame(hSelf) // 正在执行，取消应无效于当前次
+	})
+	drain(inst)
+	if calls != 1 {
+		t.Fatalf("当前次回调应完整执行，got %d", calls)
+	}
+	// 该句柄已被消费，再次 drain 无回调。
+	drain(inst)
+	if calls != 1 {
+		t.Fatalf("已消费的回调不应再次执行，got %d", calls)
+	}
+}
+
+// TestRAFCancelOnDispose 验证 Dispose 丢弃所有待执行回调。
+func TestRAFCancelOnDispose(t *testing.T) {
+	inst, el := refCanvas(t)
+	called := false
+	el.RequestAnimationFrame(func() { called = true })
+	inst.Dispose()
+	drain(inst)
+	if called {
+		t.Fatal("Dispose 后 RAF 回调不应执行")
+	}
+}
+
+// TestElementCancel 验证 el.cancelAnimationFrame 经同一 sink 生效。
+func TestElementCancel(t *testing.T) {
+	inst, el := refCanvas(t)
+	defer inst.Dispose()
+
+	called := false
+	h := el.RequestAnimationFrame(func() { called = true })
+	el.CancelAnimationFrame(h)
+	drain(inst)
+	if called {
+		t.Fatal("el.cancelAnimationFrame 应取消回调")
 	}
 }

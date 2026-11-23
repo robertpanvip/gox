@@ -92,21 +92,12 @@ func (a *App) drainRAF(inst *gxscene.Instance) {
 	// 必须在 drain 回调之前清：InlineDispatcher 下 RequestFrame 同步完成整帧，
 	// 帧末 scheduleRAFNext 就在同一调用栈内，标志此时须为 false。
 	a.rafPending.Store(false)
-	fns := inst.TakeRAF()
-	if len(fns) == 0 {
-		return
-	}
 	a.inRAF.Store(true)
-	for _, fn := range fns {
-		if fn == nil {
-			continue
-		}
-		func() {
-			// 单个回调 panic 不拖垮整帧（与浏览器 rAF 语义一致）。
-			defer func() { _ = recover() }()
-			fn()
-		}()
-	}
+	inst.DrainRAF(func(fn func()) {
+		// 单个回调 panic 不拖垮整帧（与浏览器 rAF 语义一致）。
+		defer func() { _ = recover() }()
+		fn()
+	})
 	a.inRAF.Store(false)
 }
 
@@ -183,13 +174,24 @@ func (a *App) Measure(id gxscene.NodeID, cb func(w, h float32)) {
 	a.pendingMu.Unlock()
 }
 
-// RequestAnimationFrame 登记一个下一帧回调（Web rAF 语义），App 级入口。
-// 等价于在任意拿得到 Element 的地方调 el.requestAnimationFrame——队列挂在
-// 场景树的共享 sink 上，回调在下一帧 Draw 之前执行，可再次登记形成动画循环。
-// Render 之前（inst 为 nil）为 no-op。
-func (a *App) RequestAnimationFrame(fn func()) {
+// RequestAnimationFrame 登记一个下一帧回调（Web rAF 语义），App 级入口，
+// 返回取消句柄。等价于在任意拿得到 Element 的地方调 el.requestAnimationFrame
+// ——队列挂在场景树的共享 sink 上，回调在下一帧 Draw 之前执行，可再次登记
+// 形成动画循环。用 CancelAnimationFrame 取消尚未开始执行的回调。
+// Render 之前（inst 为 nil）返回 0。
+func (a *App) RequestAnimationFrame(fn func()) gxscene.RAFHandle {
 	if a == nil || fn == nil || a.inst == nil {
+		return 0
+	}
+	return a.inst.RequestAnimationFrame(fn)
+}
+
+// CancelAnimationFrame 取消一个尚未开始执行的下一帧回调（App 级入口）。
+// 句柄来自本 App 的 RequestAnimationFrame 或 el.requestAnimationFrame。
+// 已执行 / 已取消 / 未知句柄均为 no-op。
+func (a *App) CancelAnimationFrame(h gxscene.RAFHandle) {
+	if a == nil || a.inst == nil {
 		return
 	}
-	a.inst.RequestAnimationFrame(fn)
+	a.inst.CancelAnimationFrame(h)
 }

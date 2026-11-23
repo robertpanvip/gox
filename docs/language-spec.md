@@ -150,8 +150,10 @@ func view() any {
 
 #### `el.requestAnimationFrame(fn)`：下一帧
 
-`el.requestAnimationFrame(fn)`（App 级等价：`app.RequestAnimationFrame(fn)`）登记一个**下一帧回调**：它在下一帧绘制之前执行，回调里画 canvas / 写 signal 的结果当帧可见；回调里再次登记即形成动画循环。
+`el.requestAnimationFrame(fn)`（App 级等价：`app.RequestAnimationFrame(fn)`）登记一个**下一帧回调**，返回 `gxscene.RAFHandle` 取消句柄：它在下一帧绘制之前执行，回调里画 canvas / 写 signal 的结果当帧可见；回调里再次登记即形成动画循环。
 
+- **取消**：`el.cancelAnimationFrame(handle)`（App 级 `app.CancelAnimationFrame(handle)`）取消一个尚未开始执行的回调。语义对齐浏览器：同批里取消还没轮到的回调有效；已开始执行的回调取消为 no-op；重复取消 / 未知句柄 / 句柄 0 静默忽略。实例 `Dispose`（重渲染 / 关闭 / 分支切换）会丢弃其全部待执行回调，不会在销毁后触发。
+- 句柄是全局单调正整数（0 无效），跨重渲染的陈旧句柄不会误伤新树里的回调。
 - 队列挂在共享 sink 上，因此在 `build` 期的 `ref` 回调里登记也能入队，不依赖能力注入时序。
 - drain 期间的写回会抑制重绘请求（本帧会画出写回结果），帧末若队列非空则异步预约下一帧——避免同步派发器下动画循环重入自锁。
 - `rafPending` 去抖，高频登记不会堆积帧；单个回调 panic 不影响整帧（与浏览器 rAF 语义一致）。
@@ -159,16 +161,19 @@ func view() any {
 ```jsx
 func onMount(el *gxscene.Element) {
     var tick func()
+    var handle gxscene.RAFHandle
     x := 0
     tick = func() {
         x++
         ctx := el.getContext()
         ctx.fillRect(float32(x), 0, 2, 2)
         if x < 120 {
-            el.requestAnimationFrame(tick)
+            handle = el.requestAnimationFrame(tick)
+        } else {
+            el.cancelAnimationFrame(handle) // 循环自然收尾时清掉最后一个句柄
         }
     }
-    el.requestAnimationFrame(tick)
+    handle = el.requestAnimationFrame(tick)
 }
 ```
 

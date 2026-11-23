@@ -1445,6 +1445,8 @@ func (i *Instance) bindRec(ctx *bindCtx) {
 // Dispose 销毁该实例通过 BindReactive 建立的所有响应式计算，停止订阅并清理。
 // 幂等：多次调用只清理一次。复合子组件的计算由其自身实例负责。
 func (i *Instance) Dispose() {
+	// 丢弃所有尚未执行的 RAF：回调常持有 Element/闭包，销毁后不再触发。
+	i.changes.clearRAF()
 	for _, c := range i.comps {
 		c.Dispose()
 	}

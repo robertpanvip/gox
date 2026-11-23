@@ -140,18 +140,30 @@ func (e *Element) Measure(cb func(w, h float32)) {
 	cb(0, 0)
 }
 
-// RequestAnimationFrame 登记一个下一帧回调（Web rAF 语义）。回调在下一帧
-// Draw 之前执行；回调里可继续登记形成动画循环。登记后请求宿主重绘一帧，
-// 保证「下一帧」真的发生（build 期 hook 未注入时由首帧 Render 兜底）。
-// 已销毁句柄忽略。
+// RequestAnimationFrame 登记一个下一帧回调（Web rAF 语义），返回取消句柄。
+// 回调在下一帧 Draw 之前执行；回调里可继续登记形成动画循环。登记后请求宿主
+// 重绘一帧，保证「下一帧」真的发生（build 期 hook 未注入时由首帧 Render 兜底）。
+// 已销毁句柄返回 0。
 //
 // GX 小写写法：el.requestAnimationFrame(fn)
-func (e *Element) RequestAnimationFrame(fn func()) {
+func (e *Element) RequestAnimationFrame(fn func()) RAFHandle {
 	if e == nil || e.dead || fn == nil || e.sink == nil {
+		return 0
+	}
+	h := e.sink.addRAF(fn)
+	e.sink.dirty() // 请求宿主安排下一帧；纯 scene/headless 下 no-op
+	return h
+}
+
+// CancelAnimationFrame 取消一个尚未开始执行的下一帧回调（按 RequestAnimationFrame
+// 返回的句柄）。已执行 / 已取消 / 未知句柄为 no-op。
+//
+// GX 小写写法：el.cancelAnimationFrame(handle)
+func (e *Element) CancelAnimationFrame(h RAFHandle) {
+	if e == nil || e.dead || e.sink == nil {
 		return
 	}
-	e.sink.addRAF(fn)
-	e.sink.dirty() // 请求宿主安排下一帧；纯 scene/headless 下 no-op
+	e.sink.cancelRAF(h)
 }
 
 // disposeRef 把句柄标记为销毁态：之后所有方法 no-op。ref(nil) 由 applyAll 的

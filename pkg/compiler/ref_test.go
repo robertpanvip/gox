@@ -111,7 +111,8 @@ func onMount(el *gxscene.Element) {
 	ctx.moveTo(0, 0)
 	ctx.lineTo(100, 50)
 	ctx.stroke()
-	el.requestAnimationFrame(func() { ctx.fillRect(1, 1, 2, 2) })
+	h := el.requestAnimationFrame(func() { ctx.fillRect(1, 1, 2, 2) })
+	el.cancelAnimationFrame(h)
 }
 
 func view() any {
@@ -125,7 +126,8 @@ func view() any {
 	for _, want := range []string{
 		"el.GetContext()", "ctx.SetFillStyle(", "ctx.FillRect(",
 		"ctx.BeginPath()", "ctx.MoveTo(", "ctx.LineTo(", "ctx.Stroke()",
-		"el.RequestAnimationFrame(", "gxscene.OpRef",
+		"el.RequestAnimationFrame(", "el.CancelAnimationFrame(h)",
+		"gxscene.OpRef",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("产物应包含 %q, got:\n%s", want, out)
@@ -133,7 +135,7 @@ func view() any {
 	}
 	for _, bad := range []string{
 		"el.getContext()", "ctx.fillRect(", "ctx.setFillStyle(",
-		"el.requestAnimationFrame(",
+		"el.requestAnimationFrame(", "el.cancelAnimationFrame(",
 	} {
 		if strings.Contains(out, bad) {
 			t.Errorf("小写方法名应被还原，却残留 %q, got:\n%s", bad, out)

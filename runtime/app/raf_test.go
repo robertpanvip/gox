@@ -141,3 +141,73 @@ func TestRAFAnimationLoop(t *testing.T) {
 		t.Fatalf("canvas 指令数应等于帧数 %d，got %d (%s)", target, got, last)
 	}
 }
+
+// TestRAFCancelStopsLoop 验证在动画循环里取消句柄后，循环停止、不再预约帧。
+func TestRAFCancelStopsLoop(t *testing.T) {
+	win := &rafWindow{}
+	app, err := gxapp.OpenWith(gxapp.DefaultConfig(), win)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer app.Close()
+
+	var cap atomic.Value
+	if err := app.Render(func() any { return canvasRAFInst(&cap) }); err != nil {
+		t.Fatal(err)
+	}
+	el := cap.Load().(*gxscene.Element)
+
+	var n atomic.Int32
+	stopped := make(chan struct{})
+	var tick func()
+	var handle gxscene.RAFHandle
+	tick = func() {
+		c := n.Add(1)
+		el.GetContext().FillRect(float32(c), 0, 1, 1)
+		if c == 3 {
+			el.CancelAnimationFrame(handle) // 取消自己登记的下一帧
+			close(stopped)
+			return
+		}
+		handle = el.RequestAnimationFrame(tick)
+	}
+	handle = el.RequestAnimationFrame(tick)
+
+	select {
+	case <-stopped:
+	case <-time.After(3 * time.Second):
+		t.Fatalf("动画未在时限内跑到第 3 帧（当前 %d）", n.Load())
+	}
+	// 再给调度器一点时间，确认没有多余的帧被画出。
+	time.Sleep(100 * time.Millisecond)
+	if got := n.Load(); got != 3 {
+		t.Fatalf("取消后不应再推进帧，期望 3，got %d", got)
+	}
+}
+
+// TestAppCancelAnimationFrame 验证 App 级取消入口与 Element 级共享同一 sink。
+func TestAppCancelAnimationFrame(t *testing.T) {
+	win := &rafWindow{}
+	app, err := gxapp.OpenWith(gxapp.DefaultConfig(), win)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer app.Close()
+
+	if err := app.Render(func() any { return helloInst() }); err != nil {
+		t.Fatal(err)
+	}
+
+	called := false
+	h := app.RequestAnimationFrame(func() { called = true })
+	if h == 0 {
+		t.Fatal("App.RequestAnimationFrame 应返回有效句柄")
+	}
+	app.CancelAnimationFrame(h)
+	if err := app.DrawNow(); err != nil {
+		t.Fatal(err)
+	}
+	if called {
+		t.Fatal("App.CancelAnimationFrame 应取消回调")
+	}
+}

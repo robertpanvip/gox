@@ -3,6 +3,7 @@ package gxscene
 import (
 	"fmt"
 	"sync"
+	"sync/atomic"
 )
 
 // ---------------- 增量变更通道（additive：后端可选消费） ----------------
@@ -105,32 +106,120 @@ type changeSink struct {
 	// 由 gxapp 注入为 app.requestDraw。纯 scene / headless 下为 nil，写回仍落到
 	// 节点与 Change 流，只是不主动请求帧（调用方可自行 Draw）。
 	onDirty func()
-	// rafs 是 requestAnimationFrame 登记的「下一帧」回调。挂 sink 上（而非注入的
-	// 宿主函数）是为绕过时序：ref 回调在 build 期触发、早于任何能力注入，此时
-	// 注册的 raf 也要能进队；gxapp 在每帧 Draw 前 takeRAF 取出执行。
-	rafs []func()
+	// RAF 队列挂在 sink 上（而非注入的宿主函数），以绕过时序：ref 回调在 build
+	// 期触发、早于任何能力注入，此时登记的 raf 也要能进队。
+	//   rafPending 尚未被本帧取走；rafLive 本帧已取走但尚未开始执行。
+	// cancelRAF 对两段都生效，故同批里取消一个还没轮到的回调仍然有效；一旦
+	// 回调开始执行就从 live 移除，之后的取消为 no-op（与浏览器语义一致）。
+	rafPending []*rafEntry
+	rafLive    []*rafEntry
 }
 
-// addRAF 登记一个下一帧回调。
-func (s *changeSink) addRAF(fn func()) {
+// RAFHandle 是 requestAnimationFrame 返回的取消句柄。0 为无效句柄。
+// 用全局单调计数而非 sink 内计数，使跨重渲染（新 sink）的陈旧句柄不会误伤新回调。
+type RAFHandle uint64
+
+var nextRAFHandle atomic.Uint64
+
+type rafEntry struct {
+	handle    RAFHandle
+	fn        func()
+	cancelled bool
+}
+
+// addRAF 登记一个下一帧回调，返回可用于 cancelRAF 的全局唯一句柄。
+func (s *changeSink) addRAF(fn func()) RAFHandle {
 	if s == nil || fn == nil {
-		return
+		return 0
+	}
+	h := RAFHandle(nextRAFHandle.Add(1)) // 从 1 开始，0 保留为无效句柄
+	s.mu.Lock()
+	s.rafPending = append(s.rafPending, &rafEntry{handle: h, fn: fn})
+	s.mu.Unlock()
+	return h
+}
+
+// cancelRAF 取消一个尚未开始执行的下一帧回调。对 pending 与本帧已取走的
+// live 两段都生效（同批里取消还没轮到的回调有效）；已开始执行或已取消的
+// 句柄为 no-op；未知句柄同样静默忽略。返回是否命中一个待执行回调。
+func (s *changeSink) cancelRAF(h RAFHandle) bool {
+	if s == nil || h == 0 {
+		return false
 	}
 	s.mu.Lock()
-	s.rafs = append(s.rafs, fn)
-	s.mu.Unlock()
+	defer s.mu.Unlock()
+	hit := false
+	cancel := func(entries []*rafEntry) {
+		for _, e := range entries {
+			if e.handle == h && !e.cancelled {
+				e.cancelled = true
+				hit = true
+				return
+			}
+		}
+	}
+	cancel(s.rafPending)
+	if !hit {
+		cancel(s.rafLive)
+	}
+	return hit
 }
 
-// takeRAF 取走并清空当前所有下一帧回调，保持登记顺序。
-func (s *changeSink) takeRAF() []func() {
+// takeRAF 把 pending 取走转入 live，返回本帧待执行条目（保持登记顺序）。
+// 转入 live 是为了让同批回调之间的取消仍然有效。
+func (s *changeSink) takeRAF() []*rafEntry {
 	if s == nil {
 		return nil
 	}
 	s.mu.Lock()
-	fns := s.rafs
-	s.rafs = nil
+	batch := s.rafPending
+	s.rafPending = nil
+	s.rafLive = append(s.rafLive, batch...)
 	s.mu.Unlock()
-	return fns
+	return batch
+}
+
+// runRAF 在进入某个回调前检查其是否被取消，并从 live 移除（开始执行后
+// 取消即 no-op）。返回 nil 表示该回调应跳过。
+func (s *changeSink) runRAF(e *rafEntry) func() {
+	if s == nil || e == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if e.cancelled {
+		return nil
+	}
+	e.cancelled = true // 标记已消费，之后的 cancelRAF 命中不到
+	// 从 live 摘除
+	for k, x := range s.rafLive {
+		if x == e {
+			s.rafLive = append(s.rafLive[:k], s.rafLive[k+1:]...)
+			break
+		}
+	}
+	return e.fn
+}
+
+// endRAF 帧末清空 live：本帧未执行的（被取消的）条目一并丢弃。
+func (s *changeSink) endRAF() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.rafLive = nil
+	s.mu.Unlock()
+}
+
+// clearRAF 丢弃所有待执行/在途回调（Dispose 时用），杜绝销毁后残留回调执行。
+func (s *changeSink) clearRAF() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.rafPending = nil
+	s.rafLive = nil
+	s.mu.Unlock()
 }
 
 // hasRAF 报告是否还有未执行的下一帧回调。gxapp 在 drain 后据此判断
@@ -140,7 +229,7 @@ func (s *changeSink) hasRAF() bool {
 		return false
 	}
 	s.mu.Lock()
-	has := len(s.rafs) > 0
+	has := len(s.rafPending) > 0
 	s.mu.Unlock()
 	return has
 }
@@ -152,26 +241,53 @@ func (i *Instance) SetDirtyHook(fn func()) {
 	}
 }
 
-// RequestAnimationFrame 登记一个下一帧回调。回调在下一帧 Draw 之前执行，
-// 典型用途是动画：回调里更新画布/信号，再登记下一帧形成循环。
+// RequestAnimationFrame 登记一个下一帧回调，返回取消句柄。回调在下一帧 Draw
+// 之前执行，典型用途是动画：回调里更新画布/信号，再登记下一帧形成循环。
 // 可在 ref 回调（build 期）直接调用——队列挂 sink 上，不依赖能力注入时序。
-func (i *Instance) RequestAnimationFrame(fn func()) {
+// 用返回的句柄调用 CancelAnimationFrame 可取消尚未开始执行的回调。
+func (i *Instance) RequestAnimationFrame(fn func()) RAFHandle {
 	if i != nil {
-		i.changes.addRAF(fn)
+		return i.changes.addRAF(fn)
+	}
+	return 0
+}
+
+// CancelAnimationFrame 取消一个由本实例树登记的下一帧回调。已开始执行、
+// 已取消或未知句柄均为 no-op（与浏览器 cancelAnimationFrame 语义一致）。
+func (i *Instance) CancelAnimationFrame(h RAFHandle) {
+	if i != nil {
+		i.changes.cancelRAF(h)
 	}
 }
 
-// TakeRAF 取走当前所有下一帧回调（gxapp 每帧 Draw 前调用）。
-func (i *Instance) TakeRAF() []func() {
-	if i != nil {
-		return i.changes.takeRAF()
+// DrainRAF 取走并执行本帧的下一帧回调。run 包装单条回调的执行（app 用它做
+// panic 保护与 inRAF 置位）；已被取消的回调跳过，回调内部再登记的进入下一帧。
+func (i *Instance) DrainRAF(run func(fn func())) {
+	if i == nil || run == nil {
+		return
 	}
-	return nil
+	batch := i.changes.takeRAF()
+	if len(batch) == 0 {
+		return
+	}
+	for _, e := range batch {
+		if fn := i.changes.runRAF(e); fn != nil {
+			run(fn)
+		}
+	}
+	i.changes.endRAF()
 }
 
 // HasRAF 报告是否还有未执行的下一帧回调（动画循环是否登记了下一帧）。
 func (i *Instance) HasRAF() bool {
 	return i != nil && i.changes.hasRAF()
+}
+
+// ClearRAF 丢弃所有待执行/在途回调（Dispose 用）。
+func (i *Instance) ClearRAF() {
+	if i != nil {
+		i.changes.clearRAF()
+	}
 }
 
 func (s *changeSink) setDirtyHook(fn func()) {
