@@ -30,6 +30,64 @@ import (
 // 行数单独成 sig：<For> 只在行数变化时重算；单字符编辑不再重建列表 diff。
  var LineCount = Signal.New(len(SplitLines(SourceCode())))
 
+// ---- 字符度量（Ace 风格：点击换算与光标渲染共用同一套） ----
+// 等宽字体下一个 ASCII/窄字符宽 1 格，CJK/全角宽 2 格。charWidth 是"一格"
+// 的像素宽度，由装配层在启动时用 canvas.measureText("0") 实测后注入——
+// 这样点击落点与 caret.left 用完全相同的 runeCells × charWidth，绝不会错位。
+// 桌面 skia 后端没有 canvas，注入值由 GL 字体度量给出；未注入时的默认值
+// 与 13px monospace 一致，保证首帧也基本对齐。
+ var CharWidth = Signal.New(7.83)
+// 全角/CJK 字符宽度。注意很多 monospace 字体里 CJK 并非恰好 2×ASCII：
+// 例如 ui-monospace 下 ASCII 7.83px、CJK 13.02px。两个值都由前端 canvas 实测注入，
+// 点击换算与 caret 定位共用，中文行也能像素级精确（对齐 Ace 的 fontMetrics）。
+ var WideWidth = Signal.New(13.02)
+// caretSettled：刚点击/输入后为 true（光标常亮），静置后由装配层置 false 恢复闪烁。
+ var CaretSettled = Signal.New(true)
+
+func runeCells(r rune) int {
+    if r >= 0x1100 && (r <= 0x115f || r == 0x2329 || r == 0x232a ||
+        (r >= 0x2e80 && r <= 0xa4cf && r != 0x303f) ||
+        (r >= 0xac00 && r <= 0xd7a3) ||
+        (r >= 0xf900 && r <= 0xfaff) ||
+        (r >= 0xfe10 && r <= 0xfe19) ||
+        (r >= 0xfe30 && r <= 0xfe6f) ||
+        (r >= 0xff00 && r <= 0xff60) ||
+        (r >= 0xffe0 && r <= 0xffe6)) {
+        return 2
+    }
+    return 1
+}
+
+func cellPx(r rune) float64 {
+    if runeCells(r) == 2 { return WideWidth() }
+    return CharWidth()
+}
+
+// prefixWidth 返回一行前 col 个 rune 的像素宽度（caret 的水平偏移来源）。
+ func PrefixWidth(s string, col int) float64 {
+    rs := []rune(s)
+    acc := 0.0
+    if col > len(rs) { col = len(rs) }
+    for i := 0; i < col; i = i + 1 {
+        acc = acc + cellPx(rs[i])
+    }
+    return acc
+}
+
+// pickColumn 是 prefixWidth 的逆运算：给定行内 x 像素，返回最近 rune 边界的列。
+// 点击换算与 caret 渲染共用 runeWidth，因此"点哪列就落哪列"，中文行同样精确。
+ func PickColumn(idx int, x float64) int {
+    s := lineText(idx)
+    rs := []rune(s)
+    acc := 0.0
+    for i := 0; i < len(rs); i = i + 1 {
+        w := cellPx(rs[i])
+        if x < acc + w / 2 { return i }
+        acc = acc + w
+    }
+    return len(rs)
+}
+
 // 行版本集合：一等细粒度响应式切片。每个元素都是独立 sig——改第 i 行版本
 // 只通知订阅该行的 getter，这正是此前手写 24 个 rowVerN 具名 sig 想模拟的能力。
 // Signal.newVec(...) 是 GX 语法糖，降级为 Signal.NewVec(...)。
@@ -212,9 +270,35 @@ var rowVers = Signal.NewVec(zeroRowVers())
  func EditorBlur()  {
     Signal.Batch(func() { EditorFocused(false )})
 }
+// editorSettle 标记"刚刚交互过"，caret 停止闪烁；静置由装配层定时调用 editorIdle 恢复闪烁。
+ func EditorSettle() { Signal.Batch(func() { CaretSettled(true )}) }
+ func EditorIdle()   { Signal.Batch(func() { CaretSettled(false )}) }
+ func SetCharWidth(w float64)  { Signal.Batch(func() { CharWidth(w )}) }
+ func SetWideWidth(w float64) { Signal.Batch(func() { WideWidth(w )}) }
  func EditorLine() int { return CursorLine() }
  func EditorCol() int { return CursorCol() }
  func EditorText() string { return SourceCode() }
+
+// ---- caret 图层（Ace 的 cursor layer：场景节点，两端共用） ----
+// caretLeft/caretTop 只依赖光标行列、当前行文本与 charWidth——都是精确叶子
+// getter，光标移动只写这一个节点的两个属性，不触碰任何代码行、不重建子树。
+// 容器 padding=6，行内 gutter(42)+marginRight(8)=50，故代码列左边界=56。
+func caretLeft() float64 {
+    return 56 + PrefixWidth(lineText(CursorLine()), CursorCol())
+}
+func caretTop() float64 {
+    return 6 + float64(CursorLine() * 22)
+}
+// caretClass 用 class 表达光标三态，CSS 统一控制显示/闪烁：
+//   失焦   → gx-caret-off（隐藏）
+//   常亮   → gx-caret-steady（交互后 1s 内不闪，Ace 的 restartTimer）
+//   闪烁   → 仅 gx-caret（静置后播放 blink 动画）
+// 不用 inline opacity：CSS 动画优先级高于普通 inline style 会覆盖它。
+func caretClass() string {
+    if !EditorFocused() { return "gx-caret gx-caret-off" }
+    if CaretSettled() { return "gx-caret gx-caret-steady" }
+    return "gx-caret"
+}
 
 // ---- 语法高亮（GX 编写的类 Ace 分词器） ----
 
@@ -611,7 +695,9 @@ func rowHeight(idx int) int {
  func Editor() *gxscene.Instance {
     // 可视高度 22×14=308px，超出 24 行可滚动；overflow:auto 让长示例（含
     // package/import 的展示版）超出部分可达，而不是被父容器裁掉无法编辑。
-    return gxscene.Render(gxscene.Template{Ops:[]gxscene.Op{gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpAttr,Arg:"#1e1e1e",Key:"bg",},gxscene.Op{Code:gxscene.OpAttr,Arg:"8",Key:"border-radius",},gxscene.Op{Code:gxscene.OpAttr,Arg:"6",Key:"padding",},gxscene.Op{Code:gxscene.OpAttr,Arg:"column",Key:"flex-direction",},gxscene.Op{Code:gxscene.OpAttr,Arg:"0",Key:"gap",},gxscene.Op{Code:gxscene.OpAttr,Arg:"320",Key:"height",},gxscene.Op{Code:gxscene.OpAttr,Arg:"auto",Key:"overflow",},gxscene.Op{Code:gxscene.OpFor,Slot:0,},gxscene.Op{Code:gxscene.OpClose,},},N:1,}, gxscene.ForGetterOfSignal[int](func() []int { return editorRowIDs },nil,func(i func() int) *gxscene.Instance { return lineView(i()) }))
+    // position="relative"：caret 是绝对定位子节点，左上角相对本容器；容器滚动时
+    // 绝对子节点随内容一起滚动（与 Ace 把 cursor layer 放进 scroller 同理）。
+    return gxscene.Render(gxscene.Template{Ops:[]gxscene.Op{gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpAttr,Arg:"#1e1e1e",Key:"bg",},gxscene.Op{Code:gxscene.OpAttr,Arg:"8",Key:"border-radius",},gxscene.Op{Code:gxscene.OpAttr,Arg:"6",Key:"padding",},gxscene.Op{Code:gxscene.OpAttr,Arg:"column",Key:"flex-direction",},gxscene.Op{Code:gxscene.OpAttr,Arg:"0",Key:"gap",},gxscene.Op{Code:gxscene.OpAttr,Arg:"320",Key:"height",},gxscene.Op{Code:gxscene.OpAttr,Arg:"auto",Key:"overflow",},gxscene.Op{Code:gxscene.OpAttr,Arg:"relative",Key:"position",},gxscene.Op{Code:gxscene.OpFor,Slot:0,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"class",Slot:1,},gxscene.Op{Code:gxscene.OpAttr,Arg:"absolute",Key:"position",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"left",Slot:2,},gxscene.Op{Code:gxscene.OpDynAttr,Key:"top",Slot:3,},gxscene.Op{Code:gxscene.OpAttr,Arg:"2",Key:"width",},gxscene.Op{Code:gxscene.OpAttr,Arg:"22",Key:"height",},gxscene.Op{Code:gxscene.OpAttr,Arg:"#aeafad",Key:"bg",},gxscene.Op{Code:gxscene.OpAttr,Arg:"6",Key:"z-index",},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpClose,},},N:4,}, gxscene.ForGetterOfSignal[int](func() []int { return editorRowIDs },nil,func(i func() int) *gxscene.Instance { return lineView(i()) }), func() any{ return caretClass() }, func() any{ return caretLeft() }, func() any{ return caretTop() })
 }
 
 // EditorStatus 返回编辑器状态栏文本（行列 + 行数），供 playground 头部展示。

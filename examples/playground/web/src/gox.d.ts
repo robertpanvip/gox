@@ -24,7 +24,16 @@ export interface GoxPlaygroundAPI {
   focus(): void;
   sample(source: string): void;
   cursor(): GoxCursor;
+  /** 点击落点换算：行号 + 相对代码行左缘的 x 像素 → 列（与 caret 同源度量）。 */
+  pickColumn(line: number, xPixel: number): number;
   setCursor(line: number, col: number): void;
+  /** 注入实测的窄字符（ASCII）单格宽度（像素）。 */
+  setCharWidth(width: number): void;
+  /** 注入实测的宽字符（CJK）单格宽度（像素）。 */
+  setWideWidth(width: number): void;
+  /** 交互后 caret 常亮；静置后恢复闪烁。 */
+  settle(): void;
+  idle(): void;
   insert(text: string): void;
   setSource(text: string): void;
   lspDiagnostics(): string;

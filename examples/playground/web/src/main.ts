@@ -37,7 +37,6 @@ interface Elements {
   readonly diagnostics: HTMLElement;
   readonly completion: HTMLElement;
   readonly hover: HTMLElement;
-  readonly caret: HTMLElement;
 }
 
 function requireElement(id: string): HTMLElement {
@@ -49,12 +48,8 @@ function requireElement(id: string): HTMLElement {
 }
 
 function collectElements(): Elements {
-  // 列光标覆盖层：fixed 定位到 body，跟随代码行滚动；不进 #app 以免被
-  // GX 场景树 patch 时清掉。样式由 index.html 的 #gx-caret 定义。
-  const caret: HTMLElement = document.createElement("div");
-  caret.id = "gx-caret";
-  caret.hidden = true;
-  document.body.append(caret);
+  // 列光标现在是 GX 场景节点（.gx-caret），由 wasm 的 caretLeft/caretTop getter
+  // 驱动，与点击换算共用同一套字符宽度；前端不再维护 fixed 覆盖层。
   return {
     loading: requireElement("loading"),
     app: requireElement("app"),
@@ -62,7 +57,6 @@ function collectElements(): Elements {
     diagnostics: requireElement("lsp-diagnostics"),
     completion: requireElement("lsp-completion"),
     hover: requireElement("lsp-hover"),
-    caret,
   };
 }
 
@@ -139,80 +133,44 @@ function lineAt(app: HTMLElement, ev: MouseEvent): { el: HTMLElement; line: numb
   return line >= 0 ? { el, line } : null;
 }
 
-// ---- 等宽字符测量（列定位 + 列光标共用） ----
-// 代码行用 monospace 13px，但 CJK 宽约 2×ASCII。用 canvas measureText 逐字符
-// 累加，点击列和光标位置都按真实像素算，中文/缩进/制表都不再错位。
+// ---- 字符度量注入 + caret 常亮计时（Ace 风格） ----
+// 列光标是 GX 场景节点，点击落点换算与 caret 定位都在 wasm 侧共用同一套
+// runeCells × charWidth。前端只负责：启动时测一次等宽字体单格宽度注入 wasm，
+// 以及每次交互后让 caret 常亮约 1s 再恢复闪烁（Ace 的 restartTimer）。
 
-let measureCtx: CanvasRenderingContext2D | null = null;
-
-/** 代码行的 CSS font 缩写，供 canvas measureText 使用。 */
-function codeFont(el: HTMLElement): string {
-  const css: string = window.getComputedStyle(el).font;
-  if (css.length > 0) {
-    return css;
+/** 用 canvas 实测 monospace 字体一个 ASCII 格（"0"）的像素宽度并注入 wasm。 */
+function injectCharWidth(api: GoxPlaygroundAPI, app: HTMLElement): void {
+  const canvas: HTMLCanvasElement = document.createElement("canvas");
+  const ctx: CanvasRenderingContext2D | null = canvas.getContext("2d");
+  if (ctx === null) {
+    return; // 极端降级：wasm 侧保留 13px monospace 默认宽度。
   }
-  const size: string = window.getComputedStyle(el).fontSize;
-  return `${size} ui-monospace, Menlo, Consolas, monospace`;
+  const line: HTMLElement | null = app.querySelector<HTMLElement>(".gx-code-line");
+  const font: string = line !== null
+    ? window.getComputedStyle(line).font
+    : "13px ui-monospace, Menlo, Consolas, monospace";
+  ctx.font = font;
+  // 窄字符取多个平均值；宽字符（CJK）单独实测——很多 monospace 字体里
+  // CJK 并非恰好 2×ASCII（如 ui-monospace：ASCII 7.83px、CJK 13.02px）。
+  const narrow: number = ctx.measureText("0000000000").width / 10;
+  const wide: number = ctx.measureText("中中中").width / 3;
+  if (narrow > 0 && Number.isFinite(narrow)) {
+    api.setCharWidth(narrow);
+  }
+  if (wide > 0 && Number.isFinite(wide)) {
+    api.setWideWidth(wide);
+  }
 }
 
-/** 返回字符串 s 在给定字体下的像素宽度。 */
-function textWidth(s: string, font: string): number {
-  if (measureCtx === null) {
-    const canvas: HTMLCanvasElement = document.createElement("canvas");
-    measureCtx = canvas.getContext("2d");
-  }
-  if (measureCtx === null) {
-    // 极端降级：按等宽 8px/ASCII、16px/CJK 估算。
-    let w: number = 0;
-    for (const ch of s) { w += ch.charCodeAt(0) >= 0x2e80 ? 16 : 8; }
-    return w;
-  }
-  measureCtx.font = font;
-  return measureCtx.measureText(s).width;
-}
+let settleTimer: number | undefined;
 
-/** 按鼠标 x 在代码行内定位列（0 基，按 rune 计，与 wasm 光标一致）。 */
-function columnAt(el: HTMLElement, ev: MouseEvent): number {
-  const rect: DOMRect = el.getBoundingClientRect();
-  const x: number = ev.clientX - rect.left;
-  const font: string = codeFont(el);
-  const code: string = el.getAttribute("data-code") ?? "";
-  const chars: readonly string[] = Array.from(code); // 按 rune 切分
-  let acc: number = 0;
-  for (let i: number = 0; i < chars.length; i++) {
-    const cw: number = textWidth(chars[i] ?? "", font);
-    if (acc + cw / 2 >= x) {
-      return i;
-    }
-    acc += cw;
+/** 交互后让 caret 常亮，静置 1s 后恢复闪烁。 */
+function settleCaret(api: GoxPlaygroundAPI): void {
+  api.settle();
+  if (settleTimer !== undefined) {
+    window.clearTimeout(settleTimer);
   }
-  return chars.length;
-}
-
-/** 渲染闪烁的列光标：fixed 覆盖层，跟随光标行列与编辑器滚动。 */
-function renderCaret(api: GoxPlaygroundAPI, elements: Elements): void {
-  const caret: HTMLElement = elements.caret;
-  const cursor: Cursor = api.cursor();
-  const lines: NodeListOf<HTMLElement> = elements.app.querySelectorAll<HTMLElement>(".gx-code-line");
-  const el: HTMLElement | undefined = lines[cursor.line];
-  if (el === undefined) {
-    caret.hidden = true;
-    return;
-  }
-  const rect: DOMRect = el.getBoundingClientRect();
-  const code: string = el.getAttribute("data-code") ?? "";
-  const chars: readonly string[] = Array.from(code);
-  const prefix: string = chars.slice(0, Math.min(cursor.col, chars.length)).join("");
-  const x: number = rect.left + textWidth(prefix, codeFont(el));
-  caret.style.left = `${x}px`;
-  caret.style.top = `${rect.top}px`;
-  caret.style.height = `${rect.height}px`;
-  caret.hidden = false;
-}
-
-/** DOM 更新走 RAF 提交，光标刷新排到下一帧读最新几何。 */
-function scheduleCaret(api: GoxPlaygroundAPI, elements: Elements): void {
-  window.requestAnimationFrame((): void => { renderCaret(api, elements); });
+  settleTimer = window.setTimeout((): void => { api.idle(); }, 1000);
 }
 
 // ---- 诊断面板 ----
@@ -247,7 +205,7 @@ function renderDiagnostics(api: GoxPlaygroundAPI, elements: Elements): void {
         api.key(key);
       }
       api.focus();
-      scheduleCaret(api, elements);
+      settleCaret(api);
     });
     panel.append(item);
   }
@@ -272,7 +230,7 @@ function applyCompletion(api: GoxPlaygroundAPI, elements: Elements, index: numbe
   hideCompletion(elements);
   renderDiagnostics(api, elements);
   api.focus();
-  scheduleCaret(api, elements);
+  settleCaret(api);
 }
 
 function showCompletion(
@@ -335,6 +293,12 @@ function completionKeydown(ev: KeyboardEvent, api: GoxPlaygroundAPI, elements: E
 
 let hoverTimer: number | undefined;
 
+/** 把鼠标 x 交给 wasm 的 pickColumn 换算成列——与 caret 渲染同源。 */
+function columnFromEvent(api: GoxPlaygroundAPI, el: HTMLElement, line: number, ev: MouseEvent): number {
+  const rect: DOMRect = el.getBoundingClientRect();
+  return api.pickColumn(line, ev.clientX - rect.left);
+}
+
 function showHover(api: GoxPlaygroundAPI, elements: Elements, ev: MouseEvent): void {
   const app: HTMLElement = elements.app;
   const hit = lineAt(app, ev);
@@ -342,7 +306,7 @@ function showHover(api: GoxPlaygroundAPI, elements: Elements, ev: MouseEvent): v
     elements.hover.hidden = true;
     return;
   }
-  const col: number = columnAt(hit.el, ev);
+  const col: number = columnFromEvent(api, hit.el, hit.line, ev);
   const hover: HoverResult | null = parseJSON<HoverResult | null>(api.lspHover(hit.line, col));
   if (hover === null) {
     elements.hover.hidden = true;
@@ -361,14 +325,13 @@ function bindKeyboard(elements: Elements, api: GoxPlaygroundAPI): void {
   const app: HTMLElement = elements.app;
   app.tabIndex = 0;
   app.addEventListener("mousedown", (ev: MouseEvent): void => {
-    // 点击代码行：按鼠标位置定位光标（行号从 DOM 顺序取，列按字符像素算）。
+    // 点击代码行：行号从 DOM 顺序取，列交给 wasm 的 pickColumn（与 caret 同源）。
+    // caret 是 GX 场景节点，光标列写入后由响应式 getter 自动重绘，无需前端追随。
     const hit = lineAt(app, ev);
     if (hit !== null) {
-      api.setCursor(hit.line, columnAt(hit.el, ev));
+      api.setCursor(hit.line, columnFromEvent(api, hit.el, hit.line, ev));
     }
-    // 点示例行/预览按钮也会改变光标与源码，统一刷新（两次 RAF 等 GX 提交）。
-    scheduleCaret(api, elements);
-    window.requestAnimationFrame((): void => { scheduleCaret(api, elements); });
+    settleCaret(api);
     api.focus();
     app.focus();
   });
@@ -386,7 +349,7 @@ function bindKeyboard(elements: Elements, api: GoxPlaygroundAPI): void {
       const formatted: string = api.lspFormat();
       api.setSource(formatted);
       renderDiagnostics(api, elements);
-      scheduleCaret(api, elements);
+      settleCaret(api);
       return;
     }
     if (completionKeydown(ev, api, elements)) {
@@ -406,13 +369,11 @@ function bindKeyboard(elements: Elements, api: GoxPlaygroundAPI): void {
       return;
     }
     api.key(ev.key);
-    // 输入后刷新诊断与列光标（wasm 侧随每次 key 同步重算，这里只拉结果）。
+    // 输入后刷新诊断（wasm 侧随每次 key 同步重算，这里只拉结果），并让 caret 常亮。
     window.setTimeout((): void => { renderDiagnostics(api, elements); }, 0);
-    scheduleCaret(api, elements);
+    settleCaret(api);
   });
-  // 编辑器容器滚动 / 窗口缩放时，光标覆盖层要跟着代码行移动。
-  app.addEventListener("scroll", (): void => { scheduleCaret(api, elements); }, true);
-  window.addEventListener("resize", (): void => { scheduleCaret(api, elements); });
+  // caret 是编辑器容器内的场景节点，滚动/缩放时浏览器自然跟随，无需前端重定位。
   app.addEventListener("mousemove", (ev: MouseEvent): void => {
     if (hoverTimer !== undefined) {
       window.clearTimeout(hoverTimer);
@@ -485,8 +446,12 @@ async function boot(elements: Elements): Promise<void> {
   void go.run(result.instance);
   const api: GoxPlaygroundAPI = await waitForGox();
   bindKeyboard(elements, api);
+  // 等 GX 首帧把代码行挂到 DOM 后再实测字体宽度并注入，保证 caret 与点击换算同源。
+  window.requestAnimationFrame((): void => {
+    injectCharWidth(api, elements.app);
+  });
   renderDiagnostics(api, elements);
-  scheduleCaret(api, elements);
+  settleCaret(api);
   elements.hint.textContent = "就绪 · 点击代码任意位置定位 · Ctrl+Space 补全 · Shift+Alt+F 格式化 · 悬停看符号 · 左侧选示例即运行";
 }
 

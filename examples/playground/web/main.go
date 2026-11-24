@@ -98,11 +98,45 @@ func main() {
 			"col":  ui.EditorCol(),
 		})
 	}))
+	// pickColumn 是点击落点换算：给定行号与"相对代码行左缘的 x 像素"，
+	// 用与 caret 渲染完全相同的 runeCells × charWidth 算出列（Ace 风格同源度量）。
+	// 前端不再自己 canvas 测宽算列，点哪列就落哪列。
+	g.Set("pickColumn", js.FuncOf(func(this js.Value, args []js.Value) any {
+		if len(args) >= 2 {
+			return ui.PickColumn(args[0].Int(), args[1].Float())
+		}
+		return 0
+	}))
 	// setCursor 把光标定位到指定行/列（点击代码行时调用，列按字符计）。
 	g.Set("setCursor", js.FuncOf(func(this js.Value, args []js.Value) any {
 		if len(args) >= 2 {
 			ui.EditorSetCursor(args[0].Int(), args[1].Int())
 		}
+		return nil
+	}))
+	// setCharWidth 注入实测的等宽字体单格宽度（canvas.measureText("0")），
+	// 供点击换算与 caret 定位共用；未注入时用 13px monospace 默认值。
+	g.Set("setCharWidth", js.FuncOf(func(this js.Value, args []js.Value) any {
+		if len(args) >= 1 {
+			ui.SetCharWidth(args[0].Float())
+		}
+		return nil
+	}))
+	// setWideWidth 注入全角/CJK 字符的实测像素宽度（canvas.measureText("中")），
+	// 与 setCharWidth 一起构成点击换算与 caret 定位共用的字体度量。
+	g.Set("setWideWidth", js.FuncOf(func(this js.Value, args []js.Value) any {
+		if len(args) >= 1 {
+			ui.SetWideWidth(args[0].Float())
+		}
+		return nil
+	}))
+	// settle / idle 控制 caret 闪烁：交互后常亮，静置后恢复闪烁（Ace 的 restartTimer）。
+	g.Set("settle", js.FuncOf(func(this js.Value, args []js.Value) any {
+		ui.EditorSettle()
+		return nil
+	}))
+	g.Set("idle", js.FuncOf(func(this js.Value, args []js.Value) any {
+		ui.EditorIdle()
 		return nil
 	}))
 	// insert 把补全项文本插入光标处（补全浮层点击后调用）。
