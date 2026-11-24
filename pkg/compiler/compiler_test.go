@@ -54,8 +54,12 @@ enum code { ok = 200, fail = 500 }
 	containsAll(t, got,
 		"type Color int", "ColorRed Color = iota", "ColorGreen Color = iota", "ColorBlue Color = iota",
 		"func (x Color) String() string", "func ParseColor(s string) (Color, bool)",
-		"type code int", "CodeOk code = 200", "CodeFail code = 500",
-		"func ParseCode(s string) (code, bool)")
+		// 私有 enum：类型/常量/Parse 全部私有（评审 P1：不允许部分公开 API）
+		"type code int", "codeOk code = 200", "codeFail code = 500",
+		"func parseCode(s string) (code, bool)")
+	if strings.Contains(got, "CodeOk") || strings.Contains(got, "ParseCode") {
+		t.Errorf("私有 enum 不应生成导出符号 CodeOk/ParseCode:\n%s", got)
+	}
 }
 
 func TestEnumStringAndFlags(t *testing.T) {
@@ -377,7 +381,8 @@ func main() { println(colorRed.String()) }
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, c := range []string{"case ColorRed:", "case ColorGreen:", "case ColorBlue:"} {
+	// 私有 enum color：常量名为小写 colorRed/...（评审 P1 可见性统一）
+	for _, c := range []string{"case colorRed:", "case colorGreen:", "case colorBlue:"} {
 		if !strings.Contains(res.GoSource, c) {
 			t.Errorf("无值成员 %s 不应被去重:\n%s", c, res.GoSource)
 		}

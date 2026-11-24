@@ -223,6 +223,16 @@ pub fn frame_seq() -> u64 {
     manager().lock().unwrap().frame_seq
 }
 
+/// 是否存在正在播放的视频解码器。事件驱动重绘用它判断是否需要持续调度帧：
+/// 有视频在播放时不能停，否则新帧虽写入 frame_seq 却无人请求重绘而卡住画面。
+/// 保守返回 true——宁可多绘几帧，也不能让播放中的视频停在旧画面。
+pub fn has_active() -> bool {
+    let m = manager().lock().unwrap();
+    m.decoders.values().any(|d| {
+        !*d.stop.read().unwrap() && d.spec.playing && !*d.paused.read().unwrap()
+    })
+}
+
 fn bump_seq() {
     let mut m = manager().lock().unwrap();
     m.frame_seq = m.frame_seq.wrapping_add(1);

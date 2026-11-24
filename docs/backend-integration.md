@@ -508,6 +508,39 @@ widgets.IconHeart(gxscene.Props{"size": 20, "color": "#ff453a"})
 Winding（内置图标用描边或单轮廓实心规避镂空方向问题）；动画图标需用 signal 重建
 canvas-ops。
 
+### 2.10 Rust 后端的帧传输、生命周期与事件驱动（工程评审整改）
+
+针对 Rust 后端的多轮工程评审，以下四项在 `backend/rust` 落地（这也适用于任何
+走 cgo/Wire 的独立后端，作为实现范式）：
+
+1. **帧 FIFO 队列，杜绝增量丢失**（P0）：旧实现 `Arc<Mutex<Option<Vec<u8>>>>` 是单槽，
+   连续多个增量帧在事件循环消费前会被覆盖，导致镜像缺修改。现改为
+   `FrameQueue.pending: VecDeque<Vec<u8>>`——`gx_window_draw` 逐帧入队，redraw 时 drain
+   全部按序 `apply_frame`；队列版本由 Go 侧 `Frame.Version` 连续性检查 + draw 失败回退
+   全量快照兜底。
+2. **生命周期：退出通知 + Arc 引用计数，消除 use-after-free**（P0）：`gx_window_close`
+   只设置 shutdown 并经 `EventLoopProxy<GxEvent>` 发退出请求，**不释放内存**；
+   `gx_window_run` 用 `Arc::increment_strong_count` 在事件循环期间保活，返回时 drop；
+   新增 `gx_window_destroy` 由 Go 在 `runDone` 之后释放调用方那份 Arc。Go `Window.Close`
+   严格按「请求退出 → 等 runDone → destroy → 注销注册表」顺序执行。同时移除 Go 侧
+   `LockOSThread`（锁定的线程与事件循环线程并非同一条），由 Rust 后端自管事件循环线程。
+3. **事件驱动重绘，停止空转**（P1）：去掉 `RedrawRequested` 结尾的无条件
+   `request_redraw`。新帧到达时 `gx_window_draw` 经 proxy 发合并式 `Wake` 请求一次重绘；
+   仅当 `Renderer::needs_continuous_redraw()` 为真（transition 动画 / 播放中的视频 /
+   滚动条淡入淡出过渡）才继续调度下一帧。`EventLoopProxy` 是这套机制的关键——否则
+   新帧提交后无人唤醒事件循环。
+4. **事件分级可靠性**（P1）：Rust→Go 事件回调的通道满时不再一律丢弃。`inputEvent.reliable()`
+   把 IME 提交/预编辑、键盘、点击、焦点等归为可靠事件——通道满时进 mutex 保护的
+   `overflow` 无界队列（不丢、有序），`pump` 信号唤醒 Run 去 drain；光标/hover 等高频
+   状态事件用 `mergeSlot` 只保留最新。全程非阻塞，不卡 Rust 事件线程。
+
+此外：**Wire 版本协商**（P2）——`Open` 时解析 `gx_window_version()` 的 major，与
+`expectedProtocolMajor` 不一致直接拒绝启动，防止 core 更新协议而用户仍用旧后端；
+**注册表注销**（P1）——`Window.regKey` 在 Close 时 `delete(windows, key)`，不再泄漏；
+**App.Close 错误传递**（P2）——底层 `win.Close()` 错误保存到 `closeErr` 并返回，
+`sync.Once` 保证并发重复调用结果一致。Rust Adapter 的 `go.mod` 去除对 Skia 后端的
+冗余依赖，可独立成仓。
+
 ## 3. 拆成两个项目如何跑通
 
 假设后端项目为 `github.com/yourorg/gox-desktop`，module 独立。

@@ -13,9 +13,12 @@ import (
 //
 // 命名规则（前缀式，与 http.MethodGet 一致）：
 //   类型 Color + 成员 red  ->  常量 ColorRed、String() 返回 "red"
-//   常量前缀一律 upperFirst(类型名)，与 enum 是否 pub 无关
-//   pub enum 时类型名也大写；非 pub 时类型名保持小写
-//   Parse 函数名 = "Parse" + upperFirst(类型名)，始终导出
+//
+// 可见性统一（评审 P1）：enum 的可见性决定它生成的全部符号的可见性，
+// 不允许私有 enum 泄漏出公开常量/解析函数这类"部分公开 API"：
+//   pub enum color   ->  type Color、常量 ColorRed、func ParseColor（全导出）
+//   enum code        ->  type code、常量 codeOk、func parseCode（全私有）
+// 即 constPrefix 与 parse 前缀都随 isPub 一起切换。
 //
 // 支持三种底层类型：
 //   enum X        -> int，无值成员用 iota（首个）/ 省略（后续，自动重复并递增）
@@ -31,7 +34,8 @@ type enumMember struct {
 
 type enumInfo struct {
 	typeName   string // 生成 Go 的类型名（pub 时大写）
-	constName  string // upperFirst(typeName)，常量/Parse 前缀
+	constName  string // 常量前缀：pub 时 upperFirst(typeName)，否则小写原名
+	parseName  string // 解析函数名：pub 时 Parse+constName，否则 parse+upperFirst(原名)
 	underlying string // "int" 或 "string"
 	members    []enumMember
 	p          Pos
@@ -86,26 +90,30 @@ func (s *stream) genEnum(enumIdx int, isPub bool) ([]Token, int, bool) {
 	members := s.collectMembers(braceIdx, closeIdx)
 
 	typeName := name
+	constPrefix := name // 私有 enum：常量前缀保持小写原名
+	parsePrefix := "parse"
 	if isPub {
 		typeName = upperFirst(name)
+		constPrefix = upperFirst(typeName)
+		parsePrefix = "Parse"
 		s.recordName(name, typeName) // 裸类型引用还原
 	}
-	constPrefix := upperFirst(typeName)
-	parseName := "Parse" + constPrefix
-	// Parse 的裸小写引用也要还原
-	s.recordName(lowerFirst(parseName), parseName)
+	parseName := parsePrefix + upperFirst(name)
 
 	info := enumInfo{
-		typeName: typeName, constName: constPrefix, underlying: underlying,
-		members: members, p: p,
+		typeName: typeName, constName: constPrefix, parseName: parseName,
+		underlying: underlying, members: members, p: p,
 	}
 
 	code := genEnumCode(info, namesOf(members))
-	// 成员常量的裸引用还原：colorGreen / colorRed -> ColorGreen / ColorRed
+	// 成员常量的裸引用还原：pub enum 时 colorGreen -> ColorGreen；
+	// 私有 enum 时 lowerFirst(cn)==cn，recordName 内部会跳过（lower==upper）。
 	for _, m := range members {
 		cn := constPrefix + upperFirst(m.name)
 		s.recordName(lowerFirst(cn), cn)
 	}
+	// Parse 的裸小写引用还原，同理私有 enum 时是 no-op。
+	s.recordName(lowerFirst(parseName), parseName)
 	return genGoCode(code, p), closeIdx, underlying == "int"
 }
 
@@ -169,8 +177,8 @@ func genEnumCode(info enumInfo, memberNames []string) string {
 		b.WriteString("\t}\n\treturn strconv.Itoa(int(x))\n}\n")
 	}
 
-	// Parse()
-	parseName := "Parse" + p
+	// Parse()：函数名由可见性决定（pub -> ParseXxx，私有 -> parseXxx）。
+	parseName := info.parseName
 	fmt.Fprintf(&b, "func %s(s string) (%s, bool) {\n\tswitch s {\n", parseName, t)
 	seenKeys := map[string]bool{}
 	for _, m := range info.members {

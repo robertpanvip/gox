@@ -4,7 +4,7 @@ import "fmt"
 
 pub enum color { red, green, blue }
 
-// 显式赋值的枚举（私有 enum：类型名保持小写，常量前缀仍大写）
+// 显式赋值的枚举（私有 enum：类型/常量/Parse 全部私有，不泄漏公开符号）
 enum status { pending = 1, active = 2, done = 3 }
 
 // 字符串枚举
@@ -22,5 +22,5 @@ pub func name(c color) string {
 func main() {
     c := ColorRed
     m, _ := parseMethod("GET")
-    fmt.println(name(c), StatusPending, m, PermRead|PermWrite)
+    fmt.println(name(c), statusPending, m, PermRead|PermWrite)
 }

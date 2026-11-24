@@ -14,6 +14,7 @@ extern int         gx_window_draw(void* handle, const uint8_t* buf, int len);
 extern void        gx_window_set_event_cb(void* handle, gx_event_cb cb, void* ctx);
 extern int         gx_window_run(void* handle);
 extern void        gx_window_close(void* handle);
+extern void        gx_window_destroy(void* handle);
 extern const char* gx_window_version();
 extern uint64_t    gx_bench_frame(const uint8_t* buf, int len, float width, float height, int iters);
 
@@ -54,10 +55,9 @@ func goEventBridge(jsonPtr *C.char, ctx unsafe.Pointer) {
 	w := windows[uintptr(ctx)]
 	windowsMu.Unlock()
 	if w != nil {
-		select {
-		case w.events <- ev:
-		default: // 满则丢弃，不阻塞 Rust 事件循环
-		}
+		// 分级投递（评审 P1）：可靠事件不丢、可合并事件保留最新，且全部非阻塞，
+		// 绝不卡住 Rust 事件循环线程。
+		w.postEvent(ev)
 	}
 }
 
@@ -130,8 +130,15 @@ func cWindowRun(handle unsafe.Pointer) int {
 	return int(C.gx_window_run(handle))
 }
 
+// cWindowClose 只请求 Rust 事件循环退出，不释放 handle 内存（评审 P0 生命周期）。
 func cWindowClose(handle unsafe.Pointer) {
 	C.gx_window_close(handle)
+}
+
+// cWindowDestroy 在事件循环退出后真正释放 Rust Backend（Arc::from_raw）。
+// 必须与 cWindowRun 返回之后调用，杜绝 Run/Close 竞争下的 use-after-free。
+func cWindowDestroy(handle unsafe.Pointer) {
+	C.gx_window_destroy(handle)
 }
 
 func cVersion() string {

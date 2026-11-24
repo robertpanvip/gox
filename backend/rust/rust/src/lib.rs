@@ -9,8 +9,16 @@
 //!
 //! 线程模型：wgpu surface 与事件循环绑定在 gx_window_run() 所在线程。
 //! 该线程由 Go 侧 goroutine 经 cgo 进入，并非进程主线程，故 Linux 下显式开启
-//! winit 的 any_thread（官方嵌入宿主 API）；Windows 无主线程限制。
-//! draw() 只写共享 frame（Arc<Mutex>），线程安全。
+//! winit 的 any_thread（官方嵌入宿主 API）；Windows 无主线程限制。事件循环线程
+//! 由本后端自管理，Go 侧不再用 LockOSThread 试图绑定（评审 P0）。
+//!
+//! 帧传输与生命周期（评审 P0）：
+//!   - draw() 把帧 push 进 FIFO 队列并通过 EventLoopProxy 唤醒事件循环；事件循环
+//!     每次 redraw 排空队列、按顺序 apply，杜绝单槽覆盖导致的增量丢失。
+//!   - Backend 用 Arc 引用计数管理：run 持有强引用直到事件循环退出；close 只发
+//!     退出请求，不释放内存；内存由最后离开的引用（gx_window_destroy / run 结束）
+//!     释放，彻底消除 Run/Close 竞争下的 use-after-free。
+//!   - 重绘改为事件驱动：新帧/尺寸/交互状态/动画/视频才请求重绘，静止时停止。
 
 mod binprotocol;
 mod canvas;
@@ -22,16 +30,67 @@ mod style;
 mod video;
 
 use render::Renderer;
+use std::collections::VecDeque;
 use std::ffi::CString;
 use std::os::raw::{c_char, c_int, c_uchar, c_void};
 use std::sync::{Arc, Mutex};
 use winit::{
     dpi::LogicalSize,
     event::{ElementState, Ime, MouseButton, WindowEvent},
-    event_loop::EventLoop,
+    event_loop::{EventLoop, EventLoopProxy},
     keyboard::{Key, NamedKey},
     window::Window,
 };
+
+/// 从任意线程投递给事件循环的用户事件（评审 P0/P1）。
+/// Wake：有新帧或需要重绘；Close：请求事件循环退出。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GxEvent {
+    Wake,
+    Close,
+}
+
+/// 共享帧状态：FIFO 队列保证增量不丢；proxy 用于跨线程唤醒；shutdown 用于优雅退出。
+struct FrameQueue {
+    /// 待消费帧队列（FIFO）。draw push_back，redraw drain 全部按序 apply。
+    pending: VecDeque<Vec<u8>>,
+    /// 事件循环代理（run 启动后注入）。draw/close 经它唤醒事件循环。
+    proxy: Option<EventLoopProxy<GxEvent>>,
+    /// 已收到退出请求。
+    shutdown: bool,
+    /// 是否已有一个 Wake 在途，避免高频 draw 堆积大量 wake 消息。
+    wake_in_flight: bool,
+    /// 已成功 apply 的帧数（诊断用）。
+    applied: u64,
+}
+
+impl FrameQueue {
+    fn new() -> Self {
+        FrameQueue {
+            pending: VecDeque::new(),
+            proxy: None,
+            shutdown: false,
+            wake_in_flight: false,
+            applied: 0,
+        }
+    }
+
+    /// 唤醒事件循环请求一次重绘。Wake 消息合并：已有在途则不再发。
+    fn wake(&mut self, ev: GxEvent) {
+        let need = match ev {
+            GxEvent::Wake => !self.wake_in_flight,
+            GxEvent::Close => true, // Close 必须每次都发，确保能退出
+        };
+        if !need {
+            return;
+        }
+        if let Some(p) = &self.proxy {
+            if p.send_event(ev).is_ok() && ev == GxEvent::Wake {
+                self.wake_in_flight = true;
+            }
+        }
+    }
+}
 
 pub type EventCallback = Option<extern "C" fn(*const c_char, *mut c_void)>;
 
@@ -53,8 +112,8 @@ impl Default for WindowStyle {
 }
 
 struct Backend {
-    /// 共享二进制帧；Some(Vec<u8>) 表示有最新帧待渲染
-    frame: Arc<Mutex<Option<Vec<u8>>>>,
+    /// 共享帧队列（FIFO）+ 事件循环唤醒 + 退出标志
+    queue: Arc<Mutex<FrameQueue>>,
     cb: Arc<Mutex<EventCallback>>,
     cb_ctx: Arc<Mutex<*mut c_void>>,
     width: u32,
@@ -92,7 +151,7 @@ pub extern "C" fn gx_window_new_ex(
 ) -> *mut c_void {
     let title_str = unsafe { cstr(title) };
     let backend = Backend {
-        frame: Arc::new(Mutex::new(None)),
+        queue: Arc::new(Mutex::new(FrameQueue::new())),
         cb: Arc::new(Mutex::new(None)),
         cb_ctx: Arc::new(Mutex::new(std::ptr::null_mut())),
         width: width.max(1) as u32,
@@ -105,11 +164,16 @@ pub extern "C" fn gx_window_new_ex(
             opacity,
         },
     };
-    Box::into_raw(Box::new(backend)) as *mut c_void
+    // Arc::into_raw：handle 是一份强引用的原始指针。run 期间借用（不改计数），
+    // destroy 时 Arc::from_raw 释放。close 不释放，避免 run 仍在使用时 UAF。
+    Arc::into_raw(Arc::new(backend)) as *mut c_void
 }
 
-/// 传入二进制帧。一次 memcpy 到共享区，事件循环线程下次 redraw 时零拷贝解析。
-/// 返回 0=ok, 1=参数错。
+/// 传入二进制帧。一次 memcpy 入 FIFO 队列，并唤醒事件循环请求重绘。
+/// 返回 0=ok, 1=参数错, 2=窗口已请求关闭（调用方应停止提交）。
+///
+/// 队列保序（评审 P0）：每帧都入队，redraw 时 drain 全部按序 apply。这样即便
+/// Go Host 连续提交多个增量帧、事件循环尚未消费，也不会因单槽覆盖丢失中间帧。
 #[no_mangle]
 pub extern "C" fn gx_window_draw(handle: *mut c_void, buf: *const c_uchar, len: c_int) -> c_int {
     if handle.is_null() || buf.is_null() || len <= 0 {
@@ -118,7 +182,12 @@ pub extern "C" fn gx_window_draw(handle: *mut c_void, buf: *const c_uchar, len: 
     let slice = unsafe { std::slice::from_raw_parts(buf, len as usize) };
     let owned = slice.to_vec(); // 唯一一次拷贝
     let backend = unsafe { &*(handle as *const Backend) };
-    *backend.frame.lock().unwrap() = Some(owned);
+    let mut q = backend.queue.lock().unwrap();
+    if q.shutdown {
+        return 2;
+    }
+    q.pending.push_back(owned);
+    q.wake(GxEvent::Wake); // 合并 wake，避免高频帧堆积
     0
 }
 
@@ -137,16 +206,34 @@ pub extern "C" fn gx_window_run(handle: *mut c_void) -> c_int {
     if handle.is_null() {
         return 1;
     }
-    let backend = unsafe { &*(handle as *const Backend) };
+    // 保活（评审 P0 生命周期）：handle 是调用方持有的 1 份强引用（into_raw 产生）。
+    // run 期间先用 increment_strong_count 加 1 份，再从 raw 造出 Arc 借用这份新增引用；
+    // 这样即便 Go 侧并发调用 destroy 释放原始那份，run 仍有自己的引用，不会 UAF。
+    // run 返回时 backend drop（-1），原始那份仍归调用方。
+    unsafe { Arc::increment_strong_count(handle as *const Backend) };
+    let backend: Arc<Backend> = unsafe { Arc::from_raw(handle as *const Backend) };
+
     let (w, h) = (backend.width, backend.height);
     let style = backend.style;
     let title = backend.title.clone();
     // 启动时间探针：仅当 GX_STARTUP_PROBE 设置时开启，默认零开销。
-    // 首帧渲染完成时经事件回调回传 kind="startup_first_frame" 及其 text 内的分阶段耗时。
     let probe = std::env::var_os("GX_STARTUP_PROBE").is_some();
     let t_run_start = if probe { Some(std::time::Instant::now()) } else { None };
     let result = std::panic::catch_unwind(|| {
         let el = new_event_loop();
+        // 注入 proxy：draw/close 可跨线程唤醒这个事件循环。
+        {
+            let mut q = backend.queue.lock().unwrap();
+            q.proxy = Some(el.create_proxy());
+            if q.shutdown {
+                // close 早于 run：直接退出，不创建窗口。
+                return;
+            }
+            // draw 早于 run（首帧在 run 前提交）：补一次 wake。
+            if !q.pending.is_empty() {
+                q.wake(GxEvent::Wake);
+            }
+        }
         let mut state: Option<Renderer> = None;
         el.run_app(&mut WinitApp {
             state: &mut state,
@@ -154,7 +241,7 @@ pub extern "C" fn gx_window_run(handle: *mut c_void) -> c_int {
             height: h,
             title,
             style,
-            frame: backend.frame.clone(),
+            queue: backend.queue.clone(),
             cb: backend.cb.clone(),
             cb_ctx: backend.cb_ctx.clone(),
             probe,
@@ -164,18 +251,19 @@ pub extern "C" fn gx_window_run(handle: *mut c_void) -> c_int {
         })
         .expect("run_app");
     });
+    // backend 在此 drop（-1）。原始那份由 gx_window_destroy 释放。
     if result.is_ok() { 0 } else { 2 }
 }
 
 /// 构造事件循环。Linux 下事件循环跑在 Go goroutine 经 cgo 进入的线程（非主线程），
 /// 必须显式开启 any_thread；X11/Wayland 两条后端都要开，避免运行环境选 Wayland 时踩坑。
-fn new_event_loop() -> EventLoop<()> {
+fn new_event_loop() -> EventLoop<GxEvent> {
     #[cfg(target_os = "linux")]
     {
         use winit::event_loop::EventLoopBuilder;
         use winit::platform::wayland::EventLoopBuilderExtWayland;
         use winit::platform::x11::EventLoopBuilderExtX11;
-        let mut builder: EventLoopBuilder<()> = EventLoopBuilder::new();
+        let mut builder: EventLoopBuilder<GxEvent> = EventLoop::<GxEvent>::with_user_event();
         // 两条后端都开，完全限定调用避免 with_any_thread 歧义。
         EventLoopBuilderExtX11::with_any_thread(&mut builder, true);
         EventLoopBuilderExtWayland::with_any_thread(&mut builder, true);
@@ -183,7 +271,9 @@ fn new_event_loop() -> EventLoop<()> {
     }
     #[cfg(not(target_os = "linux"))]
     {
-        return EventLoop::new().expect("event loop");
+        return EventLoop::<GxEvent>::with_user_event()
+            .build()
+            .expect("event loop");
     }
 }
 
@@ -193,7 +283,7 @@ struct WinitApp<'a> {
     height: u32,
     title: String,
     style: WindowStyle,
-    frame: Arc<Mutex<Option<Vec<u8>>>>,
+    queue: Arc<Mutex<FrameQueue>>,
     cb: Arc<Mutex<EventCallback>>,
     cb_ctx: Arc<Mutex<*mut c_void>>,
     // 启动探针状态（GX_STARTUP_PROBE 门控，默认 false/None）
@@ -203,7 +293,7 @@ struct WinitApp<'a> {
     first_frame_done: bool,
 }
 
-impl winit::application::ApplicationHandler for WinitApp<'_> {
+impl winit::application::ApplicationHandler<GxEvent> for WinitApp<'_> {
     fn resumed(&mut self, el: &winit::event_loop::ActiveEventLoop) {
         if self.state.is_some() {
             return;
@@ -233,8 +323,27 @@ impl winit::application::ApplicationHandler for WinitApp<'_> {
         // 透明效果请用 with_transparent + 场景节点的半透明 bg；此处不设置。
         let _ = self.style.opacity;
         *self.state = Some(pollster::block_on(Renderer::new(window)));
+        // 首帧主动请求一次重绘：绘制首帧/应用 run 前已提交的帧。之后靠事件驱动。
+        self.state.as_ref().unwrap().window().request_redraw();
         if self.probe {
             self.t_resumed_done = Some(std::time::Instant::now());
+        }
+    }
+
+    /// 跨线程 wake：draw/close 经 EventLoopProxy 投递。
+    fn user_event(&mut self, el: &winit::event_loop::ActiveEventLoop, event: GxEvent) {
+        match event {
+            GxEvent::Close => el.exit(),
+            GxEvent::Wake => {
+                // 清掉 wake_in_flight，允许后续 draw 再次投递（合并语义）。
+                {
+                    let mut q = self.queue.lock().unwrap();
+                    q.wake_in_flight = false;
+                }
+                if let Some(renderer) = self.state.as_mut() {
+                    renderer.window().request_redraw();
+                }
+            }
         }
     }
 
@@ -251,9 +360,17 @@ impl winit::application::ApplicationHandler for WinitApp<'_> {
                 renderer.window().request_redraw();
             }
             WindowEvent::RedrawRequested => {
-                let newest = self.frame.lock().unwrap().take();
-                if let Some(buf) = newest {
-                    renderer.apply_frame(&buf);
+                // 排空 FIFO 队列，按顺序 apply 每一帧（评审 P0：增量不丢）。
+                // 若队列积压很多（事件循环落后于提交速率），逐帧 apply 会把镜像追到最新；
+                // 每帧都成功时 applied 递增，任一增量因无基线失败会由 Go 侧全量重发兜底。
+                let batch: Vec<Vec<u8>> = {
+                    let mut q = self.queue.lock().unwrap();
+                    q.pending.drain(..).collect()
+                };
+                for buf in &batch {
+                    if renderer.apply_frame(buf) {
+                        self.queue.lock().unwrap().applied += 1;
+                    }
                 }
                 let t_pre_render = if self.probe { Some(std::time::Instant::now()) } else { None };
                 renderer.render();
@@ -307,7 +424,12 @@ impl winit::application::ApplicationHandler for WinitApp<'_> {
                     };
                     fire(&self.cb, &self.cb_ctx, &ev.to_json());
                 }
-                renderer.window().request_redraw();
+                // 按需重绘（评审 P1）：只有仍有动画/视频/滚动条过渡时才请求下一帧；
+                // 静止场景停止 request_redraw，避免空转占用 CPU/GPU。新帧到达时由
+                // gx_window_draw 经 proxy 发 Wake 重新驱动一次重绘。
+                if renderer.needs_continuous_redraw() {
+                    renderer.window().request_redraw();
+                }
             }
             WindowEvent::CloseRequested => el.exit(),
             WindowEvent::CursorMoved { position, .. } => {
@@ -415,10 +537,28 @@ fn fire(cb: &Arc<Mutex<EventCallback>>, ctx: &Arc<Mutex<*mut c_void>>, json: &st
     }
 }
 
+/// 请求关闭：设置 shutdown 并通过 proxy 唤醒事件循环退出。
+/// 注意：这里【不释放】Backend 内存——run 可能仍在使用它（评审 P0 生命周期竞争）。
+/// 内存由 Go 侧在事件循环退出后调用 gx_window_destroy 释放。
 #[no_mangle]
 pub extern "C" fn gx_window_close(handle: *mut c_void) {
+    if handle.is_null() {
+        return;
+    }
+    let backend = unsafe { &*(handle as *const Backend) };
+    {
+        let mut q = backend.queue.lock().unwrap();
+        q.shutdown = true;
+        q.wake(GxEvent::Close);
+    }
+}
+
+/// 真正释放 Backend（Arc::from_raw 归还调用方持有的那份强引用）。
+/// Go 侧必须在 gx_window_run 返回之后调用，确保 run 已 drop 它借用的那份。
+#[no_mangle]
+pub extern "C" fn gx_window_destroy(handle: *mut c_void) {
     if !handle.is_null() {
-        unsafe { drop(Box::from_raw(handle as *mut Backend)); }
+        unsafe { drop(Arc::from_raw(handle as *const Backend)); }
     }
 }
 
