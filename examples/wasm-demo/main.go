@@ -17,9 +17,9 @@ import (
 // view 是一棵计数器场景树：点击按钮 → signal+1 → 精确更新文本 → Web 后端增量重绘 DOM。
 // 结构上等价于 GX：
 //
-//	<div style={{bg:"#0f172a", color:"#e2e8f0", padding:"24", "border-radius":"14", gap:"12", "flex-direction":"column"}}>
-//	  <b style={{"font-size":"28"}}>{count}</b>
-//	  <button onClick={increment} style={{bg:"#3b82f6", padding:"10", "border-radius":"8"}}>+</button>
+//	<div style={{bg:"#0f172a", color:"#e2e8f0", padding:"24", borderRadius:"14", gap:"12", flexDirection:"column"}}>
+//	  <b style={{fontSize:"28"}}>{count}</b>
+//	  <button onClick={increment} style={{bg:"#3b82f6", padding:"10", borderRadius:"8"}}>+</button>
 //	</div>
 func view() any {
 	count := signal.New(0)

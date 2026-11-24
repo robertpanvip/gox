@@ -1092,8 +1092,17 @@ func flattenStyle(key string, v any) (map[string]any, bool) {
 	switch x := v.(type) {
 	case Style:
 		st = x
+	case *Style:
+		if x == nil {
+			return nil, false
+		}
+		st = *x
 	case map[string]any:
-		st = Style(x)
+		parsed, err := StyleFromMap(x)
+		if err != nil {
+			return nil, false
+		}
+		st = parsed
 	case string:
 		parsed, err := ParseStyle(x)
 		if err != nil {

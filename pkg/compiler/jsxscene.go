@@ -501,16 +501,13 @@ func walkScene(n *jsxNode, ops *[]sceneOp, getters *[]sceneGetter, slotCounter *
 		if msg, _ := suspiciousAttr(a.name); msg != "" {
 			ctx.report("attr-unknown", a.pos, msg)
 		}
-		// A2/A3：class/style 传对象字面量原本会降级成匿名 struct 静默错值（后端拿到
-		// 无意义 struct）。现对 style 开一个特例：若对象字面量文本是**合法 JSON**
-		// （key 带引号，如 style={{"&:hover":{"bg":"#eee"}}}），把它重写成
-		// gxscene.parseStyle("...") ——返回受限 Style，由 host 展平为后端 props。
-		// 非 JSON 的对象字面量（如 {{ color: "red" }}，key 无引号）仍报原诊断。
+		// A2/A3：style 传对象字面量 → 强类型 gxscene.Style 结构体字面量。
+		// 普通 key 用驼峰（fontSize / backgroundColor），伪状态用单词 key
+		// （hover / active / focus / disabled，不含 "&:" 符号）。整块作为一个
+		// 动态属性插槽，runtime writeAttr 按字段展平后细粒度 diff。
 		// class 无样式表语义，保持原诊断不变。
 		if a.kind == attrExpr && isObjectLitText(a.value) {
 			if a.name == "style" {
-				// React-native 风格：驼峰 key + 动态表达式值 → gxscene.Style{...}。
-				// 整块作为一个动态属性插槽，runtime writeAttr 按 key 细粒度 diff。
 				if styleToks, ok := styleObjToTokens(a.value, a.pos, ctx); ok {
 					s := *slotCounter
 					*slotCounter++
@@ -518,12 +515,12 @@ func walkScene(n *jsxNode, ops *[]sceneOp, getters *[]sceneGetter, slotCounter *
 					*getters = append(*getters, sceneGetter{pos: a.pos, call: styleToks})
 					continue
 				}
-				// 兼容既有 JSON 形态（key 带引号）：静态 parseStyle。
+				// 兼容既有 JSON 形态（key 带引号）：静态 parseStyle → Style。
 				if json.Valid([]byte(a.value)) {
 					a.value = "gxscene.parseStyle(" + strconv.Quote(a.value) + ")"
 				} else {
 					ctx.reportAttrUnsupported(a.pos, a.name,
-						"style 对象字面量无法识别：key 请用驼峰（如 { fontSize: 12 }）或带引号 JSON（如 {\"&:hover\":{\"bg\":\"#eee\"}}）")
+						"style 对象字面量无法识别：key 请用驼峰（如 { fontSize: 12 }）或伪状态单词（如 { hover: { bg: \"#eee\" } }）")
 				}
 			} else if a.name == "class" {
 				ctx.reportAttrUnsupported(a.pos, a.name,

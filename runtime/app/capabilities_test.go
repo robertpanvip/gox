@@ -58,7 +58,7 @@ func TestRefElementComputedStyle(t *testing.T) {
 		{Code: gxscene.OpRef, Slot: 1},
 		{Code: gxscene.OpClose},
 	}, N: 2}
-	st := gxscene.Style{"bg": "#fff", "color": "#000"}
+	st := gxscene.Style{Bg: "#fff", Color: "#000"}
 	if err := app.Render(func() any {
 		return gxscene.Render(tpl,
 			func() any { return st },
@@ -108,7 +108,7 @@ func TestComputedStyleNoCapability(t *testing.T) {
 		{Code: gxscene.OpRef, Slot: 1},
 		{Code: gxscene.OpClose},
 	}, N: 2}
-	st := gxscene.Style{"bg": "#123456"}
+	st := gxscene.Style{Bg: "#123456"}
 	if err := app.Render(func() any {
 		return gxscene.Render(tpl,
 			func() any { return st },

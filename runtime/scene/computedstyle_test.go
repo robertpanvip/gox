@@ -15,12 +15,12 @@ func TestComputedStyleFromProps(t *testing.T) {
 		{Code: OpClose},
 	}, N: 2}
 	st := Style{
-		"bg":       "#fff",
-		"color":    "#000",
-		"padding":  12,
-		"opacity":  0.5,
-		"&:hover":  Style{"bg": "#eee"},
-		"&:active": Style{"bg": "#ddd", "opacity": 0.9},
+		Bg:     "#fff",
+		Color:  "#000",
+		Padding: "12",
+		Opacity: "0.5",
+		Hover:  &Style{Bg: "#eee"},
+		Active: &Style{Bg: "#ddd", Opacity: "0.9"},
 	}
 	if err := st.Validate(); err != nil {
 		t.Fatal(err)
@@ -89,9 +89,9 @@ func TestComputedStylePseudoState(t *testing.T) {
 		{Code: OpClose},
 	}, N: 2}
 	st := Style{
-		"bg":      "#fff",
-		"color":   "#000",
-		"&:hover": Style{"bg": "#eee"},
+		Bg:    "#fff",
+		Color: "#000",
+		Hover: &Style{Bg: "#eee"},
 	}
 	inst := Render(tpl,
 		func() any { return st },
@@ -129,7 +129,7 @@ func TestComputedStyleCapability(t *testing.T) {
 		{Code: OpRef, Slot: 1},
 		{Code: OpClose},
 	}, N: 2}
-	st := Style{"bg": "#fff", "color": "#000"}
+	st := Style{Bg: "#fff", Color: "#000"}
 	inst := Render(tpl,
 		func() any { return st },
 		func() any { return func(e *Element) { el = e } },

@@ -3,28 +3,95 @@ package gxscene
 import (
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"sort"
 	"strings"
+	"sync"
 )
 
-// Style 是「受限 CSS sheet」：一个 key 集合，key 必须是 StylePropNames 里的普通
-// 属性，或以 "&:" 开头的受支持伪状态；伪状态的值必须也是 Style。除此之外一律
-// 拒绝——这是「受限」的硬约束（区别于任意 key 都能塞的 Props）。
+// Style 是「强类型受限 CSS sheet」：一个字段固定的结构体，而不是任意 key 的 map。
+//
+// 设计要点：
+//   - 字段集合固定（见下方 struct）；字段名拼错在 Go 编译期就会报错，不再靠运行时
+//     Validate 兜底。GX 的 style={{ fontSize: 12 }} 由编译器生成命名字段字面量。
+//   - 标量类型统一为 StyleValue（string 别名）。CSS 值本质就是字符串：这样
+//     opacity:0 不会被当成「未设置」（float64 零值会），width:"100%"/"auto" 也能
+//     无损表达，后端 cssValue 本来就只接受字符串，零改动。
+//   - 伪状态是命名字段 Hover/Focus/Active/Disabled *Style，编译期即可校验状态名；
+//     子表经 Props 编码成 "&:hover" -> JSON 串，保持后端协议不变。
 //
 // Go 写法：
 //
 //	gxscene.Style{
-//	    "bg": "#3b82f6", "color": "#fff", "padding": "11",
-//	    "&:hover":    gxscene.Style{"bg": "#2563eb"},
-//	    "&:focus":    gxscene.Style{"border": "#2563eb"},
-//	    "&:active":   gxscene.Style{"bg": "#1d4ed8", "transform": "scale(.98)"},
-//	    "&:disabled": gxscene.Style{"bg": "#9ca3af", "opacity": "0.6"},
+//	    Bg: "#3b82f6", Color: "#fff", Padding: "11",
+//	    Hover:  &gxscene.Style{Bg: "#2563eb"},
+//	    Active: &gxscene.Style{Bg: "#1d4ed8", Transform: "scale(.98)"},
 //	}
 //
-// JSON / GX 对象字面量同样用 "&:hover" 作为 key。伪状态只作用于本节点自身
-// （& 语义），不支持后代选择器；不嵌套伪状态（子表里再写 &: 会被 Validate 拒绝
-// 的第二层拦截——实际上子表允许但展平时忽略，见 Flatten 注释）。
-type Style map[string]any
+// GX 写法（驼峰 key，编译器映射到字段；数字字面量归一化成字符串）：
+//
+//	<div style={{ backgroundColor: lineGutterColor(idx), fontSize: 12,
+//	              "&:hover": { bg: "#eee" } }}>
+type StyleValue = string
+
+// Style 是字段固定的强类型样式结构体。每个 tag 是后端约定的 kebab 属性名；
+// 编译器按 kebab→PascalCase 生成字段名，二者由 TestStyleFieldsMatchNames 守护一致。
+type Style struct {
+	Color       StyleValue `gx:"color"`
+	Bg          StyleValue `gx:"bg"`
+	Background  StyleValue `gx:"background"`
+	Width       StyleValue `gx:"width"`
+	Height      StyleValue `gx:"height"`
+	FontSize    StyleValue `gx:"font-size"`
+	Weight      StyleValue `gx:"weight"`
+	Padding     StyleValue `gx:"padding"`
+	BorderRadius StyleValue `gx:"border-radius"`
+	Border      StyleValue `gx:"border"`
+	BorderWidth StyleValue `gx:"border-width"`
+	Opacity     StyleValue `gx:"opacity"`
+	FlexDirection  StyleValue `gx:"flex-direction"`
+	FlexWrap       StyleValue `gx:"flex-wrap"`
+	JustifyContent StyleValue `gx:"justify-content"`
+	AlignItems     StyleValue `gx:"align-items"`
+	AlignContent   StyleValue `gx:"align-content"`
+	Gap            StyleValue `gx:"gap"`
+	RowGap         StyleValue `gx:"row-gap"`
+	ColumnGap      StyleValue `gx:"column-gap"`
+	Position       StyleValue `gx:"position"`
+	Top            StyleValue `gx:"top"`
+	Right          StyleValue `gx:"right"`
+	Bottom         StyleValue `gx:"bottom"`
+	Left           StyleValue `gx:"left"`
+	Overflow       StyleValue `gx:"overflow"`
+	ScrollTop      StyleValue `gx:"scroll-top"`
+	ScrollLeft     StyleValue `gx:"scroll-left"`
+	Transform      StyleValue `gx:"transform"`
+	Transition     StyleValue `gx:"transition"`
+	BoxShadow      StyleValue `gx:"box-shadow"`
+	WhiteSpace     StyleValue `gx:"white-space"`
+	FlexGrow       StyleValue `gx:"flex-grow"`
+	FlexShrink     StyleValue `gx:"flex-shrink"`
+	MinWidth       StyleValue `gx:"min-width"`
+	MaxWidth       StyleValue `gx:"max-width"`
+	MinHeight      StyleValue `gx:"min-height"`
+	MaxHeight      StyleValue `gx:"max-height"`
+	Margin         StyleValue `gx:"margin"`
+	MarginTop      StyleValue `gx:"margin-top"`
+	MarginBottom   StyleValue `gx:"margin-bottom"`
+	MarginLeft     StyleValue `gx:"margin-left"`
+	MarginRight    StyleValue `gx:"margin-right"`
+	TextAlign      StyleValue `gx:"text-align"`
+	LineHeight     StyleValue `gx:"line-height"`
+	LetterSpacing  StyleValue `gx:"letter-spacing"`
+	ZIndex         StyleValue `gx:"z-index"`
+	Cursor         StyleValue `gx:"cursor"`
+
+	// 伪状态字段。nil 表示未设置；子表里的嵌套伪状态在展平时忽略。
+	Hover    *Style `gx:"&:hover"`
+	Focus    *Style `gx:"&:focus"`
+	Active   *Style `gx:"&:active"`
+	Disabled *Style `gx:"&:disabled"`
+}
 
 // 伪状态前缀。规范形式 "&:"；"$:" 是早期约定的别名，ParseStyle/Flatten/Props
 // 会统一规整成 "&:"，保证后端只看到一种 key。
@@ -38,22 +105,18 @@ const (
 	PseudoDisabled = "&:disabled"
 )
 
-// StylePropNames 是 Style 允许的普通属性白名单，覆盖两个后端 style 解析器已支持的
-// 全部属性。想加新属性必须同时改这里 + 两后端解析，避免「host 收、后端忽略」的静默错值。
-var StylePropNames = []string{
-	"color", "bg", "background", "width", "height", "font-size", "weight",
-	"padding", "border-radius", "border", "border-width", "opacity",
-	"flex-direction", "flex-wrap", "justify-content", "align-items", "align-content",
-	"gap", "row-gap", "column-gap",
-	"position", "top", "right", "bottom", "left",
-	"overflow", "scroll-top", "scroll-left",
-	"transform", "transition", "box-shadow", "white-space",
-	// 下列 key 后端 web stylemap 已支持（backend/web/stylemap.go），此前白名单遗漏，
-	// 驼峰 style={{...}} 的静态 JSON 路径（ParseStyle→Validate）会被误拒，补齐对齐。
-	"flex-grow", "flex-shrink", "min-width", "max-width", "min-height", "max-height",
-	"margin", "margin-top", "margin-bottom", "margin-left", "margin-right",
-	"text-align", "line-height", "letter-spacing", "z-index", "cursor",
-}
+// StylePropNames 是 Style 允许的普通属性白名单（后端两解析器已支持的全部属性）。
+// 由 styleFields 元信息生成，避免与 struct 字段不同步。
+var StylePropNames = func() []string {
+	fields, _ := styleMeta()
+	out := make([]string, 0, len(fields))
+	for _, f := range fields {
+		if f.pseudo == "" {
+			out = append(out, f.key)
+		}
+	}
+	return out
+}()
 
 var stylePropSet = func() map[string]bool {
 	m := make(map[string]bool, len(StylePropNames))
@@ -67,7 +130,52 @@ var pseudoStates = map[string]bool{
 	"hover": true, "active": true, "focus": true, "disabled": true,
 }
 
-// canonicalPseudo 把 "&:x" / "$:x" 统一成 "&:x"；非伪状态 key 原样返回。
+func isStyleScalar(v any) bool {
+	switch v.(type) {
+	case nil, string, bool, int, int64, int32, float64, float32:
+		return true
+	default:
+		return false
+	}
+}
+
+// ---------- 字段元信息（反射一次，缓存复用；热路径只读缓存） ----------
+
+type styleField struct {
+	key    string // 后端 kebab key 或 "&:hover"
+	name   string // Go 字段名
+	index  int    // struct 字段索引
+	pseudo string // 伪状态名（hover/...），空表示普通属性
+}
+
+var (
+	styleMetaOnce sync.Once
+	styleMetaList []styleField
+	styleMetaByKey map[string]int
+)
+
+func styleMeta() ([]styleField, map[string]int) {
+	styleMetaOnce.Do(func() {
+		t := reflect.TypeOf(Style{})
+		styleMetaList = make([]styleField, 0, t.NumField())
+		styleMetaByKey = make(map[string]int, t.NumField())
+		for i := 0; i < t.NumField(); i++ {
+			f := t.Field(i)
+			key := f.Tag.Get("gx")
+			if key == "" {
+				continue
+			}
+			m := styleField{key: key, name: f.Name, index: i}
+			if strings.HasPrefix(key, PseudoPrefix) {
+				m.pseudo = strings.TrimPrefix(key, PseudoPrefix)
+			}
+			styleMetaByKey[key] = len(styleMetaList)
+			styleMetaList = append(styleMetaList, m)
+		}
+	})
+	return styleMetaList, styleMetaByKey
+}
+
 func canonicalPseudo(k string) string {
 	for _, p := range []string{PseudoPrefix, legacyPseudoPrefix} {
 		if strings.HasPrefix(k, p) {
@@ -83,52 +191,7 @@ func isPseudoKey(k string) bool {
 
 func isKnownPseudo(k string) bool {
 	c := canonicalPseudo(k)
-	name := strings.TrimPrefix(c, PseudoPrefix)
-	return pseudoStates[name]
-}
-
-func asStyle(v any) (Style, bool) {
-	switch x := v.(type) {
-	case Style:
-		return x, true
-	case map[string]any:
-		return Style(x), true
-	default:
-		return nil, false
-	}
-}
-
-func isStyleScalar(v any) bool {
-	switch v.(type) {
-	case nil, string, bool, int, int64, int32, float64, float32:
-		return true
-	default:
-		return false
-	}
-}
-
-// Validate 校验样式表：普通 key 必须在白名单内；伪状态 key 必须是受支持的
-// &:/$: 状态且值为 Style。返回首条错误，便于编译器/测试定位。
-func (s Style) Validate() error {
-	for k, v := range s {
-		if isPseudoKey(k) {
-			if !isKnownPseudo(k) {
-				return fmt.Errorf("style: 未知伪状态 %q（支持 %s）", k, strings.Join(pseudoStateList(), ", "))
-			}
-			sub, ok := asStyle(v)
-			if !ok {
-				return fmt.Errorf("style: 伪状态 %q 的值必须是样式表", k)
-			}
-			if err := sub.Validate(); err != nil {
-				return fmt.Errorf("style: %s: %w", k, err)
-			}
-			continue
-		}
-		if !stylePropSet[strings.ToLower(k)] {
-			return fmt.Errorf("style: 未知属性 %q（不在受限 CSS sheet 白名单）", k)
-		}
-	}
-	return nil
+	return pseudoStates[strings.TrimPrefix(c, PseudoPrefix)]
 }
 
 func pseudoStateList() []string {
@@ -140,149 +203,292 @@ func pseudoStateList() []string {
 	return out
 }
 
-// encodeSubStyle 把子样式表编码成后端可解析的 JSON 对象串（只保留标量）。
-// 伪状态 key 规整为 "&:"；子表里的嵌套伪状态忽略（不支持）。
-func encodeSubStyle(sub Style) string {
-	obj := make(map[string]any, len(sub))
-	for k, v := range sub {
-		if isPseudoKey(k) || !isStyleScalar(v) {
+// normalizeStylePseudo 把 "hover" / ":hover" / "&:hover" / "$:hover" 规整成 "hover"。
+func normalizeStylePseudo(p string) string {
+	p = strings.TrimSpace(p)
+	if strings.HasPrefix(p, PseudoPrefix) || strings.HasPrefix(p, legacyPseudoPrefix) {
+		p = p[2:]
+	}
+	return strings.ToLower(strings.TrimPrefix(p, ":"))
+}
+
+// camelToKebab 把驼峰属性名转成后端 kebab 名（与编译器 styleKeyCamelToKebab 同规则）。
+func camelToKebab(s string) string {
+	if s == "" || strings.ContainsAny(s, "-:") {
+		return s
+	}
+	var b strings.Builder
+	for i, r := range s {
+		if r >= 'A' && r <= 'Z' {
+			if i > 0 {
+				b.WriteByte('-')
+			}
+			b.WriteByte(byte(r - 'A' + 'a'))
+		} else {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+// ---------- 校验 ----------
+
+// Validate 递归校验伪状态子表。普通属性因字段固定，编译期已保证合法；
+// 从 JSON / map 动态构造时由 setStyleValue 拦截未知 key。
+func (s Style) Validate() error {
+	fields, _ := styleMeta()
+	v := reflect.ValueOf(s)
+	for _, f := range fields {
+		if f.pseudo == "" {
 			continue
 		}
-		obj[canonicalPseudo(k)] = v
+		sub, _ := v.Field(f.index).Interface().(*Style)
+		if sub == nil {
+			continue
+		}
+		if err := sub.Validate(); err != nil {
+			return fmt.Errorf("style: %s: %w", f.key, err)
+		}
 	}
-	b, _ := json.Marshal(obj)
-	return string(b)
+	return nil
+}
+
+// ---------- 展平 ----------
+
+// forEachScalar 遍历所有非空的普通属性字段，供 Props / Flatten / encodeSubStyle 复用。
+func (s Style) forEachScalar(fn func(key, val string)) {
+	fields, _ := styleMeta()
+	v := reflect.ValueOf(s)
+	for _, f := range fields {
+		if f.pseudo != "" {
+			continue
+		}
+		sv, _ := v.Field(f.index).Interface().(StyleValue)
+		if sv != "" {
+			fn(f.key, sv)
+		}
+	}
+}
+
+func (s Style) pseudoPtr(name string) *Style {
+	fields, byKey := styleMeta()
+	i, ok := byKey[PseudoPrefix+name]
+	if !ok {
+		return nil
+	}
+	sub, _ := reflect.ValueOf(s).Field(fields[i].index).Interface().(*Style)
+	return sub
+}
+
+// encodeSubStyle 把子样式表编码成后端可解析的紧凑 JSON 串（只保留普通属性，
+// 忽略子表里的嵌套伪状态）。
+func encodeSubStyle(sub Style) string {
+	var parts []string
+	sub.forEachScalar(func(k, v string) {
+		b, _ := json.Marshal(v)
+		kb, _ := json.Marshal(k)
+		parts = append(parts, string(kb)+":"+string(b))
+	})
+	if len(parts) == 0 {
+		return ""
+	}
+	return "{" + strings.Join(parts, ",") + "}"
 }
 
 // Props 把样式表展平成后端 props：普通属性直出；伪状态子表编码成
-// props["&:hover"] = `{"bg":"#2563eb"}` 这样的紧凑串，交给后端按命中状态覆盖。
-// 调用前应先 Validate（本方法不重复校验，保持热路径轻量）。
+// props["&:hover"] = `{"bg":"#eee"}` 这样的紧凑串。
 func (s Style) Props() Props {
-	p := make(Props, len(s))
-	for k, v := range s {
-		if isPseudoKey(k) {
-			if sub, ok := asStyle(v); ok && len(sub) > 0 {
-				key := canonicalPseudo(k)
-				encoded := encodeSubStyle(sub)
-				if encoded != "{}" && encoded != "" {
-					p[key] = encoded
-				}
+	fields, _ := styleMeta()
+	v := reflect.ValueOf(s)
+	p := make(Props, len(fields))
+	for _, f := range fields {
+		if f.pseudo != "" {
+			sub, _ := v.Field(f.index).Interface().(*Style)
+			if sub == nil {
+				continue
+			}
+			if enc := encodeSubStyle(*sub); enc != "" {
+				p[PseudoPrefix+f.pseudo] = enc
 			}
 			continue
 		}
-		p[k] = v
+		sv, _ := v.Field(f.index).Interface().(StyleValue)
+		if sv != "" {
+			p[f.key] = sv
+		}
 	}
 	return p
 }
 
 // Flatten 按当前激活的伪状态把样式表合并成一份扁平 props（host/Skia headless
-// 测试用，模拟后端的覆盖行为）。顺序：先普通属性，再按 state 列表依次覆盖，
-// 后出现的伪状态优先级更高。子表里的嵌套伪状态忽略。
+// 用，模拟后端覆盖行为）。顺序：先普通属性，再按 states 依次覆盖。
 func (s Style) Flatten(states ...string) Props {
 	out := Props{}
-	for k, v := range s {
-		if !isPseudoKey(k) {
-			out[k] = v
-		}
-	}
+	s.forEachScalar(func(k, v string) { out[k] = v })
 	for _, st := range states {
-		name := strings.TrimPrefix(strings.TrimPrefix(st, PseudoPrefix), legacyPseudoPrefix)
-		// 原始 Style 可能用 &: 或 $: 存 key（未经 Props 规整），两种都查。
-		sub, ok := asStyle(s[PseudoPrefix+name])
-		if !ok {
-			sub, ok = asStyle(s[legacyPseudoPrefix+name])
+		sub := s.pseudoPtr(normalizeStylePseudo(st))
+		if sub == nil {
+			continue
 		}
-		if ok {
-			for sk, sv := range sub {
-				if !isPseudoKey(sk) {
-					out[sk] = sv
-				}
-			}
-		}
+		sub.forEachScalar(func(k, v string) { out[k] = v })
 	}
 	return out
 }
 
-// ParseStyle 从 JSON 对象字符串解析样式表。"&:hover"/"$:hover" 这类 key 递归
-// 解析为子 Style，其余 key 保留标量值。解析后自动 Validate。
+// ---------- 动态构造（JSON / map） ----------
+
+func scalarToStyleValue(v any) (string, bool) {
+	switch x := v.(type) {
+	case nil:
+		return "", true
+	case string:
+		return x, true
+	case bool:
+		if x {
+			return "true", true
+		}
+		return "false", true
+	case float64:
+		return fmt.Sprint(x), true
+	case float32:
+		return fmt.Sprint(x), true
+	case int:
+		return fmt.Sprint(x), true
+	case int32:
+		return fmt.Sprint(x), true
+	case int64:
+		return fmt.Sprint(x), true
+	default:
+		return "", false
+	}
+}
+
+func styleFromAny(v any) (Style, error) {
+	switch x := v.(type) {
+	case Style:
+		return x, nil
+	case *Style:
+		if x != nil {
+			return *x, nil
+		}
+		return Style{}, nil
+	case map[string]any:
+		var s Style
+		for k, val := range x {
+			if err := setStyleValue(&s, k, val); err != nil {
+				return Style{}, err
+			}
+		}
+		return s, nil
+	case string:
+		return ParseStyle(x)
+	default:
+		return Style{}, fmt.Errorf("style: 值类型 %T 不是样式表", v)
+	}
+}
+
+// setStyleValue 把动态构造的 key/value 写入 struct 字段；未知 key 报错。
+func setStyleValue(s *Style, key string, val any) error {
+	key = canonicalPseudo(key)
+	fields, byKey := styleMeta()
+	// 伪状态单词 key（hover/active/focus/disabled）映射到 "&:x" 字段。
+	if _, isP := pseudoStates[strings.ToLower(key)]; isP && !isPseudoKey(key) {
+		key = PseudoPrefix + strings.ToLower(key)
+	}
+	i, ok := byKey[key]
+	if !ok {
+		// 兼容驼峰 key（如 fontSize）。
+		if kebab := camelToKebab(key); kebab != key {
+			i, ok = byKey[kebab]
+			key = kebab
+		}
+	}
+	if !ok {
+		return fmt.Errorf("style: 未知属性 %q（不在受限 CSS sheet）", key)
+	}
+	f := fields[i]
+	dst := reflect.ValueOf(s).Elem().Field(f.index)
+	if f.pseudo != "" {
+		sub, err := styleFromAny(val)
+		if err != nil {
+			return fmt.Errorf("style: 伪状态 %q 的值必须是样式表: %w", key, err)
+		}
+		dst.Set(reflect.ValueOf(&sub))
+		return nil
+	}
+	sv, ok := scalarToStyleValue(val)
+	if !ok {
+		return fmt.Errorf("style: 属性 %q 的值不是合法标量", key)
+	}
+	dst.SetString(sv)
+	return nil
+}
+
+// StyleFromMap 把 map[string]any 严格转换为 Style（兼容既有的动态构造路径）。
+func StyleFromMap(m map[string]any) (Style, error) {
+	return styleFromAny(m)
+}
+
+// asStyle 把任意候选值解释为 Style，用于内部兼容。
+func asStyle(v any) (Style, bool) {
+	s, err := styleFromAny(v)
+	return s, err == nil
+}
+
+// parseStyle 供编译器生成的 getter 使用（单返回值）。编译器已校验 JSON 合法，
+// 这里解析失败时返回空 Style，不向生成代码暴露 error。
+func parseStyle(src string) Style {
+	s, _ := ParseStyle(src)
+	return s
+}
+
+// ParseStyle 从 JSON 对象字符串解析样式表。"&:hover"/"$:hover" 递归解析为子表。
 func ParseStyle(src string) (Style, error) {
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(src), &raw); err != nil {
-		return nil, fmt.Errorf("style: 非法 JSON: %w", err)
+		return Style{}, fmt.Errorf("style: 非法 JSON: %w", err)
 	}
-	s := make(Style, len(raw))
+	var s Style
 	for k, r := range raw {
-		if isPseudoKey(k) {
-			var sub Style
-			if err := json.Unmarshal(r, &sub); err != nil {
-				return nil, fmt.Errorf("style: %q 的值必须是样式对象: %w", k, err)
-			}
-			s[canonicalPseudo(k)] = sub
-			continue
-		}
 		var v any
 		if err := json.Unmarshal(r, &v); err != nil {
-			return nil, fmt.Errorf("style: 属性 %q 解析失败: %w", k, err)
+			return Style{}, fmt.Errorf("style: 属性 %q 解析失败: %w", k, err)
 		}
-		s[k] = v
-	}
-	if err := s.Validate(); err != nil {
-		return nil, err
+		if err := setStyleValue(&s, k, v); err != nil {
+			return Style{}, err
+		}
 	}
 	return s, nil
 }
 
-// ApplyStyle 把 Style 展平后写入目标 Props（供 host 的 slotAttr 写入路径调用）。
-// 只处理 key == "style" 的值：若 v 是 Style / map[string]any / JSON 字符串，
-// 展平并合并进 dst；否则原样写回 key。返回是否发生了样式展开。
-//
-// 合并语义：Style 的普通属性与伪状态串直接覆盖 dst 同名 key——与手写属性共存时，
-// style 表视为「整块样式声明」，优先级高于之前的同名属性。
+// ApplyStyle 把 Style 展平后写入目标 Props（host 的 slotAttr 写入路径调用）。
 func ApplyStyle(dst Props, key string, v any) bool {
 	if key != "style" {
 		return false
 	}
-	var st Style
-	switch x := v.(type) {
-	case Style:
-		st = x
-	case map[string]any:
-		st = Style(x)
-	case string:
-		parsed, err := ParseStyle(x)
-		if err != nil {
-			dst[key] = v // 解析失败保留原值，不静默吞掉
-			return false
-		}
-		st = parsed
-	default:
+	st, err := styleFromAny(v)
+	if err != nil {
+		dst[key] = v // 解析失败保留原值，不静默吞掉
 		return false
 	}
 	for k, pv := range st.Props() {
 		dst[k] = pv
 	}
-	delete(dst, key) // style 本身不是后端属性
+	delete(dst, key)
 	return true
 }
 
-// PseudoStateFromProps 从后端回传的 props 里读取某个伪状态子表（解码 Props/encodeSubStyle
-// 的编码），供 Skia headless 测试强制状态用。找不到返回 ok=false。
+// PseudoStateFromProps 从后端回传的 props 里读取某个伪状态子表，供 Skia headless
+// 测试强制状态用。找不到返回 ok=false。
 func PseudoStateFromProps(p map[string]any, state string) (Style, bool) {
-	key := PseudoPrefix + strings.TrimPrefix(strings.TrimPrefix(state, PseudoPrefix), legacyPseudoPrefix)
+	key := PseudoPrefix + normalizeStylePseudo(state)
 	v, ok := p[key]
 	if !ok {
-		return nil, false
+		return Style{}, false
 	}
-	var obj map[string]any
-	switch x := v.(type) {
-	case string:
-		if err := json.Unmarshal([]byte(x), &obj); err != nil {
-			return nil, false
-		}
-	case map[string]any:
-		obj = x
-	default:
-		return nil, false
+	st, err := styleFromAny(v)
+	if err != nil {
+		return Style{}, false
 	}
-	return Style(obj), true
+	return st, true
 }

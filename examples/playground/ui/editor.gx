@@ -571,10 +571,9 @@ func lineNumber(idx int) string { return strconv.itoa(idx + 1) }
 // token 缓存复用（未变行不重新分词）、固定 24 行（动态新增行会漏叶子订阅）、
 // 批量 + RAF 提交（一次交互只打一帧 DOM 补丁）。
 func lineView(idx int) *gxscene.Instance {
-    // 样式用 react-native 风格的对象字面量：驼峰 key 收进 style={{...}}，
-    // bg 写作 background，编译器降级为 gxscene.Style{...}，runtime 按 key 细粒度 diff。
-    // 静态/标量样式一律用直接属性（kebab key）走标量快路径，不用 style 对象——
-    // style 对象每次 effect 重算都要 flattenStyle 构造 map + 反射，是切换热点。
+    // 样式优先用直接属性（kebab key）走标量快路径。若需收进 style={{...}}，
+    // 驼峰 key 编译为 gxscene.Style 的强类型字段，伪状态用单词 key（hover 等）。
+    // 这里刻意不用 style 对象：它每次 effect 重算都要构造 Style + 展平 props，是切换热点。
     return <div bg={lineRowBg(idx)} height={rowHeight(idx)} overflow="hidden"
         flex-direction="row" align-items="center">
         <div bg={lineGutterColor(idx)} color="#858585" width="42" font-size="12"

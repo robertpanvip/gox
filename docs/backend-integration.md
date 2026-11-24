@@ -326,27 +326,28 @@ jump += offsets[anchor] - oldOff   // 视口上方项变高 → 补偿，视觉�
 
 ### 2.7 受限样式表与伪状态样式（`&:hover` / `&:focus` / `&:active` / `&:disabled`）
 
-样式从「任意字符串 props」收敛为**受限 CSS sheet**：`gxscene.Style` 是一个 map 类型，
-key 只能是白名单属性（`StylePropNames`）或受支持的伪状态（`&:hover`/`&:active`/
-`&:focus`/`&:disabled`）；其余 key 由 `Style.Validate()` 拒绝。值为标量。
+样式从「任意字符串 props」收敛为**受限 CSS sheet**：`gxscene.Style` 是一个**字段固定的
+强类型 struct**，字段即白名单属性，标量统一为 `StyleValue`（string 别名），伪状态是
+`Hover`/`Active`/`Focus`/`Disabled *Style` 字段。字段名拼错在 Go 编译期即报错。
 
 **写法**（Go、GX、JSON 三种等价）：
 
 ```go
-// Go：字段即白名单，伪状态是值为 Style 的特殊 key
+// Go：固定字段；伪状态是 *Style 命名字段
 gxscene.Style{
-    "bg": "#3b82f6", "color": "#fff", "padding": "11",
-    "&:hover":  gxscene.Style{"bg": "#2563eb"},
-    "&:active": gxscene.Style{"bg": "#1d4ed8", "transform": "scale(.98)"},
+    Bg: "#3b82f6", Color: "#fff", Padding: "11",
+    Hover:  &gxscene.Style{Bg: "#2563eb"},
+    Active: &gxscene.Style{Bg: "#1d4ed8", Transform: "scale(.98)"},
 }
 ```
 ```jsx
-// GX：带引号 key 的 JSON 对象字面量 → 编译期改写为 gxscene.parseStyle("...")
-<div style={{"bg":"#fff","&:hover":{"bg":"#eee"}}}>x</div>
+// GX：驼峰 key + 伪状态单词 key → 编译为 gxscene.Style{...} 结构体字面量
+<div style={{bg:"#fff", hover:{bg:"#eee"}}}>x</div>
 ```
-`style` 也能直接接 JSON 字符串：`style='{"bg":"#fff","&:hover":{"bg":"#eee"}}'`。
-key 无引号的对象字面量（如 `{{ color: "red" }}`）仍报 `attr-unsupported`——它会降级成
-匿名 struct 静默错值，必须避免。
+带引号 key 的旧 JSON 写法（`style={{"bg":"#fff","&:hover":{"bg":"#eee"}}}`）同样映射
+到强类型字段，语义不变；`style` 也能直接接 JSON 字符串。GX 源码里伪状态推荐用单词
+key（`hover`/`active`/`focus`/`disabled`），不写 `&:` 符号——后端 props 里的 `&:hover`
+由 `Style.Props()` 生成，与源码写法无关。
 
 四种伪状态均已接入：**`&:hover` / `&:focus` / `&:active` / `&:disabled`**。
 

@@ -8,10 +8,10 @@ import (
 // 普通属性 + &:hover 伪状态串，且 style 本身不残留在 Props。
 func TestStyleFlattenIntoProps(t *testing.T) {
 	s := Style{
-		"bg":       "#fff",
-		"color":    "#000",
-		"&:hover":  Style{"bg": "#eee"},
-		"&:active": Style{"bg": "#ddd", "opacity": "0.9"},
+		Bg:     "#fff",
+		Color:  "#000",
+		Hover:  &Style{Bg: "#eee"},
+		Active: &Style{Bg: "#ddd", Opacity: "0.9"},
 	}
 	if err := s.Validate(); err != nil {
 		t.Fatal(err)
@@ -35,14 +35,14 @@ func TestStyleFlattenIntoProps(t *testing.T) {
 		t.Errorf("伪状态子表未展平: %v", p)
 	}
 	sub, ok := PseudoStateFromProps(map[string]any(p), "hover")
-	if !ok || sub["bg"] != "#eee" {
-		t.Errorf("回读 hover 子表失败: %v", sub)
+	if !ok || sub.Bg != "#eee" {
+		t.Errorf("回读 hover 子表失败: %+v", sub)
 	}
 }
 
 // 增量更新：style 从含 hover 的集合变成只含 color，消失的 bg/&:hover 应变空串。
 func TestStyleIncrementalCleanup(t *testing.T) {
-	var cur any = Style{"bg": "#fff", "&:hover": Style{"bg": "#eee"}}
+	var cur any = Style{Bg: "#fff", Hover: &Style{Bg: "#eee"}}
 	tpl := Template{Ops: []Op{
 		{Code: OpElem, Arg: "div"},
 		{Code: OpDynAttr, Key: "style", Slot: 0},
@@ -57,7 +57,7 @@ func TestStyleIncrementalCleanup(t *testing.T) {
 		t.Fatalf("初始 bg 失败: %v", p)
 	}
 
-	cur = Style{"color": "#000"}
+	cur = Style{Color: "#000"}
 	inst.Update()
 	p = div.Props
 	if p["color"] != "#000" {

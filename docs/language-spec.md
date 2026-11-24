@@ -68,38 +68,39 @@ pub enum perm { read = 1 << iota, write, exec }  // 位标志 1,2,4
 | `<br/>` 空元素 | `gxscene.OpElem Arg:"br"` + `gxscene.OpClose` |
 | `<Foo/>` 组件 | `gxscene.OpComp` + `Foo(gxscene.Props{…})` |
 
-#### `style={{…}}` 对象字面量（react-native 风格样式）
+#### `style={{…}}` 对象字面量（强类型结构体样式）
 
-样式既可逐个写成散属性（`bg="#fff" font-size="12"`），也可收进一个 `style` 对象字面量——key 用驼峰，值为普通 GX 表达式（静态字面量或动态 getter），`bg` 语义写作 `background`：
+样式既可逐个写成散属性（`bg="#fff" font-size="12"`），也可收进一个 `style` 对象字面量——key 用驼峰，值为普通 GX 表达式（静态字面量或动态 getter），`bg` 语义写作 `background`。`gxscene.Style` 是**字段固定的强类型结构体**，不是 `map[string]any`：
 
 ```jsx
 <div style={{
     background: lineGutterColor(idx),   // 动态值：随 signal 重新求值
     color: "#858585",
-    width: 42,
-    fontSize: 12,                        // 驼峰 → font-size
-    textAlign: "right",                  // 驼峰 → text-align
+    width: 42,                           // 数字字面量 → StyleValue 字符串 "42"
+    fontSize: 12,                        // 驼峰 → FontSize 字段
+    textAlign: "right",                  // 驼峰 → TextAlign 字段
     padding: 4,
-    "&:hover": { bg: "#eee" },           // 伪状态子表递归成嵌套 Style
+    hover: { bg: "#eee" },               // 伪状态用单词 key → Hover 字段
 }}>
 ```
 
-编译为单个 `gxscene.Style{...}` 复合字面量、整块作为一个 `OpDynAttr Slot` 的 getter：
+编译为单个 `gxscene.Style{...}` 结构体字面量、整块作为一个 `OpDynAttr Slot` 的 getter：
 
 ```go
 func() any {
     return gxscene.Style{
-        "background": lineGutterColor(idx), "color": "#858585", "width": 42,
-        "font-size": 12, "text-align": "right", "padding": 4,
-        "&:hover": gxscene.Style{"bg": "#eee"},
+        Background: lineGutterColor(idx), Color: "#858585", Width: "42",
+        FontSize: "12", TextAlign: "right", Padding: "4",
+        Hover: &gxscene.Style{Bg: "#eee"},
     }
 }
 ```
 
-- **key 映射**：驼峰自动转短横线（`fontSize`→`font-size`、`textAlign`→`text-align`、`borderRadius`→`border-radius`）；已是短横线或 `&:` / `$:` 伪状态的 key 原样保留。合法 key 见 `gxscene.StylePropNames`（与 web 后端 stylemap 对齐）。
-- **动态值**：整块 getter 每次求值重建 Style map，runtime 的 `writeAttr` 按 key 做细粒度 diff（只发变化的属性增量），与散属性写法性能等价。
-- **伪状态**：值为对象字面量时递归编译成嵌套 `gxscene.Style`，展平规则不变（`Flatten` / `Props`）。
-- **兼容**：既有的带引号 key JSON 写法（`style={{"bg":"#fff"}}`）同样编译为 `gxscene.Style{...}`，语义不变。`class` 仍不支持对象字面量。
+- **强类型字段**：`gxscene.Style` 的字段集合固定（见 `runtime/scene/style.go`），标量统一 `StyleValue`（string 别名）。字段名拼错在 Go 编译期即报错，不再靠运行时校验；未知 key 由编译器报 `style-unknown-prop` 诊断。
+- **key 映射**：驼峰 key 按 kebab→PascalCase 映射到导出字段（`fontSize`→`FontSize`、`textAlign`→`TextAlign`、`borderRadius`→`BorderRadius`）；数字字面量自动加引号成字符串。
+- **动态值**：整块 getter 每次求值重建 Style，**运行时** `writeAttr` 展平为后端 props 后按 key 做细粒度 diff（只发变化的属性增量）；后端看到的仍是 kebab 属性名和 `&:hover` 伪状态串，协议不变。
+- **伪状态**：用单词 key `hover` / `active` / `focus` / `disabled`（**源码不写 `&:` 符号**，避免对象 key 的特殊字符转译问题），映射到 `Hover` / `Active` / `Focus` / `Disabled *Style` 字段；值为对象字面量时递归。后端 props 里的 `&:hover` 由 `Props()` 生成，与源码写法无关。
+- **兼容**：既有的带引号 key JSON 写法（`style={{"bg":"#fff","&:hover":{"bg":"#eee"}}}`）同样映射到强类型字段，语义不变。`class` 仍不支持对象字面量。
 
 **JSX 可跨行**：闭合标签后的换行若属于排版缩进（换行后紧跟宿主调用的 `)` / `]` / `,`，中间可夹行注释），编译器会吞掉这段空白，避免 Go 在参数列表换行处要求 trailing comma。因此下面两种写法等价，无需为规避语法错误而把 JSX 挤成单行：
 

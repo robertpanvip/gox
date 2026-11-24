@@ -145,7 +145,7 @@ func (e *Element) GetComputedStyle(pseudo ...string) *ComputedStyle {
 	// 伪状态子表叠加（与 Style.Flatten 同语义：子表同名 key 覆盖基础）。
 	if state != "" {
 		if sub, ok := PseudoStateFromProps(map[string]any(e.node.Props), state); ok {
-			for key, v := range sub {
+			for key, v := range sub.Props() {
 				key = strings.ToLower(key)
 				if !stylePropSet[key] || isPseudoKey(key) {
 					continue

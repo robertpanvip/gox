@@ -6,7 +6,8 @@ import (
 )
 
 // 受限样式表：带引号 key 的 JSON 对象字面量（含 &:hover/$:active 伪状态）
-// 编译为 gxscene.Style{...} 复合字面量（含嵌套伪状态子表），不再报 attr-unsupported。
+// 同样编译为 gxscene.Style 结构体字面量（伪状态映射到 Hover/Active 字段），
+// 不再报 attr-unsupported。
 func TestStyleObjectLiteralJSONCompiles(t *testing.T) {
 	src := "package main\nfunc main() {\n _ = <div style={{\"bg\":\"#fff\",\"&:hover\":{\"bg\":\"#eee\"},\"$:active\":{\"bg\":\"#ddd\"}}}>x</div>\n}\n"
 	res, err := Compile("style.gx", src)
@@ -21,21 +22,17 @@ func TestStyleObjectLiteralJSONCompiles(t *testing.T) {
 	if err := res.Validate(); err != nil {
 		t.Fatalf("生成的 Go 无效: %v\n%s", err, res.GoSource)
 	}
-	// JSON 形态与驼峰形态统一编译为 gxscene.Style{...}，伪状态递归为子 Style。
-	if !strings.Contains(res.GoSource, `"bg":"#fff"`) {
-		t.Errorf("应生成 gxscene.Style 复合字面量:\n%s", res.GoSource)
-	}
-	for _, want := range []string{`"&:hover":gxscene.Style{`, `"$:active":gxscene.Style{`} {
+	for _, want := range []string{`Bg:"#fff"`, `Hover:&gxscene.Style{`, `Active:&gxscene.Style{`} {
 		if !strings.Contains(res.GoSource, want) {
-			t.Errorf("伪状态 %q 应编译为嵌套 Style:\n%s", want, res.GoSource)
+			t.Errorf("JSON 形态应映射到字段 %q:\n%s", want, res.GoSource)
 		}
 	}
 }
 
-// key 无引号的驼峰对象字面量现在编译为 gxscene.Style{...}（react-native 风格），
-// 不再报诊断——历史行为（报 attr-unsupported）已被新特性取代。
+// key 无引号的驼峰对象字面量编译为 gxscene.Style{...} 结构体字面量，
+// 伪状态用单词 key（hover）映射到 Hover 字段。
 func TestStyleObjectLiteralNonJSONCompiles(t *testing.T) {
-	res, err := CompileScene("style.gx", "package main\nfunc main() {\n _ = <div style={{ color: \"red\", fontSize: 12 }}>x</div>\n}\n")
+	res, err := CompileScene("style.gx", "package main\nfunc main() {\n _ = <div style={{ color: \"red\", fontSize: 12, hover: { bg: \"#eee\" } }}>x</div>\n}\n")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -44,7 +41,9 @@ func TestStyleObjectLiteralNonJSONCompiles(t *testing.T) {
 			t.Errorf("驼峰 style 对象字面量不应再报诊断: %v", d)
 		}
 	}
-	if !strings.Contains(res.GoSource, `gxscene.Style{"color":"red","font-size":12`) {
-		t.Errorf("应生成 gxscene.Style 复合字面量:\n%s", res.GoSource)
+	for _, want := range []string{`Color:"red"`, `FontSize:"12"`, `Hover:&gxscene.Style{`} {
+		if !strings.Contains(res.GoSource, want) {
+			t.Errorf("应生成结构体字面量含 %q:\n%s", want, res.GoSource)
+		}
 	}
 }

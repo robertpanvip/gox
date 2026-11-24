@@ -39,34 +39,35 @@ func TestStyleObjCamelKeysAndValues(t *testing.T) {
 	res := compileStyleJSX(t, `style={{background: lineGutterColor(idx), color: "#858585", width: 42, fontSize: 12, textAlign: "right", padding: 4}}`)
 	assertNoDiag(t, res)
 	for _, want := range []string{
-		`"background":lineGutterColor(idx)`,
-		`"color":"#858585"`,
-		`"width":42`,
-		`"font-size":12`,
-		`"text-align":"right"`,
-		`"padding":4`,
+		`Background:lineGutterColor(idx)`,
+		`Color:"#858585"`,
+		`Width:"42"`,
+		`FontSize:"12"`,
+		`TextAlign:"right"`,
+		`Padding:"4"`,
 		"gxscene.Style{",
 	} {
 		if !strings.Contains(res.GoSource, want) {
 			t.Errorf("产物缺少 %q\n%s", want, res.GoSource)
 		}
 	}
-	// 驼峰原样泄漏为 key 名是错误信号
-	for _, bad := range []string{`"fontSize"`, `"textAlign"`} {
+	// 旧 map 形态的 kebab 字符串 key 不应再出现。
+	for _, bad := range []string{`"font-size"`, `"text-align"`, `"background":`} {
 		if strings.Contains(res.GoSource, bad) {
-			t.Errorf("驼峰 key 未转成短横线：发现 %q\n%s", bad, res.GoSource)
+			t.Errorf("产物残留 map 形态 %q\n%s", bad, res.GoSource)
 		}
 	}
 }
 
 func TestStyleObjPseudoNested(t *testing.T) {
-	res := compileStyleJSX(t, `style={{"&:hover": {bg: "#eee", fontSize: 14}, bg: "#fff"}}`)
+	// 伪状态用单词 key（hover），值对象递归成 Hover: &gxscene.Style{...}。
+	res := compileStyleJSX(t, `style={{hover: {bg: "#eee", fontSize: 14}, bg: "#fff"}}`)
 	assertNoDiag(t, res)
 	for _, want := range []string{
-		`"&:hover":gxscene.Style{`,
-		`"bg":"#eee"`,
-		`"font-size":14`,
-		`"bg":"#fff"`,
+		`Hover:&gxscene.Style{`,
+		`Bg:"#eee"`,
+		`FontSize:"14"`,
+		`Bg:"#fff"`,
 	} {
 		if !strings.Contains(res.GoSource, want) {
 			t.Errorf("产物缺少 %q\n%s", want, res.GoSource)
@@ -83,12 +84,13 @@ func TestStyleObjEmpty(t *testing.T) {
 }
 
 func TestStyleObjJSONCompatible(t *testing.T) {
-	// 带引号 key 的既有 JSON 写法继续可用，且统一走 Style 复合字面量。
+	// 带引号 key 的既有 JSON 写法继续可用：同样映射到强类型 struct 字段。
 	res := compileStyleJSX(t, `style={{"bg":"#fff","&:hover":{"bg":"#eee"}}}`)
 	assertNoDiag(t, res)
-	if !strings.Contains(res.GoSource, `"bg":"#fff"`) ||
-		!strings.Contains(res.GoSource, `"&:hover":gxscene.Style{`) {
-		t.Errorf("JSON 兼容形态产物异常:\n%s", res.GoSource)
+	for _, want := range []string{`Bg:"#fff"`, `Hover:&gxscene.Style{`, `Bg:"#eee"`} {
+		if !strings.Contains(res.GoSource, want) {
+			t.Errorf("JSON 兼容形态应映射到字段 %q:\n%s", want, res.GoSource)
+		}
 	}
 }
 
@@ -100,7 +102,6 @@ func TestStyleKeyCamelToKebab(t *testing.T) {
 		"background":   "background",
 		"bg":           "bg",
 		"color":        "color",
-		"&:hover":      "&:hover",
 		"font-size":    "font-size",
 		"lineHeight":   "line-height",
 		"zIndex":       "z-index",
@@ -109,6 +110,24 @@ func TestStyleKeyCamelToKebab(t *testing.T) {
 		if got := styleKeyCamelToKebab(in); got != want {
 			t.Errorf("styleKeyCamelToKebab(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+func TestStyleObjUnknownProp(t *testing.T) {
+	// 未知属性应报诊断，不静默生成非法字段。
+	src := "package main\nfunc main() {\n _ = <div style={{ colr: \"red\" }}>x</div>\n}\n"
+	res, err := CompileScene("style.gx", src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, d := range res.Analysis.Diagnostics() {
+		if d.Code == "style-unknown-prop" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("未知属性应报 style-unknown-prop，得到 %v", res.Analysis.Diagnostics())
 	}
 }
 
