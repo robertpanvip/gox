@@ -242,9 +242,31 @@ function applyCompletion(api: GoxPlaygroundAPI, elements: Elements, index: numbe
   settleCaret(api);
 }
 
-function showCompletion(
-  api: GoxPlaygroundAPI, elements: Elements, cursor: Cursor, x: number, y: number,
-): void {
+interface CompletionAnchor {
+  readonly left: number;
+  readonly top: number;
+  readonly bottom: number;
+}
+
+/** 补全浮层的锚点取光标场景节点 .gx-caret 的真实屏幕位置。
+ *
+ * caret 是 GX 场景节点，left/top 由 wasm 的 caretLeft/caretTop getter 驱动，
+ * 与点击落点换算共用同一套字符度量——所以浮层永远贴着光标，不再用写死的
+ * app 左上角 + 固定偏移（此前光标在第 8 行时浮层仍停在编辑器顶部，位置全错）。
+ * caret 失焦时 CSS 把它 display:none，此时 rect 全 0，回退到编辑器左上角。 */
+function completionAnchor(app: HTMLElement): CompletionAnchor {
+  const caret: HTMLElement | null = app.querySelector<HTMLElement>(".gx-caret");
+  if (caret !== null) {
+    const r: DOMRect = caret.getBoundingClientRect();
+    if (r.height > 0 && r.width > 0) {
+      return { left: r.left, top: r.top, bottom: r.bottom };
+    }
+  }
+  const r: DOMRect = app.getBoundingClientRect();
+  return { left: r.left + 90, top: r.top + 150, bottom: r.top + 172 };
+}
+
+function showCompletion(api: GoxPlaygroundAPI, elements: Elements, cursor: Cursor): void {
   const raw: string = api.lspComplete(cursor.line, cursor.col);
   const list: CompletionList = parseJSON<CompletionList>(raw);
   completionItems = list.items;
@@ -266,9 +288,19 @@ function showCompletion(
     });
     panel.append(row);
   });
+  // 先显示才能量到真实高度；再按视口收窄，下方放不下就翻到光标上方。
+  panel.hidden = false;
+  const anchor: CompletionAnchor = completionAnchor(elements.app);
+  const box: DOMRect = panel.getBoundingClientRect();
+  const margin: number = 8;
+  let y: number = anchor.bottom + 4;
+  if (y + box.height > window.innerHeight - margin) {
+    const above: number = anchor.top - box.height - 4;
+    y = above >= margin ? above : Math.max(margin, window.innerHeight - box.height - margin);
+  }
+  const x: number = Math.max(margin, Math.min(anchor.left, window.innerWidth - box.width - margin));
   panel.style.left = `${x}px`;
   panel.style.top = `${y}px`;
-  panel.hidden = false;
 }
 
 function completionKeydown(ev: KeyboardEvent, api: GoxPlaygroundAPI, elements: Elements): boolean {
@@ -366,8 +398,7 @@ function bindKeyboard(elements: Elements, api: GoxPlaygroundAPI): void {
     if (ev.ctrlKey && ev.key === " ") {
       ev.preventDefault();
       const cursor: Cursor = api.cursor();
-      const rect: DOMRect = app.getBoundingClientRect();
-      showCompletion(api, elements, cursor, rect.left + 90, rect.top + 150);
+      showCompletion(api, elements, cursor);
       return;
     }
     if (ev.shiftKey && ev.altKey && ev.key.toLowerCase() === "f") {
