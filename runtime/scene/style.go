@@ -47,7 +47,7 @@ var StylePropNames = []string{
 	"gap", "row-gap", "column-gap",
 	"position", "top", "right", "bottom", "left",
 	"overflow", "scroll-top", "scroll-left",
-	"transform", "transition", "box-shadow",
+	"transform", "transition", "box-shadow", "white-space",
 }
 
 var stylePropSet = func() map[string]bool {

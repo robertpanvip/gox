@@ -242,8 +242,8 @@ func isKeyword(w string) bool {
 // 每行固定 token 槽位数。GX 的 OpDynChild 会把首次产出的 *Instance 升级为稳定
 // 子树，因此"每次重建整棵子树"不会刷新；正确做法是让每个可变值都是标量 getter。
 // 这里每行固定 N 个 span 槽位，槽位文本/颜色都是读 sig 的 getter——既保留逐 token
-// 高亮，又让 sourceCode 变化精确刷新各槽位。
- const MaxTokens = 14
+// 高亮，又让 sourceCode 变化精确刷新各槽位。N 取 24 覆盖常见代码行（含缩进）。
+ const MaxTokens = 24
 
 // EditorLineText 导出给装配层诊断/集成用：读第 idx 行第 slot 个 token 文本。
  func EditorLineText(idx int, slot int) string { return lineText(idx, slot) }
@@ -264,9 +264,10 @@ func lineText(idx int, slot int) string {
     return toks[slot].Color
 }
 
+// lineGutterColor 与整行同色：行号列不再用独立背景块，避免视觉上把编辑器割成两条。
+// 光标行用左侧强调条（border-left）表达，背景仍与整行一致。
 func lineGutterColor(idx int) string {
-    if idx == CursorLine() && EditorFocused() { return "#0e639c" }
-    return "#3a3d45"
+    return lineRowBg(idx)
 }
 
 func lineRowBg(idx int) string {
@@ -278,8 +279,10 @@ func lineNumber(idx int) string { return strconv.Itoa(idx + 1) }
 
 // tokenSlots 渲染一行里的固定槽位 token span。slot 索引是编译期常量展开的
 // 标量 getter，文本/颜色都读 sig。
+// white-space="pre" 让每个 token span 内部的空格/制表符原样保留；否则这些 span
+// 处于 flex 行容器中，纯空白 flex item 会被浏览器折叠掉（代码会挤成 "signame"）。
 func tokenSlots(idx int, slot int) *gxscene.Instance {
-    return gxscene.Render(gxscene.Template{Ops:[]gxscene.Op{gxscene.Op{Code:gxscene.OpElem,Arg:"span",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"color",Slot:0,},gxscene.Op{Code:gxscene.OpAttr,Arg:"13",Key:"font-size",},gxscene.Op{Code:gxscene.OpDynChild,Slot:1,},gxscene.Op{Code:gxscene.OpClose,},},N:2,}, func() any{ return LineTokenColor(idx, slot) }, func() any{ return lineText(idx, slot) })
+    return gxscene.Render(gxscene.Template{Ops:[]gxscene.Op{gxscene.Op{Code:gxscene.OpElem,Arg:"span",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"color",Slot:0,},gxscene.Op{Code:gxscene.OpAttr,Arg:"pre",Key:"white-space",},gxscene.Op{Code:gxscene.OpAttr,Arg:"13",Key:"font-size",},gxscene.Op{Code:gxscene.OpDynChild,Slot:1,},gxscene.Op{Code:gxscene.OpClose,},},N:2,}, func() any{ return LineTokenColor(idx, slot) }, func() any{ return lineText(idx, slot) })
 }
 
 func slot0(idx int) *gxscene.Instance { return tokenSlots(idx, 0) }
@@ -296,10 +299,21 @@ func slot10(idx int) *gxscene.Instance { return tokenSlots(idx, 10) }
 func slot11(idx int) *gxscene.Instance { return tokenSlots(idx, 11) }
 func slot12(idx int) *gxscene.Instance { return tokenSlots(idx, 12) }
 func slot13(idx int) *gxscene.Instance { return tokenSlots(idx, 13) }
+func slot14(idx int) *gxscene.Instance { return tokenSlots(idx, 14) }
+func slot15(idx int) *gxscene.Instance { return tokenSlots(idx, 15) }
+func slot16(idx int) *gxscene.Instance { return tokenSlots(idx, 16) }
+func slot17(idx int) *gxscene.Instance { return tokenSlots(idx, 17) }
+func slot18(idx int) *gxscene.Instance { return tokenSlots(idx, 18) }
+func slot19(idx int) *gxscene.Instance { return tokenSlots(idx, 19) }
+func slot20(idx int) *gxscene.Instance { return tokenSlots(idx, 20) }
+func slot21(idx int) *gxscene.Instance { return tokenSlots(idx, 21) }
+func slot22(idx int) *gxscene.Instance { return tokenSlots(idx, 22) }
+func slot23(idx int) *gxscene.Instance { return tokenSlots(idx, 23) }
 
 // lineView 渲染一行：行号 + 固定 token 槽位。所有可变属性都是 getter。
+// 行号列与代码区同背景色，整行连续；代码容器 white-space=pre 保留 token 内空白。
 func lineView(idx int) *gxscene.Instance {
-    return gxscene.Render(gxscene.Template{Ops:[]gxscene.Op{gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"bg",Slot:0,},gxscene.Op{Code:gxscene.OpAttr,Arg:"22",Key:"height",},gxscene.Op{Code:gxscene.OpAttr,Arg:"row",Key:"flex-direction",},gxscene.Op{Code:gxscene.OpAttr,Arg:"center",Key:"align-items",},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"bg",Slot:1,},gxscene.Op{Code:gxscene.OpAttr,Arg:"#858585",Key:"color",},gxscene.Op{Code:gxscene.OpAttr,Arg:"42",Key:"width",},gxscene.Op{Code:gxscene.OpAttr,Arg:"12",Key:"font-size",},gxscene.Op{Code:gxscene.OpAttr,Arg:"right",Key:"text-align",},gxscene.Op{Code:gxscene.OpAttr,Arg:"4",Key:"padding",},gxscene.Op{Code:gxscene.OpDynChild,Slot:2,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpAttr,Arg:"row",Key:"flex-direction",},gxscene.Op{Code:gxscene.OpAttr,Arg:"6",Key:"padding",},gxscene.Op{Code:gxscene.OpDynChild,Slot:3,},gxscene.Op{Code:gxscene.OpDynChild,Slot:4,},gxscene.Op{Code:gxscene.OpDynChild,Slot:5,},gxscene.Op{Code:gxscene.OpDynChild,Slot:6,},gxscene.Op{Code:gxscene.OpDynChild,Slot:7,},gxscene.Op{Code:gxscene.OpDynChild,Slot:8,},gxscene.Op{Code:gxscene.OpDynChild,Slot:9,},gxscene.Op{Code:gxscene.OpDynChild,Slot:10,},gxscene.Op{Code:gxscene.OpDynChild,Slot:11,},gxscene.Op{Code:gxscene.OpDynChild,Slot:12,},gxscene.Op{Code:gxscene.OpDynChild,Slot:13,},gxscene.Op{Code:gxscene.OpDynChild,Slot:14,},gxscene.Op{Code:gxscene.OpDynChild,Slot:15,},gxscene.Op{Code:gxscene.OpDynChild,Slot:16,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpClose,},},N:17,}, func() any{ return lineRowBg(idx) }, func() any{ return lineGutterColor(idx) }, func() any{ return lineNumber(idx) }, func() any{ return slot0(idx) }, func() any{ return slot1(idx) }, func() any{ return slot2(idx) }, func() any{ return slot3(idx) }, func() any{ return slot4(idx) }, func() any{ return slot5(idx) }, func() any{ return slot6(idx) }, func() any{ return slot7(idx) }, func() any{ return slot8(idx) }, func() any{ return slot9(idx) }, func() any{ return slot10(idx) }, func() any{ return slot11(idx) }, func() any{ return slot12(idx) }, func() any{ return slot13(idx) })
+    return gxscene.Render(gxscene.Template{Ops:[]gxscene.Op{gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"bg",Slot:0,},gxscene.Op{Code:gxscene.OpAttr,Arg:"22",Key:"height",},gxscene.Op{Code:gxscene.OpAttr,Arg:"row",Key:"flex-direction",},gxscene.Op{Code:gxscene.OpAttr,Arg:"center",Key:"align-items",},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"bg",Slot:1,},gxscene.Op{Code:gxscene.OpAttr,Arg:"#858585",Key:"color",},gxscene.Op{Code:gxscene.OpAttr,Arg:"42",Key:"width",},gxscene.Op{Code:gxscene.OpAttr,Arg:"12",Key:"font-size",},gxscene.Op{Code:gxscene.OpAttr,Arg:"right",Key:"text-align",},gxscene.Op{Code:gxscene.OpAttr,Arg:"4",Key:"padding",},gxscene.Op{Code:gxscene.OpDynChild,Slot:2,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpAttr,Arg:"row",Key:"flex-direction",},gxscene.Op{Code:gxscene.OpAttr,Arg:"6",Key:"padding",},gxscene.Op{Code:gxscene.OpAttr,Arg:"pre",Key:"white-space",},gxscene.Op{Code:gxscene.OpDynChild,Slot:3,},gxscene.Op{Code:gxscene.OpDynChild,Slot:4,},gxscene.Op{Code:gxscene.OpDynChild,Slot:5,},gxscene.Op{Code:gxscene.OpDynChild,Slot:6,},gxscene.Op{Code:gxscene.OpDynChild,Slot:7,},gxscene.Op{Code:gxscene.OpDynChild,Slot:8,},gxscene.Op{Code:gxscene.OpDynChild,Slot:9,},gxscene.Op{Code:gxscene.OpDynChild,Slot:10,},gxscene.Op{Code:gxscene.OpDynChild,Slot:11,},gxscene.Op{Code:gxscene.OpDynChild,Slot:12,},gxscene.Op{Code:gxscene.OpDynChild,Slot:13,},gxscene.Op{Code:gxscene.OpDynChild,Slot:14,},gxscene.Op{Code:gxscene.OpDynChild,Slot:15,},gxscene.Op{Code:gxscene.OpDynChild,Slot:16,},gxscene.Op{Code:gxscene.OpDynChild,Slot:17,},gxscene.Op{Code:gxscene.OpDynChild,Slot:18,},gxscene.Op{Code:gxscene.OpDynChild,Slot:19,},gxscene.Op{Code:gxscene.OpDynChild,Slot:20,},gxscene.Op{Code:gxscene.OpDynChild,Slot:21,},gxscene.Op{Code:gxscene.OpDynChild,Slot:22,},gxscene.Op{Code:gxscene.OpDynChild,Slot:23,},gxscene.Op{Code:gxscene.OpDynChild,Slot:24,},gxscene.Op{Code:gxscene.OpDynChild,Slot:25,},gxscene.Op{Code:gxscene.OpDynChild,Slot:26,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpClose,},},N:27,}, func() any{ return lineRowBg(idx) }, func() any{ return lineGutterColor(idx) }, func() any{ return lineNumber(idx) }, func() any{ return slot0(idx) }, func() any{ return slot1(idx) }, func() any{ return slot2(idx) }, func() any{ return slot3(idx) }, func() any{ return slot4(idx) }, func() any{ return slot5(idx) }, func() any{ return slot6(idx) }, func() any{ return slot7(idx) }, func() any{ return slot8(idx) }, func() any{ return slot9(idx) }, func() any{ return slot10(idx) }, func() any{ return slot11(idx) }, func() any{ return slot12(idx) }, func() any{ return slot13(idx) }, func() any{ return slot14(idx) }, func() any{ return slot15(idx) }, func() any{ return slot16(idx) }, func() any{ return slot17(idx) }, func() any{ return slot18(idx) }, func() any{ return slot19(idx) }, func() any{ return slot20(idx) }, func() any{ return slot21(idx) }, func() any{ return slot22(idx) }, func() any{ return slot23(idx) })
 }
 
 // Editor 渲染整个编辑器。each 直接读 sourceCode（行数变化即增删行），

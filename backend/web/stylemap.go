@@ -16,7 +16,8 @@ func isStyleKey(key string) bool {
 		"overflow", "scroll-top", "scroll-left", "transform", "transition", "box-shadow",
 		"flex-grow", "flex-shrink", "min-width", "max-width", "min-height", "max-height",
 		"margin", "margin-top", "margin-bottom", "margin-left", "margin-right",
-		"text-align", "line-height", "letter-spacing", "z-index", "cursor":
+		"text-align", "line-height", "letter-spacing", "z-index", "cursor",
+		"white-space":
 		return true
 	}
 	return strings.HasPrefix(key, "&:") || strings.HasPrefix(key, "$:")

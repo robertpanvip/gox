@@ -240,8 +240,8 @@ pub func highlight(line string) []token {
 // 每行固定 token 槽位数。GX 的 OpDynChild 会把首次产出的 *Instance 升级为稳定
 // 子树，因此"每次重建整棵子树"不会刷新；正确做法是让每个可变值都是标量 getter。
 // 这里每行固定 N 个 span 槽位，槽位文本/颜色都是读 sig 的 getter——既保留逐 token
-// 高亮，又让 sourceCode 变化精确刷新各槽位。
-pub const maxTokens = 14
+// 高亮，又让 sourceCode 变化精确刷新各槽位。N 取 24 覆盖常见代码行（含缩进）。
+pub const maxTokens = 24
 
 // EditorLineText 导出给装配层诊断/集成用：读第 idx 行第 slot 个 token 文本。
 pub func EditorLineText(idx int, slot int) string { return lineText(idx, slot) }
@@ -262,9 +262,10 @@ pub func lineTokenColor(idx int, slot int) string {
     return toks[slot].color
 }
 
+// lineGutterColor 与整行同色：行号列不再用独立背景块，避免视觉上把编辑器割成两条。
+// 光标行用左侧强调条（border-left）表达，背景仍与整行一致。
 func lineGutterColor(idx int) string {
-    if idx == cursorLine() && editorFocused() { return "#0e639c" }
-    return "#3a3d45"
+    return lineRowBg(idx)
 }
 
 func lineRowBg(idx int) string {
@@ -276,8 +277,10 @@ func lineNumber(idx int) string { return strconv.itoa(idx + 1) }
 
 // tokenSlots 渲染一行里的固定槽位 token span。slot 索引是编译期常量展开的
 // 标量 getter，文本/颜色都读 sig。
+// white-space="pre" 让每个 token span 内部的空格/制表符原样保留；否则这些 span
+// 处于 flex 行容器中，纯空白 flex item 会被浏览器折叠掉（代码会挤成 "signame"）。
 func tokenSlots(idx int, slot int) *gxscene.Instance {
-    return <span color={lineTokenColor(idx, slot)} font-size="13">{lineText(idx, slot)}</span>
+    return <span color={lineTokenColor(idx, slot)} white-space="pre" font-size="13">{lineText(idx, slot)}</span>
 }
 
 func slot0(idx int) *gxscene.Instance { return tokenSlots(idx, 0) }
@@ -294,14 +297,26 @@ func slot10(idx int) *gxscene.Instance { return tokenSlots(idx, 10) }
 func slot11(idx int) *gxscene.Instance { return tokenSlots(idx, 11) }
 func slot12(idx int) *gxscene.Instance { return tokenSlots(idx, 12) }
 func slot13(idx int) *gxscene.Instance { return tokenSlots(idx, 13) }
+func slot14(idx int) *gxscene.Instance { return tokenSlots(idx, 14) }
+func slot15(idx int) *gxscene.Instance { return tokenSlots(idx, 15) }
+func slot16(idx int) *gxscene.Instance { return tokenSlots(idx, 16) }
+func slot17(idx int) *gxscene.Instance { return tokenSlots(idx, 17) }
+func slot18(idx int) *gxscene.Instance { return tokenSlots(idx, 18) }
+func slot19(idx int) *gxscene.Instance { return tokenSlots(idx, 19) }
+func slot20(idx int) *gxscene.Instance { return tokenSlots(idx, 20) }
+func slot21(idx int) *gxscene.Instance { return tokenSlots(idx, 21) }
+func slot22(idx int) *gxscene.Instance { return tokenSlots(idx, 22) }
+func slot23(idx int) *gxscene.Instance { return tokenSlots(idx, 23) }
 
 // lineView 渲染一行：行号 + 固定 token 槽位。所有可变属性都是 getter。
+// 行号列与代码区同背景色，整行连续；代码容器 white-space=pre 保留 token 内空白。
 func lineView(idx int) *gxscene.Instance {
     return <div bg={lineRowBg(idx)} height="22" flex-direction="row" align-items="center">
         <div bg={lineGutterColor(idx)} color="#858585" width="42" font-size="12" text-align="right" padding="4">{lineNumber(idx)}</div>
-        <div flex-direction="row" padding="6">
-            {slot0(idx)}{slot1(idx)}{slot2(idx)}{slot3(idx)}{slot4(idx)}{slot5(idx)}{slot6(idx)}
-            {slot7(idx)}{slot8(idx)}{slot9(idx)}{slot10(idx)}{slot11(idx)}{slot12(idx)}{slot13(idx)}
+        <div flex-direction="row" padding="6" white-space="pre">
+            {slot0(idx)}{slot1(idx)}{slot2(idx)}{slot3(idx)}{slot4(idx)}{slot5(idx)}{slot6(idx)}{slot7(idx)}
+            {slot8(idx)}{slot9(idx)}{slot10(idx)}{slot11(idx)}{slot12(idx)}{slot13(idx)}{slot14(idx)}{slot15(idx)}
+            {slot16(idx)}{slot17(idx)}{slot18(idx)}{slot19(idx)}{slot20(idx)}{slot21(idx)}{slot22(idx)}{slot23(idx)}
         </div>
     </div>
 }
