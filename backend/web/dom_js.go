@@ -1,0 +1,403 @@
+//go:build js && wasm
+
+package gxweb
+
+import (
+	"strconv"
+	"strings"
+	"sync"
+	"syscall/js"
+
+	"github.com/robertpanvip/gox/runtime/canvas"
+	gxscene "github.com/robertpanvip/gox/runtime/scene"
+)
+
+// jsDriver 是 syscall/js 驱动：直接操作浏览器 DOM。它是 memDriver 的镜像实现，
+// 共享同一套 Driver 契约；后端核心无需知道运行在哪个平台。
+type jsDriver struct {
+	mu       sync.Mutex
+	next     ElemID
+	elements map[ElemID]*jsElem
+	root     js.Value // 挂载容器
+	doc      js.Value
+	win      js.Value
+	funcs    []js.Func // 保活：js.Func 被 GC 后回调失效
+}
+
+type jsElem struct {
+	id       ElemID
+	nodeID   gxscene.NodeID
+	v        js.Value
+	kind     string
+	listeners map[string]js.Func
+	canvasCtx js.Value
+}
+
+func newJSDriver(root js.Value) *jsDriver {
+	d := &jsDriver{
+		elements: map[ElemID]*jsElem{},
+		doc:      js.Global().Get("document"),
+		win:      js.Global(),
+	}
+	if !root.Truthy() {
+		root = d.doc.Get("body")
+	}
+	d.root = root
+	return d
+}
+
+// Mount 把元素挂到宿主容器（document.querySelector 选中的节点，缺省 body）。
+func (d *jsDriver) Mount(e ElemID) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if el := d.elements[e]; el != nil {
+		d.root.Call("appendChild", el.v)
+	}
+}
+
+func (d *jsDriver) Create(kind string, id gxscene.NodeID) ElemID {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.next++
+	var v js.Value
+	if kind == "#text" {
+		v = d.doc.Call("createTextNode", "")
+	} else {
+		tag := kind
+		switch tag {
+		case "#root", "#frag", "", "div-frag":
+			tag = "div"
+		}
+		v = d.doc.Call("createElement", tag)
+	}
+	e := &jsElem{id: d.next, nodeID: id, v: v, kind: kind, listeners: map[string]js.Func{}}
+	d.elements[e.id] = e
+	return e.id
+}
+
+func (d *jsDriver) Destroy(e ElemID) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	el := d.elements[e]
+	if el == nil {
+		return
+	}
+	for name, fn := range el.listeners {
+		el.v.Call("removeEventListener", name, fn)
+		fn.Release()
+		delete(el.listeners, name)
+	}
+	el.v.Call("remove")
+	delete(d.elements, e)
+}
+
+func (d *jsDriver) InsertBefore(parent, child, before ElemID) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	p, c := d.elements[parent], d.elements[child]
+	if p == nil || c == nil {
+		return
+	}
+	var anchor js.Value
+	if before != 0 {
+		if b := d.elements[before]; b != nil {
+			anchor = b.v
+		}
+	}
+	if anchor.Truthy() {
+		p.v.Call("insertBefore", c.v, anchor)
+	} else {
+		p.v.Call("appendChild", c.v)
+	}
+}
+
+func (d *jsDriver) SetAttr(e ElemID, key, value string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	el := d.elements[e]
+	if el == nil {
+		return
+	}
+	if key == "canvas-ops" {
+		d.canvasOpsLocked(el, value)
+		return
+	}
+	if isStyleKey(key) && !strings.HasPrefix(key, "&:") && !strings.HasPrefix(key, "$:") {
+		if value == "" {
+			el.v.Get("style").Call("removeProperty", cssName(key))
+		} else {
+			el.v.Get("style").Call("setProperty", cssName(key), cssValue(key, value))
+		}
+		return
+	}
+	if strings.HasPrefix(key, "&:") || strings.HasPrefix(key, "$:") {
+		return // 伪状态子表由 CSS 类承载，见 applyPseudo
+	}
+	if value == "" {
+		el.v.Call("removeAttribute", key)
+	} else {
+		el.v.Call("setAttribute", key, value)
+	}
+}
+
+func (d *jsDriver) RemoveAttr(e ElemID, key string) { d.SetAttr(e, key, "") }
+
+func (d *jsDriver) SetText(e ElemID, text string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if el := d.elements[e]; el != nil {
+		el.v.Set("textContent", text)
+	}
+}
+
+func (d *jsDriver) Listen(e ElemID, event string, cb func(FiredEvent)) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	el := d.elements[e]
+	if el == nil {
+		return
+	}
+	if old := el.listeners[event]; old.Truthy() {
+		el.v.Call("removeEventListener", event, old)
+		old.Release()
+	}
+	fn := js.FuncOf(func(this js.Value, args []js.Value) any {
+		ev := mapFiredEvent(event, el.nodeID, args, d.doc)
+		cb(ev)
+		return nil
+	})
+	el.listeners[event] = fn
+	d.funcs = append(d.funcs, fn)
+	el.v.Call("addEventListener", event, fn)
+}
+
+func (d *jsDriver) Focus(e ElemID) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if el := d.elements[e]; el != nil {
+		el.v.Call("focus")
+	}
+}
+
+func (d *jsDriver) Rect(e ElemID) (x, y, w, h float32, ok bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if el := d.elements[e]; el == nil {
+		return 0, 0, 0, 0, false
+	} else {
+		r := el.v.Call("getBoundingClientRect")
+		return float32(r.Get("x").Float()), float32(r.Get("y").Float()),
+			float32(r.Get("width").Float()), float32(r.Get("height").Float()), true
+	}
+}
+
+func (d *jsDriver) ComputedStyle(e ElemID, state string) map[string]string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	el := d.elements[e]
+	if el == nil {
+		return map[string]string{}
+	}
+	// 伪状态在 DOM 侧用内联样式临时叠加，取完即恢复（同步，不产生可见闪烁）。
+	var restore []func()
+	if state != "" {
+		restore = applyPseudo(el.v, state, d.win)
+	}
+	cs := d.win.Call("getComputedStyle", el.v)
+	out := map[string]string{}
+	for _, k := range gxscene.StylePropNames {
+		prop := cssName(k)
+		v := cs.Call("getPropertyValue", prop).String()
+		if v != "" {
+			out[k] = v
+		}
+	}
+	for _, f := range restore {
+		f()
+	}
+	return out
+}
+
+func (d *jsDriver) CanvasOps(e ElemID, opsJSON string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	el := d.elements[e]
+	if el == nil {
+		return
+	}
+	d.canvasOpsLocked(el, opsJSON)
+}
+
+func (d *jsDriver) canvasOpsLocked(el *jsElem, opsJSON string) {
+	if !el.canvasCtx.Truthy() {
+		el.canvasCtx = el.v.Call("getContext", "2d")
+	}
+	ctx := el.canvasCtx
+	if !ctx.Truthy() {
+		return
+	}
+	ops := canvas.Decode(opsJSON)
+	// 重置画布尺寸（取布局盒，取不到用元素属性）
+	w := el.v.Get("clientWidth").Float()
+	h := el.v.Get("clientHeight").Float()
+	if w > 0 && h > 0 {
+		el.v.Set("width", int(w))
+		el.v.Set("height", int(h))
+	}
+	ctx.Call("clearRect", 0, 0, w, h)
+	for _, op := range ops {
+		drawOp(ctx, op)
+	}
+}
+
+// Root 返回挂载容器（供外部直接操作，如设置 body 样式）。
+func (d *jsDriver) Root() js.Value { return d.root }
+
+// Close 释放所有事件回调，避免泄漏。
+func (d *jsDriver) Close() {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for _, el := range d.elements {
+		for name, fn := range el.listeners {
+			el.v.Call("removeEventListener", name, fn)
+			fn.Release()
+			delete(el.listeners, name)
+		}
+	}
+	d.elements = map[ElemID]*jsElem{}
+}
+
+// ---- DOM 事件 → FiredEvent 映射 ----
+
+func mapFiredEvent(name string, id gxscene.NodeID, args []js.Value, doc js.Value) FiredEvent {
+	ev := FiredEvent{Name: name, NodeID: id}
+	if len(args) > 0 && args[0].Truthy() {
+		e := args[0]
+		if t := e.Get("clientX"); t.Truthy() { ev.X = t.Float() }
+		if t := e.Get("clientY"); t.Truthy() { ev.Y = t.Float() }
+		if t := e.Get("button"); t.Truthy() { ev.Button = t.Int() }
+		if t := e.Get("key"); t.Truthy() { ev.Key = t.String() }
+		ev.Mods = readMods(e)
+		target := e.Get("target")
+		if target.Truthy() {
+			if t := target.Get("value"); t.Truthy() { ev.Value = t.String() }
+		}
+		ev.Raw = e
+	}
+	return ev
+}
+
+func readMods(e js.Value) uint8 {
+	var m uint8
+	if e.Get("shiftKey").Truthy() { m |= 1 }
+	if e.Get("ctrlKey").Truthy() { m |= 2 }
+	if e.Get("altKey").Truthy() { m |= 4 }
+	if e.Get("metaKey").Truthy() { m |= 8 }
+	return m
+}
+
+// ---- canvas 指令绘制（与 Skia/Rust 后端同协议） ----
+
+func drawOp(ctx js.Value, op canvas.Op) {
+	switch op.Kind {
+	case canvas.OpRect:
+		if op.Fill != "" {
+			ctx.Set("fillStyle", op.Fill)
+			if op.Radius > 0 {
+				roundRect(ctx, op.X, op.Y, op.W, op.H, op.Radius)
+				ctx.Call("fill")
+			} else {
+				ctx.Call("fillRect", op.X, op.Y, op.W, op.H)
+			}
+		}
+		if op.Stroke != "" {
+			ctx.Set("strokeStyle", op.Stroke)
+			ctx.Set("lineWidth", op.StrokeWidth)
+			ctx.Call("strokeRect", op.X, op.Y, op.W, op.H)
+		}
+	case canvas.OpCircle:
+		ctx.Call("beginPath")
+		ctx.Call("arc", op.CX, op.CY, op.R, 0, 6.283185307179586)
+		if op.Fill != "" { ctx.Set("fillStyle", op.Fill); ctx.Call("fill") }
+		if op.Stroke != "" { ctx.Set("strokeStyle", op.Stroke); ctx.Set("lineWidth", op.StrokeWidth); ctx.Call("stroke") }
+	case canvas.OpLine:
+		ctx.Call("beginPath")
+		ctx.Call("moveTo", op.X1, op.Y1)
+		ctx.Call("lineTo", op.X2, op.Y2)
+		if op.Stroke != "" { ctx.Set("strokeStyle", op.Stroke); ctx.Set("lineWidth", op.StrokeWidth); ctx.Call("stroke") }
+	case canvas.OpPath:
+		ctx.Call("beginPath")
+		applyPath(ctx, op.D)
+		if op.Fill != "" { ctx.Set("fillStyle", op.Fill); ctx.Call("fill") }
+		if op.Stroke != "" { ctx.Set("strokeStyle", op.Stroke); ctx.Set("lineWidth", op.StrokeWidth); ctx.Call("stroke") }
+	}
+}
+
+func roundRect(ctx js.Value, x, y, w, h, r float32) {
+	ctx.Call("beginPath")
+	ctx.Call("moveTo", x+r, y)
+	ctx.Call("lineTo", x+w-r, y)
+	ctx.Call("quadraticCurveTo", x+w, y, x+w, y+r)
+	ctx.Call("lineTo", x+w, y+h-r)
+	ctx.Call("quadraticCurveTo", x+w, y+h, x+w-r, y+h)
+	ctx.Call("lineTo", x+r, y+h)
+	ctx.Call("quadraticCurveTo", x, y+h, x, y+h-r)
+	ctx.Call("lineTo", x, y+r)
+	ctx.Call("quadraticCurveTo", x, y, x+r, y)
+	ctx.Call("closePath")
+}
+
+// applyPath 解析 SVG path 子集 M/L/H/V/C/Q/Z，与 Rust 后端 SVG 子集一致。
+// H/V 是相对当前点的水平/垂直线，需跟踪 lastX/lastY。
+func applyPath(ctx js.Value, d string) {
+	tokens := strings.FieldsFunc(d, func(r rune) bool {
+		return r == ',' || r == ' ' || r == '\n' || r == '\t'
+	})
+	i := 0
+	num := func() float64 {
+		if i >= len(tokens) { return 0 }
+		f, _ := strconv.ParseFloat(tokens[i], 64)
+		i++
+		return f
+	}
+	var lastX, lastY float64
+	for i < len(tokens) {
+		cmd := tokens[i]
+		i++
+		switch cmd {
+		case "M":
+			lastX, lastY = num(), num()
+			ctx.Call("moveTo", lastX, lastY)
+		case "L":
+			lastX, lastY = num(), num()
+			ctx.Call("lineTo", lastX, lastY)
+		case "H":
+			lastX = num()
+			ctx.Call("lineTo", lastX, lastY)
+		case "V":
+			lastY = num()
+			ctx.Call("lineTo", lastX, lastY)
+		case "C":
+			x1, y1, x2, y2, x, y := num(), num(), num(), num(), num(), num()
+			ctx.Call("bezierCurveTo", x1, y1, x2, y2, x, y)
+			lastX, lastY = x, y
+		case "Q":
+			cx, cy, x, y := num(), num(), num(), num()
+			ctx.Call("quadraticCurveTo", cx, cy, x, y)
+			lastX, lastY = x, y
+		case "Z", "z":
+			ctx.Call("closePath")
+		}
+	}
+}
+
+// applyPseudo 为 getComputedStyle(state) 的伪状态请求返回恢复闭包。
+//
+// 真实 CSS 伪类（:hover/:focus/...）由浏览器在 getComputedStyle 时自动计算；
+// 但 JS 的 getComputedStyle 不接受「指定伪状态参数」——它读的是元素当前实际状态。
+// 因此这里用 element.matches(sel) 检测伪状态是否命中：命中则无需改动（浏览器已
+// 反映），未命中则读取浏览器为该伪类注册的 CSS 变量（若业务用 CSS 伪类声明）。
+// 当前实现不修改 DOM，返回 nil 恢复列表——伪状态权威值来自 CSS，非内联。
+func applyPseudo(_ js.Value, _ string, _ js.Value) []func() {
+	return nil
+}

@@ -4,5 +4,7 @@ use (
 	.
 	./backend/rust/go
 	./backend/skia
+	./backend/web
 	./examples/desktop-demo
+	./examples/wasm-demo
 )

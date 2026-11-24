@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>gox · WebAssembly 后端 Demo</title>
+  <style>
+    body { margin: 0; font-family: system-ui, -apple-system, sans-serif;
+           background: #020617; color: #e2e8f0; display: flex; min-height: 100vh;
+           align-items: center; justify-content: center; }
+    #app { min-width: 260px; }
+    /* GX 里 <div> 用 flex-direction 声明，这里给宿主容器兜底 */
+    #app > div { display: flex; }
+    #app button { color: inherit; border: 0; cursor: pointer; font-size: 15px; }
+    #loading { position: fixed; inset: 0; display: grid; place-items: center;
+               font-size: 14px; color: #64748b; }
+    #loading[data-state="error"] { color: #f87171; }
+  </style>
+</head>
+<body>
+  <div id="loading">正在加载 gox wasm 后端…</div>
+  <div id="app"></div>
+  <!-- wasm_exec.js 由 Go 工具链生成（非本仓手写），提供全局 window.Go -->
+  <script src="wasm_exec.js"></script>
+  <!-- 前端逻辑为严格 TS，编译产物见 dist/main.js -->
+  <script type="module" src="dist/main.js"></script>
+</body>
+</html>
