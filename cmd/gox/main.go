@@ -298,7 +298,7 @@ func printGxDiagnostics(diags []gxFileDiagnostic) {
 // gxDiags 是 GX 语义层（大小写等）诊断，已是 GX 坐标，与 go build 诊断一并输出。
 func runCheckProject(srcFiles []buildcheck.SourceFile, smByPath map[string]*sourcemap.SourceMap, gxDiags []gxFileDiagnostic, replaces []string, projectModule, root string) error {
 	checker := buildcheck.New(64)
-	checker.SetToolchain("go", "GOTOOLCHAIN=go1.27.3")
+	checker.SetToolchain("go", "GOTOOLCHAIN=go1.27.4")
 	checker.SetModulePath(projectModule)
 	for _, r := range replaces {
 		parts := strings.SplitN(r, "=", 2)
@@ -342,7 +342,7 @@ func runCheckProject(srcFiles []buildcheck.SourceFile, smByPath map[string]*sour
 // runCheck 执行真实 go build，并把诊断从 Go 位置经 sourcemap 回投到 .gx。
 func runCheck(goSrc string, sm *sourcemap.SourceMap, replaces []string) error {
 	checker := buildcheck.New(64)
-	checker.SetToolchain("go", "GOTOOLCHAIN=go1.27.3")
+	checker.SetToolchain("go", "GOTOOLCHAIN=go1.27.4")
 	for _, r := range replaces {
 		parts := strings.SplitN(r, "=", 2)
 		if len(parts) != 2 {

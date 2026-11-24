@@ -31,7 +31,7 @@ func NewServer(in io.Reader, out io.Writer, checker *buildcheck.Checker) *Server
 	if checker == nil {
 		checker = buildcheck.New(64)
 		// 生成的 Go 代码声明 go 1.27；固定 toolchain 避免默认 go 联网下载卡住。
-		checker.SetToolchain("go", "GOTOOLCHAIN=go1.27.3")
+		checker.SetToolchain("go", "GOTOOLCHAIN=go1.27.4")
 	}
 	return &Server{
 		in:      in,

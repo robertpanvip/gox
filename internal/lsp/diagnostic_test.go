@@ -35,7 +35,7 @@ func f(v int | string) {
 func main() { f(1) }
 `
 	checker := buildcheck.New(8)
-	checker.SetToolchain("go", "GOTOOLCHAIN=go1.27.3")
+	checker.SetToolchain("go", "GOTOOLCHAIN=go1.27.4")
 	diags, _, err := compileAndCheck(src, checker)
 	if err != nil && len(diags) == 0 {
 		t.Fatalf("compileAndCheck 应返回诊断: %v", err)
@@ -56,7 +56,7 @@ func TestCompileAndCheckCleanCode(t *testing.T) {
 func main() { println("ok") }
 `
 	checker := buildcheck.New(8)
-	checker.SetToolchain("go", "GOTOOLCHAIN=go1.27.3")
+	checker.SetToolchain("go", "GOTOOLCHAIN=go1.27.4")
 	diags, _, _ := compileAndCheck(src, checker)
 	if len(diags) != 0 {
 		t.Fatalf("干净代码应无诊断: %+v", diags)

@@ -68,7 +68,7 @@ func New(capacity int) *Checker {
 	}
 }
 
-// SetToolchain 注入 go 命令路径与额外环境变量（如 GOTOOLCHAIN=go1.27.3）。
+// SetToolchain 注入 go 命令路径与额外环境变量（如 GOTOOLCHAIN=go1.27.4）。
 // 工具链变更会使缓存失效，因此在锁内清空缓存。
 func (c *Checker) SetToolchain(bin string, env ...string) {
 	c.mu.Lock()

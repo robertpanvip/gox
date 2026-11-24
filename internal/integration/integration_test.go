@@ -46,7 +46,7 @@ func runGX(t *testing.T, gxSrc string) string {
 
 	cmd := exec.Command("go", "run", ".")
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "GOTOOLCHAIN=go1.27.3")
+	cmd.Env = append(os.Environ(), "GOTOOLCHAIN=go1.27.4")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("go run 失败: %v\n--- output ---\n%s\n--- generated ---\n%s", err, out, res.GoSource)
@@ -131,7 +131,7 @@ func runGXScene(t *testing.T, gxSrc string) string {
 	}
 	cmd := exec.Command("go", "run", ".")
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "GOTOOLCHAIN=go1.27.3")
+	cmd.Env = append(os.Environ(), "GOTOOLCHAIN=go1.27.4")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("go run 失败: %v\n--- output ---\n%s\n--- generated ---\n%s", err, out, res.GoSource)
@@ -188,7 +188,7 @@ func main() {
 	}
 	root, _ := filepath.Abs(filepath.Join("..", ".."))
 	checker := buildcheck.New(8)
-	checker.SetToolchain("go", "GOTOOLCHAIN=go1.27.3")
+	checker.SetToolchain("go", "GOTOOLCHAIN=go1.27.4")
 	checker.AddReplace(modulePath, root)
 	diags, err := checker.Check(context.Background(), res.GoSource)
 	if err != nil {

@@ -140,13 +140,13 @@ func TestCacheKeyIncludesConfig(t *testing.T) {
 	k1 := cacheKey(src, base)
 
 	// 工具链不同 → key 不同
-	k2 := cacheKey(src, buildConfig{toolchain: "go1.27.3", replaces: map[string]string{}})
+	k2 := cacheKey(src, buildConfig{toolchain: "go1.27.4", replaces: map[string]string{}})
 	if k1 == k2 {
 		t.Fatal("不同 toolchain 应产生不同缓存 key")
 	}
 
 	// 环境变量不同 → key 不同
-	k3 := cacheKey(src, buildConfig{toolchain: "go", extraEnv: []string{"GOTOOLCHAIN=go1.27.3"}})
+	k3 := cacheKey(src, buildConfig{toolchain: "go", extraEnv: []string{"GOTOOLCHAIN=go1.27.4"}})
 	if k1 == k3 {
 		t.Fatal("不同 extraEnv 应产生不同缓存 key")
 	}
@@ -175,7 +175,7 @@ func TestSetToolchainInvalidatesCache(t *testing.T) {
 	if n != 1 {
 		t.Fatalf("首次检查后缓存条目应为 1, got %d", n)
 	}
-	c.SetToolchain("go", "GOTOOLCHAIN=go1.27.3")
+	c.SetToolchain("go", "GOTOOLCHAIN=go1.27.4")
 	n, _ = c.Stats()
 	if n != 0 {
 		t.Fatalf("SetToolchain 后缓存应清空, got %d", n)
@@ -215,7 +215,7 @@ func TestCheckFilesMultiPackageDiagnosticFile(t *testing.T) {
 	// 两个包：main 依赖 util；util 内有类型错误。诊断的 File 应指向 util/math.go，
 	// CLI 据此回投到 util/math.gx。
 	c := New(8)
-	c.SetToolchain("go", "GOTOOLCHAIN=go1.27.3")
+	c.SetToolchain("go", "GOTOOLCHAIN=go1.27.4")
 	c.SetModulePath("example.com/proj")
 	files := []SourceFile{
 		{Name: "main.go", Source: "package main\n\nimport \"example.com/proj/util\"\nfunc main() { println(util.Add(1, 2)) }\n"},

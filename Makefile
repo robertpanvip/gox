@@ -1,6 +1,6 @@
 # GoX 构建与测试入口（需 Go 1.27+）
 GO := go
-TOOLCHAIN := GOTOOLCHAIN=go1.27.3
+TOOLCHAIN := GOTOOLCHAIN=go1.27.4
 CGO := CGO_ENABLED=1
 # GX 组件转译用的工具链（.gx → .go）。与 widgets/*.gx 的编译产物保持一致。
 GXTOOLCHAIN ?= GOTOOLCHAIN=go1.27.4
