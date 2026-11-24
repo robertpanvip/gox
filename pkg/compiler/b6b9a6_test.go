@@ -30,21 +30,38 @@ func TestJSXControlStatementDiagnostic(t *testing.T) {
 	}
 }
 
-// B6：事件 handler 箭头函数体是赋值语句时（() => n = n + 1），=> 残留产非法 Go，
-// 应报 event-arrow-statement 并提示用 func(){} 字面量。
-func TestEventArrowAssignDiagnostic(t *testing.T) {
-	for _, jsx := range []string{
-		`<button onClick={() => n = n + 1}>a</button>`,
-		`<input onInput={(e) => n = e} />`,
-	} {
-		src := "package main\nfunc main(){ sig n = 0; _ = " + jsx + " }\n"
-		res, err := CompileScene("b6.gx", src)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !hasDiag(res, "event-arrow-statement") {
-			t.Errorf("应报 event-arrow-statement for %s, got %v", jsx, res.Analysis.Diagnostics())
-		}
+// 事件 handler 简化写法（原 B6）：箭头函数体含赋值（() => n = n + 1）曾因
+// JSX 属性路径不展开箭头而残留 => 产非法 Go。现统一规范化成 gxscene.Handler，
+// 箭头赋值、具名函数、func 字面量都应产合法 Go 且不再报诊断。
+func TestEventHandlerSimplifiedForms(t *testing.T) {
+	cases := []struct {
+		name, decl, handler, jsx string
+	}{
+		{"箭头赋值", "sig n = 0\n", "() => n = n + 1", `<button onClick={%s}>a</button>`},
+		{"带参箭头", "sig n = 0\n", "(e) => n = n + 1", `<input onInput={%s} />`},
+		{"箭头调函数", "sig n = 0\nfunc inc(){ n = n + 1 }\n", "() => inc()", `<button onClick={%s}>a</button>`},
+		{"具名函数", "sig n = 0\nfunc inc(){ n = n + 1 }\n", "inc", `<button onClick={%s}>a</button>`},
+		{"func字面量", "sig n = 0\n", "func() { n = n + 1 }", `<button onClick={%s}>a</button>`},
+		{"已Handler", "sig n = 0\n", "gxscene.Handler(func(ctx gxscene.EventContext) { n = n + 1 })", `<button onClick={%s}>a</button>`},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			jsx := strings.Replace(c.jsx, "%s", c.handler, 1)
+			src := "package main\nimport gxscene \"github.com/robertpanvip/gox/runtime/scene\"\n" + c.decl + "func main(){ _ = " + jsx + " }\n"
+			res, err := CompileScene("b6.gx", src)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if verr := res.Validate(); verr != nil {
+				t.Fatalf("事件简化写法应产合法 Go: %v\n%s", verr, res.GoSource)
+			}
+			if hasDiag(res, "event-arrow-statement") {
+				t.Errorf("事件写法不应再报 event-arrow-statement: %v", res.Analysis.Diagnostics())
+			}
+			if !strings.Contains(res.GoSource, "gxscene.Handler(func(") {
+				t.Errorf("事件应包装成 gxscene.Handler:\n%s", res.GoSource)
+			}
+		})
 	}
 }
 

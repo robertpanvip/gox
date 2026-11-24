@@ -27,7 +27,7 @@
 | B2 | 嵌套 `<For>` 内层推成 `any` | 从外层 item 类型反查 struct 字段，逃逸也登记类型 | `TestB2NestedForElemType` | 产物：`ForGetterOfSignal[Cell]` |
 | B3 | `each={getter}` 不自动调用 | `funcLitResultType` + getter 变量补 `()` | `TestB3GetterVariableEach` | 产物：`return rows()` |
 | B4 | sig 持 struct 字段赋值编不过 | 深写诊断（整体替换修法） | `TestSignalDeepWriteDiagnostic` | `signal-deep-write` |
-| B6 | 事件箭头赋值产非法 Go | 诊断化 + func 字面量修法 | `TestEventArrowAssignDiagnostic` | `event-arrow-statement` |
+| B6 | 事件箭头赋值产非法 Go | 统一规范化成 `gxscene.Handler`，箭头/具名函数/func 字面量均可 | `TestEventHandlerSimplifiedForms` | 产物：`gxscene.Handler(func(...)` |
 | B7 | sig 字段简写 `P{v}` 编不过 | `stripSoleSignalShorthand` | `TestStructSignalFieldShorthand` | 产物：`P{v()}` 形态 |
 | B8 | computed 返回对象字面量产非法 Go | lambda body 对象字面量判定 | `TestComputedArrowObjectLiteral` / `TestLambdaBlockBodyStillWorks` | 产物：匿名 struct |
 | B9 | 组件多根 / `return if` 非法 Go | 诊断化 | `TestJSXMultiRootAndReturnIfDiagnostics` | `jsx-multi-root` / `jsx-return-if` |

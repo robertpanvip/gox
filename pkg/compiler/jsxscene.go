@@ -395,12 +395,153 @@ func isEventAttrName(name string) bool {
 	return c >= 'A' && c <= 'Z'
 }
 
-// eventGetter 为事件属性生成取值 getter。attrExpr 走正常表达式词法化；
-// 静态字符串/bool 事件包成常量 getter（后端按需解释，前端不假设签名）。
+// normalizeEventHandlerExpr 把事件属性上的简化 handler 写法规范化成协议推荐的
+// `gxscene.Handler(func(ctx gxscene.EventContext) { ... })` 表达式文本，使下面四种
+// 写法都能编译且点击时真正触发（运行时只认推荐签名 gxscene.Handler）：
+//
+//	onClick={inc}                          具名函数（按无参调用 inc()）
+//	onClick={func() { ... }}               func 字面量
+//	onClick={() => inc()}                  无参箭头
+//	onClick={() => n = n + 1}              箭头 + 赋值 body（原 B6 会报诊断）
+//
+// 已是 gxscene.Handler(...) / Handler(...) 的保持原样（幂等），带事件参数
+// （如 (e) => ...）的形态把参数名接到 ctx 上，body 里读 e 即读 ctx。
+// 返回的是一段 GX 表达式源码，随后照常走 lexExprScene 做 sig 读写改写。
+func normalizeEventHandlerExpr(expr string) string {
+	s := strings.TrimSpace(expr)
+	if s == "" {
+		return expr
+	}
+	// 幂等：已是推荐签名包装，原样放过。
+	if strings.HasPrefix(s, "gxscene.Handler(") || strings.HasPrefix(s, "Handler(") {
+		return expr
+	}
+	// 箭头函数：PARAMS => BODY。参数名（若有）接到 ctx，body 直接作函数体。
+	if arrow := topLevelArrow(s); arrow >= 0 {
+		params := strings.TrimSpace(s[:arrow])
+		body := strings.TrimSpace(s[arrow+2:])
+		return wrapHandlerLambda(params, body)
+	}
+	// func 字面量：func(...) { ... }。取其签名与 body，包进 Handler。
+	if strings.HasPrefix(s, "func") {
+		if sig, body, ok := splitFuncLit(s); ok {
+			return wrapHandlerFuncLit(sig, body)
+		}
+	}
+	// 其余按具名函数/函数值处理：统一无参调用 fn()。
+	return "gxscene.Handler(func(ctx gxscene.EventContext) { " + s + "() })"
+}
+
+// topLevelArrow 找顶层 `=>` 的下标（跳过括号/花括号/方括号内部），没有返回 -1。
+func topLevelArrow(s string) int {
+	depth := 0
+	for i := 0; i+1 < len(s); i++ {
+		switch s[i] {
+		case '(', '{', '[':
+			depth++
+		case ')', '}', ']':
+			depth--
+		case '=':
+			if s[i+1] == '>' && depth == 0 {
+				return i
+			}
+		}
+	}
+	return -1
+}
+
+// wrapHandlerLambda 把箭头参数与 body 包成 Handler。无参用 ctx；
+// 单参数（如 e 或 e gxscene.EventContext）把参数名接到 ctx 上。
+func wrapHandlerLambda(params, body string) string {
+	p := strings.TrimSpace(params)
+	p = strings.TrimPrefix(p, "(")
+	p = strings.TrimSuffix(p, ")")
+	p = strings.TrimSpace(p)
+	name := "ctx"
+	if p != "" {
+		// 取第一个标识符作为参数名（`(e gxscene.EventContext)` → e）。
+		if j := strings.IndexAny(p, " \t"); j > 0 {
+			p = p[:j]
+		}
+		if isGoIdent(p) {
+			name = p
+		}
+	}
+	if body == "" {
+		body = " _ = ctx "
+	}
+	return "gxscene.Handler(func(" + name + " gxscene.EventContext) { " + body + " })"
+}
+
+// splitFuncLit 拆分 `func(签名) { body }`，返回签名（含括号）与 body。
+func splitFuncLit(s string) (sig, body string, ok bool) {
+	open := strings.IndexByte(s, '(')
+	if open < 0 {
+		return "", "", false
+	}
+	depth := 0
+	close := -1
+	for i := open; i < len(s); i++ {
+		switch s[i] {
+		case '(':
+			depth++
+		case ')':
+			depth--
+			if depth == 0 {
+				close = i
+			}
+		}
+		if close >= 0 {
+			break
+		}
+	}
+	if close < 0 {
+		return "", "", false
+	}
+	brace := strings.IndexByte(s[close+1:], '{')
+	if brace < 0 {
+		return "", "", false
+	}
+	brace += close + 1
+	if !strings.HasSuffix(strings.TrimSpace(s), "}") {
+		return "", "", false
+	}
+	return s[open : close+1], strings.TrimSpace(s[brace+1 : len(strings.TrimSpace(s))-1]), true
+}
+
+// wrapHandlerFuncLit 把 func 字面量的 body 包成标准签名 Handler。
+// 原样保留签名里的形参——func(){} 补成 ctx，已有参数则沿用。
+func wrapHandlerFuncLit(sig, body string) string {
+	params := strings.TrimSpace(sig)
+	params = strings.TrimPrefix(params, "(")
+	params = strings.TrimSuffix(params, ")")
+	params = strings.TrimSpace(params)
+	if params == "" {
+		params = "ctx gxscene.EventContext"
+	}
+	return "gxscene.Handler(func(" + params + ") { " + body + " })"
+}
+
+// isGoIdent 判断 s 是否是 Go 标识符（用作箭头参数名）。
+func isGoIdent(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i, r := range s {
+		if r == '_' || r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || i > 0 && r >= '0' && r <= '9' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+// eventGetter 为事件属性生成取值 getter。attrExpr 先规范化成推荐签名
+// 的 Handler 表达式，再走正常表达式词法化；静态字符串/bool 事件包成常量 getter。
 func eventGetter(a jsxAttr) sceneGetter {
 	switch a.kind {
 	case attrExpr:
-		return sceneGetter{expr: a.value, pos: a.pos}
+		return sceneGetter{expr: normalizeEventHandlerExpr(a.value), pos: a.pos}
 	case attrString:
 		return sceneGetter{pos: a.pos, call: []Token{tokString(normalizeStringLit(a.value), a.pos)}}
 	default: // attrBool
@@ -460,12 +601,8 @@ func walkScene(n *jsxNode, ops *[]sceneOp, getters *[]sceneGetter, slotCounter *
 		// 后端自定义事件（如 onFoo）同样原样进 Node.Handlers。静态字符串/bool 的
 		// on* 也放行（编译为常量 getter，后端按需解释）。
 		if isEventAttrName(a.name) {
-			// B6：事件属性的箭头函数 body 是赋值语句时（() => n = n+1），
-			// JSX 属性路径不展开箭头，=> 残留产非法 Go。给明确诊断 + 修法。
-			if a.kind == attrExpr && isArrowAssignExpr(a.value) {
-				ctx.report("event-arrow-statement", a.pos,
-					"事件 handler 的箭头函数体是赋值语句，请用 func() { ... } 字面量（如 onClick={func() { n = n + 1 }}）")
-			}
+			// 事件表达式统一经 eventGetter 规范化成推荐签名 Handler，
+			// 具名函数 / func 字面量 / 箭头（含赋值 body）都能编译并触发。
 			s := *slotCounter
 			*slotCounter++
 			*ops = append(*ops, sceneOp{code: "OpEvent", key: a.name, slot: s})
@@ -1287,37 +1424,6 @@ func isGoControlInJSX(s string) bool {
 	for _, kw := range []string{"for", "switch"} {
 		if strings.HasPrefix(t, kw) && len(t) > len(kw) && isHSpace(t[len(kw)]) {
 			return true
-		}
-	}
-	return false
-}
-
-// isArrowAssignExpr 判断事件属性值是否是"箭头函数 + 赋值 body"形态（B6）：
-// `() => n = n + 1` / `(e) => n = e`。这类 lambda 在 JSX 属性路径不会被
-// transformLambdas 展开，=> 会残留进 Go 源码导致语法错误。
-func isArrowAssignExpr(s string) bool {
-	arrow := strings.Index(s, "=>")
-	if arrow < 0 {
-		return false
-	}
-	body := strings.TrimSpace(s[arrow+2:])
-	// body 以标识符/选择器开头且含单个 '='（赋值，非 ==/!=/<=/>=）。
-	if body == "" {
-		return false
-	}
-	for i := 0; i < len(body); i++ {
-		if body[i] == '=' {
-			prev := byte(0)
-			next := byte(0)
-			if i > 0 {
-				prev = body[i-1]
-			}
-			if i+1 < len(body) {
-				next = body[i+1]
-			}
-			if prev != '=' && prev != '!' && prev != '<' && prev != '>' && next != '=' {
-				return true
-			}
 		}
 	}
 	return false

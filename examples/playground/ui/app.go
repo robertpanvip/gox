@@ -23,7 +23,7 @@ import (
 func buildSamples() []Sample {
     return []Sample{
         Sample{Name: "01 Hello GX", Source: "// 最小 GX 程序\nsig name = \"GX\"\nfunc view() *gxscene.Instance {\n    return <div>Hello, {name}!</div>\n}"},
-        Sample{Name: "02 Counter", Source: "// signal 计数器\nsig count = 0\nfunc inc() {\n    count = count + 1\n}\nfunc view() *gxscene.Instance {\n    return <button onClick={gxscene.Handler(func(ctx gxscene.EventContext) { inc() })}>{count}</button>\n}"},
+        Sample{Name: "02 Counter", Source: "// signal 计数器\nsig count = 0\nfunc inc() {\n    count = count + 1\n}\nfunc view() *gxscene.Instance {\n    return <button onClick={inc}>{count}</button>\n}"},
         Sample{Name: "03 For 列表", Source: "// For 列表渲染\nsig todos = []string{\"a\", \"b\", \"c\"}\nfunc view() *gxscene.Instance {\n    return <div flex-direction=\"column\">\n        <For each={todos}>{(t string) => <span>{t()}</span>}</For>\n    </div>\n}"},
         Sample{Name: "04 样式卡片", Source: "// 深色卡片\nfunc view() *gxscene.Instance {\n    return <div bg=\"#0b1020\" padding=\"20\"\n        border-radius=\"12\" flex-direction=\"column\" gap=\"8\">\n        <b color=\"#7dd3fc\" font-size=\"24\">Card</b>\n        <span color=\"#94a3b8\">用 GX 写的样式</span>\n    </div>\n}"},
         Sample{Name: "05 语法高亮", Source: "// 关键字/字符串/注释都会着色\npub enum color { red, green, blue }\nfunc describe(v int | string) string {\n    if v is int { return \"int\" }\n    return \"string\"\n}"},

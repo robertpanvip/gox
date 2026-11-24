@@ -126,6 +126,25 @@ app.render(() =>
 
 运行时 `runtime/scene/`：`Template` / `Op` / `Render` / `Instance`。`Render` 缓存静态骨架、clone 出常驻场景树；`Instance.Update()` 只回写变化的插槽（可观测指标 `Writes`），不含调度。host 不定义绘制后端接口：GUI 后端实现 `gxapp.Window`，可用 `Node.ID`（整数稳定身份）/ `Changes()` 做增量绘制；内置 `TextBackend` 只是文本工具。
 
+#### 事件 handler（`onClick` 等）
+
+`onXxx` 属性（`onClick` / `onInput` / `onMouseEnter` …，无白名单）统一编译成 `gxscene.OpEvent`，值是推荐签名 `gxscene.Handler`（即 `func(gxscene.EventContext)`）。**无需再手写冗长的 `gxscene.Handler(func(ctx gxscene.EventContext){...})` 包装**——编译器会把下面五种写法规范化成它，点击时都能真正触发：
+
+```jsx
+sig count = 0
+func inc() { count = count + 1 }
+
+<button onClick={inc}>具名函数（无参调用 inc()）</button>
+<button onClick={() => inc()}>箭头调函数</button>
+<button onClick={() => count = count + 1}>箭头 + 赋值 body</button>
+<button onClick={func() { count = count + 1 }}>func 字面量</button>
+<button onClick={gxscene.Handler(func(ctx gxscene.EventContext) { inc() })}>完整写法（兼容）</button>
+```
+
+- 箭头可带事件参数：`(e) => ...` 里的 `e` 接到 `ctx gxscene.EventContext`，可读 `e.Synthetic`（归一化事件对象，含 `X`/`Y`/`Key`/`Mods` 等）。
+- 箭头/函数体里的 sig 读写照常按普通变量写（`count = count + 1`），编译器补 `()`；跨线程更新用 `Signal.safe`。
+- `gxscene.Handler(...)` 已是推荐签名时原样放过（幂等），保持兼容性。
+
 ### 3.1 `ref` 模板引用（命令式逃生口）
 
 `<tag ref={fn}/>` 里的 `fn` 是 `func(*gxscene.Element)`（或兼容形态 `func(any)`）。编译器编成 `gxscene.OpRef` 插槽：建树时该节点 ID 分配完毕后回调一次 `*Element` 句柄，实例销毁（重渲染 / 关闭 / 分支切换）时回调 `nil`。ref 是一次性挂载/卸载语义，**不进响应式重新绑定**——signal 变化不会重跑 ref。

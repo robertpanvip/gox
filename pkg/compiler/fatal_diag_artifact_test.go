@@ -16,12 +16,6 @@ func TestFatalDiagSuppressesInvalidGo(t *testing.T) {
 		wantInvalid bool
 	}{
 		{
-			name:        "事件箭头赋值（非法 Go）",
-			src:         "package main\nfunc main(){ sig n = 0; _ = <button onClick={() => n = n + 1}>a</button> }\n",
-			diagCode:    "event-arrow-statement",
-			wantInvalid: true,
-		},
-		{
 			name:        "组件多根（非法 Go）",
 			src:         "package main\nfunc Two() any { return <div>a</div><div>b</div> }\nfunc main(){ _ = Two() }\n",
 			diagCode:    "jsx-multi-root",
