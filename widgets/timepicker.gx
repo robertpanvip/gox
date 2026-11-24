@@ -171,7 +171,7 @@ func TimePicker(props gxscene.Props) *gxscene.Instance {
 		if i < len(segments)-1 {
 			ops = append(ops,
 				el("span"), attr("color", ThemeMuted),
-				attr("font-size", FontTitle2), attr("weight", "bold"),
+				attr("font-size", FontBody),
 				gxscene.Op{Code: gxscene.opChildText, Arg: ":"}, closeEl(),
 			)
 		}
@@ -192,30 +192,33 @@ func TimePicker(props gxscene.Props) *gxscene.Instance {
 }
 
 // timeSegmentTrigger 一个段触发器：点击时把 openSeg 设为该段(+1)或关闭(0)。
-// 视觉：柔和填充块 + 大圆角，当前打开的段用强调色描边与淡色底，数字字号放大。
+// 视觉对齐 macOS NSDatePicker：输入底 + 细描边 + 常规字重数字 + 控件高度，
+// 当前打开的段用强调色描边强调；不像按钮那样用粗重填充块和放大粗体。
 func timeSegmentTrigger(seg timeSegment, text func() string, width, tone string, openSeg signal.Signal[int], uid string) *gxscene.Instance {
 	const (
 		clickSlot = iota
 		textSlot
 		bgSlot
 		borderSlot
+		colorSlot
 		nSlots
 	)
 	ops := []gxscene.Op{
 		el("div"), attr("gx-role", "time-segment"),
 		attr("gx-time-segment", fmt.sprintf("%d", seg)),
-		attr("width", width),
+		attr("width", width), attr("height", ControlHeight),
 		attr("border-width", "1"), attr("border-radius", RadiusControl),
-		attr("padding", "10"),
 		attr("align-items", "center"), attr("justify-content", "center"),
 		gxscene.Op{Code: gxscene.opDynAttr, Key: "bg", Slot: bgSlot},
 		gxscene.Op{Code: gxscene.opDynAttr, Key: "border", Slot: borderSlot},
 		gxscene.Op{Code: gxscene.opEvent, Key: "onClick", Slot: clickSlot},
-		el("span"), attr("font-size", FontTitle2), attr("weight", "bold"),
+		el("span"), attr("font-size", FontBody),
+		gxscene.Op{Code: gxscene.opDynAttr, Key: "color", Slot: colorSlot},
 		gxscene.Op{Code: gxscene.opDynChild, Slot: textSlot}, closeEl(),
 		closeEl(),
 	}
 	isOpen := func() bool { return openSeg() == int(seg)+1 }
+	textColor := tkText()
 	return gxscene.render(gxscene.Template{Ops: ops, N: nSlots},
 		func() any {
 			return gxscene.Handler(func(gxscene.EventContext) {
@@ -228,18 +231,16 @@ func timeSegmentTrigger(seg timeSegment, text func() string, width, tone string,
 			})
 		},
 		func() any { return text() }, // 动态文本：value 变化时刷新
-		func() any { // 打开段用强调色淡底，其余用控件填充
-			if isOpen() {
-				return tone
-			}
-			return ThemeFill
+		func() any { // 统一用输入底；打开段保持同底，靠描边区分（macOS 字段风格）
+			return ThemeInputBg
 		},
-		func() any { // 打开段描边强调色，其余细描边
+		func() any { // 打开段描边强调色，其余常规细描边
 			if isOpen() {
 				return tone
 			}
 			return ThemeBorder
 		},
+		func() any { return textColor() }, // 数字用主题主文字色（深色主题下为浅色）
 	)
 }
 

@@ -150,10 +150,12 @@ func Table(props gxscene.Props) *gxscene.Instance {
 	ops := []gxscene.Op{
 		el("div"), attr("gx-role", "table"),
 		attr("flex-direction", "column"),
-		// macOS NSTableView：表格本身只是一张浅底平面，不额外套卡片阴影/描边
-		// （外层 group 已提供卡片层次，避免"双层卡片"）。仅用一圈 hairline
-		// 收边 + 圆角，贴近原生列表视图的克制观感。
-		attr("bg", ThemePanel), attr("border-radius", RadiusSmall),
+		// macOS NSTableView：整表是一张带圆角与细描边的平面，overflow=hidden
+		// 让表头底与斑马纹都被圆角裁切，避免在四角溢出方角。不套阴影，
+		// 外层 group 已提供卡片层次。
+		attr("bg", ThemePanel), attr("border-radius", RadiusCard),
+		attr("border", ThemeBorder2), attr("border-width", "1"),
+		attr("overflow", "hidden"),
 	}
 	if w := width(); w != "" {
 		ops = append(ops, attr("width", w))

@@ -32,6 +32,7 @@ func tkBg() func() string      { return UseToken("bg") }
 func tkGrouped() func() string { return UseToken("grouped") }
 func tkPanel() func() string   { return UseToken("panel") }
 func tkPanelAlt() func() string { return UseToken("panelalt") }
+func tkSkeleton() func() string { return UseToken("skeleton") }
 func tkInput() func() string   { return UseToken("input") }
 
 // tkBorder/tkBorder2/tkHairline 描边类 getter。

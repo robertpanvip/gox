@@ -109,6 +109,48 @@ func TestTableSortUsesVectorChevron(t *testing.T) {
 	}
 }
 
+func TestSpinnerUsesVectorIcon(t *testing.T) {
+	// Spinner 用矢量 reload 图标，不再用 ◌ 字符，且子树里没有绘制字符的节点。
+	inst := Spinner(gxscene.Props{"size": 18})
+	inst.BindReactive(syncEffect)
+	if !hasVectorIcon(inst.Root()) {
+		t.Error("Spinner 应渲染矢量环形图标")
+	}
+	text := gxscene.TextBackend{}.Paint(inst.Root())
+	if containsStr(text, "◌") {
+		t.Errorf("Spinner 不应再用 ◌ 字符: %q", text)
+	}
+}
+
+func TestSkeletonHasVisibleFill(t *testing.T) {
+	// 无 tone 时骨架条用专用令牌色（不再是空串导致不可见）。
+	inst := Skeleton(gxscene.Props{"width": "180", "height": "14"})
+	inst.BindReactive(syncEffect)
+	if got := inst.Root().Props["bg"]; got == "" {
+		t.Error("Skeleton 默认底色不应为空（否则骨架条不可见）")
+	}
+	// 明暗两套令牌色都非空且明显可见。
+	if LightTheme.Skeleton == "" || DarkTheme.Skeleton == "" {
+		t.Error("明暗主题都必须定义 Skeleton 令牌")
+	}
+}
+
+func TestTimePickerSegmentTextHasThemeColor(t *testing.T) {
+	// 时间段数字节点应带 color 属性（深色主题下为浅色文字），避免继承默认暗色。
+	inst := TimePicker(gxscene.Props{
+		"value":    func() any { return "09:30" },
+		"onChange": BindValue(func(string) {}),
+	})
+	inst.BindReactive(syncEffect)
+	segs := findAllByRole(inst.Root(), "time-segment")
+	if len(segs) == 0 {
+		t.Fatal("无时间段节点")
+	}
+	if got := findAttrDeep(segs[0], "color"); got == "" {
+		t.Error("时间段数字应有明确的主题文字色")
+	}
+}
+
 func TestSelectUsesVectorIcons(t *testing.T) {
 	state := NewPopoverState(false)
 	opts := []Option{{Label: "A", Value: "a"}, {Label: "B", Value: "b"}}

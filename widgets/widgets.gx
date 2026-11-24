@@ -46,6 +46,7 @@ var (
 	ThemeGrouped  = AppleGroupedBg  // 分组底
 	ThemePanel    = AppleElevated   // 卡片底
 	ThemeFill     = AppleFill       // 控件填充 / 次级底
+	ThemeSkeleton = AppleFill2      // 骨架屏占位块
 	ThemeBorder   = AppleSeparator  // 常规描边
 	ThemeBorder2  = AppleSeparator2 // 更亮描边 / 分隔线
 	ThemeHairline = AppleHairline   // 高光细描边（浮层）

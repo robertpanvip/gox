@@ -36,6 +36,7 @@ type Theme struct {
 	GroupedBg string // 分组底（比 Bg 更深一层）
 	Panel     string // 卡片/面板底（elevated）
 	PanelAlt  string // 次级面板/斑马纹
+	Skeleton  string // 骨架屏占位块（比次级填充略深，保证在卡片上可见）
 	InputBg   string // 输入框底
 	Border    string // 常规描边（opaque separator）
 	Border2   string // 更亮描边（separator）
@@ -103,6 +104,7 @@ type Theme struct {
 var DarkTheme = Theme{
 	Name: "dark",
 	Bg: AppleWindowBg, GroupedBg: AppleGroupedBg, Panel: AppleElevated, PanelAlt: AppleFill,
+	Skeleton: AppleFill2,
 	InputBg: AppleInputBg, Border: AppleSeparator, Border2: AppleSeparator2, Hairline: AppleHairline,
 	Material: AppleMaterialThick, Scrim: AppleScrim,
 	Text: AppleLabel, Muted: AppleLabel2, Faint: AppleLabel3, OnAccent: "#ffffff",
@@ -123,6 +125,7 @@ var DarkTheme = Theme{
 var LightTheme = Theme{
 	Name: "light",
 	Bg: "#ffffff", GroupedBg: "#f2f2f7", Panel: "#ffffff", PanelAlt: "#f2f2f7",
+	Skeleton: "#d8d8dd",
 	InputBg: "#ffffff", Border: "#c6c6c8", Border2: "#d1d1d6", Hairline: LightHairline,
 	Material: "#ffffffeb", Scrim: "#0000004d",
 	Text: "#1d1d1f", Muted: "#86868b", Faint: "#aeaeb2", OnAccent: "#ffffff",
@@ -170,6 +173,7 @@ func syncLegacyThemeTokens(t Theme) {
 	ThemeGrouped = t.GroupedBg
 	ThemePanel = t.Panel
 	ThemeFill = t.PanelAlt
+	ThemeSkeleton = t.Skeleton
 	ThemeBorder = t.Border
 	ThemeBorder2 = t.Border2
 	ThemeHairline = t.Hairline
@@ -248,6 +252,8 @@ func themeToken(t Theme, name string) string {
 		return t.Panel
 	case "panelalt", "zebra":
 		return t.PanelAlt
+	case "skeleton":
+		return t.Skeleton
 	case "inputbg", "input":
 		return t.InputBg
 	case "border":

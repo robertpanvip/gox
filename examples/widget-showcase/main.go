@@ -248,14 +248,15 @@ func buildTree() *gxscene.Instance {
 	})
 
 	formInput := widgets.Input(gxscene.Props{
-		"value": func() any { return text() }, "placeholder": "项目名称", "width": "420",
+		"value": func() any { return text() }, "placeholder": "项目名称", "width": str(W - 120),
 	})
-	// 表单卡片收窄到内容宽度：字段撑满、按钮居中于同一内容列，
-	// 避免"字段在左、按钮飘在卡片正中"的轴线割裂。
+	// 表单卡片撑满分组内容宽（group 内容 = W-88）：字段左对齐撑满，
+	// 提交按钮在卡片正中（form-submit-wrap 的 justify-center），
+	// 与 macOS 系统设置里"表单 + 居中主按钮"的观感一致。
 	form := widgets.Form(gxscene.Props{
-		"title": func() any { return "新建项目" }, "width": "460",
+		"title": func() any { return "新建项目" }, "width": str(W - 88),
 		"children": func() any {
-			return col("428", "12",
+			return col(str(W-120), "12",
 				widgets.FormItem(gxscene.Props{
 					"label": "名称", "name": "name", "required": true,
 					"children": func() any { return formInput },
