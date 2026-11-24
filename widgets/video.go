@@ -1,0 +1,73 @@
+// gx:nocollections
+// 本文件为原生 Go 组件源码，经 gox build 转译为 video.go。
+// gx:nocollections 声明跳过集合/裸对象字面量 desugar，保留手写 opcode 的原生 Go 语义。
+// Video 是 GX 通用组件层的视频组件，与 Img 同构：只产出一个后端无关的
+// gxscene 场景树节点（Kind="video"）。src 由后端内部读取并解码（ffmpeg 子进程
+// 转 RGBA 帧贴纹理），播放意图经 Props 透传，进度/状态经事件回传；上层可用
+// 普通 Button/Slider 组装控制条。没有 ffmpeg 时降级显示 poster + error 事件。
+//
+// 常用 props：
+//   - src:        视频源（本地路径 / http(s) URL，交给宿主系统播放器）
+//   - width/height: 显示尺寸
+//   - object-fit: "fill"(默认) / "contain" / "cover"（与 Img 一致）
+//   - border-radius / bg / opacity: 视觉样式
+//   - poster:     封面图 src（首帧到达前占位）
+//   - autoplay:   bool/"true" 自动播放
+//   - loop:       bool/"true" 循环
+//   - muted:      bool/"true" 静音
+//   - playback-id: int，播放会话版本（变更时后端重新打开视频）
+//   - playing:     bool，播放/暂停意图（后端据此暂停/恢复解码进程）
+//   - seek-to:     float64，目标时间秒（变更时后端 seek）
+package widgets
+
+import (
+	gxscene "github.com/robertpanvip/gox/runtime/scene"
+	gxvideo "github.com/robertpanvip/gox/runtime/video"
+)
+
+// Video 视频组件。产出 Kind="video" 节点；解码/绘制由后端完成。
+//
+//	widgets.Video(gxscene.Props{
+//	    "src": "sample.mp4", "width": "640", "height": "360",
+//	    "object-fit": "contain", "autoplay": true, "loop": true,
+//	    "playback-id": 1, // 点击播放时 +1，暂停可置 0 或改 src
+//	})
+func Video(props gxscene.Props) *gxscene.Instance {
+	ops := []gxscene.Op{
+		el(gxvideo.Kind),
+	}
+	// 字符串属性透传（含视觉样式与 src/poster/object-fit）。
+	for _, k := range []string{
+		gxvideo.PropSrc, gxvideo.PropPoster, gxvideo.PropObjectFit,
+		"width", "height", "border-radius", "bg", "opacity",
+	} {
+		if v := gxscene.Get[string](props, k)(); v != "" {
+			ops = append(ops, attr(k, v))
+		}
+	}
+	// 布尔属性：只有为真才写入（后端缺省视为 false）。
+	for _, k := range []string{gxvideo.PropAutoplay, gxvideo.PropLoop, gxvideo.PropMuted} {
+		if gxscene.Get[bool](props, k)() {
+			ops = append(ops, attr(k, "true"))
+		}
+	}
+	// 数值控制属性：playback-id / seek-to。
+	for _, k := range []string{gxvideo.PropPlaybackID, gxvideo.PropSeekTo} {
+		if v, ok := props[k]; ok {
+			ops = append(ops, attr(k, gxvideo.NumString(v)))
+		}
+	}
+	// playing 意图（bool 或 getter）：驱动后端暂停/恢复解码。
+	if v, ok := props[gxvideo.PropPlaying]; ok {
+		var playing bool
+		switch p := v.(type) {
+		case bool:
+			playing = p
+		case func() bool:
+			playing = p()
+		}
+		ops = append(ops, attr(gxvideo.PropPlaying, gxvideo.BoolProp(playing)))
+	}
+	ops = append(ops, closeEl())
+	return gxscene.Render(gxscene.Template{Ops: ops, N: 0})
+}

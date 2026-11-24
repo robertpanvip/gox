@@ -19,6 +19,7 @@ mod protocol;
 mod render;
 mod scene;
 mod style;
+mod video;
 
 use render::Renderer;
 use std::ffi::CString;
@@ -265,6 +266,18 @@ impl winit::application::ApplicationHandler for WinitApp<'_> {
                         node_id: String::new(),
                         event: String::new(),
                         text: serde_json::to_string(&measured).unwrap_or_default(),
+                        x: 0.0,
+                        y: 0.0,
+                    };
+                    fire(&self.cb, &self.cb_ctx, &ev.to_json());
+                }
+                // video 事件（state/meta/time）：解码线程产出，经事件回调回传 Host。
+                for ve in video::take_events() {
+                    let ev = protocol::InputEvent {
+                        kind: ve.kind,
+                        node_id: ve.node_id,
+                        event: String::new(),
+                        text: ve.text,
                         x: 0.0,
                         y: 0.0,
                     };

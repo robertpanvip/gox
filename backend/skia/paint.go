@@ -129,6 +129,9 @@ func (p *painter) paintWithLayout(root *gxscene.Node) {
 	if root == nil {
 		return
 	}
+	// video 节点：确保解码器与当前树同步（src/playing 变化重建，消失的清理）。
+	// key 未变时是廉价的树遍历，多次调用（脏区分遍）无副作用。
+	videos.syncFromTree(root)
 	// 主树：按矩形逐个调用 Skia 绘制原语。
 	p.paintTree(root, defaultTextStyle())
 	// 浮层：按"普通内容 → 遮罩 → 浮层"补画，保证层级正确。
@@ -304,6 +307,10 @@ func (p *painter) paintElement(n *gxscene.Node, box layoutBox) {
 		// 在背景之后解释执行，坐标相对本节点布局盒。
 		if n.Kind == "canvas" {
 			paintCanvas(p, n, box)
+		}
+		// video 原语：后端内部 ffmpeg 解码，画当前帧（无帧时画 poster 占位）。
+		if n.Kind == "video" {
+			paintVideo(p, n, box, s)
 		}
 		// 描边：用 stroke 样式沿矩形（或圆角矩形）边缘绘制。
 		if s.hasBorder && s.borderWidth > 0 {

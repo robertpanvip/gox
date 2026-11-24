@@ -25,6 +25,37 @@ func TestImgStructure(t *testing.T) {
 	}
 }
 
+func TestVideoStructure(t *testing.T) {
+	inst := Video(gxscene.Props{
+		"src": "sample.mp4", "poster": "cover.png", "width": "640", "height": "360",
+		"object-fit": "contain", "autoplay": true, "loop": true, "muted": true,
+		"playback-id": 2, "playing": true, "seek-to": 3.5,
+	})
+	root := inst.Root()
+	n := findKind(root, "video")
+	if n == nil {
+		t.Fatal("应产出 Kind=video 节点")
+	}
+	for k, want := range map[string]string{
+		"src": "sample.mp4", "poster": "cover.png", "object-fit": "contain",
+		"width": "640", "height": "360", "playback-id": "2", "seek-to": "3.5",
+		"autoplay": "true", "loop": "true", "muted": "true", "playing": "true",
+	} {
+		if got := n.Props[k]; got != want {
+			t.Errorf("prop %s = %v, want %v", k, got, want)
+		}
+	}
+}
+
+func TestVideoPlayingGetter(t *testing.T) {
+	playing := false
+	inst := Video(gxscene.Props{"src": "x.mp4", "playing": func() bool { return playing }})
+	n := findKind(inst.Root(), "video")
+	if n.Props["playing"] != "false" {
+		t.Errorf("playing getter=false 应写 \"false\", got %v", n.Props["playing"])
+	}
+}
+
 func TestCanvasStructure(t *testing.T) {
 	ops := []canvas.Op{
 		{Kind: canvas.OpRect, X: 0, Y: 0, W: 100, H: 50, Fill: "#ff0000"},

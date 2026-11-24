@@ -327,6 +327,10 @@ struct ShapeDraw {
     img: Option<(std::sync::Arc<tiny_skia::Pixmap>, ObjectFit)>,
     /// canvas 原语：命令式绘制指令；None 表示普通节点。
     canvas: Option<std::sync::Arc<Vec<crate::canvas::CanvasOp>>>,
+    /// video 原语：ffmpeg 解码的当前帧；None 表示普通节点/无帧。
+    video: Option<std::sync::Arc<crate::video::VideoFrame>>,
+    /// video 节点 ID（用于取帧）；普通节点为空。
+    video_id: String,
 }
 
 /// 苹果风格滚动条的几何（overlay，不占布局；画在容器右内侧）。
@@ -397,6 +401,31 @@ impl DisplayList {
         use taffy::prelude::*;
 
         let mut dl = DisplayList::new();
+
+        // video 原语：先从场景树收集所有 video 节点的播放意图，同步解码器进程。
+        // 必须在 emit 取帧之前调用，保证本帧拿到的是最新同步状态。
+        fn collect_videos(n: &crate::scene::SceneNode, out: &mut Vec<(String, crate::video::VideoSpec)>) {
+            if n.kind.eq_ignore_ascii_case("video") && !n.id.is_empty() {
+                let g = |k: &str| n.props.get(k).map(|s| s.as_str()).unwrap_or("");
+                let truthy = |k: &str| matches!(g(k), "true" | "1");
+                out.push((n.id.clone(), crate::video::VideoSpec {
+                    src: g("src").to_string(),
+                    playback_id: g("playback-id").to_string(),
+                    seek: g("seek-to").to_string(),
+                    playing: truthy("playing"),
+                    autoplay: truthy("autoplay"),
+                    loop_: truthy("loop"),
+                    muted: truthy("muted"),
+                }));
+            }
+            for c in &n.children {
+                collect_videos(c, out);
+            }
+        }
+        let mut vspecs = Vec::new();
+        collect_videos(root, &mut vspecs);
+        crate::video::sync(&vspecs);
+
         let mut taffy: TaffyTree<TextMeasure> = TaffyTree::new();
 
         fn dir_of(s: &str) -> FlexDirection {
@@ -667,12 +696,21 @@ impl DisplayList {
                     } else {
                         None
                     };
+                    // video 原语：ffmpeg 子进程解码动画（video.rs），当前帧在此取。
+                    let is_video = node.kind.eq_ignore_ascii_case("video");
+                    let video_frame = if is_video {
+                        crate::video::frame(&node.id).map(std::sync::Arc::new)
+                    } else {
+                        None
+                    };
                     dl.shapes.push(ShapeDraw {
                         x, y, w, h,
                         bg: bg.unwrap_or((0, 0, 0)), bg_present: bg.is_some(), radius, border,
                         shadow: st.shadow.clone(),
                         clip: my_clip,
                         img, canvas,
+                        video: video_frame,
+                        video_id: if is_video { node.id.clone() } else { String::new() },
                     });
                 }
                 if let Some(ev) = node.events.iter().find(|e| e.starts_with("on")) {
@@ -790,6 +828,8 @@ pub struct Renderer {
     scrollbar_last_activity: std::time::Instant,
     /// 自上次 render 以来是否收到新帧数据（无变化帧跳过昂贵的布局/光栅化/文本整形）
     frame_dirty: bool,
+    /// 上次 render 观测到的视频帧序号；新帧到达时置 frame_dirty 驱动重绘。
+    video_frame_seq: u64,
     /// 按稳定 node_id 缓存的字形：只 shape 新增/内容变化的文本，其余跨帧复用。
     /// 虚拟列表滚动跨 item 边界时只有进出视口的 1 个 ID 变化，其余全部命中，
     /// 比"整段签名一致才全复用"更精确——任何内容变化帧都能复用未变的项。
@@ -958,6 +998,7 @@ struct VSOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f };
             scrollbar_last_top: 0.0,
             scrollbar_last_activity: std::time::Instant::now(),
             frame_dirty: true,
+            video_frame_seq: 0,
             glyph_cache: std::collections::HashMap::new(),
             cached_areas_dirty: true,
             cursor: (0.0, 0.0),
@@ -1177,6 +1218,16 @@ struct VSOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f };
                 if let Some((pix, fit)) = &s.img {
                     Self::draw_image_fit_impl(&mut pm, pix, *fit, rx, ry, rw, rh, s.radius);
                 }
+                // video：ffmpeg 解码的当前帧，按 contain 缩放绘制 + 圆角裁剪。
+                if let Some(frame) = &s.video {
+                    if let Some(size) = tiny_skia::IntSize::from_wh(frame.w, frame.h) {
+                    if let Some(pix) = tiny_skia::Pixmap::from_vec(
+                        frame.data.clone(), size,
+                    ) {
+                        Self::draw_image_fit_impl(&mut pm, &pix, ObjectFit::Contain, rx, ry, rw, rh, s.radius);
+                    }
+                    }
+                }
                 // canvas 原语：命令式指令画到主 pm，坐标相对本节点裁剪后的盒。
                 if let Some(ops) = &s.canvas {
                     crate::canvas::paint(&mut pm, ops, rx, ry);
@@ -1217,6 +1268,12 @@ struct VSOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f };
         let now_ms = self.anim_origin.elapsed().as_millis();
         self.animator.set_now(now_ms);
         let animating = self.animator.is_active();
+        // video 新帧：解码线程独立推进帧序号，变化则强制重算（重画当前帧）。
+        let vseq = crate::video::frame_seq();
+        if vseq != self.video_frame_seq {
+            self.video_frame_seq = vseq;
+            self.frame_dirty = true;
+        }
         let need_rebuild = self.frame_dirty || animating || self.cached_areas_dirty;
 
         self.viewport.update(&self.queue, Resolution { width: self.config.width, height: self.config.height });

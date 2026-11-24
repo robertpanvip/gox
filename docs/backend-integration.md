@@ -381,6 +381,54 @@ key 无引号的对象字面量（如 `{{ color: "red" }}`）仍报 `attr-unsupp
 `focus` 的视觉状态由点击事件驱动（键盘 Tab 导航焦点尚未接入）；覆盖发生在布局前，
 改尺寸类属性（width/padding 等）会触发重排。
 
+### 2.8 Video 组件与视频解码
+
+`widgets.Video` 与 `Img` 同构：产出一个 `Kind="video"` 的普通 NodeDiv（参与布局/
+定位/裁剪/伪状态），所有播放属性走 Props 原生透传。**src 由后端内部读取并解码**——
+不引入重量级解码库，也不把播放甩给外部宿主组件。
+
+**解码策略（性能优先、零新增编译依赖）**：
+
+- 后端 spawn 一个 ffmpeg **子进程**把 `src` 解码成 RGBA 原始帧（`stdout` 流式输出），
+  在独立线程按帧读取；UI 线程只做「取当前帧 → 贴纹理」，不参与解码。
+- 双缓冲：解码线程整帧写入 front buffer，绘制读 front，无撕裂；新帧到达只请求重绘，
+  **不触发布局重算**（复用现有帧缓存/DisplayList 增量管线）。
+- 暂停：只切「丢弃帧」标志，不杀进程；`playback-id`/`seek-to`/`src` 变化才重建解码进程。
+- 两后端统一协议 `runtime/video`（Props 键、事件 Kind、Meta JSON 载荷），各自实现解码：
+  Skia 用 `os/exec` + `image`，Rust 用 `std::process::Command` + `tiny-skia::Pixmap`。
+  与 img/canvas 的「两后端各自用原生能力实现同一协议」分层一致。
+
+**为什么不用 `ffmpeg-next` crate**：其链接依赖 `libav*.pc` + 头文件（本机缺失，apt 源
+无 dev 包），build feature 要走 GitHub clone FFmpeg 源码（502 且耗时），且会让 Rust
+静态库动态依赖一堆 `.so`、与 cgo 分发/跨平台冲突。子进程方案零编译依赖、零静态库膨胀。
+
+**部署（重要）**：ffmpeg **不是任何主流系统的预装组件**（Windows/macOS 从不预装，
+Linux 桌面多数不装 CLI）。后端按 `FFMPEG_PATH` → `PATH` 探测：
+
+- 探测到 → 正常解码播放；
+- 探测不到 → 画 `poster` 占位 + 回传 `videostate=error` 事件，**绝不崩溃**。
+
+应用需随包分发一个 ffmpeg（注意 LGPL/GPL 合规），或用 `FFMPEG_PATH` 指定路径。
+音频默认不解码（`-an`），`muted=false` 目前也不出声——当前版本专注画面播放。
+
+**API**：
+
+```go
+widgets.Video(gxscene.Props{
+    "src": "clip.mp4", "poster": "cover.png", "width": "640", "height": "360",
+    "object-fit": "contain", "autoplay": true, "loop": true,
+    "playing": playingSignal,        // bool / func() bool，驱动暂停/恢复
+    "playback-id": session, "seek-to": seekSec,
+})
+```
+
+后端 → host 事件（经现有事件通道，node_id=video 节点）：`videostate`
+（playing/paused/ended/error）、`videometa`（`{"duration":s,"w":px,"h":px}`）、
+`videotime`（当前秒，250ms 节流）。上层据此用普通 Button/Slider 组装控制条。
+
+**边界**：无 ffmpeg 时降级为 poster；音频未接入；seek 通过重启解码进程实现（毫秒级）；
+时间戳按 30fps 近似（未走 ffmpeg PTS 通道）；暂停期间仍抽帧但丢弃（不省解码 CPU）。
+
 ## 3. 拆成两个项目如何跑通
 
 假设后端项目为 `github.com/yourorg/gox-desktop`，module 独立。
