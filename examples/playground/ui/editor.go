@@ -227,67 +227,67 @@ func isKeyword(w string) bool {
 
 // matchBrace 返回从 start 处的 '{' 开始、与之匹配的 '}' 下标；未找到返回 len。
 // 跳过字符串字面量，支持嵌套 {}（JSX 插值里常见 {(t) => <span>{t()}</span>}）。
-func matchBrace(b []byte, start int) int {
+func matchBrace(line string, start int) int {
     depth := 0
     i := start
-    for i < len(b) {
-        if b[i] == '"' {
+    for i < len(line) {
+        if line[i] == '"' {
             i = i + 1
-            for i < len(b) && b[i] != '"' {
-                if b[i] == '\\' && i+1 < len(b) { i = i + 1 }
+            for i < len(line) && line[i] != '"' {
+                if line[i] == '\\' && i+1 < len(line) { i = i + 1 }
                 i = i + 1
             }
-        } else if b[i] == '{' {
+        } else if line[i] == '{' {
             depth = depth + 1
-        } else if b[i] == '}' {
+        } else if line[i] == '}' {
             depth = depth - 1
             if depth == 0 { return i }
         }
         i = i + 1
     }
-    return len(b)
+    return len(line)
 }
 
 // highlight 把一行 GX 源码切成带颜色的 token，拼回去严格等于原文。
 // 支持 Go 代码与 JSX：标签名、属性名、{插值} 分别着色，插值内部再按 Go 规则着色。
  func Highlight(line string) []Token {
-    var out []Token
-    b := []byte(line)
+    // 预分配容量：一行通常每 2 个字符一个 token，避免 append 反复扩容。
+    out := make([]Token, 0, len(line)/2 + 1)
     i := 0
     inTag := false        // 是否处于 <...> 标签内部
     tagNamePending := false // 标签内尚未读到标签名
-    for i < len(b) {
+    for i < len(line) {
         // ---- JSX 标签内部 ----
         if inTag {
-            if b[i] == '>' {
+            if line[i] == '>' {
                 out = append(out, Token{Text: ">", Color: "#808080"})
                 i = i + 1
                 inTag = false
                 continue
             }
-            if b[i] == '/' && i+1 < len(b) && b[i+1] == '>' {
+            if line[i] == '/' && i+1 < len(line) && line[i+1] == '>' {
                 out = append(out, Token{Text: "/>", Color: "#808080"})
                 i = i + 2
                 inTag = false
                 continue
             }
             // 属性值字符串（含转义）
-            if b[i] == '"' {
+            if line[i] == '"' {
                 j := i + 1
-                for j < len(b) && b[j] != '"' {
-                    if b[j] == '\\' && j+1 < len(b) { j = j + 1 }
+                for j < len(line) && line[j] != '"' {
+                    if line[j] == '\\' && j+1 < len(line) { j = j + 1 }
                     j = j + 1
                 }
-                if j < len(b) { j = j + 1 }
+                if j < len(line) { j = j + 1 }
                 out = append(out, Token{Text: line[i:j], Color: "#ce9178"})
                 i = j
                 continue
             }
             // {插值}：递归按 Go 规则着色内部，含嵌套标签
-            if b[i] == '{' {
-                close := matchBrace(b, i)
+            if line[i] == '{' {
+                close := matchBrace(line, i)
                 out = append(out, Token{Text: "{", Color: "#808080"})
-                if close < len(b) {
+                if close < len(line) {
                     for _, t := range Highlight(line[i+1 : close]) { out = append(out, t) }
                     out = append(out, Token{Text: "}", Color: "#808080"})
                     i = close + 1
@@ -297,12 +297,12 @@ func matchBrace(b []byte, start int) int {
                 continue
             }
             // 标签名（第一个词）或属性名（允许 kebab-case）
-            if isAlpha(b[i]) {
+            if isAlpha(line[i]) {
                 j := i + 1
-                for j < len(b) && isAlnum(b[j]) { j = j + 1 }
-                for j+1 < len(b) && b[j] == '-' && isAlnum(b[j+1]) {
+                for j < len(line) && isAlnum(line[j]) { j = j + 1 }
+                for j+1 < len(line) && line[j] == '-' && isAlnum(line[j+1]) {
                     j = j + 1
-                    for j < len(b) && isAlnum(b[j]) { j = j + 1 }
+                    for j < len(line) && isAlnum(line[j]) { j = j + 1 }
                 }
                 c := "#9cdcfe" // 属性名
                 if tagNamePending { c = "#569cd6"; tagNamePending = false }
@@ -311,7 +311,7 @@ func matchBrace(b []byte, start int) int {
                 continue
             }
             c := "#808080"
-            if b[i] == ' ' || b[i] == '\t' { c = "#d4d4d4" }
+            if line[i] == ' ' || line[i] == '\t' { c = "#d4d4d4" }
             out = append(out, Token{Text: line[i : i+1], Color: c})
             i = i + 1
             continue
@@ -319,38 +319,38 @@ func matchBrace(b []byte, start int) int {
 
         // ---- Go 代码 ----
         // JSX 开始标签：< 后跟字母（<div）；或闭合标签 </div>。
-        if b[i] == '<' && i+1 < len(b) && (isAlpha(b[i+1]) || b[i+1] == '/') {
+        if line[i] == '<' && i+1 < len(line) && (isAlpha(line[i+1]) || line[i+1] == '/') {
             out = append(out, Token{Text: "<", Color: "#808080"})
             i = i + 1
             inTag = true
             tagNamePending = true
-            if b[i] == '/' {
+            if line[i] == '/' {
                 out = append(out, Token{Text: "/", Color: "#808080"})
                 i = i + 1
             }
             continue
         }
         // 注释：行尾全绿
-        if i+1 < len(b) && b[i] == '/' && b[i+1] == '/' {
+        if i+1 < len(line) && line[i] == '/' && line[i+1] == '/' {
             out = append(out, Token{Text: line[i:], Color: "#6a9955"})
             break
         }
         // 字符串：到下一个未转义引号
-        if b[i] == '"' {
+        if line[i] == '"' {
             j := i + 1
-            for j < len(b) && b[j] != '"' {
-                if b[j] == '\\' && j+1 < len(b) { j = j + 1 }
+            for j < len(line) && line[j] != '"' {
+                if line[j] == '\\' && j+1 < len(line) { j = j + 1 }
                 j = j + 1
             }
-            if j < len(b) { j = j + 1 }
+            if j < len(line) { j = j + 1 }
             out = append(out, Token{Text: line[i:j], Color: "#ce9178"})
             i = j
             continue
         }
         // 标识符 / 关键字
-        if isAlpha(b[i]) {
+        if isAlpha(line[i]) {
             j := i + 1
-            for j < len(b) && isAlnum(b[j]) { j = j + 1 }
+            for j < len(line) && isAlnum(line[j]) { j = j + 1 }
             w := line[i:j]
             c := "#d4d4d4"
             if isKeyword(w) { c = "#c586c0" }
@@ -359,16 +359,16 @@ func matchBrace(b []byte, start int) int {
             continue
         }
         // 数字
-        if b[i] >= '0' && b[i] <= '9' {
+        if line[i] >= '0' && line[i] <= '9' {
             j := i + 1
-            for j < len(b) && isAlnum(b[j]) { j = j + 1 }
+            for j < len(line) && isAlnum(line[j]) { j = j + 1 }
             out = append(out, Token{Text: line[i:j], Color: "#b5cea8"})
             i = j
             continue
         }
         // 标点 / 空白：逐字节
         c := "#808080"
-        if b[i] == ' ' || b[i] == '\t' { c = "#d4d4d4" }
+        if line[i] == ' ' || line[i] == '\t' { c = "#d4d4d4" }
         out = append(out, Token{Text: line[i : i+1], Color: c})
         i = i + 1
     }
@@ -390,31 +390,79 @@ func matchBrace(b []byte, start int) int {
 //   - 继续优化：setSource 只重新分词变化行；富文本组件保留并合并同色 span，
 //     但编辑器最终改用 CSS 渐变着色——每行一个文本属性 + 一个背景属性，
 //     既无 innerHTML 也没有逐 token 节点/effect，且不受槽位上限截断。
+//   - 本轮（切换优化）：静态样式从 style={{...}} 对象改回 kebab 直接属性，消掉
+//     每行 flattenStyle 的 map 构造 + 反射（切换 177µs→61µs）；渐变/纯文本随
+//     token 一起缓存，行 getter 只读缓存零分配（→48µs）；highlight 去掉
+//     []byte 拷贝、改成 string 索引 + make 预分配（→43µs，分词 alloc 12→2）。
 //
-// tokenCache[i] 缓存第 i 行的分词结果；lineTextCache 保存对应的原文行。
-// setSource 比对新旧每行：只有内容变化的行才重新分词，未变行直接复用 token 切片。
-// 富文本 HTML 在序列化时把相邻同色分段合并成单个 span，见 gxscene.RichText.HTML。
-// 所有写 sourceCode 的编辑命令都改走 setSource，保证缓存与版本同步更新。
+// tokenCache[i] 缓存第 i 行的分词结果；lineTextCache 保存对应的原文行；
+// textCache/gradientCache 存派生出的纯文本与 CSS 渐变。setSource 比对新旧每行：
+// 只有内容变化的行才重新分词并派生，未变行四份缓存全部复用。所有写 sourceCode
+// 的编辑命令都改走 setSource，保证缓存与版本同步更新。
 var tokenCache [][]Token
 var lineTextCache []string
+// textCache/gradientCache 存每行的纯文本与 CSS 渐变，和 token 一起在
+// rebuildTokenCache 里算好。行 getter 只读缓存，effect 重算时零分配。
+var textCache []string
+var gradientCache []string
 
-// rebuildTokenCache 按新行表刷新缓存：未变行复用旧 token，变化行才分词。
+// buildGradient 把一行的 token 颜色编码成 CSS linear-gradient 字符串。
+func buildGradient(toks []Token) string {
+    var b strings.Builder
+    b.WriteString("linear-gradient(90deg")
+    pos := 0
+    for _, t := range toks {
+        w := runeWidth(t.Text)
+        if w == 0 { continue }
+        b.WriteString(", ")
+        b.WriteString(t.Color)
+        b.WriteString(" ")
+        b.WriteString(strconv.Itoa(pos))
+        b.WriteString("ch ")
+        b.WriteString(strconv.Itoa(pos+w))
+        b.WriteString("ch")
+        pos = pos + w
+    }
+    b.WriteString(")")
+    return b.String()
+}
+
+// joinLineText 拼回一行的原始文本。
+func joinLineText(toks []Token) string {
+    var b strings.Builder
+    for _, t := range toks { b.WriteString(t.Text) }
+    return b.String()
+}
+
+// rebuildTokenCache 按新行表刷新缓存：未变行复用旧 token/文本/渐变，变化行才算。
 func rebuildTokenCache(lines []string) {
     oldLines := lineTextCache
     oldTokens := tokenCache
+    oldText := textCache
+    oldGrad := gradientCache
     nextLines := []string{}
     nextTokens := [][]Token{}
+    nextText := []string{}
+    nextGrad := []string{}
     for i := 0; i < len(lines); i = i + 1 {
         line := lines[i]
         nextLines = append(nextLines, line)
         if i < len(oldLines) && oldLines[i] == line && i < len(oldTokens) {
+            // 未变行：三份缓存都复用。
             nextTokens = append(nextTokens, oldTokens[i])
+            if i < len(oldText) { nextText = append(nextText, oldText[i]) } else { nextText = append(nextText, joinLineText(oldTokens[i])) }
+            if i < len(oldGrad) { nextGrad = append(nextGrad, oldGrad[i]) } else { nextGrad = append(nextGrad, buildGradient(oldTokens[i])) }
         } else {
-            nextTokens = append(nextTokens, Highlight(line))
+            toks := Highlight(line)
+            nextTokens = append(nextTokens, toks)
+            nextText = append(nextText, joinLineText(toks))
+            nextGrad = append(nextGrad, buildGradient(toks))
         }
     }
     lineTextCache = nextLines
     tokenCache = nextTokens
+    textCache = nextText
+    gradientCache = nextGrad
 }
 
 // rowVersion 读第 idx 行版本：Vec.At(idx) 返回该行独立 sig，读它只订阅这一行。
@@ -491,33 +539,15 @@ func runeWidth(s string) int {
 func lineText(idx int) string {
     _ = rowVersion(idx)
     ensureTokenCache()
-    if idx < 0 || idx >= len(tokenCache) { return "" }
-    var b strings.Builder
-    for _, t := range tokenCache[idx] { b.WriteString(t.Text) }
-    return b.String()
+    if idx < 0 || idx >= len(textCache) { return "" }
+    return textCache[idx]
 }
 
 func lineCodeGradient(idx int) string {
     _ = rowVersion(idx)
     ensureTokenCache()
-    if idx < 0 || idx >= len(tokenCache) { return "" }
-    var b strings.Builder
-    b.WriteString("linear-gradient(90deg")
-    pos := 0
-    for _, t := range tokenCache[idx] {
-        w := runeWidth(t.Text)
-        if w == 0 { continue }
-        b.WriteString(", ")
-        b.WriteString(t.Color)
-        b.WriteString(" ")
-        b.WriteString(strconv.Itoa(pos))
-        b.WriteString("ch ")
-        b.WriteString(strconv.Itoa(pos+w))
-        b.WriteString("ch")
-        pos = pos + w
-    }
-    b.WriteString(")")
-    return b.String()
+    if idx < 0 || idx >= len(gradientCache) { return "" }
+    return gradientCache[idx]
 }
 
 // lineGutterColor 与整行同色：行号列不再用独立背景块，避免视觉上把编辑器割成两条。
@@ -543,7 +573,9 @@ func lineNumber(idx int) string { return strconv.Itoa(idx + 1) }
 func lineView(idx int) *gxscene.Instance {
     // 样式用 react-native 风格的对象字面量：驼峰 key 收进 style={{...}}，
     // bg 写作 background，编译器降级为 gxscene.Style{...}，runtime 按 key 细粒度 diff。
-    return gxscene.Render(gxscene.Template{Ops:[]gxscene.Op{gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:0,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:1,},gxscene.Op{Code:gxscene.OpDynChild,Slot:2,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpElem,Arg:"span",},gxscene.Op{Code:gxscene.OpAttr,Arg:"gx-code-line",Key:"class",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"data-code",Slot:3,},gxscene.Op{Code:gxscene.OpAttr,Arg:"pre",Key:"white-space",},gxscene.Op{Code:gxscene.OpAttr,Arg:"13",Key:"font-size",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:4,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpClose,},},N:5,}, func() any{ return gxscene.Style{"background":lineRowBg(idx),"height":rowHeight(idx),"overflow":"hidden","flex-direction":"row","align-items":"center",} }, func() any{ return gxscene.Style{"background":lineGutterColor(idx),"color":"#858585","width":42,"font-size":12,"text-align":"right","padding":4,} }, func() any{ return lineNumber(idx) }, func() any{ return lineText(idx) }, func() any{ return gxscene.Style{"background":lineCodeGradient(idx),} })
+    // 静态/标量样式一律用直接属性（kebab key）走标量快路径，不用 style 对象——
+    // style 对象每次 effect 重算都要 flattenStyle 构造 map + 反射，是切换热点。
+    return gxscene.Render(gxscene.Template{Ops:[]gxscene.Op{gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"bg",Slot:0,},gxscene.Op{Code:gxscene.OpDynAttr,Key:"height",Slot:1,},gxscene.Op{Code:gxscene.OpAttr,Arg:"hidden",Key:"overflow",},gxscene.Op{Code:gxscene.OpAttr,Arg:"row",Key:"flex-direction",},gxscene.Op{Code:gxscene.OpAttr,Arg:"center",Key:"align-items",},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"bg",Slot:2,},gxscene.Op{Code:gxscene.OpAttr,Arg:"#858585",Key:"color",},gxscene.Op{Code:gxscene.OpAttr,Arg:"42",Key:"width",},gxscene.Op{Code:gxscene.OpAttr,Arg:"12",Key:"font-size",},gxscene.Op{Code:gxscene.OpAttr,Arg:"right",Key:"text-align",},gxscene.Op{Code:gxscene.OpAttr,Arg:"4",Key:"padding",},gxscene.Op{Code:gxscene.OpDynChild,Slot:3,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpElem,Arg:"span",},gxscene.Op{Code:gxscene.OpAttr,Arg:"gx-code-line",Key:"class",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"data-code",Slot:4,},gxscene.Op{Code:gxscene.OpAttr,Arg:"pre",Key:"white-space",},gxscene.Op{Code:gxscene.OpAttr,Arg:"13",Key:"font-size",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"bg",Slot:5,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpClose,},},N:6,}, func() any{ return lineRowBg(idx) }, func() any{ return rowHeight(idx) }, func() any{ return lineGutterColor(idx) }, func() any{ return lineNumber(idx) }, func() any{ return lineText(idx) }, func() any{ return lineCodeGradient(idx) })
 }
 
 // 固定 24 行：For 的 each 是常量，所有行在首帧就完成叶子 effect 绑定。
