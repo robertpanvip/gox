@@ -1,6 +1,7 @@
 package signal_test
 
 import (
+	"errors"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -124,20 +125,142 @@ func TestSafeDroppedAfterClose(t *testing.T) {
 	// 以便 cleanup 的 close(rt.ch) 正常（无人再投递）。
 }
 
-// TestSafeWithoutRuntimeRunsInline 验证未注入 UI Runtime 时 Safe 同步执行
-// （headless/测试场景），保证无 GUI 环境下仍可用。
-func TestSafeWithoutRuntimeRunsInline(t *testing.T) {
+// TestSafeWithoutRuntimeReturnsError 验收评审 P0：未注入 UI Runtime 时 Safe
+// 不得静默在调用方（可能是后台）goroutine 同步执行响应式代码。
+func TestSafeWithoutRuntimeReturnsError(t *testing.T) {
 	old := signal.SetUIPost(nil)
 	defer signal.SetUIPost(old)
 
 	called := false
-	signal.Safe(func() { called = true })
-	if !called {
-		t.Fatal("无 UI Runtime 时 Safe 应同步执行")
+	if err := signal.Safe(func() { called = true }); !errors.Is(err, signal.ErrUIRuntimeNotInitialized) {
+		t.Fatalf("无 UI Runtime 时 Safe 应返回 ErrUIRuntimeNotInitialized, got=%v", err)
+	}
+	if called {
+		t.Fatal("无 UI Runtime 时 Safe 的闭包绝不能被执行")
 	}
 
 	// nil fn 是 no-op。
-	signal.Safe(nil)
+	if err := signal.Safe(nil); err != nil {
+		t.Fatalf("Safe(nil) 应无错误, got=%v", err)
+	}
+}
+
+// TestSyncRuntimeRunsInline 验证 headless/测试可以**显式**选择同步执行，
+// 而不是靠正式 API 自动降级。
+func TestSyncRuntimeRunsInline(t *testing.T) {
+	rt := signal.NewSyncRuntime()
+	called := false
+	if err := rt.Dispatch(func() { called = true }); err != nil {
+		t.Fatalf("SyncRuntime.Dispatch 应成功, got=%v", err)
+	}
+	if !called {
+		t.Fatal("SyncRuntime 应同步执行闭包")
+	}
+	if !rt.InUI() {
+		t.Fatal("SyncRuntime.InUI 应为 true")
+	}
+}
+
+// TestRuntimeIsolation 验收评审 P0：每个 Runtime 的投递器与关闭状态互相隔离，
+// 关闭一个不影响另一个（模拟 app1.Close 不影响 app2 的后台更新）。
+func TestRuntimeIsolation(t *testing.T) {
+	rt1 := newDispatchRuntime()
+	rt2 := newDispatchRuntime()
+
+	var a, b atomic.Int64
+	for i := 0; i < 10; i++ {
+		if err := rt1.rt.Dispatch(func() { a.Add(1) }); err != nil {
+			t.Fatal(err)
+		}
+		if err := rt2.rt.Dispatch(func() { b.Add(1) }); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rt1.drain()
+	rt2.drain()
+
+	// 关闭 rt1：rt2 必须仍可投递。
+	rt1.rt.Close()
+	if err := rt2.rt.Dispatch(func() { b.Add(1) }); err != nil {
+		t.Fatalf("rt1 关闭后 rt2 仍应可投递, got=%v", err)
+	}
+	if err := rt1.rt.Dispatch(func() { a.Add(1) }); !errors.Is(err, signal.ErrUIRuntimeClosed) {
+		t.Fatalf("已关闭的 rt1 应返回 ErrUIRuntimeClosed, got=%v", err)
+	}
+	rt2.drain()
+	if a.Load() != 10 || b.Load() != 11 {
+		t.Fatalf("投递计数错误: rt1=%d rt2=%d", a.Load(), b.Load())
+	}
+}
+
+// TestRuntimeNotInitializedDoesNotExecute 验证空 Runtime（未注入投递器）时
+// Dispatch 返回错误且闭包不执行——正式 App 未接 UIExecutor 的行为。
+func TestRuntimeNotInitializedDoesNotExecute(t *testing.T) {
+	rt := signal.NewRuntime()
+	called := false
+	if err := rt.Dispatch(func() { called = true }); !errors.Is(err, signal.ErrUIRuntimeNotInitialized) {
+		t.Fatalf("未初始化 Runtime 应返回 ErrUIRuntimeNotInitialized, got=%v", err)
+	}
+	if called {
+		t.Fatal("未初始化 Runtime 的闭包绝不能执行")
+	}
+	if rt.InUI() {
+		t.Fatal("未初始化 Runtime 的 InUI 应为 false")
+	}
+}
+
+// TestRuntimeErrorHandler 验证错误回调：GX 语句形式忽略 Dispatch 返回值时，
+// 未初始化 / 已关闭等失败仍能通过 Runtime 错误处理器上报。
+func TestRuntimeErrorHandler(t *testing.T) {
+	rt := signal.NewRuntime()
+	var got error
+	rt.SetErrorHandler(func(err error) { got = err })
+	defer rt.SetErrorHandler(nil)
+
+	_ = rt.Dispatch(func() {})
+	if !errors.Is(got, signal.ErrUIRuntimeNotInitialized) {
+		t.Fatalf("未初始化错误未上报, got=%v", got)
+	}
+
+	got = nil
+	rt.SetPoster(signal.SyncPoster)
+	rt.Close()
+	_ = rt.Dispatch(func() {})
+	if !errors.Is(got, signal.ErrUIRuntimeClosed) {
+		t.Fatalf("已关闭错误未上报, got=%v", got)
+	}
+}
+
+// dispatchRuntime 是绑定独立 goroutine 的投递型 Runtime 测试夹具。
+type dispatchRuntime struct {
+	rt   *signal.Runtime
+	ch   chan func()
+	done chan struct{}
+}
+
+func newDispatchRuntime() *dispatchRuntime {
+	d := &dispatchRuntime{rt: signal.NewRuntime(), ch: make(chan func(), 1<<16), done: make(chan struct{})}
+	d.rt.SetPoster(func(fn func()) bool {
+		select {
+		case d.ch <- fn:
+			return true
+		default:
+			return false
+		}
+	})
+	go func() {
+		defer close(d.done)
+		for fn := range d.ch {
+			fn()
+		}
+	}()
+	return d
+}
+
+func (d *dispatchRuntime) drain() {
+	barrier := make(chan struct{})
+	d.ch <- func() { close(barrier) }
+	<-barrier
 }
 
 // TestBatchDoesNotSwitchThread 验证 Batch 只做合并、不做线程切换：在 UI Runtime

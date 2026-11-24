@@ -109,20 +109,22 @@ type Window interface {
 type App struct {
 	win           Window
 	cfg           WindowConfig
-	inst          *gxscene.Instance // render 前为 nil
-	owner         *signal.Owner     // render 建树的根 Owner：组件内 effect/computed/cleanup 归属它
-	dispatcher    FrameDispatcher   // 帧重绘派发器（默认 InlineDispatcher）
-	unFlush       func()            // 注销帧边界 hook（T1.2）
-	drawPending   atomic.Bool       // 一批 effect 内是否发生需要重绘的变化（预留给 Dispatcher 精确化；并发写用原子）
-	lastDrawErr   error             // 最近一次 Draw 的错误（T2.2）
-	errHook       func(error)       // 可选：Draw 错误回调
-	commit        *commitGate       // 串行化 Scene Mutation 与 Backend Draw（Host 评审 P0）
-	stateMu       sync.Mutex        // 保护 errHook / lastDrawErr / frameVersion / needsFullSync 的并发读写
-	closed        atomic.Bool       // 并发安全的关闭标记（Run/Close/Draw 契约）
-	closeOnce     sync.Once         // 保证 Close 幂等且只释放一次资源
-	closeErr      error             // 保存首次 Close 的结果，供并发/重复调用一致返回（评审 P2）
-	frameVersion  uint64            // 单调递增的提交序号（Frame 契约）
-	needsFullSync bool              // 上次 Present 失败后置位：下帧要求后端全量重建（Frame 契约）
+	inst          *gxscene.Instance   // render 前为 nil
+	owner         *signal.Owner       // render 建树的根 Owner：组件内 effect/computed/cleanup 归属它
+	runtime       *signal.Runtime     // 本 App 专属的 UI 任务运行时（多 App 隔离）
+	globalLease   *signal.GlobalLease // 对默认 Runtime 的兼容桥接租约（GX Signal.safe）
+	dispatcher    FrameDispatcher     // 帧重绘派发器（默认 InlineDispatcher）
+	unFlush       func()              // 注销帧边界 hook（T1.2）
+	drawPending   atomic.Bool         // 一批 effect 内是否发生需要重绘的变化（预留给 Dispatcher 精确化；并发写用原子）
+	lastDrawErr   error               // 最近一次 Draw 的错误（T2.2）
+	errHook       func(error)         // 可选：Draw 错误回调
+	commit        *commitGate         // 串行化 Scene Mutation 与 Backend Draw（Host 评审 P0）
+	stateMu       sync.Mutex          // 保护 errHook / lastDrawErr / frameVersion / needsFullSync 的并发读写
+	closed        atomic.Bool         // 并发安全的关闭标记（Run/Close/Draw 契约）
+	closeOnce     sync.Once           // 保证 Close 幂等且只释放一次资源
+	closeErr      error               // 保存首次 Close 的结果，供并发/重复调用一致返回（评审 P2）
+	frameVersion  uint64              // 单调递增的提交序号（Frame 契约）
+	needsFullSync bool                // 上次 Present 失败后置位：下帧要求后端全量重建（Frame 契约）
 	rendered      bool
 
 	// RAF（requestAnimationFrame）调度状态，见 capabilities.go：
@@ -163,7 +165,7 @@ func OpenWith(cfg WindowConfig, win Window) (*App, error) {
 	if actual := win.Config(); actual.Width > 0 && actual.Height > 0 {
 		cfg = actual.normalize()
 	}
-	app := &App{win: win, cfg: cfg, commit: newCommitGate()}
+	app := &App{win: win, cfg: cfg, commit: newCommitGate(), runtime: signal.NewRuntime()}
 	app.setDispatcher(&InlineDispatcher{})
 	return app, nil
 }
@@ -200,19 +202,20 @@ func (a *App) SetUIExecutor(exec UIExecutor) {
 	}
 	if exec == nil {
 		a.setDispatcher(nil)
+		a.detachUITaskPoster()
 		return
 	}
 	a.setDispatcher(NewUIExecutorDispatcher(exec))
 
-	// 严格单线程响应式：把 UIExecutor 注入 signal 包，使后台 goroutine 调用的
-	// Signal.Safe(fn) 能把更新闭包投递到 UI Runtime 线程执行。这样 signal 内部
-	// 得以彻底去掉 goroutine id、观察者栈按线程分桶与全局锁。
-	// Post 失败（UI 已关闭）时返回 false，任务由 Safe 侧丢弃。
+	// 严格单线程响应式：把 UIExecutor 注入本 App 专属的 signal.Runtime，使后台
+	// goroutine 调用的 app.Dispatch(fn) 能把更新闭包投递到本 App 的 UI 线程执行。
+	// 投递器与关闭状态不再全局共享——多 App 互不覆盖、互不误伤（评审 P0）。
 	a.bindUITaskPoster(exec.Post)
 }
 
-// bindUITaskPoster 把后端 UIExecutor.Post 适配为 signal.TaskPoster 并注入。
-// 重复调用（如 SetUIExecutor 多次）以最后一次为准；Close 时统一 CloseUITasks。
+// bindUITaskPoster 把后端 UIExecutor.Post 适配为 signal.TaskPoster 并注入本
+// App 的 Runtime，同时安装兼容桥接（供 GX Signal.safe 使用）。重复调用以最后
+// 一次为准；Close 时释放租约并关闭本 App 的 Runtime。
 func (a *App) bindUITaskPoster(post func(func()) error) {
 	if post == nil {
 		return
@@ -220,8 +223,37 @@ func (a *App) bindUITaskPoster(post func(func()) error) {
 	poster := signal.TaskPoster(func(fn func()) bool {
 		return post(fn) == nil
 	})
-	signal.SetUIPost(poster)
+	a.runtime.SetPoster(poster)
+	if a.globalLease != nil {
+		a.globalLease.Release()
+	}
+	a.globalLease = signal.InstallGlobalPost(poster)
 }
+
+// detachUITaskPoster 撤销本 App 的投递器注入（SetUIExecutor(nil) 时）。
+// 此后 Dispatch 返回 ErrUIRuntimeNotInitialized，不再在任何线程静默执行。
+func (a *App) detachUITaskPoster() {
+	a.runtime.SetPoster(nil)
+	if a.globalLease != nil {
+		a.globalLease.Release()
+		a.globalLease = nil
+	}
+}
+
+// Dispatch 把更新闭包投递到本 App 的 UI Runtime 执行——后台 goroutine 修改
+// 响应式状态的推荐入口。异步投递，调用后立即返回，不等待 fn 执行。
+//
+// 返回非 nil 错误（未初始化 / 已关闭 / 被拒绝）表示 fn **未被执行**，调用方
+// 据此处理结果。GX 里可用 `app.dispatch(() => {...})`。
+func (a *App) Dispatch(fn func()) error {
+	if a == nil {
+		return signal.ErrUIRuntimeNotInitialized
+	}
+	return a.runtime.Dispatch(fn)
+}
+
+// Runtime 返回本 App 专属的 UI 任务运行时（诊断/高级用法）。
+func (a *App) Runtime() *signal.Runtime { return a.runtime }
 
 // drawNow 是派发器最终执行的绘制动作：真正调用窗口 Draw 并记录错误（T2.2）。
 // 它是 drawNowErr 的无返回值适配（作为 FrameDispatcher 的 sink）。
@@ -567,9 +599,15 @@ func (a *App) Run() error {
 func (a *App) Close() error {
 	a.closeOnce.Do(func() {
 		a.closed.Store(true)
-		// 先关闭 UI 任务投递：此后后台 goroutine 的 Signal.Safe 更新一律丢弃，
-		// 不会在已销毁的响应式树 / 窗口上执行闭包。
-		signal.CloseUITasks()
+		// 先关闭本 App 的 UI 任务投递：此后后台 goroutine 的 app.Dispatch 更新
+		// 一律被拒绝，不会在已销毁的响应式树 / 窗口上执行闭包。仅关闭本 App 的
+		// Runtime，其它 App 的投递不受影响（评审 P0：多 App 隔离）。兼容桥接租约
+		// 同时释放，只有最后一个 App 关闭才关闭默认 Runtime。
+		a.runtime.Close()
+		if a.globalLease != nil {
+			a.globalLease.Release()
+			a.globalLease = nil
+		}
 		// 先销毁整棵响应式树：停订阅、执行组件 onCleanup，避免关闭过程中 signal 写入
 		// 触发已关闭窗口的重绘。
 		a.teardownTree()

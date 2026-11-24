@@ -541,6 +541,41 @@ canvas-ops。
 `sync.Once` 保证并发重复调用结果一致。Rust Adapter 的 `go.mod` 去除对 Skia 后端的
 冗余依赖，可独立成仓。
 
+### 2.11 单线程 Runtime 边界与生命周期隔离（本轮评审整改）
+
+本轮针对「单线程 UI Runtime 是否真正闭环」的评审，落地以下整改（Host 侧位于
+`runtime/signal`、`runtime/app`；后端侧位于 `backend/rust/rust`）：
+
+1. **任务投递绑定到 App，不再全局**（P0）：`signal.Runtime` 封装投递器与关闭状态；
+   每个 `App` 持有独立实例，`app.SetUIExecutor` 注入本 App 的投递器，`app.Dispatch(fn)`
+   是后台更新的推荐入口。旧的全局 `signal.Safe` 降级为默认 Runtime 的兼容语法糖
+   （单 App 场景）。因此 app1.Close 不再误伤 app2 的后台更新，多个 App 也不会互相
+   覆盖投递器。依赖追踪核心（observers / ownerStack / batch）仍是单线程唯一的，
+   多个 App 应共享同一个 UI 事件循环（评审亦认可共享事件循环的模型）；Runtime 的
+   实例隔离解决的是「投递器覆盖 / 关闭误伤」，不是让响应式核心支持多线程并发。
+2. **禁止 Safe 静默同步降级**（P0）：未注入 UI Runtime 时 `Dispatch`/`Safe` 返回
+   `ErrUIRuntimeNotInitialized` 且闭包不执行；headless / 测试必须显式选用
+   `signal.NewSyncRuntime()` 或 `signal.SetUIPost(signal.SyncPoster)`。已关闭返回
+   `ErrUIRuntimeClosed`，投递器拒绝返回 `ErrUITaskRejected`——拒绝原因一律可观测。
+3. **Cleanup panic 不污染观察者栈**（P0）：`withObserver` 先注册 defer 恢复栈，再执行
+   用户 Cleanup；Owner 栈由 `runWithOwner` 的 defer 独立恢复。panic 原样向上传播，
+   剩余 Cleanup 跳过，但运行时内部状态全部复位。
+4. **Batch 去重与 panic 语义**（P1）：epoch 在每个 Batch 入口只递增一次，Effect 按
+   batchMark 去重，避免每次写入重扫 pending 列表；Batch 内 panic 时已写入的值保留、
+   已收集的 Effect 仍冲刷，随后 panic 传播。
+5. **Computed 异常语义**（P1）：移除无效的 `panicked` 标志；Computed 内 panic 原样
+   传播，不吞用户异常；`computing` / `observers` / `ownerStack` / `running` 由各层
+   defer 复位，dirty 保持 true，下次读取正常重算。
+6. **Owner 线程契约**（P1）：明确 Owner 创建 / Dispose / Cleanup / Mount 必须在 UI
+   Runtime 线程；保留 mutex 作为防御与并发控制点需要，不承诺跨线程并发 Dispose。
+7. **Rust 帧队列过载可观测**（P1）：新增 `MAX_PENDING_FRAMES`（默认 120）阈值与
+   `submitted / applied / peak_pending / overload_events / max_latency_ms` 指标，经
+   `gx_window_frame_stats(handle, out[5])` 导出。过载只计数**不丢帧**（增量帧丢弃会
+   永久失步），由 Host 的 FullSync 机制在适当时机合并完整状态。
+8. **失败恢复 / 多 App 生命周期测试**：新增 Frame 成功→失败→FullSync→增量、Close
+   与失败恢复并发不重复提交、两个 App 关闭互不影响、关闭中持续投递不触碰已销毁
+   Scene、Cleanup panic 后依赖追踪仍正常等回归测试。
+
 ## 3. 拆成两个项目如何跑通
 
 假设后端项目为 `github.com/yourorg/gox-desktop`，module 独立。

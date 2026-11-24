@@ -127,18 +127,30 @@ func collectDirty(n *node) []*node {
 }
 
 // withObserver 执行 fn，期间把 n 压入观察者栈并重建依赖集合。
-// 恢复用 defer 保证：即便 fn panic（如循环依赖检测触发），栈也不会被污染。
+//
+// 栈恢复用 defer 保证：即便 cleanup 或 fn panic（如循环依赖检测触发），观察者
+// 栈也不会被污染（评审 P0）。关键在于 defer 必须**先于** cleanup 注册——cleanup
+// 是用户代码，可能 panic；若 defer 排在 cleanup 之后，panic 会让 observers 永久
+// 多出一项，后续无关的 Signal 读取会错误登记到这个「幽灵观察者」上，依赖被污染
+// 且问题延迟暴露。Owner 栈由 runWithOwner 内部的 defer 独立保证恢复。
+//
+// Cleanup panic 策略（明确规则）：panic 原样向上传播（不吞用户异常）；本次剩余
+// cleanup 与 fn 不再执行；但 observers / ownerStack / computing / running 等运行时
+// 内部状态全部通过 defer 复位，不会破坏整个 Runtime。Effect 下次因依赖变化重跑、
+// Computed 下次被读取时会重新走完整流程。
 func withObserver(n *node, fn func()) {
 	observers = append(observers, n)
+	// 先注册栈恢复，再执行任何可能 panic 的用户代码。
+	defer func() {
+		observers = observers[:len(observers)-1]
+	}()
 	clearDeps(n)
+
 	cleanups := n.runCleanups
 	n.runCleanups = nil
 	for _, c := range cleanups {
 		c() // 每次重跑前执行上一轮的 onCleanup（SolidJS 语义）
 	}
-	defer func() {
-		observers = observers[:len(observers)-1]
-	}()
 	// 恢复创建时的 Owner 作用域：重跑/条件分支/列表重建子树时 fn 内会
 	// 新建计算、注册 cleanup，并沿 Owner 链 Lookup context。
 	runWithOwner(n.owner, fn)
@@ -267,14 +279,11 @@ func ComputedWithHandle[T any](f func() T) (Signal[T], Computation) {
 		for {
 			startVersion := st.n.version
 			var result T
-			panicked := true
-			func() {
-				withObserver(st.n, func() { result = f() })
-				panicked = false
-			}()
-			if panicked {
-				return // f() panic：result 无效，不写回
-			}
+			withObserver(st.n, func() { result = f() })
+			// f() 的 panic 原样向上传播——响应式核心不吞用户异常（评审 P1）。
+			// computing（本函数 defer）、observers / ownerStack（withObserver /
+			// runWithOwner 的 defer）、running（scheduleEffect 的 defer）均已复位；
+			// dirty 保持 true，下次读取会重新计算，旧值不变。
 			if st.n.version != startVersion {
 				continue // 计算期间又脏：丢弃旧结果，保持 dirty 并重试
 			}
