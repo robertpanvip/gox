@@ -106,10 +106,11 @@ func Table(props gxscene.Props) *gxscene.Instance {
 			attr("gx-row-index", strconv.itoa(index)),
 			attr("flex-direction", "row"), attr("align-items", "center"),
 			attr("height", fmt.sprintf("%g", rowHeight)),
-			attr("border-bottom", ThemeBorder), attr("border-width", "1"),
+			attr("border-bottom", ThemeBorder2), attr("border-width", "1"),
 		}
 		if striped() && index%2 == 1 {
-			ops = append(ops, attr("bg", ThemePanel)) // 斑马纹：交替行抬起一层
+			// 斑马纹：极淡分层（tertiarySystemBackground），不抢主文字层级。
+			ops = append(ops, attr("bg", ThemeFill))
 		}
 		// 行点击 → on-select（列单元格点击会冒泡到此；事件名相同按命中就近派发）。
 		ops = append(ops, gxscene.Op{Code: gxscene.opEvent, Key: "onClick", Slot: 0})
@@ -149,15 +150,16 @@ func Table(props gxscene.Props) *gxscene.Instance {
 	ops := []gxscene.Op{
 		el("div"), attr("gx-role", "table"),
 		attr("flex-direction", "column"),
-		// 整表作为一张卡片：细描边 + 圆角 + 柔和阴影，与页面底拉开层次。
-		attr("border", ThemeBorder), attr("border-width", "1"),
-		attr("border-radius", RadiusCard), attr("box-shadow", ShadowCard),
+		// macOS NSTableView：表格本身只是一张浅底平面，不额外套卡片阴影/描边
+		// （外层 group 已提供卡片层次，避免"双层卡片"）。仅用一圈 hairline
+		// 收边 + 圆角，贴近原生列表视图的克制观感。
+		attr("bg", ThemePanel), attr("border-radius", RadiusSmall),
 	}
 	if w := width(); w != "" {
 		ops = append(ops, attr("width", w))
 	}
 	ops = append(ops,
-		// 表头：填充色与数据行形成层次；整表由外层容器统一描边+圆角。
+		// 表头：极淡底层 + 细分隔线，11px 次级色非粗体（macOS 列标题规范）。
 		el("div"), attr("gx-role", "table-head"),
 		attr("flex-direction", "row"), attr("align-items", "center"),
 		attr("height", fmt.sprintf("%g", rowHeight)),
@@ -252,16 +254,17 @@ func tableHeadCell(col TableColumn, onSort gxscene.Handler) *gxscene.Instance {
 	}
 	ops := []gxscene.Op{
 		el("div"), attr("gx-role", "table-head-cell"),
-		attr("width", w), attr("padding", "10"),
-		attr("flex-direction", "row"), attr("align-items", "center"),
-		attr("font-size", FontCallout), attr("weight", "bold"), attr("color", ThemeMuted),
+		attr("width", w), attr("padding", "8"),
+		attr("flex-direction", "row"), attr("align-items", "center"), attr("gap", "4"),
+		attr("font-size", FontSubheadline), attr("color", ThemeMuted),
 		attr("text-align", align),
 		gxscene.Op{Code: gxscene.opChildText, Arg: col.Title},
 	}
 	if col.Sortable {
-		// 排序标记直接拼在标题后（避免独立 flex item 被折行），整格同色。
+		// 排序标记用预制矢量 chevron 图标（替代字符 ⇅），次级色跟随主题。
+		// slot 0 = onClick Handler，slot 1 = 图标 canvas 子树。
 		ops = append(ops,
-			gxscene.Op{Code: gxscene.opChildText, Arg: " ⇅"},
+			gxscene.Op{Code: gxscene.opComp, Arg: "SortIcon", Slot: 1},
 			gxscene.Op{Code: gxscene.opEvent, Key: "onClick", Slot: 0},
 		)
 	}
@@ -269,15 +272,18 @@ func tableHeadCell(col TableColumn, onSort gxscene.Handler) *gxscene.Instance {
 	n := 0
 	getters := []func() any{}
 	if col.Sortable {
-		n = 1
-		getters = append(getters, func() any {
-			key := col.Key
-			return gxscene.Handler(func(ctx gxscene.EventContext) {
-				if onSort != nil {
-					emitValue(onSort, ctx, key)
-				}
-			})
-		})
+		n = 2
+		getters = append(getters,
+			func() any {
+				key := col.Key
+				return gxscene.Handler(func(ctx gxscene.EventContext) {
+					if onSort != nil {
+						emitValue(onSort, ctx, key)
+					}
+				})
+			},
+			func() any { return iconNode("chevron-down", 12, "faint") },
+		)
 	}
 	return gxscene.render(gxscene.Template{Ops: ops, N: n}, getters...)
 }
@@ -298,7 +304,7 @@ func tableCell(text string, col TableColumn, colIndex int) *gxscene.Instance {
 	}
 	ops := []gxscene.Op{
 		el("div"), attr("gx-role", "table-cell"),
-		attr("width", w), attr("padding", "10"),
+		attr("width", w), attr("padding", "8"),
 		attr("font-size", FontBody), attr("weight", weight), attr("color", textColor),
 		attr("text-align", align),
 		gxscene.Op{Code: gxscene.opChildText, Arg: text}, closeEl(),

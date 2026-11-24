@@ -35,26 +35,28 @@ func Alert(props gxscene.Props) *gxscene.Instance {
 	ops := []gxscene.Op{
 		el("div"), attr("gx-role", "alert"),
 		attr("bg", ThemePanel), attr("border-radius", RadiusCard),
-		attr("padding", "12"), attr("flex-direction", "row"), attr("gap", "10"),
-		attr("align-items", "flex-start"),
+		attr("padding", "12"), attr("flex-direction", "column"), attr("gap", "6"),
 	}
 	if w := width(); w != "" {
 		ops = append(ops, attr("width", w))
 	}
 	ops = append(ops,
-		// 语义矢量图标（canvas 子树）
+		// 标题行：语义矢量图标 + 标题，垂直居中对齐（macOS 通知/告警样式）。
+		// 图标与标题共用一条 align-items=center 的横轴，避免 canvas 节点按
+		// flex-start 顶部对齐时比标题文字高出一截的错位。
+		el("div"), attr("flex-direction", "row"),
+		attr("align-items", "center"), attr("gap", "8"),
 		gxscene.Op{Code: gxscene.opComp, Arg: "AlertIcon", Slot: iconSlot},
-		// 文本列
-		el("div"), attr("flex-direction", "column"), attr("gap", "3"),
 		el("span"), attr("font-size", FontHeadline), attr("weight", "bold"),
 		attr("color", accent), dynChild(titleSlot), closeEl(),
+		closeEl(),
+		// 正文：与标题行同一左边缘起排，保持阅读基线一致。
 		el("span"), attr("font-size", FontBody), attr("color", ThemeMuted),
 		dynChild(msgSlot), closeEl(),
 		closeEl(),
-		closeEl(),
 	)
 	return gxscene.render(gxscene.Template{Ops: ops, N: nSlots},
-		func() any { return iconNode(iconName, 20, toneName) },
+		func() any { return iconNode(iconName, 16, toneName) },
 		func() any { return title() },
 		func() any { return message() },
 	)

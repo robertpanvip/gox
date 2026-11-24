@@ -21,7 +21,7 @@ import (
 func init() { runtime.LockOSThread() }
 
 const W = 900
-const H = 4100
+const H = 4400
 
 func toAny(kids ...*gxscene.Instance) []any {
 	out := make([]any, len(kids))
@@ -248,12 +248,14 @@ func buildTree() *gxscene.Instance {
 	})
 
 	formInput := widgets.Input(gxscene.Props{
-		"value": func() any { return text() }, "placeholder": "项目名称", "width": "300",
+		"value": func() any { return text() }, "placeholder": "项目名称", "width": "420",
 	})
+	// 表单卡片收窄到内容宽度：字段撑满、按钮居中于同一内容列，
+	// 避免"字段在左、按钮飘在卡片正中"的轴线割裂。
 	form := widgets.Form(gxscene.Props{
-		"title": func() any { return "新建项目" }, "width": str(W - 88),
+		"title": func() any { return "新建项目" }, "width": "460",
 		"children": func() any {
-			return col(str(W-96), "12",
+			return col("428", "12",
 				widgets.FormItem(gxscene.Props{
 					"label": "名称", "name": "name", "required": true,
 					"children": func() any { return formInput },
@@ -267,17 +269,21 @@ func buildTree() *gxscene.Instance {
 		"onSubmit": widgets.BindSubmit(func() {}),
 	})
 
-	feedbackRow := col(str(W-88), "12",
-		widgets.EmptyState(gxscene.Props{
-			"icon": "folder", "title": func() any { return "暂无内容" },
-			"description": func() any { return "空状态也遵循当前主题的层级与留白" },
-			"width":       str(W - 88),
-		}),
-		row("12",
-			widgets.Skeleton(gxscene.Props{"width": "180", "height": "14"}),
-			widgets.Skeleton(gxscene.Props{"width": "120", "height": "14"}),
-			widgets.Spinner(gxscene.Props{"size": 22}),
-		),
+	// EmptyState 单独成区：不再把 Spinner 叠在同一列造成"图标下多出个圈"的错觉。
+	emptyState := widgets.EmptyState(gxscene.Props{
+		"icon": "folder", "title": func() any { return "暂无内容" },
+		"description": func() any { return "空状态也遵循当前主题的层级与留白" },
+		"width":       str(W - 88),
+	})
+	// 骨架屏与加载指示器独立成区，各自有明确语义标签。
+	skeletonRow := row("16",
+		widgets.Skeleton(gxscene.Props{"width": "180", "height": "14"}),
+		widgets.Skeleton(gxscene.Props{"width": "120", "height": "14"}),
+		widgets.Skeleton(gxscene.Props{"width": "80", "height": "28", "radius": widgets.RadiusControl}),
+	)
+	spinnerRow := row("20",
+		label("加载中", widgets.FontBody, "muted"),
+		widgets.Spinner(gxscene.Props{"size": 18}),
 	)
 
 	timePick := widgets.TimePicker(gxscene.Props{
@@ -312,7 +318,8 @@ func buildTree() *gxscene.Instance {
 				group(str(W-48), str(W-48), sectionTitleIcon("卡片 Card", "card"), card),
 				group(str(W-48), str(W-48), sectionTitleIcon("表格 Table", "grid"), table),
 				group(str(W-48), str(W-48), sectionTitleIcon("表单 Form", "doc"), form),
-				group(str(W-48), str(W-48), sectionTitleIcon("空状态 / 骨架 / 加载", "doc"), feedbackRow),
+				group(str(W-48), str(W-48), sectionTitleIcon("空状态 EmptyState", "doc"), emptyState),
+				group(str(W-48), str(W-48), sectionTitleIcon("骨架屏 / 加载 Skeleton / Spinner", "reload"), skeletonRow, spinnerRow),
 				group(str(W-48), str(W-48), sectionTitleIcon("时间 / 浮层提示", "clock"), timePick, tooltip),
 				iconGallery(str(W-48)),
 			)

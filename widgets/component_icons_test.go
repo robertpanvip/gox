@@ -5,6 +5,7 @@ import (
 
 	"github.com/robertpanvip/gox/runtime/canvas"
 	gxscene "github.com/robertpanvip/gox/runtime/scene"
+	"github.com/robertpanvip/gox/runtime/signal"
 )
 
 // hasVectorIcon 报告节点子树里是否存在带矢量绘制指令的 canvas 节点。
@@ -83,6 +84,28 @@ func TestButtonOptionalIcon(t *testing.T) {
 		if !hasVectorIcon(b.Root()) {
 			t.Errorf("variant=%q 的带图标 Button 应渲染矢量图标", v)
 		}
+	}
+}
+
+func TestTableSortUsesVectorChevron(t *testing.T) {
+	props, _ := tableFixture() // 首列 Sortable=true
+	tbl := Table(props)
+	tbl.BindReactive(signal.Effect)
+	heads := findAllByRole(tbl.Root(), "table-head-cell")
+	if len(heads) == 0 {
+		t.Fatal("无表头单元格")
+	}
+	// 可排序列头应含矢量 chevron 图标，且不再用字符 ⇅ 凑数。
+	if !hasVectorIcon(heads[0]) {
+		t.Error("可排序列头应含矢量 chevron 图标")
+	}
+	text := gxscene.TextBackend{}.Paint(heads[0])
+	if containsStr(text, "⇅") {
+		t.Errorf("排序标记不应再是字符 ⇅: %q", text)
+	}
+	// 排序回传仍可用（图标插槽没有顶掉 onClick）。
+	if heads[0].Handler("onClick") == nil {
+		t.Error("加图标后列头排序点击应仍可用")
 	}
 }
 
