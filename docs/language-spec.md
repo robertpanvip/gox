@@ -445,7 +445,7 @@ Signal.batch(() => {
 - **底层 API 禁止手写**：`Signal.New` / `Signal.Computed` / `Signal.Effect` / `Signal.NewWithEquals` 等首字母大写的运行时构造器是编译器内部实现细节，用户源码里直接调用会报编译错误。GX 只暴露语法糖：`sig n = v` 声明源信号、`Signal.computed(() => expr)` 派生、`Signal.effect(() => {...})` 副作用；迟早需要的自定义相等策略等仍由运行时保留，但不从语言层暴露。这样用户无需感知 sig 与普通变量的区别，也杜绝了手写值与编译器 binding 不一致引发的快照冻结 / 别名冲突 / 二次包装等一系列问题。小写语法糖（含作为函数值传递的 `Signal.effect`）由编译器在末尾还原成对应大写符号，是唯一合法入口。
 - **`Signal` 是保留标识符**：作为占位包名的语义优先，勿用作变量名/类型名/字段名。`Signal.New` 形式的底层 API 调用会被拦截；若确需同名局部变量（如 `Signal := Holder{...}`），对其字段的访问（`Signal.New`）会按绑定表放行——判据是「`Signal` 是否解析为包名绑定」，不是纯词法匹配。
 - **并发安全**：响应式核心（观察者栈、依赖图、Owner 栈、批处理）严格单线程，无锁、无 goroutine id。跨线程只经 `app.Dispatch` / `signal.Safe` 投递；`sync.Once`（句柄 Dispose）、任务队列、App Close 等并发控制点仍使用必要的同步原语。「响应式单线程」不等于「整个程序无需锁」。
-- **读取性能**：依赖追踪只在 effect/computed 重算期间需要，而这类场景是少数；普通读取走**无锁快路径**——用原子计数器 `activeObservers` 判断当前无 observer 重算时，直接原子读取当前值，跳过抓栈（goroutine id 解析）与加锁。sig 值用原子指针存储避免撕裂。实测读取 ~2 ns（约为普通变量的 2 倍），相较抓栈方案（~2900 ns）提速约 1400×；computed 缓存命中读 ~14 ns。
+- **读取性能**：依赖追踪只在 effect/computed 重算期间需要，而这类场景是少数；读热路径走**无锁快路径**——只做一次 `len(observers)` 切片判空：为空（无 observer 重算）就直接返回值，非空才登记依赖。没有 goroutine id 解析、没有锁、没有原子操作，实测读 ~1.6 ns（接近普通变量的 1.2 ns）；computed 缓存命中读 ~2.8 ns。响应式核心不跨线程，因此值不需要原子指针防撕裂——跨线程更新统一走 `app.Dispatch` / `Signal.safe` 投递到 UI Runtime 后再读写。
 - **import**：`Signal` 占位包名由 ImportManager 统一解析为 `import Signal "<module>/runtime/signal"`；源码已用别名导入则复用。
 
 **已知边界与绕法**（能跑但需按规则写，编译器不改写也不会自动报警的三处）：

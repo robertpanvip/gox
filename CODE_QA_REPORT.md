@@ -100,8 +100,8 @@
 | H-5 | ✅ | `ImportManager` 把用户源码标识符登记为已占用名，运行时占位别名冲突时自动重命名（list2）。回归 `TestImportAliasNotShadowedByLocal` |
 | H-6 | ✅ | `CompileStage(src,"all")` 消除 `toks` shadow，case 内直接 emit 返回 |
 | H-7 | ✅ | `collectGuards` 对链首非守卫的 else-if 守卫作为独立链起点处理。回归 `TestElseIfGuardWithNonGuardHead` |
-| H-8 | ✅ | sig 观察者栈按 goroutine id 隔离（observers map），并发 withObserver 不再互相覆盖。回归 `TestConcurrentEffectsIsolatedDeps` |
-| H-9 | ✅ | computed 结果在锁内写回，computing 带 goroutine 归属 + Cond 等待，并发读只重算一次。回归 `TestComputedConcurrentReadComputesOnce` |
+| H-8 | ✅（已演进） | 当时 sig 观察者栈按 goroutine id 隔离；现响应式核心已单线程化（`observers` 为单栈，无 goid/无锁/无原子），跨线程更新走 `app.Dispatch` / `Signal.safe`，并发隔离测试随重构移除 |
+| H-9 | ✅（已演进） | 当时 computed 并发读加锁 + Cond 等待；现单线程模型下 computed 惰性缓存 + 缓存命中读 ~2.8ns，无需并发去重，相关并发测试随重构移除 |
 | H-10 | ✅ | LSP `Content-Length` 校验 Atoi 错误与负值，不再 `make([]byte,-1)` panic |
 | M-1 | ✅ | 同 H-1：tokenizeTypeText 修正生成 token 的 Pos 为 lambda 位置 |
 | M-2 | ✅ | `collectUnionGuards` 正确定位匿名函数参数括号并插入守卫。回归 `TestAnonFuncUnionParamGuard` |
@@ -151,6 +151,6 @@
 | 建议 | 状态 | 说明 |
 |---|---|---|
 | 写入边界语义（多参数只用首个 / computed 写入忽略 / 相等值不触发 / Dispose） | ○ | 属 API 语义扩展，非正确性 bug；Dispose 生命周期是后续演进项 |
-| goid() 用 runtime.Stack 属非官方技巧 | ○ | 当前无官方 goroutine-local；改动需重设 API 契约，风险高于收益，已在代码注释标注 |
+| goid() 用 runtime.Stack 属非官方技巧 | ○ | 响应式核心已不再依赖 goid（单线程 observers 栈）；`signal.Goid()` 仅保留给宿主层 `commitGate` / 旧 `QueueDispatcher` 的 UI 线程串行门使用，非官方栈解析已在代码注释标注 |
 | 对象解构字段重命名 / 嵌套解构 | ○ | 报告本身建议暂不增加，先把简单解构的作用域/类型/求值处理完善 |
 | 统一符号表 + 作用域 + 表达式 AST 改造 | ○ | 架构级演进，另立方案评审后分阶段落地；本轮先以补丁解除 P1 正确性风险 |

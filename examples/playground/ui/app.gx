@@ -22,11 +22,11 @@ pub sig sampleIndex = 0
 // 示例源码是常量，缓存一份切片，避免每次切换/渲染列表都重新构造 5 个结构体。
 func buildSamples() []sample {
     return []sample{
-        sample{name: "01 Hello GX", source: "// 最小 GX 程序\nsig name = \"GX\"\nfunc view() *gxscene.Instance {\n    return <div>Hello, {name}!</div>\n}"},
-        sample{name: "02 Counter", source: "// signal 计数器\nsig count = 0\nfunc inc() {\n    count = count + 1\n}\nfunc view() *gxscene.Instance {\n    return <button onClick={inc}>{count}</button>\n}"},
-        sample{name: "03 For 列表", source: "// For 列表渲染\nsig todos = []string{\"a\", \"b\", \"c\"}\nfunc view() *gxscene.Instance {\n    return <div flex-direction=\"column\">\n        <For each={todos}>{(t string) => <span>{t()}</span>}</For>\n    </div>\n}"},
-        sample{name: "04 样式卡片", source: "// 深色卡片\nfunc view() *gxscene.Instance {\n    return <div bg=\"#0b1020\" padding=\"20\"\n        border-radius=\"12\" flex-direction=\"column\" gap=\"8\">\n        <b color=\"#7dd3fc\" font-size=\"24\">Card</b>\n        <span color=\"#94a3b8\">用 GX 写的样式</span>\n    </div>\n}"},
-        sample{name: "05 语法高亮", source: "// 关键字/字符串/注释都会着色\npub enum color { red, green, blue }\nfunc describe(v int | string) string {\n    if v is int { return \"int\" }\n    return \"string\"\n}"},
+        sample{name: "01 Hello GX", source: "// sig 声明 + 裸读（编译器自动补 ()）\nsig name = \"GX\"\nfunc view() *gxscene.Instance {\n    return <div>Hello, {name}!</div>\n}"},
+        sample{name: "02 Counter", source: "// 事件传函数原值 + sig 读写\nsig count = 0\nfunc inc() {\n    count = count + 1\n}\nfunc view() *gxscene.Instance {\n    return <button onClick={inc}>Count: {count}</button>\n}"},
+        sample{name: "03 For 列表", source: "// For + item getter（t() 读值）\nsig todos = []string{\"a\", \"b\", \"c\"}\nfunc view() *gxscene.Instance {\n    return <div flex-direction=\"column\">\n        <For each={todos}>{(t string) => <span>{t()}</span>}</For>\n    </div>\n}"},
+        sample{name: "04 样式卡片", source: "// style={{...}} 强类型 struct + 驼峰 key + 伪状态单词 key\nfunc view() *gxscene.Instance {\n    return <div style={{\n        background: \"#0b1020\",\n        padding: 20,\n        borderRadius: 12,\n        flexDirection: \"column\",\n        gap: 8,\n        hover: { background: \"#1e293b\" },\n    }}>\n        <b style={{ color: \"#7dd3fc\", fontSize: 24 }}>Card</b>\n        <span style={{ color: \"#94a3b8\" }}>用 GX style struct 写的样式</span>\n    </div>\n}"},
+        sample{name: "05 响应式 computed", source: "// Signal.computed 派生 + Signal.batch 合并 + 事件传函数原值\nsig price = 10\nsig qty = 2\nvar total = Signal.computed(() => price * qty)\nfunc bump() {\n    Signal.batch(() => {\n        price = price + 1\n        qty = qty + 1\n    })\n}\nfunc view() *gxscene.Instance {\n    return <div flex-direction=\"column\" gap=\"6\">\n        <span>Total: {total}</span>\n        <button onClick={bump}>加价加量</button>\n    </div>\n}"},
     }
 }
 

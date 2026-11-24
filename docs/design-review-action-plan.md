@@ -26,7 +26,7 @@
 | 3 | 编译器语义分析需统一 | P1 | ✅ 属实：`jsxSceneCtx` 同时持 `bindings`/`sigs`/`sigTypes`/`signalFields` 多源 | 已有统一 Bindings、表达式 AST、`Pos.Offset` 绑定身份；"Symbol/Type/Expression 三概念"是下一步收敛方向 |
 | 4 | GUI 调度不完善，Draw 可能非 UI 线程 | P1 | ✅ 属实：`a.Draw()` 在 effect 回调里同步执行，全仓无 dispatcher/scheduler | `Batch` 已合并同轮写入为一帧；缺的是"帧请求 → UI 线程"这一步 |
 | 5 | Node 协议宽泛 `Props map[string]any` | P2 | ✅ 属实：`Node` 结构如报告所述，布局挂载点已改为后端自建 map[NodeID]any | `ID`（整数稳定身份）、`SyntheticEvent` 已是后端扩展机制的基础 |
-| 债 | goid 依赖 `runtime.Stack` | P2 | ✅ 属实：`signal.go` 仍抓栈取 goid | 已有 `activeObservers` 原子计数，普通读走无锁快路径跳过 goid（~2ns）；只需隔离模块，不必重写 |
+| 债 | goid 依赖 `runtime.Stack` | P2 | 已解决：signal 响应式核心已单线程化，`signal.go` 读热路径只做 `len(observers)` 判空，无抓栈/无锁/无原子；`goid.go` 仅保留给宿主层 `commitGate`/旧 `QueueDispatcher` 用 | 跨线程更新统一走 `app.Dispatch` / `Signal.safe` 投递到 UI Runtime（详见 language-spec §11）；宿主层的 goid 串行门与响应式核心无关 |
 
 ## 2. 任务清单
 

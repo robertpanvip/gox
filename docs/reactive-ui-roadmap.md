@@ -19,7 +19,7 @@
 | Computed 句柄 | `ComputedWithHandle` 返回 `(Signal[T], Computation)` |
 | Owner 树 | `CreateRoot` / `GetOwner` / `RunWithOwner`，父销毁级联子；嵌套 `CreateRoot` 自动挂为子 |
 | 生命周期 | `OnCleanup`（重跑前 + 销毁时执行）、`OnMount`（首次挂载执行一次） |
-| 批处理 | `Batch(f)` 合并同一轮 sig 写入，批次结束统一调度 Effect |
+| 批处理 | `Batch(f)`（GX: `Signal.batch(() => {...})`）合并同一轮 sig 写入，批次结束统一调度 Effect；只负责合并，不做线程切换（`Dispatch`/`Safe` 才管跨线程投递） |
 
 `scene.Computation` 以类型别名统一到 `signal.Computation`，使 `signal.Effect` 可直接作为
 `BindReactive` 的实参（Go 函数类型要求返回类型 identical）。

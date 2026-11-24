@@ -359,7 +359,8 @@ gxscene.Style{
 - `style` key 本身不进 Props。
 
 增量更新时，上次写入但本次消失的 key 写空串（后端无属性删除语义，空串使旧值失效）。
-`$:xxx` 是 `&:xxx` 的兼容别名，展平时统一规整为 `&:`，后端只见到一种形式。
+伪状态输入统一用单词 key（`hover`/`active`/`focus`/`disabled`），由 `Props()` 编码成唯一的
+`&:xxx` 后端协议形式；源码或 JSON 里写 `&:`/`$:` 前缀会被拒绝，后端只见到一种形式。
 
 **覆盖优先级**：`hover → focus → active → disabled`，后者覆盖前者同名属性。
 `disabled` 由节点自身属性 `props["disabled"]`（bool 或字符串 `"true"`/`"1"`）驱动，
