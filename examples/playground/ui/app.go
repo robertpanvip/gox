@@ -5,9 +5,8 @@
 // 转译成标准 Go 场景树后，桌面（skia+GLFW）与网页（web+wasm）共用。
 package ui
 
-import Signal "github.com/robertpanvip/gox/runtime/signal"
-
 import (
+    Signal "github.com/robertpanvip/gox/runtime/signal"
     gxscene "github.com/robertpanvip/gox/runtime/scene"
 )
 
@@ -40,10 +39,13 @@ var sampleStore []Sample = buildSamples()
     xs := Samples()
     if i < 0 { i = 0 }
     if i >= len(xs) { i = len(xs) - 1 }
-    SampleIndex(i)
-    EditorSetText(xs[i].Source)
-    EditorHome()
-    EditorFocus()
+    // 一次批量提交：示例高亮、源码/行版本、光标、焦点合并为一帧 DOM 补丁。
+    Signal.Batch(func() {
+        SampleIndex(i)
+        EditorSetText(xs[i].Source)
+        EditorHome()
+        EditorFocus()
+    })
 }
 
  func NextSample() { LoadSample(SampleIndex() + 1) }

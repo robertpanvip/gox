@@ -3,6 +3,7 @@
 package gxweb
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
 	"sync"
@@ -22,6 +23,12 @@ type jsDriver struct {
 	doc      js.Value
 	win      js.Value
 	funcs    []js.Func // 保活：js.Func 被 GC 后回调失效
+
+	// RAF 投递：同一帧内多次 Post 只登记一次 requestAnimationFrame。
+	// 浏览器在下一帧回调里统一 drain，避免事件处理期间同步重入 DOM 提交。
+	rafOnce      js.Func
+	rafQueue     []func()
+	rafScheduled bool
 }
 
 type jsElem struct {
@@ -43,7 +50,59 @@ func newJSDriver(root js.Value) *jsDriver {
 		root = d.doc.Get("body")
 	}
 	d.root = root
+	d.rafOnce = js.FuncOf(func(this js.Value, args []js.Value) any {
+		d.runRAF()
+		return nil
+	})
+	d.funcs = append(d.funcs, d.rafOnce)
 	return d
+}
+
+// postRAF 把 fn 排进下一帧。回调只注册一次，避免每帧创建/释放 js.Func。
+func (d *jsDriver) postRAF(fn func()) {
+	if fn == nil {
+		return
+	}
+	d.mu.Lock()
+	d.rafQueue = append(d.rafQueue, fn)
+	if !d.rafScheduled {
+		d.rafScheduled = true
+		d.win.Call("requestAnimationFrame", d.rafOnce)
+	}
+	d.mu.Unlock()
+}
+
+// runRAF 执行并清空本帧队列。在锁外调用 fn，允许回调继续 Post 下一帧。
+func (d *jsDriver) runRAF() {
+	d.mu.Lock()
+	q := d.rafQueue
+	d.rafQueue = nil
+	d.rafScheduled = false
+	d.mu.Unlock()
+	for _, fn := range q {
+		fn()
+	}
+}
+
+// Post 实现 gxapp.UIExecutor：把任务投递到浏览器下一帧执行。
+// UIExecutorDispatcher 已对同一帧内的多次 RequestFrame 去抖，因此一次点击/按键
+// 只会提交一帧 DOM 补丁，且事件回调本身不再被同步绘制阻塞。
+func (w *Window) Post(fn func()) error {
+	if fn == nil {
+		return nil
+	}
+	w.mu.Lock()
+	closed := w.closed
+	w.mu.Unlock()
+	if closed {
+		return fmt.Errorf("gxweb: 窗口已关闭，无法投递 RAF 任务")
+	}
+	d, ok := w.driver.(*jsDriver)
+	if !ok {
+		return fmt.Errorf("gxweb: RAF 投递需要 js 驱动")
+	}
+	d.postRAF(fn)
+	return nil
 }
 
 // Mount 把元素挂到宿主容器（document.querySelector 选中的节点，缺省 body）。

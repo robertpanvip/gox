@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	gxscene "github.com/robertpanvip/gox/runtime/scene"
+	"github.com/robertpanvip/gox/runtime/signal"
 )
 
 const benchLine = `    return <button onClick={gxscene.Handler(func(ctx gxscene.EventContext) { inc() })}>{count()}</button>`
@@ -30,6 +31,20 @@ func BenchmarkRichTextHTML(b *testing.B) {
 		if len(rt.HTML()) == 0 {
 			b.Fatal("空 HTML")
 		}
+	}
+}
+
+// BenchmarkLoadSampleSwitch 度量一次示例切换在 Go/WASM 侧的响应式与场景更新成本。
+// 像真实 app 那样绑定 effect，否则 getter 不会重算。
+func BenchmarkLoadSampleSwitch(b *testing.B) {
+	LoadSample(0)
+	inst := Playground()
+	inst.BindStructural(signal.Effect)
+	inst.BindLeafEffects(signal.Effect)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		LoadSample(i % 5)
 	}
 }
 

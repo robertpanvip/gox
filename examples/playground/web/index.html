@@ -14,6 +14,12 @@
     #app [style*="flex-direction"] { display: flex; }
     #app [style*="overflow"] { overflow: auto; }
     #app div { box-sizing: border-box; }
+    /* 编辑器逐 token 着色：GX 侧把颜色编码成 linear-gradient 背景，
+       这里把渐变裁到文字上。桌面（skia）无此 CSS，显示纯文本，功能不受影响。 */
+    .gx-code-line { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+                    color: transparent !important; -webkit-background-clip: text !important;
+                    background-clip: text !important; white-space: pre; }
+    .gx-code-line::before { content: attr(data-code); }
     #hint { margin-top: 12px; font-size: 12px; color: #64748b; }
     #loading { position: fixed; inset: 0; display: grid; place-items: center;
                font-size: 14px; color: #94a3b8; background: #020617; z-index: 10; }

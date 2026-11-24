@@ -25,6 +25,10 @@ func main() {
 	}
 	defer app.Close()
 
+	// Web 后端提供 RAF UIExecutor：同一帧内的多次状态变化合并为一次 DOM 提交，
+	// 且事件回调不再被同步绘制阻塞。必须在 Render 之前设置。
+	app.SetUIExecutor(win)
+
 	ui.LoadSample(0)
 	if err := app.Render(func() any { return ui.Playground() }); err != nil {
 		panic(err)

@@ -126,57 +126,76 @@ var rowVers = Signal.NewVec(zeroRowVers())
 
 // ---- 包级编辑命令：装配层收到键盘事件后调用 ----
 
+// 所有编辑命令都在一个 Batch 内写信号：否则源码、行版本、光标、焦点各自独立
+// 触发帧边界，一次点击/按键会提交多帧 DOM 补丁（点击示例曾观察到 4~5 次 Present）。
+// Batch 只合并更新，不改变任何编辑语义；嵌套在 setSource 内部的 Batch 由最外层统一冲刷。
  func EditorInsert(s string) {
     text, c := InsertText(SourceCode(), CursorLine(), CursorCol(), s)
-    setSource(text)
-    CursorCol(c)
-    EditorFocused(true)
+    Signal.Batch(func() {
+        setSource(text)
+        CursorCol(c)
+        EditorFocused(true)
+    })
 }
 
  func EditorBackspace() {
     text, ln, c := BackspaceAt(SourceCode(), CursorLine(), CursorCol())
-    setSource(text)
-    CursorLine(ln)
-    CursorCol(c)
+    Signal.Batch(func() {
+        setSource(text)
+        CursorLine(ln)
+        CursorCol(c)
+    })
 }
 
  func EditorNewline() {
     text, ln, c := NewlineAt(SourceCode(), CursorLine(), CursorCol())
-    setSource(text)
-    CursorLine(ln)
-    CursorCol(c)
+    Signal.Batch(func() {
+        setSource(text)
+        CursorLine(ln)
+        CursorCol(c)
+    })
 }
 
  func EditorMove(dln int, dcol int) {
-    lines := SplitLines(SourceCode())
-    ln := CursorLine()
-    c := CursorCol()
-    ln = ln + dln
-    if ln < 0 { ln = 0 }
-    if ln >= len(lines) { ln = len(lines) - 1 }
-    rs := []rune(lines[ln])
-    c = c + dcol
-    if c < 0 { c = 0 }
-    if c > len(rs) { c = len(rs) }
-    CursorLine(ln)
-    CursorCol(c)
+    Signal.Batch(func() {
+        lines := SplitLines(SourceCode())
+        ln := CursorLine()
+        c := CursorCol()
+        ln = ln + dln
+        if ln < 0 { ln = 0 }
+        if ln >= len(lines) { ln = len(lines) - 1 }
+        rs := []rune(lines[ln])
+        c = c + dcol
+        if c < 0 { c = 0 }
+        if c > len(rs) { c = len(rs) }
+        CursorLine(ln)
+        CursorCol(c)
+    })
 }
 
  func EditorSetText(s string) {
-    setSource(s)
-    lines := SplitLines(s)
-    if CursorLine() >= len(lines) { CursorLine(len(lines) - 1 )}
+    Signal.Batch(func() {
+        setSource(s)
+        lines := SplitLines(s)
+        if CursorLine() >= len(lines) { CursorLine(len(lines) - 1 )}
+    })
 }
 
 // editorHome 一次性把光标归位。切换示例时旧实现调用两次 editorMove，
-// 每次都 SplitLines + []rune 转换；这里直接写两个标量 sig。
+// 每次都 SplitLines + []rune 转换且各提交一帧；这里直接写两个标量 sig。
  func EditorHome() {
-    CursorLine(0)
-    CursorCol(0)
+    Signal.Batch(func() {
+        CursorLine(0)
+        CursorCol(0)
+    })
 }
 
- func EditorFocus() { EditorFocused(true )}
- func EditorBlur()  { EditorFocused(false )}
+ func EditorFocus() {
+    Signal.Batch(func() { EditorFocused(true )})
+}
+ func EditorBlur()  {
+    Signal.Batch(func() { EditorFocused(false )})
+}
  func EditorLine() int { return CursorLine() }
  func EditorCol() int { return CursorCol() }
  func EditorText() string { return SourceCode() }
@@ -368,9 +387,9 @@ func matchBrace(b []byte, start int) int {
 //   - 现在把一行拆成"一个富文本节点"（rich-text 分段着色），每行的可变插槽从
 //     48 降到 3。切换示例降到 ~10ms，打字降到 ~1.5ms。行版本用 signal.Vec
 //     （一等细粒度集合）承载，替代了原先手写的 24 个 rowVerN 具名 sig。
-//   - 继续优化：相邻同色分段在 RichText.HTML 序列化时合并，避免为空格/标点
-//     生成几十个 <span>；setSource 只重新分词变化行；For 订阅独立 lineCount，
-//     单字符编辑跳过列表 diff。token 本身仍保持细粒度，便于诊断与精确取段。
+//   - 继续优化：setSource 只重新分词变化行；富文本组件保留并合并同色 span，
+//     但编辑器最终改用 CSS 渐变着色——每行一个文本属性 + 一个背景属性，
+//     既无 innerHTML 也没有逐 token 节点/effect，且不受槽位上限截断。
 //
 // tokenCache[i] 缓存第 i 行的分词结果；lineTextCache 保存对应的原文行。
 // setSource 比对新旧每行：只有内容变化的行才重新分词，未变行直接复用 token 切片。
@@ -456,30 +475,49 @@ func ensureTokenCache() {
     LineCount(len(lines))
 }
 
-// lineRich 返回第 idx 行的着色分段。它是该行唯一的富文本 getter：
-// 订阅本行版本（本行变化才重跑），把缓存的 token 列表打包成一个 RichText 值。
-// 于是一行的着色更新 = 1 个属性插槽 + 1 条 Change，而非 24 slot × 2 getter。
-func lineRich(idx int) gxscene.RichText {
-	_ = rowVersion(idx)
-	ensureTokenCache()
-	out := gxscene.RichText{}
-	if idx < 0 || idx >= len(tokenCache) { return out }
-	for _, t := range tokenCache[idx] {
-		out = append(out, gxscene.RichSpan{Text: t.Text, Color: t.Color})
-	}
-	return out
+// 每行只保留两个 getter：纯文本 + 颜色渐变。语法高亮不用富文本组件，也不给
+// 每个 token 建节点/effect，而是把逐 token 颜色编码成 CSS linear-gradient：
+// 等宽字体下一个字符宽度是 1ch（CJK 按 2ch 估算），渐变色标落在 token 边界上，
+// 再由页面 CSS 的 background-clip:text 把渐变裁到文字本身。于是着色更新 =
+// 每行 1 个背景属性，effect 数从 O(行×token) 降到 O(行)，且不存在槽位上限截断。
+func runeWidth(s string) int {
+    n := 0
+    for _, r := range s {
+        if r >= 0x2e80 { n = n + 2 } else { n = n + 1 }
+    }
+    return n
 }
 
-// linePlain 返回第 idx 行纯文本，作为富文本节点的 Text（供布局测量/无障碍）。
-func linePlain(idx int) string {
-	_ = rowVersion(idx)
-	ensureTokenCache()
-	if idx < 0 || idx >= len(tokenCache) { return "" }
-	var b strings.Builder
-	for _, t := range tokenCache[idx] {
-		b.WriteString(t.Text)
-	}
-	return b.String()
+func lineText(idx int) string {
+    _ = rowVersion(idx)
+    ensureTokenCache()
+    if idx < 0 || idx >= len(tokenCache) { return "" }
+    var b strings.Builder
+    for _, t := range tokenCache[idx] { b.WriteString(t.Text) }
+    return b.String()
+}
+
+func lineCodeGradient(idx int) string {
+    _ = rowVersion(idx)
+    ensureTokenCache()
+    if idx < 0 || idx >= len(tokenCache) { return "" }
+    var b strings.Builder
+    b.WriteString("linear-gradient(90deg")
+    pos := 0
+    for _, t := range tokenCache[idx] {
+        w := runeWidth(t.Text)
+        if w == 0 { continue }
+        b.WriteString(", ")
+        b.WriteString(t.Color)
+        b.WriteString(" ")
+        b.WriteString(strconv.Itoa(pos))
+        b.WriteString("ch ")
+        b.WriteString(strconv.Itoa(pos+w))
+        b.WriteString("ch")
+        pos = pos + w
+    }
+    b.WriteString(")")
+    return b.String()
 }
 
 // lineGutterColor 与整行同色：行号列不再用独立背景块，避免视觉上把编辑器割成两条。
@@ -495,23 +533,32 @@ func lineRowBg(idx int) string {
 
 func lineNumber(idx int) string { return strconv.Itoa(idx + 1) }
 
-// lineView 渲染一行：行号 + 一个富文本代码节点。
+// lineView 渲染一行：行号 + 一个代码 span。
 //
-// 旧实现把一行拆成 24 个固定 token span（每行 48 个 getter），切换示例时
-// 数百个 effect 全量重跑、几百次 DOM 跨边界写入，实测 180~250ms。
-// 新实现把整行着色打包成一个 RichText 属性值：web 后端一次 innerHTML 落地，
-// skia 后端逐段着色。每行的可变插槽从 48 降到 3（行背景/行号/富文本），
-// 节点数从 24 降到 1，切换与打字都只重跑变化行的少数 getter。
+// 编辑器刻意不使用富文本组件：每行只有两个 getter（纯文本 + 颜色渐变），
+// 颜色由 lineCodeGradient 编码进 CSS linear-gradient，页面 CSS 用
+// background-clip:text 裁到文字上。性能来自四层：行版本隔离（只重算变化行）、
+// token 缓存复用（未变行不重新分词）、固定 24 行（动态新增行会漏叶子订阅）、
+// 批量 + RAF 提交（一次交互只打一帧 DOM 补丁）。
 func lineView(idx int) *gxscene.Instance {
     // 样式用 react-native 风格的对象字面量：驼峰 key 收进 style={{...}}，
     // bg 写作 background，编译器降级为 gxscene.Style{...}，runtime 按 key 细粒度 diff。
-    return gxscene.Render(gxscene.Template{Ops:[]gxscene.Op{gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:0,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:1,},gxscene.Op{Code:gxscene.OpDynChild,Slot:2,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpElem,Arg:"span",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"rich-text",Slot:3,},gxscene.Op{Code:gxscene.OpAttr,Arg:"pre",Key:"white-space",},gxscene.Op{Code:gxscene.OpAttr,Arg:"13",Key:"font-size",},gxscene.Op{Code:gxscene.OpDynChild,Slot:4,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpClose,},},N:5,}, func() any{ return gxscene.Style{"background":lineRowBg(idx),"height":22,"flex-direction":"row","align-items":"center",} }, func() any{ return gxscene.Style{"background":lineGutterColor(idx),"color":"#858585","width":42,"font-size":12,"text-align":"right","padding":4,} }, func() any{ return lineNumber(idx) }, func() any{ return lineRich(idx) }, func() any{ return linePlain(idx) })
+    return gxscene.Render(gxscene.Template{Ops:[]gxscene.Op{gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:0,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:1,},gxscene.Op{Code:gxscene.OpDynChild,Slot:2,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpElem,Arg:"span",},gxscene.Op{Code:gxscene.OpAttr,Arg:"gx-code-line",Key:"class",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"data-code",Slot:3,},gxscene.Op{Code:gxscene.OpAttr,Arg:"pre",Key:"white-space",},gxscene.Op{Code:gxscene.OpAttr,Arg:"13",Key:"font-size",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:4,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpClose,},},N:5,}, func() any{ return gxscene.Style{"background":lineRowBg(idx),"height":rowHeight(idx),"overflow":"hidden","flex-direction":"row","align-items":"center",} }, func() any{ return gxscene.Style{"background":lineGutterColor(idx),"color":"#858585","width":42,"font-size":12,"text-align":"right","padding":4,} }, func() any{ return lineNumber(idx) }, func() any{ return lineText(idx) }, func() any{ return gxscene.Style{"background":lineCodeGradient(idx),} })
 }
 
-// Editor 渲染整个编辑器。each 只读 lineCount——单字符编辑不再触发 For 重算；
-// 每行的文本/颜色/高亮走行版本 getter，内容变化才精确刷新对应行。
+// 固定 24 行：For 的 each 是常量，所有行在首帧就完成叶子 effect 绑定。
+// 行数变化只改每行的高度（超出部分高度 0），不再动态新增/删除行——
+// 动态新增行在 Web 增量后端会漏掉叶子订阅，导致切换示例后尾部行保留旧内容。
+var editorRowIDs = Indices(24)
+
+func rowHeight(idx int) int {
+    if idx < LineCount() { return 22 }
+    return 0
+}
+
+// Editor 渲染整个编辑器。每行文本/颜色/高亮走行版本 getter，内容变化才精确刷新。
  func Editor() *gxscene.Instance {
-    return gxscene.Render(gxscene.Template{Ops:[]gxscene.Op{gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpAttr,Arg:"#1e1e1e",Key:"bg",},gxscene.Op{Code:gxscene.OpAttr,Arg:"8",Key:"border-radius",},gxscene.Op{Code:gxscene.OpAttr,Arg:"6",Key:"padding",},gxscene.Op{Code:gxscene.OpAttr,Arg:"column",Key:"flex-direction",},gxscene.Op{Code:gxscene.OpAttr,Arg:"0",Key:"gap",},gxscene.Op{Code:gxscene.OpAttr,Arg:"320",Key:"height",},gxscene.Op{Code:gxscene.OpFor,Slot:0,},gxscene.Op{Code:gxscene.OpClose,},},N:1,}, gxscene.ForGetterOfSignal[int](func() []int { return Indices(LineCount()) },nil,func(i func() int) *gxscene.Instance { return lineView(i()) }))
+    return gxscene.Render(gxscene.Template{Ops:[]gxscene.Op{gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpAttr,Arg:"#1e1e1e",Key:"bg",},gxscene.Op{Code:gxscene.OpAttr,Arg:"8",Key:"border-radius",},gxscene.Op{Code:gxscene.OpAttr,Arg:"6",Key:"padding",},gxscene.Op{Code:gxscene.OpAttr,Arg:"column",Key:"flex-direction",},gxscene.Op{Code:gxscene.OpAttr,Arg:"0",Key:"gap",},gxscene.Op{Code:gxscene.OpAttr,Arg:"320",Key:"height",},gxscene.Op{Code:gxscene.OpFor,Slot:0,},gxscene.Op{Code:gxscene.OpClose,},},N:1,}, gxscene.ForGetterOfSignal[int](func() []int { return editorRowIDs },nil,func(i func() int) *gxscene.Instance { return lineView(i()) }))
 }
 
 // EditorStatus 返回编辑器状态栏文本（行列 + 行数），供 playground 头部展示。
