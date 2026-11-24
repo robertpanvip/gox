@@ -9,6 +9,7 @@
 //   - CursorLine  sig int     光标所在行（0 基）
 //   - CursorCol   sig int     光标所在列（rune 计，0 基）
 //   - Focused     sig bool    是否有焦点（驱动光标行高亮）
+//   - SelAnchor   sig int×2   选区锚点行列（与光标重合即无选区，纯点击天然折叠）
 //
 // 命令式编辑操作（insert/backspace/newline/move）都是 pub 函数，装配层在
 // 收到平台键盘事件后直接调用——不暴露 NodeID，不区分桌面还是网页。
@@ -26,6 +27,9 @@ import (
 pub sig sourceCode = "// 用 GX 写的编辑器，试着输入 GX 代码\nsig count = 0\nfunc main() {\n    count = count + 1\n}"
 pub sig cursorLine = 0
 pub sig cursorCol = 0
+// 选区锚点：与光标 (cursorLine, cursorCol) 重合即无选区。
+pub sig selAnchorLine = 0
+pub sig selAnchorCol = 0
 pub sig editorFocused = false
 // 行数单独成 sig：<For> 只在行数变化时重算；单字符编辑不再重建列表 diff。
 pub sig lineCount = len(splitLines(sourceCode))
@@ -182,6 +186,70 @@ pub func newlineAt(s string, ln int, col int) (string, int, int) {
     return joinLines(newLines), ln + 1, 0
 }
 
+// ---- 选区引擎（Selection engine）----
+// 选区 = anchor（锚点：拖拽起点 / 双击词首 / Shift 扩展时的原位）到 head（即光标）
+// 的闭左开右区间。不设独立"有无选区"标志：锚点与光标重合即无选区，普通点击/
+// 程序定位天然折叠选区。渲染见 selectionView：与固定 24 行同构的绝对定位色块。
+
+pub func hasSelection() bool {
+    return selAnchorLine != cursorLine || selAnchorCol != cursorCol
+}
+
+// selFrom/selTo 返回归一化后的选区两端（from ≤ to，行列均 0 基 rune 列）。
+func selFrom() (int, int) {
+    if selAnchorLine < cursorLine || (selAnchorLine == cursorLine && selAnchorCol <= cursorCol) {
+        return selAnchorLine, selAnchorCol
+    }
+    return cursorLine, cursorCol
+}
+
+func selTo() (int, int) {
+    if selAnchorLine < cursorLine || (selAnchorLine == cursorLine && selAnchorCol <= cursorCol) {
+        return cursorLine, cursorCol
+    }
+    return selAnchorLine, selAnchorCol
+}
+
+// removeRange 删除 [from, to) 文本区间，返回新文本（纯函数，不碰信号）。
+func removeRange(s string, fl int, fc int, tl int, tc int) string {
+    lines := splitLines(s)
+    if fl < 0 || fl >= len(lines) || tl >= len(lines) || fl > tl { return s }
+    fr := []rune(lines[fl])
+    tr := []rune(lines[tl])
+    if fc > len(fr) { fc = len(fr) }
+    if tc > len(tr) { tc = len(tr) }
+    if fl == tl {
+        lines[fl] = string(fr[:fc]) + string(fr[tc:])
+        return joinLines(lines)
+    }
+    merged := string(fr[:fc]) + string(tr[tc:])
+    out := []string{}
+    for i, l := range lines {
+        if i < fl {
+            out = append(out, l)
+        } else if i == fl {
+            out = append(out, merged)
+        } else if i > tl {
+            out = append(out, l)
+        }
+    }
+    return joinLines(out)
+}
+
+// deleteSelectionInner 删除选区并把光标落到选区起点（插入/退格/换行/Delete 共用）。
+func deleteSelectionInner() {
+    fl, fc := selFrom()
+    tl, tc := selTo()
+    text := removeRange(sourceCode, fl, fc, tl, tc)
+    Signal.batch(func() {
+        setSource(text)
+        cursorLine = fl
+        cursorCol = fc
+        selAnchorLine = fl
+        selAnchorCol = fc
+    })
+}
+
 // ---- 撤销 / 重做（Ctrl+Z / Ctrl+Shift+Z） ----
 // 每个编辑步骤压入"编辑前"的完整状态（源码 + 光标行列）；撤销恢复上一步，
 // 重做把当前状态压回撤销栈。栈是普通 Go 状态，不参与响应式。恢复统一走
@@ -213,6 +281,8 @@ pub func EditorUndo() {
         setSource(st.text)
         cursorLine = st.ln
         cursorCol = st.col
+        selAnchorLine = st.ln
+        selAnchorCol = st.col
         editorFocused = true
     })
 }
@@ -228,6 +298,8 @@ pub func EditorRedo() {
         setSource(st.text)
         cursorLine = st.ln
         cursorCol = st.col
+        selAnchorLine = st.ln
+        selAnchorCol = st.col
         editorFocused = true
     })
 }
@@ -239,48 +311,115 @@ pub func EditorRedo() {
 // Batch 只合并更新，不改变任何编辑语义；嵌套在 setSource 内部的 Batch 由最外层统一冲刷。
 pub func editorInsert(s string) {
     pushUndo()
-    text, c := insertText(sourceCode, cursorLine, cursorCol, s)
+    text := sourceCode
+    ln := cursorLine
+    col := cursorCol
+    if hasSelection() {
+        fl, fc := selFrom()
+        tl, tc := selTo()
+        text = removeRange(text, fl, fc, tl, tc)
+        ln = fl
+        col = fc
+    }
+    next, c := insertText(text, ln, col, s)
     Signal.batch(func() {
-        setSource(text)
+        setSource(next)
+        cursorLine = ln
         cursorCol = c
+        selAnchorLine = ln
+        selAnchorCol = c
         editorFocused = true
     })
 }
 
 pub func editorBackspace() {
     pushUndo()
+    if hasSelection() {
+        deleteSelectionInner()
+        return
+    }
     text, ln, c := backspaceAt(sourceCode, cursorLine, cursorCol)
     Signal.batch(func() {
         setSource(text)
         cursorLine = ln
         cursorCol = c
+        selAnchorLine = ln
+        selAnchorCol = c
     })
 }
 
 pub func editorNewline() {
     pushUndo()
-    text, ln, c := newlineAt(sourceCode, cursorLine, cursorCol)
+    text := sourceCode
+    ln := cursorLine
+    col := cursorCol
+    if hasSelection() {
+        fl, fc := selFrom()
+        tl, tc := selTo()
+        text = removeRange(text, fl, fc, tl, tc)
+        ln = fl
+        col = fc
+    }
+    next, nl, c := newlineAt(text, ln, col)
     Signal.batch(func() {
-        setSource(text)
-        cursorLine = ln
+        setSource(next)
+        cursorLine = nl
         cursorCol = c
+        selAnchorLine = nl
+        selAnchorCol = c
     })
 }
 
+// moveCursorRel 相对移动光标并夹到合法范围（不含选区逻辑，供复用）。
+func moveCursorRel(dln int, dcol int) {
+    lines := splitLines(sourceCode)
+    ln := cursorLine + dln
+    if ln < 0 { ln = 0 }
+    if ln >= len(lines) { ln = len(lines) - 1 }
+    rs := []rune(lines[ln])
+    c := cursorCol + dcol
+    if c < 0 { c = 0 }
+    if c > len(rs) { c = len(rs) }
+    cursorLine = ln
+    cursorCol = c
+}
+
+// editorMove 方向移动：有选区时先折叠再移动（左/上收到选区起点，右/下放到终点，
+// Ace 语义），锚点跟随。
 pub func editorMove(dln int, dcol int) {
     Signal.batch(func() {
-        lines := splitLines(sourceCode)
-        ln := cursorLine
-        c := cursorCol
-        ln = ln + dln
-        if ln < 0 { ln = 0 }
-        if ln >= len(lines) { ln = len(lines) - 1 }
-        rs := []rune(lines[ln])
-        c = c + dcol
-        if c < 0 { c = 0 }
-        if c > len(rs) { c = len(rs) }
-        cursorLine = ln
-        cursorCol = c
+        if hasSelection() {
+            fl, fc := selFrom()
+            tl, tc := selTo()
+            if dln < 0 || (dln == 0 && dcol < 0) {
+                cursorLine = fl
+                cursorCol = fc
+            } else {
+                cursorLine = tl
+                cursorCol = tc
+            }
+            selAnchorLine = cursorLine
+            selAnchorCol = cursorCol
+        }
+        moveCursorRel(dln, dcol)
+        // 非 Shift 移动以"无选区的光标"收尾：锚点跟随到最终位置。
+        selAnchorLine = cursorLine
+        selAnchorCol = cursorCol
+    })
+}
+
+// editorMoveEx 带 Shift 的方向移动：锚点不动扩展选区；首次移动先立锚点。
+pub func editorMoveEx(dln int, dcol int, shift bool) {
+    if !shift {
+        editorMove(dln, dcol)
+        return
+    }
+    Signal.batch(func() {
+        if !hasSelection() {
+            selAnchorLine = cursorLine
+            selAnchorCol = cursorCol
+        }
+        moveCursorRel(dln, dcol)
     })
 }
 
@@ -288,8 +427,11 @@ pub func editorSetText(s string) {
     pushUndo()
     Signal.batch(func() {
         setSource(s)
-        lines := splitLines(s)
-        if cursorLine >= len(lines) { cursorLine = len(lines) - 1 }
+        l, c := clampLineCol(cursorLine, cursorCol)
+        cursorLine = l
+        cursorCol = c
+        selAnchorLine = l
+        selAnchorCol = c
     })
 }
 
@@ -299,21 +441,358 @@ pub func editorHome() {
     Signal.batch(func() {
         cursorLine = 0
         cursorCol = 0
+        selAnchorLine = 0
+        selAnchorCol = 0
     })
 }
 
-// EditorSetCursor 把光标定位到指定行/列（点击代码行时由装配层调用）。
-// 列按 rune 计并夹到该行长度内，行夹到实际行数内。
+// clampLineCol 把任意行列夹到合法范围（实际行数、行长），所有定位命令共用。
+func clampLineCol(ln int, col int) (int, int) {
+    lines := splitLines(sourceCode)
+    if ln < 0 { ln = 0 }
+    if ln >= len(lines) { ln = len(lines) - 1 }
+    rs := []rune(lines[ln])
+    if col < 0 { col = 0 }
+    if col > len(rs) { col = len(rs) }
+    return ln, col
+}
+
+// EditorSetCursor 把光标定位到指定行/列（点击代码行时由装配层调用），并折叠选区。
 pub func EditorSetCursor(ln int, col int) {
     Signal.batch(func() {
+        l, c := clampLineCol(ln, col)
+        cursorLine = l
+        cursorCol = c
+        selAnchorLine = l
+        selAnchorCol = c
+        editorFocused = true
+    })
+}
+
+// isWordRune 词字符：字母数字下划线 + CJK/全角（双击选中文段与 Ace 行为一致）。
+func isWordRune(r rune) bool {
+    if r == '_' || (r >= '0' && r <= '9') || (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') {
+        return true
+    }
+    return runeCells(r) == 2
+}
+
+// wordRunAt 返回 col（光标位）所在词的 [start, end)。col 落在词边界时优先取左侧词。
+func wordRunAt(line string, col int) (int, int) {
+    rs := []rune(line)
+    if len(rs) == 0 { return 0, 0 }
+    at := col
+    if at > len(rs) { at = len(rs) }
+    pick := at
+    if at > 0 && (at == len(rs) || !isWordRune(rs[at])) { pick = at - 1 }
+    if at < len(rs) && isWordRune(rs[at]) { pick = at }
+    word := isWordRune(rs[pick])
+    s := pick
+    for s > 0 && isWordRune(rs[s-1]) == word { s = s - 1 }
+    e := pick + 1
+    for e < len(rs) && isWordRune(rs[e]) == word { e = e + 1 }
+    return s, e
+}
+
+func firstNonSpace(rs []rune) int {
+    for i, r := range rs {
+        if r != ' ' && r != '\t' { return i }
+    }
+    return len(rs)
+}
+
+// ---- 选区命令（装配层按平台事件调用，桌面/网页共用同一语义）----
+
+// editorClearSelection 折叠选区到光标处。
+pub func editorClearSelection() {
+    Signal.batch(func() {
+        selAnchorLine = cursorLine
+        selAnchorCol = cursorCol
+    })
+}
+
+// editorSetSelect 拖拽/程序式定位：锚点与光标同时落到 (ln, col)（即无选区的定点）。
+pub func editorSetSelect(ln int, col int) {
+    Signal.batch(func() {
+        l, c := clampLineCol(ln, col)
+        cursorLine = l
+        cursorCol = c
+        selAnchorLine = l
+        selAnchorCol = c
+        editorFocused = true
+    })
+}
+
+// editorExtendTo 拖拽移动 / Shift+点击：只移动光标，锚点保持原位。
+pub func editorExtendTo(ln int, col int) {
+    Signal.batch(func() {
+        l, c := clampLineCol(ln, col)
+        cursorLine = l
+        cursorCol = c
+        editorFocused = true
+    })
+}
+
+// editorMoveWord Ctrl/Alt+方向：按词移动光标；shift 时保留锚点扩展选区。
+pub func editorMoveWord(dir int, shift bool) {
+    Signal.batch(func() {
+        if !shift {
+            if hasSelection() {
+                fl, fc := selFrom()
+                tl, tc := selTo()
+                if dir < 0 {
+                    cursorLine = fl
+                    cursorCol = fc
+                } else {
+                    cursorLine = tl
+                    cursorCol = tc
+                }
+                selAnchorLine = cursorLine
+                selAnchorCol = cursorCol
+            }
+        } else if !hasSelection() {
+            selAnchorLine = cursorLine
+            selAnchorCol = cursorCol
+        }
         lines := splitLines(sourceCode)
-        if ln < 0 { ln = 0 }
+        ln := cursorLine
         if ln >= len(lines) { ln = len(lines) - 1 }
         rs := []rune(lines[ln])
-        if col < 0 { col = 0 }
+        c := cursorCol
+        if c > len(rs) { c = len(rs) }
+        if dir > 0 {
+            for c < len(rs) && !isWordRune(rs[c]) { c = c + 1 }
+            for c < len(rs) && isWordRune(rs[c]) { c = c + 1 }
+        } else {
+            for c > 0 && !isWordRune(rs[c-1]) { c = c - 1 }
+            for c > 0 && isWordRune(rs[c-1]) { c = c - 1 }
+        }
+        cursorCol = c
+        if !shift {
+            // 非 Shift 的词移动同样要折叠锚点，否则锚点停在原地产生"幽灵选区"。
+            selAnchorLine = cursorLine
+            selAnchorCol = cursorCol
+        }
+    })
+}
+
+// editorKeyHome Home 键：光标到首非空白、再到纯行首（Ace 两段式）；shift 扩展选区。
+pub func editorKeyHome(shift bool) {
+    Signal.batch(func() {
+        if shift && !hasSelection() {
+            selAnchorLine = cursorLine
+            selAnchorCol = cursorCol
+        }
+        rs := []rune(lineText(cursorLine))
+        target := 0
+        fns := firstNonSpace(rs)
+        if cursorCol > fns {
+            target = fns
+        }
+        cursorCol = target
+        if !shift {
+            selAnchorLine = cursorLine
+            selAnchorCol = cursorCol
+        }
+    })
+}
+
+// editorKeyEnd End 键：光标到行尾；shift 扩展选区。
+pub func editorKeyEnd(shift bool) {
+    Signal.batch(func() {
+        if shift && !hasSelection() {
+            selAnchorLine = cursorLine
+            selAnchorCol = cursorCol
+        }
+        rs := []rune(lineText(cursorLine))
+        cursorCol = len(rs)
+        if !shift {
+            selAnchorLine = cursorLine
+            selAnchorCol = cursorCol
+        }
+    })
+}
+
+// editorDeleteForward Delete 键：有选区删选区，否则删光标后字符（行尾则并入下行）。
+pub func editorDeleteForward() {
+    pushUndo()
+    if hasSelection() {
+        deleteSelectionInner()
+        return
+    }
+    lines := splitLines(sourceCode)
+    ln := cursorLine
+    col := cursorCol
+    if ln < 0 || ln >= len(lines) { return }
+    rs := []rune(lines[ln])
+    if col >= len(rs) {
+        // 行尾：并入下一行（光标不动）。
+        if ln >= len(lines)-1 { return }
+        nxt := []rune(lines[ln+1])
+        merged := lines[ln] + string(nxt)
+        outLines := []string{}
+        for i, l := range lines {
+            if i == ln {
+                outLines = append(outLines, merged)
+            } else if i != ln+1 {
+                outLines = append(outLines, l)
+            }
+        }
+        joinText := joinLines(outLines)
+        Signal.batch(func() {
+            setSource(joinText)
+            cursorLine = ln
+            cursorCol = len(rs)
+            selAnchorLine = ln
+            selAnchorCol = len(rs)
+        })
+        return
+    }
+    next := string(rs[:col]) + string(rs[col+1:])
+    lines[ln] = next
+    text := joinLines(lines)
+    Signal.batch(func() {
+        setSource(text)
+        selAnchorLine = ln
+        selAnchorCol = col
+    })
+}
+
+// editorSelectAll 全选。
+pub func editorSelectAll() {
+    Signal.batch(func() {
+        lines := splitLines(sourceCode)
+        selAnchorLine = 0
+        selAnchorCol = 0
+        cursorLine = len(lines) - 1
+        cursorCol = runeLen(lines[len(lines)-1])
+        editorFocused = true
+    })
+}
+
+// editorSelectWord 双击选词：锚点落词首、光标落词尾。
+pub func editorSelectWord(ln int, col int) {
+    Signal.batch(func() {
+        l, c := clampLineCol(ln, col)
+        cursorLine = l
+        s, e := wordRunAt(lineText(l), c)
+        if s == e {
+            selAnchorLine = l
+            selAnchorCol = c
+            cursorCol = c
+        } else {
+            selAnchorLine = l
+            selAnchorCol = s
+            cursorCol = e
+        }
+        editorFocused = true
+    })
+}
+
+// editorSelectLine 三击选行：选中本行含行尾换行符（末行只选行内容）。
+pub func editorSelectLine(ln int) {
+    Signal.batch(func() {
+        lines := splitLines(sourceCode)
+        l := ln
+        if l < 0 { l = 0 }
+        if l >= len(lines) { l = len(lines) - 1 }
+        selAnchorLine = l
+        selAnchorCol = 0
+        if l < len(lines)-1 {
+            cursorLine = l + 1
+            cursorCol = 0
+        } else {
+            cursorLine = l
+            cursorCol = runeLen(lines[l])
+        }
+        editorFocused = true
+    })
+}
+
+// editorSelectedText 返回选中文本（Ctrl+C / Ctrl+X 用）；无选区返回空串。
+pub func editorSelectedText() string {
+    if !hasSelection() { return "" }
+    fl, fc := selFrom()
+    tl, tc := selTo()
+    lines := splitLines(sourceCode)
+    if fl >= len(lines) || tl >= len(lines) { return "" }
+    if fl == tl {
+        fr := []rune(lines[fl])
+        if fc > len(fr) || tc > len(fr) { return "" }
+        return string(fr[fc:tc])
+    }
+    fr := []rune(lines[fl])
+    tr := []rune(lines[tl])
+    if fc > len(fr) { fc = len(fr) }
+    if tc > len(tr) { tc = len(tr) }
+    out := string(fr[fc:])
+    for i := fl + 1; i < tl; i = i + 1 {
+        out = out + "\n" + lines[i]
+    }
+    out = out + "\n" + string(tr[:tc])
+    return out
+}
+
+// editorDeleteSelection 删除当前选区（Ctrl+X 的"剪"半边，复制由装配层负责）。
+pub func editorDeleteSelection() {
+    if !hasSelection() { return }
+    pushUndo()
+    deleteSelectionInner()
+}
+
+// editorPaste 粘贴（可含 \n 的多行文本）：有选区先删，再整体插入，光标落插入末尾。
+pub func editorPaste(s string) {
+    if s == "" { return }
+    pushUndo()
+    text := sourceCode
+    ln := cursorLine
+    col := cursorCol
+    if hasSelection() {
+        fl, fc := selFrom()
+        tl, tc := selTo()
+        text = removeRange(text, fl, fc, tl, tc)
+        ln = fl
+        col = fc
+    }
+    out := ""
+    nl := ln
+    nc := col
+    if !strings.Contains(s, "\n") {
+        next, c2 := insertText(text, ln, col, s)
+        out = next
+        nc = c2
+    } else {
+        lines := splitLines(text)
+        if ln >= len(lines) { ln = len(lines) - 1 }
+        rs := []rune(lines[ln])
         if col > len(rs) { col = len(rs) }
-        cursorLine = ln
-        cursorCol = col
+        left := string(rs[:col])
+        right := string(rs[col:])
+        parts := splitLines(s)
+        newLines := []string{}
+        for i, l := range lines {
+            if i < ln {
+                newLines = append(newLines, l)
+            } else if i == ln {
+                newLines = append(newLines, left+parts[0])
+                for j := 1; j < len(parts)-1; j = j + 1 {
+                    newLines = append(newLines, parts[j])
+                }
+                newLines = append(newLines, parts[len(parts)-1]+right)
+                nl = ln + len(parts) - 1
+                nc = runeLen(parts[len(parts)-1])
+            } else {
+                newLines = append(newLines, l)
+            }
+        }
+        out = joinLines(newLines)
+    }
+    Signal.batch(func() {
+        setSource(out)
+        cursorLine = nl
+        cursorCol = nc
+        selAnchorLine = nl
+        selAnchorCol = nc
         editorFocused = true
     })
 }
@@ -343,6 +822,42 @@ func caretLeft() float64 {
 func caretTop() float64 {
     return 6 + float64(cursorLine * 22)
 }
+
+// ---- 选区色块度量（与 caretTop/prefixWidth 同一套坐标公式）----
+// 每个色块读光标/锚点与该行文本（行版本隔离），无选区/行外时宽度 0 即隐形。
+func selRectStartCol(idx int) int {
+    fl, fc := selFrom()
+    tl, tc := selTo()
+    _ = tc
+    if !hasSelection() || idx < fl || idx > tl { return 0 }
+    if idx == fl { return fc }
+    return 0
+}
+
+func selRectEndCol(idx int) int {
+    fl, fc := selFrom()
+    tl, tc := selTo()
+    _ = fc
+    if !hasSelection() || idx < fl || idx > tl { return 0 }
+    if idx == tl { return tc }
+    return runeLen(lineText(idx))
+}
+
+func selRectLeft(idx int) float64 {
+    return 56 + prefixWidth(lineText(idx), selRectStartCol(idx))
+}
+
+func selRectWidth(idx int) float64 {
+    t := lineText(idx)
+    w := prefixWidth(t, selRectEndCol(idx)) - prefixWidth(t, selRectStartCol(idx))
+    if w < 0 { w = 0 }
+    return w
+}
+
+func selRectTop(idx int) float64 {
+    return 6 + float64(idx * 22)
+}
+
 // caretClass 用 class 表达光标三态，CSS 统一控制显示/闪烁：
 //   失焦   → gx-caret-off（隐藏）
 //   常亮   → gx-caret-steady（交互后 1s 内不闪，Ace 的 restartTimer）
@@ -769,6 +1284,21 @@ func lineView(idx int) *gxscene.Instance {
     </div>
 }
 
+// selectionView 选区色块：绝对定位，盖在行背景之上、文字之下（z-index=1，
+// 代码 span 由装配层 CSS 提到 z-index=2，caret 保持 6）。bg 用 VS Code 同款 #264f78。
+func selectionView(idx int) *gxscene.Instance {
+    return <div
+        class="gx-sel"
+        position="absolute"
+        top={selRectTop(idx)}
+        left={selRectLeft(idx)}
+        width={selRectWidth(idx)}
+        height="22"
+        bg="#264f78"
+        z-index="1"
+    />
+}
+
 // 固定 24 行：For 的 each 是常量，所有行在首帧就完成叶子 effect 绑定。
 // 行数变化只改每行的高度（超出部分高度 0），不再动态新增/删除行——
 // 动态新增行在 Web 增量后端会漏掉叶子订阅，导致切换示例后尾部行保留旧内容。
@@ -796,6 +1326,7 @@ pub func Editor() *gxscene.Instance {
         position="relative"
     >
         <For each={editorRowIDs}>{(i int) => lineView(i())}</For>
+        <For each={editorRowIDs}>{(i int) => selectionView(i())}</For>
         <div
             class={caretClass()}
             position="absolute"
@@ -811,6 +1342,10 @@ pub func Editor() *gxscene.Instance {
 
 // EditorStatus 返回编辑器状态栏文本（行列 + 行数），供 playground 头部展示。
 pub func EditorStatus() string {
-    return "Ln " + strconv.itoa(cursorLine+1) + ", Col " + strconv.itoa(cursorCol+1) +
-           "  |  " + strconv.itoa(lineCount) + " lines"
+    s := "Ln " + strconv.itoa(cursorLine+1) + ", Col " + strconv.itoa(cursorCol+1) +
+         "  |  " + strconv.itoa(lineCount) + " lines"
+    if hasSelection() {
+        s = s + "  |  " + strconv.itoa(runeLen(editorSelectedText())) + " selected"
+    }
+    return s
 }

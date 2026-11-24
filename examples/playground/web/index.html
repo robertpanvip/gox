@@ -8,7 +8,7 @@
            background: #020617; color: #e2e8f0; min-height: 100vh;
            display: flex; flex-direction: column; align-items: center; padding: 16px;
            overflow-x: auto; }
-    #app { outline: none; flex: none; }
+    #app { outline: none; flex: none; user-select: none; -webkit-user-select: none; }
     /* 移动端软键盘代理：隐藏但必须可聚焦（display:none 无法唤起键盘）。
        关键：不能用 pointer-events:none——iOS Safari 会判定该元素不可交互，
        focus 后立刻 blur，表现就是键盘“弹起马上又收起”。这里保持它可交互，
@@ -27,7 +27,8 @@
     /* 编辑器逐 token 着色：GX 侧把颜色编码成 linear-gradient 背景，这里裁到文字上。 */
     .gx-code-line { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
                     color: transparent !important; -webkit-background-clip: text !important;
-                    background-clip: text !important; white-space: pre; }
+                    background-clip: text !important; white-space: pre;
+                    position: relative; z-index: 2; }
     .gx-code-line::before { content: attr(data-code); }
     /* 列光标：GX 场景节点（两端共用），绝对定位在编辑器容器内随内容滚动。
        class 三态由 wasm 的 caretClass() getter 驱动：off 隐藏 / steady 常亮 / 默认闪烁。
@@ -38,6 +39,9 @@
     .gx-caret.gx-caret-steady { opacity: 1; }
     @keyframes caret-blink { 0%,49% { opacity: 1; } 50%,100% { opacity: 0; } }
     .gx-caret:not(.gx-caret-off):not(.gx-caret-steady) { animation: caret-blink 1.06s steps(1) infinite; }
+    /* 选区色块：GX 场景节点（selectionView），z-index 在行背景与文字之间；
+       拖拽起点由 JS preventDefault + 全局 user-select:none 屏蔽原生选词。 */
+    .gx-sel { pointer-events: none; }
     #hint { margin-top: 10px; font-size: 12px; color: #64748b; }
 
     /* ---- 内建 LSP UI（无服务端，全部由 wasm 侧 goxlsp 驱动） ---- */

@@ -20,7 +20,7 @@ export interface GoxCursor {
 
 /** wasm 侧暴露的编辑 + 内建 LSP API，由 main.go 用 syscall/js 注册。 */
 export interface GoxPlaygroundAPI {
-  key(key: string): void;
+  key(key: string, shift?: boolean, ctrl?: boolean): void;
   /** 解释当前源码并运行（Ctrl+Enter）。 */
   run(): void;
   /** 撤销一步编辑（Ctrl+Z）。 */
@@ -33,6 +33,22 @@ export interface GoxPlaygroundAPI {
   /** 点击落点换算：行号 + 相对代码行左缘的 x 像素 → 列（与 caret 同源度量）。 */
   pickColumn(line: number, xPixel: number): number;
   setCursor(line: number, col: number): void;
+  /** 双击选词：锚点落词首、光标落词尾（CJK 整段成词）。 */
+  selectWord(line: number, col: number): void;
+  /** 三击选行（含行尾换行符，末行只选内容）。 */
+  selectLine(line: number): void;
+  /** 拖拽起点：锚点与光标同落一点（即无选区定点）。 */
+  setSelect(line: number, col: number): void;
+  /** 拖拽移动 / Shift+点击：只动光标，锚点保持。 */
+  extendTo(line: number, col: number): void;
+  /** 全选（Ctrl+A）。 */
+  selectAll(): void;
+  clearSelection(): void;
+  /** 选中文本；无选区返回空串（Ctrl+C / Ctrl+X 用）。 */
+  selectedText(): string;
+  deleteSelection(): void;
+  /** 粘贴文本（可含换行）。 */
+  paste(text: string): void;
   /** 注入实测的窄字符（ASCII）单格宽度（像素）。 */
   setCharWidth(width: number): void;
   /** 注入实测的宽字符（CJK）单格宽度（像素）。 */

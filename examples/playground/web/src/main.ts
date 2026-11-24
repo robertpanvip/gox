@@ -435,6 +435,22 @@ function bindMobileInput(elements: Elements, api: GoxPlaygroundAPI): void {
   });
 }
 
+/** 剪贴板写入：优先异步 Clipboard API，file:// 等不安全上下文降级 execCommand。 */
+async function copyText(text: string): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch {
+    const ta: HTMLTextAreaElement = document.createElement("textarea");
+    ta.value = text;
+    ta.style.position = "fixed";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand("copy");
+    document.body.removeChild(ta);
+  }
+}
+
 /** 每次输入后刷新诊断并让 caret 常亮（移动端与桌面共用）。 */
 function afterEdit(api: GoxPlaygroundAPI, elements: Elements): void {
   window.setTimeout((): void => { renderDiagnostics(api, elements); }, 0);
@@ -465,7 +481,19 @@ function bindKeyboard(elements: Elements, api: GoxPlaygroundAPI): void {
     }
     const hit = lineAt(app, ev);
     if (hit !== null) {
-      api.setCursor(hit.line, columnFromEvent(api, hit.el, hit.line, ev));
+      const col: number = columnFromEvent(api, hit.el, hit.line, ev);
+      if (ev.shiftKey) {
+        // Shift+点击：锚点保持原位，只移动光标（引擎端夹到合法范围）。
+        api.extendTo(hit.line, col);
+      } else {
+        // 普通按下：定点落光标并立锚点，为拖动选择做准备。
+        api.setSelect(hit.line, col);
+        if (ev.pointerType === "mouse") {
+          dragging = true;
+        }
+      }
+      // 屏蔽浏览器原生文本选择：选区渲染完全由 GX 场景树的 gx-sel 色块负责。
+      ev.preventDefault();
     }
     settleCaret(api);
     if (ev.pointerType === "touch") {
@@ -476,6 +504,51 @@ function bindKeyboard(elements: Elements, api: GoxPlaygroundAPI): void {
     } else {
       api.focus();
       app.focus();
+    }
+  });
+  // ---- 选区交互：拖动 / 双击选词 / 三击选行 / 粘贴 ----
+  let dragging: boolean = false;
+  window.addEventListener("pointermove", (ev: PointerEvent): void => {
+    if (!dragging) {
+      return;
+    }
+    const hit = lineAt(app, ev);
+    if (hit !== null) {
+      api.extendTo(hit.line, columnFromEvent(api, hit.el, hit.line, ev));
+      settleCaret(api);
+    }
+    // 拖出编辑器外（hit 为 null）：保持当前选区端点不动，回到行内继续扩展。
+    ev.preventDefault();
+  });
+  window.addEventListener("pointerup", (): void => {
+    dragging = false;
+  });
+  app.addEventListener("dblclick", (ev: MouseEvent): void => {
+    const hit = lineAt(app, ev);
+    if (hit !== null) {
+      api.selectWord(hit.line, columnFromEvent(api, hit.el, hit.line, ev));
+      settleCaret(api);
+    }
+    ev.preventDefault(); // 屏蔽原生双击选词，统一走 wasm 选区引擎。
+  });
+  app.addEventListener("click", (ev: MouseEvent): void => {
+    // detail 计数由浏览器对连续同点位点击累加：3 = 三击选行。
+    if (ev.detail % 3 === 0) {
+      const hit = lineAt(app, ev);
+      if (hit !== null) {
+        api.selectLine(hit.line);
+        settleCaret(api);
+      }
+      ev.preventDefault();
+    }
+  });
+  app.addEventListener("paste", (ev: ClipboardEvent): void => {
+    const text: string = ev.clipboardData?.getData("text") ?? "";
+    if (text.length > 0) {
+      ev.preventDefault();
+      api.paste(text);
+      window.setTimeout((): void => { renderDiagnostics(api, elements); }, 0);
+      settleCaret(api);
     }
   });
   app.addEventListener("keydown", (ev: KeyboardEvent): void => {
@@ -502,6 +575,34 @@ function bindKeyboard(elements: Elements, api: GoxPlaygroundAPI): void {
       settleCaret(api);
       return;
     }
+    // Ctrl/Cmd+A 全选。
+    if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === "a") {
+      ev.preventDefault();
+      api.selectAll();
+      settleCaret(api);
+      return;
+    }
+    // Ctrl/Cmd+C 复制选区（无选区时交还浏览器默认行为）。
+    if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === "c") {
+      const sel: string = api.selectedText();
+      if (sel.length > 0) {
+        ev.preventDefault();
+        void copyText(sel);
+      }
+      return;
+    }
+    // Ctrl/Cmd+X 剪切：复制后删除选区（删除语义在 wasm 编辑器侧）。
+    if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === "x") {
+      const sel: string = api.selectedText();
+      if (sel.length > 0) {
+        ev.preventDefault();
+        void copyText(sel);
+        api.deleteSelection();
+        window.setTimeout((): void => { renderDiagnostics(api, elements); }, 0);
+        settleCaret(api);
+      }
+      return;
+    }
     // Ctrl+Space：补全；Shift+Alt+F：格式化；先于编辑器转发处理。
     if (ev.ctrlKey && ev.key === " ") {
       ev.preventDefault();
@@ -526,14 +627,16 @@ function bindKeyboard(elements: Elements, api: GoxPlaygroundAPI): void {
       ev.preventDefault();
     }
     // 只有可打印单字符或编辑器明确支持的导航键才转发给 wasm；
-    // Home/End/PageUp/Delete/Tab/F1 等不转发，避免变成乱码插入源码。
+    // Home/End/Delete 已进引擎（选区时代补齐），PageUp/PageDown/Tab 仍未实现、不转发。
     const navKeys: ReadonlySet<string> = new Set<string>([
       "Backspace", "Enter", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight",
+      "Home", "End", "Delete",
     ]);
     if (!isPrintableChar(ev) && !navKeys.has(ev.key)) {
       return;
     }
-    api.key(ev.key);
+    // 修饰键随键值下发：shift=扩展选区、ctrl(/cmd)=词移动（wasm 侧分流）。
+    api.key(ev.key, ev.shiftKey, ev.ctrlKey || ev.metaKey);
     // 输入后刷新诊断（wasm 侧随每次 key 同步重算，这里只拉结果），并让 caret 常亮。
     window.setTimeout((): void => { renderDiagnostics(api, elements); }, 0);
     settleCaret(api);

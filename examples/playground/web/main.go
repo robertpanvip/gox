@@ -146,6 +146,53 @@ func main() {
 		}
 		return nil
 	}))
+	// ---- 选区 API（引擎在 ui/editor.gx「选区引擎」一节，桌面端可直接复用同一组）----
+	g.Set("selectWord", js.FuncOf(func(this js.Value, args []js.Value) any {
+		if len(args) >= 2 {
+			ui.EditorSelectWord(args[0].Int(), args[1].Int())
+		}
+		return nil
+	}))
+	g.Set("selectLine", js.FuncOf(func(this js.Value, args []js.Value) any {
+		if len(args) >= 1 {
+			ui.EditorSelectLine(args[0].Int())
+		}
+		return nil
+	}))
+	g.Set("setSelect", js.FuncOf(func(this js.Value, args []js.Value) any {
+		if len(args) >= 2 {
+			ui.EditorSetSelect(args[0].Int(), args[1].Int())
+		}
+		return nil
+	}))
+	g.Set("extendTo", js.FuncOf(func(this js.Value, args []js.Value) any {
+		if len(args) >= 2 {
+			ui.EditorExtendTo(args[0].Int(), args[1].Int())
+		}
+		return nil
+	}))
+	g.Set("selectAll", js.FuncOf(func(this js.Value, args []js.Value) any {
+		ui.EditorSelectAll()
+		return nil
+	}))
+	g.Set("clearSelection", js.FuncOf(func(this js.Value, args []js.Value) any {
+		ui.EditorClearSelection()
+		return nil
+	}))
+	g.Set("selectedText", js.FuncOf(func(this js.Value, args []js.Value) any {
+		return ui.EditorSelectedText()
+	}))
+	g.Set("deleteSelection", js.FuncOf(func(this js.Value, args []js.Value) any {
+		ui.EditorDeleteSelection()
+		return nil
+	}))
+	g.Set("paste", js.FuncOf(func(this js.Value, args []js.Value) any {
+		if len(args) >= 1 {
+			ui.EditorPaste(args[0].String())
+			refreshLSP()
+		}
+		return nil
+	}))
 	// setCharWidth 注入实测的等宽字体单格宽度（canvas.measureText("0")），
 	// 供点击换算与 caret 定位共用；未注入时用 13px monospace 默认值。
 	g.Set("setCharWidth", js.FuncOf(func(this js.Value, args []js.Value) any {
