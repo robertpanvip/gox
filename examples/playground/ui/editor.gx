@@ -1284,8 +1284,11 @@ func lineView(idx int) *gxscene.Instance {
     </div>
 }
 
-// selectionView 选区色块：绝对定位，盖在行背景之上、文字之下（z-index=1，
-// 代码 span 由装配层 CSS 提到 z-index=2，caret 保持 6）。bg 用 VS Code 同款 #264f78。
+// selectionView 选区色块：绝对定位。两端渲染顺序不同：web 端由 CSS 分层（色块
+// z-index=1、代码提到 2、caret 保持 6），色块在文字之下可用不透明标准色；
+// skia 后端不识别 z-index、按树序绘制（色块在行之后 → 盖在文字上），所以源码里
+// 用 8 位 hex 半透明 #264f7899（parseColor 支持 #rrggbbaa）保文字可读，
+// web 端再由页面 CSS 的 background-color !important 覆盖回不透明 #264f78。
 func selectionView(idx int) *gxscene.Instance {
     return <div
         class="gx-sel"
@@ -1294,7 +1297,7 @@ func selectionView(idx int) *gxscene.Instance {
         left={selRectLeft(idx)}
         width={selRectWidth(idx)}
         height="22"
-        bg="#264f78"
+        bg="#264f7899"
         z-index="1"
     />
 }

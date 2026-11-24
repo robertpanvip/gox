@@ -2,16 +2,20 @@ package main
 
 import (
 	"fmt"
+	"math"
 	"runtime"
+	"sort"
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/go-gl/gl/v3.3-core/gl"
 	"github.com/go-gl/glfw/v3.3/glfw"
 	sk "github.com/pekim/go-skia"
 	skia "github.com/robertpanvip/gox-backend-skia"
+	"github.com/robertpanvip/gox-playground/ui"
 	gxapp "github.com/robertpanvip/gox/runtime/app"
 	gxscene "github.com/robertpanvip/gox/runtime/scene"
-	"github.com/robertpanvip/gox-playground/ui"
 )
 
 func init() {
@@ -43,6 +47,13 @@ type glWindow struct {
 	frames int           // 已绘制帧数
 	opened bool
 	closed bool
+
+	// 编辑器选区交互状态。GLFW 回调都在主线程（Run 的 WaitEvents 循环里）串行执行，无需加锁。
+	dragging   bool      // 左键按住拖拽选择中
+	clickTime  time.Time // 上次按下时刻/位置：双击、三击判定
+	clickX     float64
+	clickY     float64
+	clickCount int
 }
 
 var _ gxapp.Window = (*glWindow)(nil)
@@ -116,26 +127,80 @@ func (g *glWindow) Open(cfg gxapp.WindowConfig) error {
 			ui.EditorRedo()
 			return
 		}
+		shift := mods&glfw.ModShift != 0
+		// 选区快捷键：与 web 装配层同源语义，编辑逻辑全部在 editor.gx（桌面零新逻辑）。
+		// 剪贴板用本绑定的无窗口参数签名（glfw clipboard.go 已核对）。
+		if ctrl && key == glfw.KeyA {
+			ui.EditorSelectAll()
+			return
+		}
+		if ctrl && key == glfw.KeyC {
+			if sel := ui.EditorSelectedText(); sel != "" {
+				glfw.SetClipboardString(sel)
+			}
+			return
+		}
+		if ctrl && key == glfw.KeyX {
+			if sel := ui.EditorSelectedText(); sel != "" {
+				glfw.SetClipboardString(sel)
+				ui.EditorDeleteSelection()
+			}
+			return
+		}
+		if ctrl && key == glfw.KeyV {
+			if s := glfw.GetClipboardString(); s != "" {
+				ui.EditorPaste(s)
+			}
+			return
+		}
 		switch key {
 		case glfw.KeyBackspace:
 			ui.EditorBackspace()
 		case glfw.KeyEnter, glfw.KeyKPEnter:
 			ui.EditorNewline()
 		case glfw.KeyUp:
-			ui.EditorMove(-1, 0)
+			ui.EditorMoveEx(-1, 0, shift)
 		case glfw.KeyDown:
-			ui.EditorMove(1, 0)
+			ui.EditorMoveEx(1, 0, shift)
 		case glfw.KeyLeft:
-			ui.EditorMove(0, -1)
+			if ctrl {
+				ui.EditorMoveWord(-1, shift)
+			} else {
+				ui.EditorMoveEx(0, -1, shift)
+			}
 		case glfw.KeyRight:
-			ui.EditorMove(0, 1)
+			if ctrl {
+				ui.EditorMoveWord(1, shift)
+			} else {
+				ui.EditorMoveEx(0, 1, shift)
+			}
+		case glfw.KeyHome:
+			ui.EditorKeyHome(shift)
+		case glfw.KeyEnd:
+			ui.EditorKeyEnd(shift)
+		case glfw.KeyDelete:
+			ui.EditorDeleteForward()
 		}
 	})
 	// 可打印字符（含中文，GLFW CharCallback 直接给 Unicode rune）→ GX 编辑器。
 	win.SetCharCallback(func(w *glfw.Window, ch rune) {
+		// Ctrl 组合在个别平台会给出控制字符（如 Ctrl+C 的 \x03），过滤掉避免灌进源码；
+		// \t 保留（Tab 插入缩进是既有行为），可打印字符与 CJK（>=0x80）正常插入。
+		if (ch < 0x20 && ch != '\t') || ch == 0x7f {
+			return
+		}
 		ui.EditorInsert(string(ch))
 	})
 	win.SetMouseButtonCallback(g.onMouseButton)
+	// 拖动选择：左键按住移动时持续扩展选区（与 web 端 pointermove 同语义）。
+	win.SetCursorPosCallback(func(w *glfw.Window, x, y float64) {
+		if !g.dragging || w.GetMouseButton(glfw.MouseButtonLeft) != glfw.Press {
+			return
+		}
+		if line, col, ok := g.editorHit(float32(x), float32(y)); ok {
+			ui.EditorExtendTo(line, col)
+		}
+	})
 	win.SetFramebufferSizeCallback(func(w *glfw.Window, width, height int) {
 		g.resizeToWindow()
 		g.markDirty()
@@ -224,8 +289,42 @@ func (g *glWindow) paintNow() {
 
 // onMouseButton 把鼠标点击映射到场景节点：命中矩形（面积最小优先）→ 焦点处理 → 冒泡派发 onClick。
 func (g *glWindow) onMouseButton(w *glfw.Window, button glfw.MouseButton, action glfw.Action, mods glfw.ModifierKey) {
-	if action != glfw.Press || button != glfw.MouseButtonLeft {
+	if button != glfw.MouseButtonLeft {
 		return
+	}
+	if action == glfw.Release {
+		g.dragging = false
+		return
+	}
+	if action != glfw.Press {
+		return
+	}
+	cx, cy := w.GetCursorPos()
+	px, py := float32(cx), float32(cy) // GLFW 光标坐标已是左上原点，与 painter/hits 一致
+	// ---- 编辑器选区交互：定点 / Shift 扩展 / 双击选词 / 三击选行 / 拖拽起点 ----
+	// GLFW 没有 dblclick 事件，用"400ms 内同点位连续按下"计数模拟 detail。
+	if line, col, ok := g.editorHit(px, py); ok {
+		shift := mods&glfw.ModShift != 0
+		now := time.Now()
+		if !shift && now.Sub(g.clickTime) < 400*time.Millisecond &&
+			math.Abs(cx-g.clickX) < 6 && math.Abs(cy-g.clickY) < 6 {
+			g.clickCount++
+		} else {
+			g.clickCount = 1
+		}
+		g.clickTime, g.clickX, g.clickY = now, cx, cy
+		switch {
+		case shift:
+			ui.EditorExtendTo(line, col)
+		case g.clickCount == 2:
+			ui.EditorSelectWord(line, col)
+		case g.clickCount >= 3:
+			ui.EditorSelectLine(line)
+			g.clickCount = 1 // 四击不再重复选行
+		default:
+			ui.EditorSetSelect(line, col)
+			g.dragging = true
+		}
 	}
 	g.mu.Lock()
 	root, hits := g.root, append([]skia.HitBox(nil), g.hits...)
@@ -233,8 +332,6 @@ func (g *glWindow) onMouseButton(w *glfw.Window, button glfw.MouseButton, action
 	if root == nil {
 		return
 	}
-	cx, cy := w.GetCursorPos()
-	px, py := float32(cx), float32(cy) // GLFW 光标坐标已是左上原点，与 painter/hits 一致
 	// 命中"面积最小"的框：最内层/最具体的元素（如按钮）优先于外层容器。
 	bestIdx, bestArea := -1, float32(0)
 	for i := range hits {
@@ -263,6 +360,37 @@ func (g *glWindow) onMouseButton(w *glfw.Window, button glfw.MouseButton, action
 			},
 		})
 	}
+}
+
+// editorHit 把屏幕点换算成编辑器 (行, 列)。行取 .gx-editor-row 命中框（可见行
+// 按 y 排序后序号即文档行号——固定 24 行里超出内容高度的行高为 0，天然不参与命中）；
+// 列换算交给 ui.PickColumn，与 caret 渲染共用同一套字符度量。行内前 50 逻辑点是
+// 行号槽（42）+ 间距（8），点击行号区等价列 0（PickColumn 对负数返回 0）。
+func (g *glWindow) editorHit(px, py float32) (int, int, bool) {
+	g.mu.Lock()
+	hits := append([]skia.HitBox(nil), g.hits...)
+	g.mu.Unlock()
+	var rows []skia.HitBox
+	for i := range hits {
+		h := hits[i]
+		if h.Node == nil || h.Node.Props == nil || h.H <= 0 {
+			continue
+		}
+		if cls, _ := h.Node.Props["class"].(string); strings.Contains(cls, "gx-editor-row") {
+			rows = append(rows, h)
+		}
+	}
+	if len(rows) == 0 {
+		return 0, 0, false
+	}
+	sort.Slice(rows, func(a, b int) bool { return rows[a].Y < rows[b].Y })
+	for idx, r := range rows {
+		if py >= r.Y && py < r.Y+22 {
+			relX := float64(px) - (float64(r.X) + 50)
+			return idx, ui.PickColumn(idx, relX), true
+		}
+	}
+	return 0, 0, false
 }
 
 // Run 实现 gxapp.Window：主线程事件循环，处理 GLFW 事件并按需绘制新帧。

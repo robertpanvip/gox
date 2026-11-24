@@ -39,9 +39,11 @@
     .gx-caret.gx-caret-steady { opacity: 1; }
     @keyframes caret-blink { 0%,49% { opacity: 1; } 50%,100% { opacity: 0; } }
     .gx-caret:not(.gx-caret-off):not(.gx-caret-steady) { animation: caret-blink 1.06s steps(1) infinite; }
-    /* 选区色块：GX 场景节点（selectionView），z-index 在行背景与文字之间；
+    /* 选区色块：GX 场景节点（selectionView）。web 端分层：色块 z-index:1 在文字
+       之下（.gx-code-line 提到 2）；背景用 !important 覆盖回不透明标准色
+       （GX 源码里的半透明值是为 skia 桌面端树序绘制保文字可读而设）。
        拖拽起点由 JS preventDefault + 全局 user-select:none 屏蔽原生选词。 */
-    .gx-sel { pointer-events: none; }
+    .gx-sel { pointer-events: none; background-color: #264f78 !important; }
     #hint { margin-top: 10px; font-size: 12px; color: #64748b; }
 
     /* ---- 内建 LSP UI（无服务端，全部由 wasm 侧 goxlsp 驱动） ---- */
