@@ -92,17 +92,38 @@ function bindKeyboard(app: HTMLElement, api: GoxPlaygroundAPI): void {
   });
 }
 
-async function boot(elements: Elements): Promise<void> {
-  assertWasmSupport();
+/** 把 base64 解码为字节缓冲，供 file:// 下离线实例化 wasm，不依赖 fetch。 */
+function decodeBase64(base64: string): ArrayBuffer {
+  const binary: string = atob(base64);
+  const buffer: ArrayBuffer = new ArrayBuffer(binary.length);
+  const bytes: Uint8Array = new Uint8Array(buffer);
+  for (let i: number = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return buffer;
+}
 
-  const go = new window.Go();
+/**
+ * 实例化 wasm：单文件 file:// 打开时用内嵌 base64；服务器部署时回退 fetch。
+ * 浏览器在 file:// 下禁止 fetch 本地文件，故必须走 base64 分支。
+ */
+async function instantiateWasm(go: InstanceType<Window["Go"]>): Promise<WebAssembly.WebAssemblyInstantiatedSource> {
+  const embedded: string | undefined = window.__GX_PLAYGROUND_WASM_B64__;
+  if (embedded !== undefined && embedded.length > 0) {
+    return await WebAssembly.instantiate(decodeBase64(embedded), go.importObject);
+  }
   const response: Response = await fetch("app.wasm");
   if (!response.ok) {
     throw new Error(`获取 app.wasm 失败: HTTP ${response.status}`);
   }
+  return await WebAssembly.instantiateStreaming(response, go.importObject);
+}
 
-  const result: WebAssembly.WebAssemblyInstantiatedSource =
-    await WebAssembly.instantiateStreaming(response, go.importObject);
+async function boot(elements: Elements): Promise<void> {
+  assertWasmSupport();
+
+  const go = new window.Go();
+  const result: WebAssembly.WebAssemblyInstantiatedSource = await instantiateWasm(go);
 
   elements.loading.remove();
 

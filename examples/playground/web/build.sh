@@ -24,6 +24,10 @@ echo "[3/4] 拷贝 wasm_exec.js（Go 工具链运行时胶水）..."
 GOROOT="$(go env GOROOT)"
 cp "$GOROOT/lib/wasm/wasm_exec.js" ./wasm_exec.js
 
-echo "[4/4] 完成。本地预览："
-echo "    cd $(pwd) && python3 -m http.server 8080"
-echo "    浏览器打开 http://localhost:8080/"
+echo "[4/5] 打包单文件 playground.html（file:// 双击即开，无需服务器）..."
+python3 pack.py
+
+echo "[5/5] 完成。两种打开方式："
+echo "    A) 直接双击 $(pwd)/playground.html （已内联 wasm，无需服务器）"
+echo "    B) 服务器模式：cd $(pwd) && python3 -m http.server 8080"
+echo "       浏览器打开 http://localhost:8080/index.html"

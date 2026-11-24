@@ -27,6 +27,8 @@ declare global {
     readonly Go: GoWasmConstructor;
     // Gox 由 wasm 在 Render 完成后注册；加载期可能尚未就绪，故可选。
     readonly Gox?: GoxPlaygroundAPI;
+    // file:// 直接打开时由单文件 HTML 注入的 wasm base64；服务器部署时不存在。
+    readonly __GX_PLAYGROUND_WASM_B64__?: string;
   }
 }
 
