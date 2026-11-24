@@ -50,6 +50,11 @@ enum GxEvent {
     Close,
 }
 
+/// 队列积压告警阈值（评审 P1：FIFO 保序不等于无限队列安全）。约等于 60fps 下
+/// 2 秒的积压。超过阈值**不丢帧**（增量帧丢弃会永久失步），只计数并上报过载，
+/// 由 Go Host 侧的 FullSync 机制在适当时机合并成完整状态。
+const MAX_PENDING_FRAMES: usize = 120;
+
 /// 共享帧状态：FIFO 队列保证增量不丢；proxy 用于跨线程唤醒；shutdown 用于优雅退出。
 struct FrameQueue {
     /// 待消费帧队列（FIFO）。draw push_back，redraw drain 全部按序 apply。
@@ -62,6 +67,17 @@ struct FrameQueue {
     wake_in_flight: bool,
     /// 已成功 apply 的帧数（诊断用）。
     applied: u64,
+    // ---- 队列积压 / 延迟指标（评审 P1）----
+    /// 累计提交帧数。
+    submitted: u64,
+    /// 历史最大积压帧数。
+    peak_pending: usize,
+    /// 提交时队列已达到阈值的次数（过载计数）。
+    overload_events: u64,
+    /// 提交到消费的最大延迟（毫秒）。
+    max_latency_ms: u64,
+    /// 当前批次最早一帧的入队时间（用于计算提交→消费延迟）。
+    first_enqueue: Option<std::time::Instant>,
 }
 
 impl FrameQueue {
@@ -72,7 +88,50 @@ impl FrameQueue {
             shutdown: false,
             wake_in_flight: false,
             applied: 0,
+            submitted: 0,
+            peak_pending: 0,
+            overload_events: 0,
+            max_latency_ms: 0,
+            first_enqueue: None,
         }
+    }
+
+    /// 入队一帧并记录积压 / 延迟指标。过载只计数不丢帧——增量帧必须保序。
+    fn enqueue(&mut self, frame: Vec<u8>) {
+        if self.pending.is_empty() {
+            self.first_enqueue = Some(std::time::Instant::now());
+        }
+        if self.pending.len() >= MAX_PENDING_FRAMES {
+            self.overload_events += 1;
+        }
+        self.pending.push_back(frame);
+        self.submitted += 1;
+        if self.pending.len() > self.peak_pending {
+            self.peak_pending = self.pending.len();
+        }
+    }
+
+    /// 排空全部待消费帧，并结算本批次的提交→消费延迟。
+    fn drain_all(&mut self) -> Vec<Vec<u8>> {
+        if let Some(t0) = self.first_enqueue.take() {
+            let ms = t0.elapsed().as_secs_f64() * 1000.0;
+            let ms = ms.min(u64::MAX as f64) as u64;
+            if ms > self.max_latency_ms {
+                self.max_latency_ms = ms;
+            }
+        }
+        self.pending.drain(..).collect()
+    }
+
+    /// 诊断快照：[submitted, applied, peak_pending, overload_events, max_latency_ms]。
+    fn stats(&self) -> [u64; 5] {
+        [
+            self.submitted,
+            self.applied,
+            self.peak_pending as u64,
+            self.overload_events,
+            self.max_latency_ms,
+        ]
     }
 
     /// 唤醒事件循环请求一次重绘。Wake 消息合并：已有在途则不再发。
@@ -186,8 +245,27 @@ pub extern "C" fn gx_window_draw(handle: *mut c_void, buf: *const c_uchar, len: 
     if q.shutdown {
         return 2;
     }
-    q.pending.push_back(owned);
+    q.enqueue(owned);
     q.wake(GxEvent::Wake); // 合并 wake，避免高频帧堆积
+    0
+}
+
+/// 帧队列诊断指标（评审 P1）：写入 out[0..5] =
+/// [submitted, applied, peak_pending, overload_events, max_latency_ms]。
+/// out 必须指向至少 5 个 u64 的可写内存。返回 0 表示成功。
+#[no_mangle]
+pub extern "C" fn gx_window_frame_stats(handle: *mut c_void, out: *mut u64) -> c_int {
+    if handle.is_null() || out.is_null() {
+        return 1;
+    }
+    let backend = unsafe { &*(handle as *const Backend) };
+    let q = backend.queue.lock().unwrap();
+    let s = q.stats();
+    unsafe {
+        for (i, v) in s.iter().enumerate() {
+            *out.add(i) = *v;
+        }
+    }
     0
 }
 
@@ -365,7 +443,7 @@ impl winit::application::ApplicationHandler<GxEvent> for WinitApp<'_> {
                 // 每帧都成功时 applied 递增，任一增量因无基线失败会由 Go 侧全量重发兜底。
                 let batch: Vec<Vec<u8>> = {
                     let mut q = self.queue.lock().unwrap();
-                    q.pending.drain(..).collect()
+                    q.drain_all()
                 };
                 for buf in &batch {
                     if renderer.apply_frame(buf) {
@@ -688,4 +766,43 @@ pub extern "C" fn gx_mirror_dump(out: *mut c_char, cap: c_int) -> c_int {
 pub extern "C" fn gx_mirror_counts() -> u64 {
     let m = mirror().lock().unwrap();
     ((m.applied as u64) << 32) | (m.failed & 0xFFFF_FFFF)
+}
+
+#[cfg(test)]
+mod frame_queue_tests {
+    use super::*;
+
+    #[test]
+    fn queue_records_peak_and_overload_without_dropping_frames() {
+        let mut q = FrameQueue::new();
+        let total = MAX_PENDING_FRAMES + 7;
+        for i in 0..total {
+            q.enqueue(vec![i as u8]);
+        }
+        // 过载只计数，不丢帧（增量帧丢弃会永久失步）。
+        assert_eq!(q.submitted, total as u64);
+        assert_eq!(q.pending.len(), total);
+        assert_eq!(q.peak_pending, total);
+        assert_eq!(q.overload_events, 7);
+        assert_eq!(q.stats()[0], total as u64);
+        assert_eq!(q.stats()[3], 7);
+
+        let batch = q.drain_all();
+        assert_eq!(batch.len(), total);
+        assert!(q.pending.is_empty());
+        assert!(q.first_enqueue.is_none());
+    }
+
+    #[test]
+    fn queue_stats_reset_latency_on_new_batch() {
+        let mut q = FrameQueue::new();
+        q.enqueue(vec![1, 2, 3]);
+        let _ = q.drain_all();
+        q.enqueue(vec![4, 5, 6]);
+        assert!(q.first_enqueue.is_some());
+        let _ = q.drain_all();
+        assert!(q.first_enqueue.is_none());
+        assert_eq!(q.submitted, 2);
+        assert_eq!(q.applied, 0);
+    }
 }

@@ -143,7 +143,7 @@ func inc() { count = count + 1 }
 
 - 编译器只把箭头 `=>` 展开成 Go func 字面量（JSX 属性路径不做 lambda 转换）；具名函数、`func` 字面量、显式 `gxscene.Handler(...)` 全部原样透传。**编译产物不含 `gxscene.Handler(...)` 包装**。
 - 箭头可带事件参数：`(e) => ...` 展开成 `func(e gxscene.EventContext) {...}`，可读 `e.Synthetic`（归一化事件对象，含 `X`/`Y`/`Key`/`Mods` 等）。
-- 函数体里的 sig 读写照常按普通变量写（`count = count + 1`），编译器补 `()`；跨线程更新用 `Signal.safe`。
+- 函数体里的 sig 读写照常按普通变量写（`count = count + 1`），编译器补 `()`；跨线程更新用 `app.dispatch(() => {...})`（单 App 兼容写法 `Signal.safe`）。
 - `gxscene.Handler` 是 `func(EventContext)` 的类型别名，老代码里显式写的 `gxscene.Handler(func(ctx ...){...})` 仍然合法、原样透传，保持兼容。
 
 ### 3.1 `ref` 模板引用（命令式逃生口）
@@ -419,10 +419,11 @@ GoX 的核心线程规则：**响应式系统是单线程的，业务任务可�
 
 依赖追踪热路径（Effect 内读，含依赖登记）约 12 ns/op、0 分配。写信号成本随订阅者数量线性增长（这是依赖图传播本身，1 / 10 / 100 / 1000 订阅者约 0.2 / 1.2 / 11.7 / 115 µs）。
 
-- **后台 goroutine**：不得直接读写响应式 Signal，必须经 `Signal.safe(() => {...})` 把更新闭包投递给 UI Runtime。编译器把 `Signal.safe` 映射为 `signal.Safe`（通用首字母大写规则，与 `Signal.batch` → `Signal.Batch` 一致）。`Safe` 是**异步投递**——调用后立即返回，不等待执行；投递到已注入的 `UIExecutor`（由 `app.SetUIExecutor` 接线），UI 关闭后任务被丢弃。
-- **UI Runtime 内**（事件回调、effect、`Signal.effect` 等）：直接读写，或用 `Signal.batch(() => {...})` 合并一批写入——`Batch` 只负责合并、不做线程切换，一批写完统一调度 effect 并只提交一帧。若 UI Runtime 内误用 `Safe`，任务会在下一帧执行，语义仍安全但非同步。
-- **职责分离**：`Safe` 只管线程切换（后台 → UI Runtime），`Batch` 只管合并更新。第一版不提供同步等待的 `SafeSync`。
-- **未注入 UI Runtime 时**（headless / 纯测试）：`Safe` 退化为同步执行，调用方须自行保证单线程顺序。
+- **后台 goroutine**：不得直接读写响应式 Signal，必须把更新闭包投递给 UI Runtime。推荐入口是每个 App 独有的 `app.Dispatch(func(){ ... })`（GX: `app.dispatch(() => {...})`）——它绑定到该 App 的 `signal.Runtime`，多 App 互不覆盖、互不影响。`app.SetUIExecutor` 注入投递器；`app.Close` 只关闭本 App 的 Runtime，关闭后投递返回 `ErrUIRuntimeClosed` 且闭包不执行。
+- **`Signal.safe` 兼容层**：编译器把 `Signal.safe` 映射为 `signal.Safe`（通用首字母大写规则）。它是「全局默认 Runtime」的语法糖，供单 App 场景兼容；多 App 请一律用 `app.Dispatch`。`Safe` / `Dispatch` 都是**异步投递**——调用后立即返回，不等待执行。
+- **禁止静默降级（评审 P0）**：未注入 UI Runtime 时，`Safe` / `Dispatch` 返回 `ErrUIRuntimeNotInitialized`，闭包**不会**在调用方（可能是后台）goroutine 同步执行。需要同步语义的 headless / 测试必须显式 `signal.NewSyncRuntime()` 或 `signal.SetUIPost(signal.SyncPoster)`。第一版不提供同步等待的 `SafeSync`。
+- **UI Runtime 内**（事件回调、effect、`Signal.effect` 等）：直接读写，或用 `Signal.batch(() => {...})` 合并一批写入——`Batch` 只负责合并、不做线程切换，一批写完统一调度 effect 并只提交一帧。去重按批次 epoch 打标，每个 Effect 同批最多入队一次（O(1) 去重）；`Batch` 内 panic 时已写入的值保留、已收集的 Effect 仍冲刷，随后 panic 原样向上传播。
+- **职责分离**：`Dispatch`/`Safe` 只管线程切换（后台 → UI Runtime），`Batch` 只管合并更新。Owner 的创建 / Dispose / Cleanup / Mount 全部属于响应式生命周期，必须在 UI Runtime 线程执行；后台请用 `app.Dispatch` 包装 `Dispose`。`withObserver` 先注册 defer 再执行用户 Cleanup，保证 Cleanup panic 时观察者栈与 Owner 栈必定复位；Computed 内 panic 原样传播（不吞用户异常），内部状态复位后下次读取可正常重算。
 
 ```gx
 // 后台任务：网络回包后更新 UI
@@ -442,7 +443,7 @@ Signal.batch(() => {
 - **effect**：立即执行一次，依赖变化时重跑；每次重跑动态重建依赖集合（条件分支依赖可增删）。
 - **底层 API 禁止手写**：`Signal.New` / `Signal.Computed` / `Signal.Effect` / `Signal.NewWithEquals` 等首字母大写的运行时构造器是编译器内部实现细节，用户源码里直接调用会报编译错误。GX 只暴露语法糖：`sig n = v` 声明源信号、`Signal.computed(() => expr)` 派生、`Signal.effect(() => {...})` 副作用；迟早需要的自定义相等策略等仍由运行时保留，但不从语言层暴露。这样用户无需感知 sig 与普通变量的区别，也杜绝了手写值与编译器 binding 不一致引发的快照冻结 / 别名冲突 / 二次包装等一系列问题。小写语法糖（含作为函数值传递的 `Signal.effect`）由编译器在末尾还原成对应大写符号，是唯一合法入口。
 - **`Signal` 是保留标识符**：作为占位包名的语义优先，勿用作变量名/类型名/字段名。`Signal.New` 形式的底层 API 调用会被拦截；若确需同名局部变量（如 `Signal := Holder{...}`），对其字段的访问（`Signal.New`）会按绑定表放行——判据是「`Signal` 是否解析为包名绑定」，不是纯词法匹配。
-- **并发安全**：全局互斥锁保护观察者栈与依赖图，用户回调在锁外执行。
+- **并发安全**：响应式核心（观察者栈、依赖图、Owner 栈、批处理）严格单线程，无锁、无 goroutine id。跨线程只经 `app.Dispatch` / `signal.Safe` 投递；`sync.Once`（句柄 Dispose）、任务队列、App Close 等并发控制点仍使用必要的同步原语。「响应式单线程」不等于「整个程序无需锁」。
 - **读取性能**：依赖追踪只在 effect/computed 重算期间需要，而这类场景是少数；普通读取走**无锁快路径**——用原子计数器 `activeObservers` 判断当前无 observer 重算时，直接原子读取当前值，跳过抓栈（goroutine id 解析）与加锁。sig 值用原子指针存储避免撕裂。实测读取 ~2 ns（约为普通变量的 2 倍），相较抓栈方案（~2900 ns）提速约 1400×；computed 缓存命中读 ~14 ns。
 - **import**：`Signal` 占位包名由 ImportManager 统一解析为 `import Signal "<module>/runtime/signal"`；源码已用别名导入则复用。
 

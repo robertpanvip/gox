@@ -15,6 +15,15 @@ import "sync"
 var ownerStack []*Owner
 
 // Owner 是一个响应式作用域，持有其下的计算、子作用域与生命周期回调。
+//
+// 线程归属契约（评审 P1，方案 A）：Owner 的创建（CreateRoot/RunWithOwner）、
+// Dispose、OnCleanup/OnMount 的注册与执行，以及 Computed/Effect 的创建，全部
+// 只能在 UI Runtime 线程上进行。后台 goroutine 必须先经 Runtime.Dispatch 投递。
+// 因此这些结构没有 goid 隔离、依赖单线程串行语义。
+//
+// 仍保留 mu：sync.Once（句柄 Dispose）、任务队列、App Close 等并发控制点确实需要
+// 同步原语；「响应式单线程」不等于「整个程序无需锁」。mu 在这里另外
+// 作为契约被意外破坏时的防御，不承诺跨线程并发 Dispose 的线性一致性。
 type Owner struct {
 	mu       sync.Mutex
 	parent   *Owner
@@ -63,6 +72,10 @@ func (o *Owner) LookupValue(key any) (any, bool) { return LookupValue(o, key) }
 
 // Computation 是可销毁的响应式计算句柄。Effect 返回它；Computed 也可通过
 // ComputedWithHandle 取得。销毁是幂等的。
+//
+// 线程契约：Dispose 属于响应式生命周期操作，必须在 UI Runtime 线程调用；后台
+// goroutine 请包装成 `app.Dispatch(func(){ h.Dispose() })`。句柄内的 sync.Once
+// 仅保证幂等，不提供跨线程同步的额外承诺。
 type Computation interface {
 	Dispose()
 }
@@ -291,19 +304,31 @@ func newChildOwner(parent *Owner) *Owner {
 // ---------- 批处理 ----------
 
 var (
-	batchDepth    int       // Batch 嵌套深度（单实例）
-	pendingEffect []*node   // 待执行 Effect，去重（单实例）
-	batchEpoch    uint64    // pending 去重 epoch
+	batchDepth    int     // Batch 嵌套深度（单实例）
+	pendingEffect []*node // 待执行 Effect，去重（单实例）
+	batchEpoch    uint64  // pending 去重 epoch
 )
 
 // Batch 把 f 内的多次 signal 写入合并成一批：期间被标脏的 Effect 只收集不执行，
 // f 结束后统一调度一次。嵌套 Batch 只在最外层结束时冲刷。
-// Batch 只负责合并更新，不做线程切换——线程切换由 Signal.Safe 负责。
+// Batch 只负责合并更新，不做线程切换——线程切换由 Runtime.Dispatch 负责。
+//
+// 去重（评审 P1）：epoch 在**每个 Batch 开始时仅递增一次**，同一批内所有写入
+// 共用它。Effect 用 batchMark 记录自己是否已入队，天然保证每批最多入队一次，
+// 避免旧的「每次写入都重扫整个 pendingEffect 列表并重新打标」的 O(n²) 扫描。
+//
+// panic 语义（明确规则）：f 内 panic 时 defer 仍会冲刷本批已收集的 Effect（已写入
+// 的 Signal 值保留、Effect 正常执行），随后 panic 原样向上传播。这与「写入已生效
+// 就不该丢失」的直觉一致；如需原子回滚请用更高层事务，Batch 不提供。
 func Batch(f func()) {
 	if f == nil {
 		return
 	}
 	batchDepth++
+	if batchDepth == 1 {
+		// 新的一批：递增 epoch。同一批（含嵌套）共用，Effect 首次入队即打标。
+		batchEpoch++
+	}
 	defer func() {
 		batchDepth--
 		if batchDepth != 0 {
@@ -330,11 +355,9 @@ func dispatchEffects(effects []*node) {
 		return
 	}
 	if batchDepth > 0 {
-		batchEpoch++
+		// epoch 由 Batch 入口统一推进；此处只按节点 batchMark 去重，不再重扫
+		// 整个 pendingEffect 列表（评审 P1）。
 		epoch := batchEpoch
-		for _, e := range pendingEffect {
-			e.batchMark = epoch
-		}
 		for _, e := range effects {
 			if e.batchMark == epoch {
 				continue

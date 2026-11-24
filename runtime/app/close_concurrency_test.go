@@ -82,7 +82,7 @@ func TestCloseConcurrentWithSafeMutationAndDraw(t *testing.T) {
 				defer wg.Done()
 				for i := 0; i < 500; i++ {
 					v := i
-					signal.Safe(func() { val(v) })
+					_ = app.Dispatch(func() { val(v) })
 				}
 			}()
 		}
@@ -93,7 +93,7 @@ func TestCloseConcurrentWithSafeMutationAndDraw(t *testing.T) {
 			defer wg.Done()
 			for i := 0; i < 500; i++ {
 				app.Draw()
-				signal.Safe(func() { app.Update() })
+				_ = app.Dispatch(func() { app.Update() })
 			}
 		}()
 		// 关闭者：制造与 Safe 更新的交错。Close 会销毁响应式树（Owner.Dispose
@@ -104,9 +104,9 @@ func TestCloseConcurrentWithSafeMutationAndDraw(t *testing.T) {
 			defer wg.Done()
 			for i := 0; i < 100; i++ {
 				v := i
-				signal.Safe(func() { val(v) })
+				_ = app.Dispatch(func() { val(v) })
 			}
-			signal.Safe(func() { _ = app.Close() })
+			_ = app.Dispatch(func() { _ = app.Close() })
 		}()
 
 		wg.Wait()
