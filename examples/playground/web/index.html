@@ -20,6 +20,13 @@
                     color: transparent !important; -webkit-background-clip: text !important;
                     background-clip: text !important; white-space: pre; }
     .gx-code-line::before { content: attr(data-code); }
+    /* 列光标：fixed 覆盖层，跟随代码行的 getBoundingClientRect 定位；
+       pointer-events:none 保证点击能穿透到下方代码行本身。 */
+    #gx-caret { position: fixed; width: 1.5px; background: #aeafad; z-index: 15;
+                pointer-events: none; }
+    #gx-caret[hidden] { display: none; }
+    @keyframes caret-blink { 0%,49% { opacity: 1; } 50%,100% { opacity: 0; } }
+    #gx-caret { animation: caret-blink 1.06s steps(1) infinite; }
     #hint { margin-top: 10px; font-size: 12px; color: #64748b; }
 
     /* ---- 内建 LSP UI（无服务端，全部由 wasm 侧 goxlsp 驱动） ---- */

@@ -37,6 +37,7 @@ interface Elements {
   readonly diagnostics: HTMLElement;
   readonly completion: HTMLElement;
   readonly hover: HTMLElement;
+  readonly caret: HTMLElement;
 }
 
 function requireElement(id: string): HTMLElement {
@@ -48,6 +49,12 @@ function requireElement(id: string): HTMLElement {
 }
 
 function collectElements(): Elements {
+  // 列光标覆盖层：fixed 定位到 body，跟随代码行滚动；不进 #app 以免被
+  // GX 场景树 patch 时清掉。样式由 index.html 的 #gx-caret 定义。
+  const caret: HTMLElement = document.createElement("div");
+  caret.id = "gx-caret";
+  caret.hidden = true;
+  document.body.append(caret);
   return {
     loading: requireElement("loading"),
     app: requireElement("app"),
@@ -55,6 +62,7 @@ function collectElements(): Elements {
     diagnostics: requireElement("lsp-diagnostics"),
     completion: requireElement("lsp-completion"),
     hover: requireElement("lsp-hover"),
+    caret,
   };
 }
 
@@ -131,17 +139,86 @@ function lineAt(app: HTMLElement, ev: MouseEvent): { el: HTMLElement; line: numb
   return line >= 0 ? { el, line } : null;
 }
 
-/** 按等宽字符宽度估算光标列（0 基）。 */
+// ---- 等宽字符测量（列定位 + 列光标共用） ----
+// 代码行用 monospace 13px，但 CJK 宽约 2×ASCII。用 canvas measureText 逐字符
+// 累加，点击列和光标位置都按真实像素算，中文/缩进/制表都不再错位。
+
+let measureCtx: CanvasRenderingContext2D | null = null;
+
+/** 代码行的 CSS font 缩写，供 canvas measureText 使用。 */
+function codeFont(el: HTMLElement): string {
+  const css: string = window.getComputedStyle(el).font;
+  if (css.length > 0) {
+    return css;
+  }
+  const size: string = window.getComputedStyle(el).fontSize;
+  return `${size} ui-monospace, Menlo, Consolas, monospace`;
+}
+
+/** 返回字符串 s 在给定字体下的像素宽度。 */
+function textWidth(s: string, font: string): number {
+  if (measureCtx === null) {
+    const canvas: HTMLCanvasElement = document.createElement("canvas");
+    measureCtx = canvas.getContext("2d");
+  }
+  if (measureCtx === null) {
+    // 极端降级：按等宽 8px/ASCII、16px/CJK 估算。
+    let w: number = 0;
+    for (const ch of s) { w += ch.charCodeAt(0) >= 0x2e80 ? 16 : 8; }
+    return w;
+  }
+  measureCtx.font = font;
+  return measureCtx.measureText(s).width;
+}
+
+/** 按鼠标 x 在代码行内定位列（0 基，按 rune 计，与 wasm 光标一致）。 */
 function columnAt(el: HTMLElement, ev: MouseEvent): number {
   const rect: DOMRect = el.getBoundingClientRect();
-  const fontSize: number = Number.parseFloat(window.getComputedStyle(el).fontSize) || 13;
-  const charWidth: number = fontSize * 0.62;
-  return Math.max(0, Math.floor((ev.clientX - rect.left) / charWidth));
+  const x: number = ev.clientX - rect.left;
+  const font: string = codeFont(el);
+  const code: string = el.getAttribute("data-code") ?? "";
+  const chars: readonly string[] = Array.from(code); // 按 rune 切分
+  let acc: number = 0;
+  for (let i: number = 0; i < chars.length; i++) {
+    const cw: number = textWidth(chars[i] ?? "", font);
+    if (acc + cw / 2 >= x) {
+      return i;
+    }
+    acc += cw;
+  }
+  return chars.length;
+}
+
+/** 渲染闪烁的列光标：fixed 覆盖层，跟随光标行列与编辑器滚动。 */
+function renderCaret(api: GoxPlaygroundAPI, elements: Elements): void {
+  const caret: HTMLElement = elements.caret;
+  const cursor: Cursor = api.cursor();
+  const lines: NodeListOf<HTMLElement> = elements.app.querySelectorAll<HTMLElement>(".gx-code-line");
+  const el: HTMLElement | undefined = lines[cursor.line];
+  if (el === undefined) {
+    caret.hidden = true;
+    return;
+  }
+  const rect: DOMRect = el.getBoundingClientRect();
+  const code: string = el.getAttribute("data-code") ?? "";
+  const chars: readonly string[] = Array.from(code);
+  const prefix: string = chars.slice(0, Math.min(cursor.col, chars.length)).join("");
+  const x: number = rect.left + textWidth(prefix, codeFont(el));
+  caret.style.left = `${x}px`;
+  caret.style.top = `${rect.top}px`;
+  caret.style.height = `${rect.height}px`;
+  caret.hidden = false;
+}
+
+/** DOM 更新走 RAF 提交，光标刷新排到下一帧读最新几何。 */
+function scheduleCaret(api: GoxPlaygroundAPI, elements: Elements): void {
+  window.requestAnimationFrame((): void => { renderCaret(api, elements); });
 }
 
 // ---- 诊断面板 ----
 
-function renderDiagnostics(api: GoxPlaygroundAPI, panel: HTMLElement): void {
+function renderDiagnostics(api: GoxPlaygroundAPI, elements: Elements): void {
+  const panel: HTMLElement = elements.diagnostics;
   const diags: readonly Diagnostic[] = parseJSON<readonly Diagnostic[]>(api.lspDiagnostics());
   panel.replaceChildren();
   const title: HTMLElement = document.createElement("span");
@@ -170,6 +247,7 @@ function renderDiagnostics(api: GoxPlaygroundAPI, panel: HTMLElement): void {
         api.key(key);
       }
       api.focus();
+      scheduleCaret(api, elements);
     });
     panel.append(item);
   }
@@ -192,8 +270,9 @@ function applyCompletion(api: GoxPlaygroundAPI, elements: Elements, index: numbe
   }
   api.insert(item.label);
   hideCompletion(elements);
-  renderDiagnostics(api, elements.diagnostics);
+  renderDiagnostics(api, elements);
   api.focus();
+  scheduleCaret(api, elements);
 }
 
 function showCompletion(
@@ -282,11 +361,14 @@ function bindKeyboard(elements: Elements, api: GoxPlaygroundAPI): void {
   const app: HTMLElement = elements.app;
   app.tabIndex = 0;
   app.addEventListener("mousedown", (ev: MouseEvent): void => {
-    // 点击代码行：按鼠标位置定位光标（行号从 DOM 顺序取，列按等宽字符估算）。
+    // 点击代码行：按鼠标位置定位光标（行号从 DOM 顺序取，列按字符像素算）。
     const hit = lineAt(app, ev);
     if (hit !== null) {
       api.setCursor(hit.line, columnAt(hit.el, ev));
     }
+    // 点示例行/预览按钮也会改变光标与源码，统一刷新（两次 RAF 等 GX 提交）。
+    scheduleCaret(api, elements);
+    window.requestAnimationFrame((): void => { scheduleCaret(api, elements); });
     api.focus();
     app.focus();
   });
@@ -303,7 +385,8 @@ function bindKeyboard(elements: Elements, api: GoxPlaygroundAPI): void {
       ev.preventDefault();
       const formatted: string = api.lspFormat();
       api.setSource(formatted);
-      renderDiagnostics(api, elements.diagnostics);
+      renderDiagnostics(api, elements);
+      scheduleCaret(api, elements);
       return;
     }
     if (completionKeydown(ev, api, elements)) {
@@ -323,9 +406,13 @@ function bindKeyboard(elements: Elements, api: GoxPlaygroundAPI): void {
       return;
     }
     api.key(ev.key);
-    // 输入后刷新诊断（诊断在 wasm 侧随每次 key 同步重算，这里只拉结果）。
-    window.setTimeout((): void => { renderDiagnostics(api, elements.diagnostics); }, 0);
+    // 输入后刷新诊断与列光标（wasm 侧随每次 key 同步重算，这里只拉结果）。
+    window.setTimeout((): void => { renderDiagnostics(api, elements); }, 0);
+    scheduleCaret(api, elements);
   });
+  // 编辑器容器滚动 / 窗口缩放时，光标覆盖层要跟着代码行移动。
+  app.addEventListener("scroll", (): void => { scheduleCaret(api, elements); }, true);
+  window.addEventListener("resize", (): void => { scheduleCaret(api, elements); });
   app.addEventListener("mousemove", (ev: MouseEvent): void => {
     if (hoverTimer !== undefined) {
       window.clearTimeout(hoverTimer);
@@ -398,8 +485,9 @@ async function boot(elements: Elements): Promise<void> {
   void go.run(result.instance);
   const api: GoxPlaygroundAPI = await waitForGox();
   bindKeyboard(elements, api);
-  renderDiagnostics(api, elements.diagnostics);
-  elements.hint.textContent = "就绪 · Ctrl+Space 补全 · Shift+Alt+F 格式化 · 悬停看符号 · 左侧选示例即运行";
+  renderDiagnostics(api, elements);
+  scheduleCaret(api, elements);
+  elements.hint.textContent = "就绪 · 点击代码任意位置定位 · Ctrl+Space 补全 · Shift+Alt+F 格式化 · 悬停看符号 · 左侧选示例即运行";
 }
 
 function main(): void {
