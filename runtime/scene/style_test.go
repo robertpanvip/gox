@@ -15,8 +15,11 @@ func TestStyleValidateWhitelist(t *testing.T) {
 	if _, err := ParseStyle(`{"colr":"#fff"}`); err == nil {
 		t.Fatal("未知属性应被拒绝")
 	}
-	if _, err := ParseStyle(`{"&:visitd":{"bg":"#000"}}`); err == nil {
+	if _, err := ParseStyle(`{"visitd":{"bg":"#000"}}`); err == nil {
 		t.Fatal("未知伪状态应被拒绝")
+	}
+	if _, err := ParseStyle(`{"&:hover":{"bg":"#000"}}`); err == nil {
+		t.Fatal("JSON 输入不应接受 & 前缀，只认单词 key")
 	}
 }
 
@@ -75,7 +78,8 @@ func TestStyleFlatten(t *testing.T) {
 }
 
 func TestStyleParseStyle(t *testing.T) {
-	src := `{"bg":"#fff","&:hover":{"bg":"#2563eb"},"&:active":{"bg":"#1d4ed8"}}`
+	// JSON 输入同理：伪状态用单词 key，后端协议 "&:" 只在 Props 输出侧出现。
+	src := `{"bg":"#fff","hover":{"bg":"#2563eb"},"active":{"bg":"#1d4ed8"}}`
 	s, err := ParseStyle(src)
 	if err != nil {
 		t.Fatal(err)
@@ -119,8 +123,8 @@ func TestStyleFocusDisabled(t *testing.T) {
 	if both["bg"] != "#9ca3af" || both["border"] != "#2563eb" || both["opacity"] != "0.6" {
 		t.Errorf("focus+disabled 展平错误: %v", both)
 	}
-	// ParseStyle 也能解析。
-	parsed, err := ParseStyle(`{"bg":"#fff","&:focus":{"border":"#00f"},"&:disabled":{"bg":"#999"}}`)
+	// ParseStyle 也能解析（伪状态单词 key）。
+	parsed, err := ParseStyle(`{"bg":"#fff","focus":{"border":"#00f"},"disabled":{"bg":"#999"}}`)
 	if err != nil || parsed.Focus == nil || parsed.Disabled == nil {
 		t.Errorf("ParseStyle focus/disabled 失败: %+v %v", parsed, err)
 	}

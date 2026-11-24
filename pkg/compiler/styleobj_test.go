@@ -84,13 +84,31 @@ func TestStyleObjEmpty(t *testing.T) {
 }
 
 func TestStyleObjJSONCompatible(t *testing.T) {
-	// 带引号 key 的既有 JSON 写法继续可用：同样映射到强类型 struct 字段。
-	res := compileStyleJSX(t, `style={{"bg":"#fff","&:hover":{"bg":"#eee"}}}`)
+	// 带引号 key 的 JSON 写法同样映射到强类型 struct 字段；伪状态用单词 key。
+	res := compileStyleJSX(t, `style={{"bg":"#fff","hover":{"bg":"#eee"}}}`)
 	assertNoDiag(t, res)
 	for _, want := range []string{`Bg:"#fff"`, `Hover:&gxscene.Style{`, `Bg:"#eee"`} {
 		if !strings.Contains(res.GoSource, want) {
-			t.Errorf("JSON 兼容形态应映射到字段 %q:\n%s", want, res.GoSource)
+			t.Errorf("JSON 写法应映射到字段 %q:\n%s", want, res.GoSource)
 		}
+	}
+}
+
+func TestStyleObjAmpPrefixRejected(t *testing.T) {
+	// 第三种写法：源码只认单词 key，写 "&:hover" 报 style-unknown-prop，不做前缀转译。
+	src := "package main\nfunc main() {\n _ = <div style={{\"&:hover\":{\"bg\":\"#eee\"}}}>x</div>\n}\n"
+	res, err := CompileScene("style.gx", src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, d := range res.Analysis.Diagnostics() {
+		if d.Code == "style-unknown-prop" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("源码写 & 前缀应报 style-unknown-prop，得到 %v", res.Analysis.Diagnostics())
 	}
 }
 

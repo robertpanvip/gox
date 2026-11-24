@@ -100,7 +100,7 @@ func() any {
 - **key 映射**：驼峰 key 按 kebab→PascalCase 映射到导出字段（`fontSize`→`FontSize`、`textAlign`→`TextAlign`、`borderRadius`→`BorderRadius`）；数字字面量自动加引号成字符串。
 - **动态值**：整块 getter 每次求值重建 Style，**运行时** `writeAttr` 展平为后端 props 后按 key 做细粒度 diff（只发变化的属性增量）；后端看到的仍是 kebab 属性名和 `&:hover` 伪状态串，协议不变。
 - **伪状态**：用单词 key `hover` / `active` / `focus` / `disabled`（**源码不写 `&:` 符号**，避免对象 key 的特殊字符转译问题），映射到 `Hover` / `Active` / `Focus` / `Disabled *Style` 字段；值为对象字面量时递归。后端 props 里的 `&:hover` 由 `Props()` 生成，与源码写法无关。
-- **兼容**：既有的带引号 key JSON 写法（`style={{"bg":"#fff","&:hover":{"bg":"#eee"}}}`）同样映射到强类型字段，语义不变。`class` 仍不支持对象字面量。
+- **JSON 写法**：带引号 key 的 JSON 对象字面量同样映射到强类型字段，但伪状态仍用单词 key（`style={{"bg":"#fff","hover":{"bg":"#eee"}}}`）；写 `&:hover` 会报 `style-unknown-prop`。`class` 仍不支持对象字面量。
 
 **JSX 可跨行**：闭合标签后的换行若属于排版缩进（换行后紧跟宿主调用的 `)` / `]` / `,`，中间可夹行注释），编译器会吞掉这段空白，避免 Go 在参数列表换行处要求 trailing comma。因此下面两种写法等价，无需为规避语法错误而把 JSX 挤成单行：
 

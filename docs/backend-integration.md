@@ -344,10 +344,11 @@ gxscene.Style{
 // GX：驼峰 key + 伪状态单词 key → 编译为 gxscene.Style{...} 结构体字面量
 <div style={{bg:"#fff", hover:{bg:"#eee"}}}>x</div>
 ```
-带引号 key 的旧 JSON 写法（`style={{"bg":"#fff","&:hover":{"bg":"#eee"}}}`）同样映射
-到强类型字段，语义不变；`style` 也能直接接 JSON 字符串。GX 源码里伪状态推荐用单词
-key（`hover`/`active`/`focus`/`disabled`），不写 `&:` 符号——后端 props 里的 `&:hover`
-由 `Style.Props()` 生成，与源码写法无关。
+带引号 key 的 JSON 对象字面量同样映射到强类型字段，伪状态也用单词 key
+（`style={{"bg":"#fff","hover":{"bg":"#eee"}}}`）；`style` 也能直接接 JSON 字符串。
+伪状态一律用单词 key（`hover`/`active`/`focus`/`disabled`），源码和 JSON 字符串里写
+`&:hover` 都会报 `style-unknown-prop`/解析失败——不做 `&:` 前缀转译；后端 props 里的
+`&:hover` 由 `Style.Props()` 生成，与源码写法无关。
 
 四种伪状态均已接入：**`&:hover` / `&:focus` / `&:active` / `&:disabled`**。
 

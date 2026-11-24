@@ -28,10 +28,11 @@ import (
 //	    Active: &gxscene.Style{Bg: "#1d4ed8", Transform: "scale(.98)"},
 //	}
 //
-// GX 写法（驼峰 key，编译器映射到字段；数字字面量归一化成字符串）：
+// GX 写法（驼峰 key，编译器映射到字段；数字字面量归一化成字符串；
+// 伪状态用单词 key，源码不写 "&:"）：
 //
 //	<div style={{ backgroundColor: lineGutterColor(idx), fontSize: 12,
-//	              "&:hover": { bg: "#eee" } }}>
+//	              hover: { bg: "#eee" } }}>
 type StyleValue = string
 
 // Style 是字段固定的强类型样式结构体。每个 tag 是后端约定的 kebab 属性名；
@@ -176,22 +177,8 @@ func styleMeta() ([]styleField, map[string]int) {
 	return styleMetaList, styleMetaByKey
 }
 
-func canonicalPseudo(k string) string {
-	for _, p := range []string{PseudoPrefix, legacyPseudoPrefix} {
-		if strings.HasPrefix(k, p) {
-			return PseudoPrefix + strings.TrimPrefix(k, p)
-		}
-	}
-	return k
-}
-
 func isPseudoKey(k string) bool {
 	return strings.HasPrefix(k, PseudoPrefix) || strings.HasPrefix(k, legacyPseudoPrefix)
-}
-
-func isKnownPseudo(k string) bool {
-	c := canonicalPseudo(k)
-	return pseudoStates[strings.TrimPrefix(c, PseudoPrefix)]
 }
 
 func pseudoStateList() []string {
@@ -388,11 +375,16 @@ func styleFromAny(v any) (Style, error) {
 }
 
 // setStyleValue 把动态构造的 key/value 写入 struct 字段；未知 key 报错。
+// 伪状态只接受单词 key（hover/active/focus/disabled），不做 "&:" 前缀转译。
 func setStyleValue(s *Style, key string, val any) error {
-	key = canonicalPseudo(key)
+	// 第三种写法：输入只认单词 key，带 "&:" / "$:" 前缀直接拒绝——
+	// 前缀是后端 Props 输出协议，不是源码/JSON 的输入写法。
+	if isPseudoKey(key) {
+		return fmt.Errorf("style: 伪状态请用单词 key（hover/active/focus/disabled），不接受 %q", key)
+	}
 	fields, byKey := styleMeta()
 	// 伪状态单词 key（hover/active/focus/disabled）映射到 "&:x" 字段。
-	if _, isP := pseudoStates[strings.ToLower(key)]; isP && !isPseudoKey(key) {
+	if _, isP := pseudoStates[strings.ToLower(key)]; isP {
 		key = PseudoPrefix + strings.ToLower(key)
 	}
 	i, ok := byKey[key]

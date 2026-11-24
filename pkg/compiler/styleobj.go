@@ -32,9 +32,9 @@ import (
 //   - 普通属性 key 按 kebab→PascalCase 映射到固定字段；不在白名单的 key 报诊断，
 //     不再生成 map[string]any 让错字段静默通过。
 //   - 伪状态用单词 key（hover/active/focus/disabled），映射到 Hover/Active/...
-//     字段；源码不出现 "&:" 符号，避免对象 key 里的特殊字符转译问题。
+//     字段；源码不出现 "&:" 符号，不做任何前缀字符串解析，避免转译歧义。
 //   - 数字字面量加引号成 StyleValue 字符串（与 CSS 值语义一致）。
-//   - 兼容旧的字面量形式：带引号 key 的 JSON（"&:hover" 等）也能映射到字段。
+//   - 带引号 key 的 JSON 写法同样支持，但伪状态 key 必须是单词（hover，不是 &:hover）。
 
 // stylePseudoFields 把伪状态单词 key 映射到 struct 字段名。
 var stylePseudoFields = map[string]string{
@@ -65,8 +65,8 @@ var stylePropFields = map[string]string{
 }
 
 // styleKeyToField 把源码 key 解析成 (字段名, 是否伪状态)。
-// 普通 key：camel→kebab 后查表；伪状态单词：查 pseudo 表。
-// 兼容带引号的 "&:hover" / "$:active" / ":hover" 形式。
+// 普通 key：camel→kebab 后查表；伪状态只认单词 key（hover/active/focus/disabled）。
+// 不再解析 "&:" / "$:" / ":" 前缀——源码不写 & 符号，避免字符串转译歧义。
 func styleKeyToField(raw string) (field string, pseudo bool, ok bool) {
 	key := raw
 	// 兼容引号形式（带引号 key 在 styleObjToTokens 里已去引号，这里仍兜底）。
@@ -74,16 +74,9 @@ func styleKeyToField(raw string) (field string, pseudo bool, ok bool) {
 		key = u
 	}
 	key = strings.TrimSpace(key)
-	// 伪状态：单词优先，其次兼容 "&:x" / "$:x" / ":x"。
+	// 伪状态：只认单词 key，无前缀转译。
 	if f, isP := stylePseudoFields[strings.ToLower(key)]; isP {
 		return f, true, true
-	}
-	for _, p := range []string{"&:", "$:", ":"} {
-		if strings.HasPrefix(key, p) {
-			if f, isP := stylePseudoFields[strings.ToLower(strings.TrimPrefix(key, p))]; isP {
-				return f, true, true
-			}
-		}
 	}
 	// 普通属性：camel → kebab → 查字段表。
 	kebab := styleKeyCamelToKebab(key)
@@ -95,7 +88,8 @@ func styleKeyToField(raw string) (field string, pseudo bool, ok bool) {
 
 // styleKeyCamelToKebab 把驼峰属性名转成后端约定的短横线名。
 //   - fontSize → font-size, textAlign → text-align, borderRadius → border-radius
-//   - 已是短横线 / 含 "&:" 的 key 原样保留
+//   - 已是短横线的 key 原样保留；含 ":" 的 key（如 "&:hover"）原样返回后查表失败，
+//     由调用方报 style-unknown-prop——即源码不写 & 前缀。
 func styleKeyCamelToKebab(s string) string {
 	if s == "" {
 		return s

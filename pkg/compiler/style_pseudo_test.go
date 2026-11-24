@@ -5,11 +5,11 @@ import (
 	"testing"
 )
 
-// 受限样式表：带引号 key 的 JSON 对象字面量（含 &:hover/$:active 伪状态）
+// 受限样式表：带引号 key 的 JSON 对象字面量（伪状态用单词 key hover/active）
 // 同样编译为 gxscene.Style 结构体字面量（伪状态映射到 Hover/Active 字段），
-// 不再报 attr-unsupported。
+// 不再报 attr-unsupported。源码不写 "&:" 前缀。
 func TestStyleObjectLiteralJSONCompiles(t *testing.T) {
-	src := "package main\nfunc main() {\n _ = <div style={{\"bg\":\"#fff\",\"&:hover\":{\"bg\":\"#eee\"},\"$:active\":{\"bg\":\"#ddd\"}}}>x</div>\n}\n"
+	src := "package main\nfunc main() {\n _ = <div style={{\"bg\":\"#fff\",\"hover\":{\"bg\":\"#eee\"},\"active\":{\"bg\":\"#ddd\"}}}>x</div>\n}\n"
 	res, err := Compile("style.gx", src)
 	if err != nil {
 		t.Fatal(err)
