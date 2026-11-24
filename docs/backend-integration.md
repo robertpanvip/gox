@@ -473,6 +473,31 @@ props：`name`（内置名/别名）、`src`（外部 SVG）、`size`（默认 2
 `tone`（语义色，默认 primary）、`stroke-width`（默认 1.8，随 size 缩放）。
 `name` 优先于 `src`；都无效时降级为空图标（不崩溃）。
 
+**具名图标组件集（`widgets/iconSet.gx`）**：把内置 SVG 用 GX 语言预制为强类型组件。
+每个图标 = 一个 SVG 源码常量 + 一个 `IconXxx` 具名组件，SVG 数据随组件库源码交付，
+不依赖运行时字符串表；底层统一复用 `iconFromSVG`（与通用 `Icon` 同一解析/构建链路）。
+`size/color/tone/stroke-width` 仍由调用方 props 决定，因此具名组件同样支持换色与缩放。
+
+```go
+// Go 调用
+widgets.IconHouse(gxscene.Props{"size": 24, "tone": "blue"})
+widgets.IconHeart(gxscene.Props{"size": 20, "color": "#ff453a"})
+```
+```jsx
+// GX JSX（与其它标准库组件用法一致，编成 OpComp + Props 插槽）
+<div>
+  <IconHouse size="24" tone="blue"/>
+  <IconSearch size="20" color="#fff"/>
+</div>
+```
+
+- **覆盖**：41 个规范名具名组件（`IconHouse`/`IconChevronRight`/`IconPlay`/`IconHeart`/
+  `IconBell`/`IconWarning`/`IconMoon`…）+ 3 个高频别名（`IconHome`/`IconUser`/
+  `IconSettings`，复用规范图标 SVG）。全部经 `make gxbuild` 从 `.gx` 转译为 `.go`，幂等。
+- **一致性**：测试逐字节校验组件库 SVG 常量与 `runtime/icon.Builtin` 相同，防止两套
+  数据漂移；别名组件与规范名产出完全相同的矢量指令。
+- 新增图标时在 `runtime/icon/builtin.go` 与 `widgets/iconSet.gx` 同时登记即可。
+
 **边界**：仅静态矢量图元（无 SVG 滤镜/渐变/文本/外部 image 引用）；fill-rule 固定
 Winding（内置图标用描边或单轮廓实心规避镂空方向问题）；动画图标需用 signal 重建
 canvas-ops。
