@@ -184,8 +184,17 @@ func (g *glWindow) paintNow() {
 	if canvas.IsNil() {
 		return
 	}
-	w, h := g.win.GetFramebufferSize()
-	_, hits := skia.PaintTo(canvas, float32(w), float32(h), g.root, g.fonts)
+	// 高 DPI：framebuffer 物理像素 / 窗口逻辑点 = DPR，布局用逻辑点、绘制按 DPR 放大。
+	fx, fy := g.win.GetFramebufferSize()
+	wx, wy := g.win.GetSize()
+	dpr := float32(1)
+	if wx > 0 && wy > 0 && fx > 0 && fy > 0 {
+		dpr = float32(fx) / float32(wx)
+		if dpr <= 0 {
+			dpr = 1
+		}
+	}
+	_, hits := skia.PaintToScaled(canvas, float32(fx), float32(fy), dpr, g.root, g.fonts)
 	g.hits = hits
 	g.context.FlushAndSubmit(sk.GrSyncCpuYes)
 	gl.Flush()

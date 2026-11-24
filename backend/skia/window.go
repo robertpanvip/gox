@@ -225,6 +225,9 @@ func (w *Window) SetFocusHandler(fn func(gxscene.NodeID)) {
 // PaintTo 用本后端一致的 painter 把场景树画到任意 Skia canvas（供真实窗口复用布局/绘制协议）。
 // width/height 为像素尺寸；返回本帧命中矩形。fonts 由调用方长期持有以复用字体缓存。
 // 无缓存全量路径；需要帧缓存的真实窗口请用 PaintToCached。
+//
+// 单位：width/height 是"逻辑点"（pt）尺寸，与组件里的字号/间距同一坐标系。
+// 高 DPI 渲染请用 PaintToScaled——本函数等价于 PaintToScaled(..., 1)。
 func PaintTo(canvas sk.Canvas, width, height float32, root *gxscene.Node, fonts map[int]sk.Font) (DrawLog, []HitBox) {
 	var log DrawLog
 	var hits []HitBox
@@ -235,6 +238,41 @@ func PaintTo(canvas sk.Canvas, width, height float32, root *gxscene.Node, fonts 
 	canvas.Clear(sk.ColorSetARGB(255, 255, 255, 255))
 	p.paintFrame(root, width, height)
 	// 回流实测尺寸（无窗口锁，可同步投递）。
+	gxscene.PublishMeasured(measuredFromLayout(p.layout))
+	return log, hits
+}
+
+// PaintToScaled 是支持设备像素比（DPR）的高清绘制入口，供真实 GUI 窗口使用。
+//
+// 坐标模型（对齐 Apple 的 point 体系）：
+//   - 组件里所有尺寸（字号 13、控件高 28、圆角 6……）都是"逻辑点"(pt)；
+//   - physW/physH 是 framebuffer 的物理像素尺寸 = 逻辑尺寸 × dpr；
+//   - 布局在逻辑坐标系进行（availW=physW/dpr, availH=physH/dpr），所以一个
+//     13pt 的字号在 2x 屏上仍占 13pt 的逻辑宽度，不会变小；
+//   - 绘制前把 canvas 缩放 dpr 倍，Skia 会用物理像素光栅化 glyph 与描边，
+//     达到 Retina 清晰度（13pt → 26 物理像素）。
+//
+// 返回的 HitBox 坐标是逻辑点（与 paintFrame 布局一致），因此调用方用 GLFW
+// 的窗口坐标（也是逻辑点）即可直接命中，无需再除 dpr。
+//
+// dpr<=0 时按 1 处理（退化为 PaintTo）。save/restore 成对，不污染调用方 canvas 状态。
+func PaintToScaled(canvas sk.Canvas, physW, physH, dpr float32, root *gxscene.Node, fonts map[int]sk.Font) (DrawLog, []HitBox) {
+	if dpr <= 0 {
+		dpr = 1
+	}
+	if canvas.IsNil() || root == nil {
+		return nil, nil
+	}
+	logicalW, logicalH := physW/dpr, physH/dpr
+	var log DrawLog
+	var hits []HitBox
+	p := &painter{canvas: canvas, width: logicalW, height: logicalH, fonts: fonts, log: &log, hits: &hits}
+	// Clear 作用于整块 framebuffer，不受 canvas 变换影响，先清再缩放。
+	canvas.Clear(sk.ColorSetARGB(255, 255, 255, 255))
+	canvas.Save()
+	canvas.Scale(dpr, dpr)
+	p.paintFrame(root, logicalW, logicalH)
+	canvas.Restore()
 	gxscene.PublishMeasured(measuredFromLayout(p.layout))
 	return log, hits
 }

@@ -39,6 +39,16 @@
 
 > 后端没有真正的 `backdrop-filter`，材质用带 alpha 的半透明底色 + hairline 描边 + 柔和阴影近似。Skia 支持 `#rrggbbaa`；Rust/TinySkia 对 alpha 的支持有限，可能退化为接近实色的观感。
 
+### 单位：逻辑点（pt）与高 DPI 渲染
+
+**设计系统里所有尺寸都是「逻辑点」(pt)，不是物理像素。** 上面列出的字号 13、控件高 28、圆角 6、间距 8……全是 pt。这与 Apple 的 point 体系一致：同样的 pt 值在任何屏幕上占据相同的视觉大小，屏幕越密、用来绘制它的物理像素越多，观感越清晰。
+
+- **布局**在逻辑坐标系进行：可用宽高 = framebuffer 物理尺寸 ÷ DPR。因此一个 13pt 的字号在 2x / 3x 屏上仍占 13pt 的逻辑宽度，不会变小。
+- **绘制**时后端先把画布缩放 DPR 倍，再用物理像素光栅化 glyph、描边与圆角（13pt → 26/39 物理像素），达到 Retina 清晰度。
+- **命中测试**始终用逻辑坐标：GLFW 光标坐标（`GetCursorPos`）与布局同一坐标系，无需除以 DPR。
+
+Skia GL 真实窗口通过 `skia.PaintToScaled(canvas, physW, physH, dpr, ...)` 接入该模型；DPR 取 `framebuffer 尺寸 / 窗口逻辑尺寸`。离屏 `PaintTo` 与 `Window`（测试/截图用途）默认 DPR=1，行为不变。Web 后端走 DOM/CSS，浏览器原生处理 devicePixelRatio，无需额外换算。
+
 ## 2. 主题切换与兼容性
 
 ```go

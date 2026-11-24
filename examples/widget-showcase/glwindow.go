@@ -2,7 +2,9 @@ package main
 
 import (
 	"fmt"
+	"os"
 	"runtime"
+	"strconv"
 	"sync"
 	"time"
 
@@ -10,9 +12,9 @@ import (
 	"github.com/go-gl/glfw/v3.3/glfw"
 	sk "github.com/pekim/go-skia"
 	skia "github.com/robertpanvip/gox-backend-skia"
-	"github.com/robertpanvip/gox/widgets"
 	gxapp "github.com/robertpanvip/gox/runtime/app"
 	gxscene "github.com/robertpanvip/gox/runtime/scene"
+	"github.com/robertpanvip/gox/widgets"
 )
 
 func init() {
@@ -198,8 +200,24 @@ func (g *glWindow) paintNow() {
 	if canvas.IsNil() {
 		return
 	}
-	w, h := g.win.GetFramebufferSize()
-	_, hits := skia.PaintTo(canvas, float32(w), float32(h), g.root, g.fonts)
+	// 高 DPI：framebuffer 是物理像素，窗口 size 是逻辑点；两者之比即 DPR。
+	// 布局用逻辑点（字号 13pt 不缩小），绘制按 DPR 放大 → Retina 清晰。
+	fx, fy := g.win.GetFramebufferSize()
+	wx, wy := g.win.GetSize()
+	dpr := float32(1)
+	if wx > 0 && wy > 0 && fx > 0 && fy > 0 {
+		dpr = float32(fx) / float32(wx)
+		if dpr <= 0 {
+			dpr = 1
+		}
+	}
+	// GX_DPR 仅用于截图/调试：强制覆盖 DPR 以模拟高分屏（逻辑布局会相应缩放）。
+	if override := os.Getenv("GX_DPR"); override != "" {
+		if v, err := strconv.ParseFloat(override, 32); err == nil && v > 0 {
+			dpr = float32(v)
+		}
+	}
+	_, hits := skia.PaintToScaled(canvas, float32(fx), float32(fy), dpr, g.root, g.fonts)
 	g.hits = hits
 	g.context.FlushAndSubmit(sk.GrSyncCpuYes)
 	gl.Flush()
@@ -234,7 +252,9 @@ func (g *glWindow) onMouseButton(w *glfw.Window, button glfw.MouseButton, action
 		return
 	}
 	cx, cy := w.GetCursorPos()
-	px, py := float32(cx), float32(cy) // GLFW 光标坐标已是左上原点，与 painter/hits 一致
+	// GLFW 光标坐标是窗口逻辑点、左上原点；hits 也在逻辑坐标系（DPR 缩放只作用于
+	// 绘制，不进入布局/命中），因此两者直接匹配，高 DPI 下无需再除 DPR。
+	px, py := float32(cx), float32(cy)
 	// 命中"面积最小"的框：最内层/最具体的元素（如按钮）优先于外层容器。
 	bestIdx, bestArea := -1, float32(0)
 	for i := range hits {
