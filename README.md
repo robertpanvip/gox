@@ -612,3 +612,19 @@ gox fmt -check demo.gx                            # CI 检查是否已格式化
 gox lsp-map ./examples                            # 项目符号 JSON
 gox lsp                                           # 启动 LSP
 ```
+
+## Web Playground（单文件 / 内置 LSP）
+
+`examples/playground` 是一个"用 GX 写 GX"的自举 playground：桌面（skia+GLFW）与网页（web+wasm）共用同一份 GX 场景树。
+
+- **15 个可直接运行的示例**：sig 裸读、事件函数原值、For/getter、Style struct、computed+batch、条件分支、列表增删、enum、模板字符串、对象解构、联合类型、组件 props、EventContext、struct sig、集合链式。左侧切换即重新运行，预览区可点击交互。
+- **单文件双击打开**：`examples/playground/web/playground.html` 内联了 wasm（gzip+base64）与全部前端代码，`file://` 直接打开，无需服务器。
+- **无服务端 LSP**：GX 编译器 + 符号表编译进同一个 wasm，浏览器本地提供实时诊断、补全（`Ctrl+Space`）、悬停符号信息、定义跳转、格式化（`Shift+Alt+F`）。不启动语言服务器、不依赖 `go build`。
+- **严格 TS 7 前端**：`examples/playground/web/src/main.ts` 全程零 `any`；LSP 浮层（诊断面板 / 补全列表 / hover tooltip）由前端渲染，语言逻辑全在 wasm。
+- **构建前强制门禁**：`gen_samples.py` 对每个示例做 `gox fmt -check`、24 行限制、`gox build -check`（真实 Go 编译），全过才生成 `demos/*.go` 运行版包与 `app.gx` 元数据；任一失败立即中止，不写半成品。
+
+```bash
+cd examples/playground/web
+bash build.sh        # 门禁 → 严格 TS → wasm → 单文件 playground.html
+# 直接双击 playground.html，或：python3 -m http.server 8080
+```

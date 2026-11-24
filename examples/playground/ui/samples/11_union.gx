@@ -1,0 +1,12 @@
+// 联合类型 int | string + is 守卫（擦除为 any 的语法便利层）
+type value = int | string
+func show(v int | string) string {
+    if v is string { return fmt.sprint("str:", v) }
+    return fmt.sprint("int:", v)
+}
+func view() *gxscene.Instance {
+    return <div style={{ flexDirection: "column", gap: 6 }}>
+        <span style={{ color: "#9cdcfe" }}>{show(7)}</span>
+        <span style={{ color: "#c3e88d" }}>{show("gx")}</span>
+    </div>
+}

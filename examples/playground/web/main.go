@@ -4,7 +4,8 @@
 //
 // 与桌面端共用同一份 GX 场景树（ui.Playground）。差别仅在：
 //   - 后端：gxweb（把场景树渲染成真实 DOM）
-//   - 输入：前端 TS 监听键盘，调本文件暴露的 Gox.key() → GX 编辑命令
+//   - 输入：前端 TS 监听键盘，调本文件暴露的 Gox API → GX 编辑命令
+//   - LSP：goxlsp 会话编译进同一个 wasm，无服务端，诊断/补全/hover 全在本地
 //
 // 编辑逻辑（editor.gx）两端完全相同，零条件编译。
 package main
@@ -13,9 +14,14 @@ import (
 	"syscall/js"
 
 	gxweb "github.com/robertpanvip/gox-backend-web"
-	gxapp "github.com/robertpanvip/gox/runtime/app"
 	"github.com/robertpanvip/gox-playground/ui"
+	gxapp "github.com/robertpanvip/gox/runtime/app"
+	"github.com/robertpanvip/gox/pkg/goxlsp"
 )
+
+// lsp 是浏览器内的语言服务会话。只跑编译器 + GX 语义规则，不启动 go build，
+// 因此 file:// 双击打开、完全离线也能诊断/补全。
+var lsp = goxlsp.New()
 
 func main() {
 	win := gxweb.MustOpen("#app")
@@ -30,6 +36,7 @@ func main() {
 	app.SetUIExecutor(win)
 
 	ui.LoadSample(0)
+	lsp.SetSource(ui.EditorText())
 	if err := app.Render(func() any { return ui.Playground() }); err != nil {
 		panic(err)
 	}
@@ -37,12 +44,16 @@ func main() {
 		panic(err)
 	}
 
-	// 暴露给严格 TS 前端的 API：键盘输入 → GX 编辑命令。
+	// 暴露给严格 TS 前端的 API。所有返回值都是 JSON 字符串或纯字符串，
+	// 避免 syscall/js 逐字段转换，也让 TS 侧保持零 any。
 	g := js.Global().Get("Gox")
 	if !g.Truthy() {
 		g = js.ValueOf(map[string]any{})
 		js.Global().Set("Gox", g)
 	}
+	// refreshLSP 在每次源码变化后同步 LSP 会话，保证诊断/补全看到最新文本。
+	refreshLSP := func() { lsp.SetSource(ui.EditorText()) }
+
 	g.Set("key", js.FuncOf(func(this js.Value, args []js.Value) any {
 		if len(args) == 0 {
 			return nil
@@ -62,11 +73,11 @@ func main() {
 		case "ArrowRight":
 			ui.EditorMove(0, 1)
 		default:
-			// 可打印字符（含中文）：整串插入。
 			if len(key) > 0 {
 				ui.EditorInsert(key)
 			}
 		}
+		refreshLSP()
 		return nil
 	}))
 	g.Set("focus", js.FuncOf(func(this js.Value, args []js.Value) any {
@@ -76,9 +87,66 @@ func main() {
 	g.Set("sample", js.FuncOf(func(this js.Value, args []js.Value) any {
 		if len(args) > 0 {
 			ui.EditorSetText(args[0].String())
+			refreshLSP()
 		}
 		return nil
 	}))
+	// cursor 返回编辑器光标（0 基行/列），供 TS 侧定位补全与 hover。
+	g.Set("cursor", js.FuncOf(func(this js.Value, args []js.Value) any {
+		return js.ValueOf(map[string]any{
+			"line": ui.EditorLine(),
+			"col":  ui.EditorCol(),
+		})
+	}))
+	// insert 把补全项文本插入光标处（补全浮层点击后调用）。
+	g.Set("insert", js.FuncOf(func(this js.Value, args []js.Value) any {
+		if len(args) > 0 {
+			ui.EditorInsert(args[0].String())
+			refreshLSP()
+		}
+		return nil
+	}))
+	// setSource 整体替换源码（格式化后回写）。
+	g.Set("setSource", js.FuncOf(func(this js.Value, args []js.Value) any {
+		if len(args) > 0 {
+			ui.EditorSetText(args[0].String())
+			refreshLSP()
+		}
+		return nil
+	}))
+
+	// ---- 内建 LSP（无服务端） ----
+	g.Set("lspDiagnostics", js.FuncOf(func(this js.Value, args []js.Value) any {
+		return lsp.DiagnosticsJSON()
+	}))
+	g.Set("lspComplete", js.FuncOf(func(this js.Value, args []js.Value) any {
+		line, col := 0, 0
+		if len(args) >= 2 {
+			line, col = args[0].Int(), args[1].Int()
+		}
+		return lsp.CompleteJSON(line, col)
+	}))
+	g.Set("lspHover", js.FuncOf(func(this js.Value, args []js.Value) any {
+		line, col := 0, 0
+		if len(args) >= 2 {
+			line, col = args[0].Int(), args[1].Int()
+		}
+		return lsp.HoverJSON(line, col)
+	}))
+	g.Set("lspDefinition", js.FuncOf(func(this js.Value, args []js.Value) any {
+		line, col := 0, 0
+		if len(args) >= 2 {
+			line, col = args[0].Int(), args[1].Int()
+		}
+		return lsp.DefinitionJSON(line, col)
+	}))
+	g.Set("lspSymbols", js.FuncOf(func(this js.Value, args []js.Value) any {
+		return lsp.DocumentSymbolsJSON()
+	}))
+	g.Set("lspFormat", js.FuncOf(func(this js.Value, args []js.Value) any {
+		return lsp.Format()
+	}))
+
 	// wasm 里 main 返回即结束，用阻塞通道保持事件回调可用。
 	select {}
 }

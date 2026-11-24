@@ -1,0 +1,9 @@
+// 集合链式：[]T 提升为 List[T]，filter/map/reduce 可换型
+sig nums = []int{1, 2, 3, 4, 5}
+func shuffle() { nums = []int{2, 4, 6, 8} }
+func view() *gxscene.Instance {
+    return <div style={{ flexDirection: "column", gap: 8 }}>
+        <button onClick={shuffle} style={{ padding: 8 }}>换数据</button>
+        <span>偶数个数: {len(nums.filter(func(n int) bool { return n % 2 == 0 }))}</span>
+    </div>
+}

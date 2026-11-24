@@ -20,7 +20,7 @@ if [ ! -x "$GOX_BIN" ] && ! command -v "$GOX_BIN" >/dev/null 2>&1; then
 fi
 GOX="$GOX_BIN" python3 "$UI_DIR/gen_samples.py"
 
-echo "[1/4] 前端严格类型检查 + 编译（TypeScript 7）..."
+echo "[1/5] 前端严格类型检查 + 编译（TypeScript 7）..."
 if [ ! -x node_modules/.bin/tsc ]; then
   echo "未找到本地 tsc，先安装依赖（typescript 7.0.2）..."
   npm install --no-audit --no-fund
@@ -29,10 +29,10 @@ node_modules/.bin/tsc --version
 node_modules/.bin/tsc --noEmit   # strict 全套；失败即中止
 node_modules/.bin/tsc            # 产出 dist/main.js
 
-echo "[2/4] 编译 Go wasm（js/wasm）..."
+echo "[2/5] 编译 Go wasm（js/wasm，含内建 LSP）..."
 GOOS=js GOARCH=wasm go build -o app.wasm .
 
-echo "[3/4] 拷贝 wasm_exec.js（Go 工具链运行时胶水）..."
+echo "[3/5] 拷贝 wasm_exec.js（Go 工具链运行时胶水）..."
 GOROOT="$(go env GOROOT)"
 cp "$GOROOT/lib/wasm/wasm_exec.js" ./wasm_exec.js
 

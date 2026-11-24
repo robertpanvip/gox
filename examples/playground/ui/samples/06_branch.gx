@@ -1,0 +1,17 @@
+// JSX 条件分支：if/else 编译成细粒度 Branch，条件变化只换分支子树
+sig on = true
+func toggle() { on = !on }
+func view() *gxscene.Instance {
+    return <div style={{ flexDirection: "column", gap: 8 }}>
+        <button onClick={toggle} style={{ background: "#3b82f6", padding: 8, borderRadius: 6 }}>
+            切换分支
+        </button>
+        <div style={{ padding: 16, borderRadius: 8 }}>
+            if on {
+                <b style={{ color: "#4ec9b0", fontSize: 18 }}>ON · 分支 A</b>
+            } else {
+                <b style={{ color: "#f87171", fontSize: 18 }}>OFF · 分支 B</b>
+            }
+        </div>
+    </div>
+}

@@ -2,35 +2,61 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
-  <title>GX Playground · WebAssembly</title>
+  <title>GX Playground · WebAssembly · 内置 LSP</title>
   <style>
     body { margin: 0; font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
            background: #020617; color: #e2e8f0; min-height: 100vh;
-           display: flex; flex-direction: column; align-items: center; padding: 24px; }
-    h1 { font-size: 18px; color: #4ec9b0; margin: 0 0 12px; }
-    #app { outline: none; }
-    /* GX 场景树用 style 属性声明 flex-direction；浏览器需显式 display:flex 才生效。
-       用属性选择器覆盖所有声明了 flex 布局的 GX 节点（含多层嵌套容器）。 */
+           display: flex; flex-direction: column; align-items: center; padding: 16px;
+           overflow-x: auto; }
+    #app { outline: none; flex: none; }
+    /* GX 场景树用 style 属性声明 flex-direction；浏览器需显式 display:flex 才生效。 */
     #app [style*="flex-direction"] { display: flex; }
     #app [style*="overflow"] { overflow: auto; }
     #app div { box-sizing: border-box; }
-    /* 编辑器逐 token 着色：GX 侧把颜色编码成 linear-gradient 背景，
-       这里把渐变裁到文字上。桌面（skia）无此 CSS，显示纯文本，功能不受影响。 */
+    /* 编辑器逐 token 着色：GX 侧把颜色编码成 linear-gradient 背景，这里裁到文字上。 */
     .gx-code-line { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
                     color: transparent !important; -webkit-background-clip: text !important;
                     background-clip: text !important; white-space: pre; }
     .gx-code-line::before { content: attr(data-code); }
-    #hint { margin-top: 12px; font-size: 12px; color: #64748b; }
+    #hint { margin-top: 10px; font-size: 12px; color: #64748b; }
+
+    /* ---- 内建 LSP UI（无服务端，全部由 wasm 侧 goxlsp 驱动） ---- */
+    #lsp-diagnostics { width: 1180px; max-width: 100%; min-height: 28px; margin-top: 8px;
+                       display: flex; flex-direction: column; gap: 4px;
+                       font-size: 12px; color: #8b949e; }
+    #lsp-diagnostics.lsp-ok .lsp-title { color: #3fb950; }
+    #lsp-diagnostics.lsp-errors .lsp-title { color: #f85149; }
+    .lsp-title { font-weight: 600; }
+    .lsp-diag-item { align-self: flex-start; text-align: left; background: transparent;
+                     border: 0; border-left: 2px solid #f85149; color: #d0d7de;
+                     padding: 2px 8px; font: inherit; cursor: pointer; }
+    .lsp-diag-item:hover { background: #21262d; color: #fff; }
+
+    #lsp-completion { position: fixed; z-index: 30; min-width: 220px; max-height: 260px;
+                      overflow-y: auto; background: #161b22; border: 1px solid #30363d;
+                      border-radius: 6px; box-shadow: 0 8px 24px rgba(0,0,0,.5);
+                      font: 12px ui-monospace, Menlo, Consolas, monospace; color: #c9d1d9; }
+    #lsp-completion[hidden], #lsp-hover[hidden] { display: none; }
+    .lsp-completion-row { padding: 4px 10px; cursor: pointer; }
+    .lsp-completion-row:hover, .lsp-completion-row.selected { background: #1f6feb; color: #fff; }
+
+    #lsp-hover { position: fixed; z-index: 40; max-width: 320px; padding: 8px 10px;
+                 background: #1c2128; border: 1px solid #30363d; border-radius: 6px;
+                 box-shadow: 0 6px 18px rgba(0,0,0,.5); font-size: 12px; color: #c9d1d9;
+                 line-height: 1.5; }
+
     #loading { position: fixed; inset: 0; display: grid; place-items: center;
                font-size: 14px; color: #94a3b8; background: #020617; z-index: 10; }
     #loading[data-state="error"] { color: #f87171; }
   </style>
 </head>
 <body>
-  <h1>GX Playground —— 用 GX 写 GX（WebAssembly 后端）</h1>
-  <div id="loading">正在加载 GX Playground wasm…</div>
+  <div id="loading">正在加载 GX Playground wasm（含内建 LSP）…</div>
   <div id="app" tabindex="0"></div>
+  <div id="lsp-diagnostics">LSP 初始化中…</div>
   <div id="hint">正在初始化…</div>
+  <div id="lsp-completion" hidden></div>
+  <div id="lsp-hover" hidden></div>
   <!-- wasm_exec.js 由 Go 工具链生成（非本仓手写），提供全局 window.Go -->
   <script src="wasm_exec.js"></script>
   <!-- 前端逻辑为严格 TS 7，编译产物见 dist/main.js -->

@@ -1,0 +1,15 @@
+// sig 切片增删 + For 响应式列表 + item getter（t() 读值）
+sig items = []string{"alpha", "beta"}
+func add() { items = append(items, "item") }
+func clear() { items = []string{} }
+func view() *gxscene.Instance {
+    return <div style={{ flexDirection: "column", gap: 8 }}>
+        <div style={{ flexDirection: "row", gap: 8 }}>
+            <button onClick={add} style={{ padding: 8, borderRadius: 6 }}>添加</button>
+            <button onClick={clear} style={{ padding: 8, borderRadius: 6 }}>清空</button>
+        </div>
+        <For each={items}>
+            {(t string) => <div style={{ color: "#9cdcfe", padding: 4 }}>{t()}</div>}
+        </For>
+    </div>
+}
