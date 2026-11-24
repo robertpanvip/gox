@@ -190,6 +190,22 @@ pub func editorHome() {
     })
 }
 
+// EditorSetCursor 把光标定位到指定行/列（点击代码行时由装配层调用）。
+// 列按 rune 计并夹到该行长度内，行夹到实际行数内。
+pub func EditorSetCursor(ln int, col int) {
+    Signal.batch(func() {
+        lines := splitLines(sourceCode)
+        if ln < 0 { ln = 0 }
+        if ln >= len(lines) { ln = len(lines) - 1 }
+        rs := []rune(lines[ln])
+        if col < 0 { col = 0 }
+        if col > len(rs) { col = len(rs) }
+        cursorLine = ln
+        cursorCol = col
+        editorFocused = true
+    })
+}
+
 pub func editorFocus() {
     Signal.batch(func() { editorFocused = true })
 }
@@ -574,11 +590,17 @@ func lineView(idx int) *gxscene.Instance {
     // 样式优先用直接属性（kebab key）走标量快路径。若需收进 style={{...}}，
     // 驼峰 key 编译为 gxscene.Style 的强类型字段，伪状态用单词 key（hover 等）。
     // 这里刻意不用 style 对象：它每次 effect 重算都要构造 Style + 展平 props，是切换热点。
+    // 固定行高 22px + flex-shrink:0：父容器是定高 flex column，若不锁行高会被
+    // 压缩到 ~13px，行号（padding+字号）与代码 span 各按自身高度居中就会错位。
+    // 行号与代码都用 line-height:22px 统一基线，diff 恒为 0（含空行/中文/注释）。
+    // 隐藏行 height=0 + overflow:hidden 裁掉内容，不占空间。
     return <div bg={lineRowBg(idx)} height={rowHeight(idx)} overflow="hidden"
-        flex-direction="row" align-items="center">
+        flex-shrink="0" flex-direction="row" align-items="center">
         <div bg={lineGutterColor(idx)} color="#858585" width="42" font-size="12"
-            text-align="right" padding="4">{lineNumber(idx)}</div>
+            height="22" line-height="22px" padding="0" flex-shrink="0"
+            text-align="right">{lineNumber(idx)}</div>
         <span class="gx-code-line" data-code={lineText(idx)} white-space="pre" font-size="13"
+            height="22" line-height="22px" flex-shrink="0"
             bg={lineCodeGradient(idx)}></span>
     </div>
 }
@@ -595,7 +617,10 @@ func rowHeight(idx int) int {
 
 // Editor 渲染整个编辑器。每行文本/颜色/高亮走行版本 getter，内容变化才精确刷新。
 pub func Editor() *gxscene.Instance {
-    return <div bg="#1e1e1e" border-radius="8" padding="6" flex-direction="column" gap="0" height="320">
+    // 可视高度 22×14=308px，超出 24 行可滚动；overflow:auto 让长示例（含
+    // package/import 的展示版）超出部分可达，而不是被父容器裁掉无法编辑。
+    return <div bg="#1e1e1e" border-radius="8" padding="6" flex-direction="column" gap="0"
+        height="320" overflow="auto">
         <For each={editorRowIDs}>{(i int) => lineView(i())}</For>
     </div>
 }

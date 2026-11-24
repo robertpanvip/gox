@@ -2,28 +2,29 @@
 // 只声明本前端实际用到的面，全部用具体类型，杜绝 any 漏进严格 TS。
 
 /** Go wasm 运行时实例（来自 wasm_exec.js 的全局 Go 构造器）。 */
-interface GoWasmRuntime {
+export interface GoWasmRuntime {
   readonly importObject: WebAssembly.Imports;
   run(instance: WebAssembly.Instance): Promise<void>;
 }
 
 /** Go 运行时构造器（wasm_exec.js 挂到 window.Go）。 */
-interface GoWasmConstructor {
+export interface GoWasmConstructor {
   new (): GoWasmRuntime;
 }
 
 /** 编辑器光标（0 基行 / 列）。 */
-interface GoxCursor {
+export interface GoxCursor {
   readonly line: number;
   readonly col: number;
 }
 
 /** wasm 侧暴露的编辑 + 内建 LSP API，由 main.go 用 syscall/js 注册。 */
-interface GoxPlaygroundAPI {
+export interface GoxPlaygroundAPI {
   key(key: string): void;
   focus(): void;
   sample(source: string): void;
   cursor(): GoxCursor;
+  setCursor(line: number, col: number): void;
   insert(text: string): void;
   setSource(text: string): void;
   lspDiagnostics(): string;
@@ -35,7 +36,7 @@ interface GoxPlaygroundAPI {
 }
 
 /** wasm 加载各阶段耗时（毫秒）。 */
-interface LoadTiming {
+export interface LoadTiming {
   decodeMs: number;
   inflateMs: number;
   compileMs: number;
@@ -53,5 +54,3 @@ declare global {
     __GX_TIMING__?: LoadTiming;
   }
 }
-
-export {};

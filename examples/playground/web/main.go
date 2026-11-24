@@ -98,6 +98,13 @@ func main() {
 			"col":  ui.EditorCol(),
 		})
 	}))
+	// setCursor 把光标定位到指定行/列（点击代码行时调用，列按字符计）。
+	g.Set("setCursor", js.FuncOf(func(this js.Value, args []js.Value) any {
+		if len(args) >= 2 {
+			ui.EditorSetCursor(args[0].Int(), args[1].Int())
+		}
+		return nil
+	}))
 	// insert 把补全项文本插入光标处（补全浮层点击后调用）。
 	g.Set("insert", js.FuncOf(func(this js.Value, args []js.Value) any {
 		if len(args) > 0 {

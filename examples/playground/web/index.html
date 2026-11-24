@@ -11,7 +11,9 @@
     #app { outline: none; flex: none; }
     /* GX 场景树用 style 属性声明 flex-direction；浏览器需显式 display:flex 才生效。 */
     #app [style*="flex-direction"] { display: flex; }
-    #app [style*="overflow"] { overflow: auto; }
+    /* overflow 由 GX 后端 setProperty 精确设置（auto/hidden 各自保留），
+       这里不再用 [style*="overflow"] 粗匹配覆盖——否则编辑器的
+       overflow:hidden（裁掉隐藏行）会被强制成 auto 导致空行撑高。 */
     #app div { box-sizing: border-box; }
     /* 编辑器逐 token 着色：GX 侧把颜色编码成 linear-gradient 背景，这里裁到文字上。 */
     .gx-code-line { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;

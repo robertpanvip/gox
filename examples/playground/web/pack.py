@@ -28,6 +28,10 @@ def main() -> None:
                          "wasm_exec.js (Go runtime)")
     main_js = (ROOT / "dist" / "main.js").read_text(encoding="utf-8")
     main_js = re.sub(r"//[#@] sourceMappingURL=.*", "", main_js)
+    # TS 在 verbatimModuleSyntax 下会把纯 type import 编成尾部 `export {}`，
+    # 用于标记 ES 模块。但单文件把它内联进普通 <script>（非 module），
+    # `export` 是非法 token，会导致整段脚本不执行。删掉这个无副作用标记。
+    main_js = re.sub(r"^\s*export\s*\{\s*\}\s*;?\s*$", "", main_js, flags=re.MULTILINE)
     main_js = js_block(main_js, "dist/main.js (strict TS 7)")
 
     # 先 gzip 再 base64：wasm 从 ~5MB 压到 ~1.4MB，单文件体积大幅下降，

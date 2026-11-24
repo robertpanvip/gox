@@ -7,6 +7,8 @@
 // 业务渲染与编辑逻辑全部在 wasm 里（GX 源码编译产物 + gxweb 后端），
 // 本文件只做引导、输入转发与 LSP 浮层，全程零 any。
 
+import type { GoxCursor, GoxPlaygroundAPI } from "./gox.js";
+
 interface Position { readonly line: number; readonly character: number }
 interface Range { readonly start: Position; readonly end: Position }
 interface Diagnostic {
@@ -25,8 +27,8 @@ interface CompletionList {
   readonly items: readonly CompletionItem[];
 }
 interface HoverResult { readonly contents: { readonly kind: string; readonly value: string } }
-interface DefinitionResult { readonly range: Range }
-interface Cursor { readonly line: number; readonly col: number }
+/** 光标结构复用共享声明（见 gox.d.ts）。 */
+type Cursor = GoxCursor;
 
 interface Elements {
   readonly loading: HTMLElement;
@@ -35,21 +37,6 @@ interface Elements {
   readonly diagnostics: HTMLElement;
   readonly completion: HTMLElement;
   readonly hover: HTMLElement;
-}
-
-interface GoxPlaygroundAPI {
-  key(key: string): void;
-  focus(): void;
-  sample(source: string): void;
-  cursor(): Cursor;
-  insert(text: string): void;
-  setSource(text: string): void;
-  lspDiagnostics(): string;
-  lspComplete(line: number, col: number): string;
-  lspHover(line: number, col: number): string;
-  lspDefinition(line: number, col: number): string;
-  lspSymbols(): string;
-  lspFormat(): string;
 }
 
 function requireElement(id: string): HTMLElement {
@@ -110,13 +97,23 @@ async function waitForGox(timeoutMs: number = 8000): Promise<GoxPlaygroundAPI> {
   throw new Error("等待 Gox 编辑 / LSP API 超时");
 }
 
-function keyName(ev: KeyboardEvent): string {
-  return ev.key;
+/**
+ * 只有"可打印的单字符"才作为文本插入。Home/End/Delete/PageUp/F1 等功能键
+ * 一律不灌进编辑器，否则会在源码里插入 "End"/"Home" 这种字面串。
+ * Ctrl/Meta/Alt 组合也不产生文本（组合键有各自的快捷键语义）。
+ */
+function isPrintableChar(ev: KeyboardEvent): boolean {
+  if (ev.ctrlKey || ev.metaKey || ev.altKey) {
+    return false;
+  }
+  return ev.key.length === 1;
 }
 
-/** 修饰键自身不产生文本，按下 Ctrl/Shift 时不能灌进编辑器。 */
-const MODIFIER_KEYS: ReadonlySet<string> = new Set<string>([
-  "Control", "Shift", "Alt", "Meta", "CapsLock", "NumLock", "ScrollLock",
+/** 编辑器识别的导航/编辑键，需要 preventDefault 阻止页面滚动。 */
+const HANDLED_KEYS: ReadonlySet<string> = new Set<string>([
+  "Backspace", "Delete", "Enter", "Tab",
+  "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight",
+  "Home", "End", "PageUp", "PageDown",
 ]);
 
 /** 找到鼠标所在的代码行元素与 0 基行号。 */
@@ -284,7 +281,12 @@ function showHover(api: GoxPlaygroundAPI, elements: Elements, ev: MouseEvent): v
 function bindKeyboard(elements: Elements, api: GoxPlaygroundAPI): void {
   const app: HTMLElement = elements.app;
   app.tabIndex = 0;
-  app.addEventListener("mousedown", (): void => {
+  app.addEventListener("mousedown", (ev: MouseEvent): void => {
+    // 点击代码行：按鼠标位置定位光标（行号从 DOM 顺序取，列按等宽字符估算）。
+    const hit = lineAt(app, ev);
+    if (hit !== null) {
+      api.setCursor(hit.line, columnAt(hit.el, ev));
+    }
     api.focus();
     app.focus();
   });
@@ -308,13 +310,19 @@ function bindKeyboard(elements: Elements, api: GoxPlaygroundAPI): void {
       ev.preventDefault();
       return;
     }
-    if (ev.key === "Backspace" || ev.key.startsWith("Arrow")) {
+    // 功能键：阻止默认行为（方向键/空格滚动页面等），但不作为文本插入。
+    if (HANDLED_KEYS.has(ev.key)) {
       ev.preventDefault();
     }
-    if (MODIFIER_KEYS.has(ev.key)) {
+    // 只有可打印单字符或编辑器明确支持的导航键才转发给 wasm；
+    // Home/End/PageUp/Delete/Tab/F1 等不转发，避免变成乱码插入源码。
+    const navKeys: ReadonlySet<string> = new Set<string>([
+      "Backspace", "Enter", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight",
+    ]);
+    if (!isPrintableChar(ev) && !navKeys.has(ev.key)) {
       return;
     }
-    api.key(keyName(ev));
+    api.key(ev.key);
     // 输入后刷新诊断（诊断在 wasm 侧随每次 key 同步重算，这里只拉结果）。
     window.setTimeout((): void => { renderDiagnostics(api, elements.diagnostics); }, 0);
   });

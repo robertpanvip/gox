@@ -190,6 +190,22 @@ var rowVers = Signal.NewVec(zeroRowVers())
     })
 }
 
+// EditorSetCursor 把光标定位到指定行/列（点击代码行时由装配层调用）。
+// 列按 rune 计并夹到该行长度内，行夹到实际行数内。
+ func EditorSetCursor(ln int, col int) {
+    Signal.Batch(func() {
+        lines := SplitLines(SourceCode())
+        if ln < 0 { ln = 0 }
+        if ln >= len(lines) { ln = len(lines) - 1 }
+        rs := []rune(lines[ln])
+        if col < 0 { col = 0 }
+        if col > len(rs) { col = len(rs) }
+        CursorLine(ln)
+        CursorCol(col)
+        EditorFocused(true)
+    })
+}
+
  func EditorFocus() {
     Signal.Batch(func() { EditorFocused(true )})
 }
@@ -571,11 +587,14 @@ func lineNumber(idx int) string { return strconv.Itoa(idx + 1) }
 // token 缓存复用（未变行不重新分词）、固定 24 行（动态新增行会漏叶子订阅）、
 // 批量 + RAF 提交（一次交互只打一帧 DOM 补丁）。
 func lineView(idx int) *gxscene.Instance {
-    // 样式用 react-native 风格的对象字面量：驼峰 key 收进 style={{...}}，
-    // bg 写作 background，编译器降级为 gxscene.Style{...}，runtime 按 key 细粒度 diff。
-    // 静态/标量样式一律用直接属性（kebab key）走标量快路径，不用 style 对象——
-    // style 对象每次 effect 重算都要 flattenStyle 构造 map + 反射，是切换热点。
-    return gxscene.Render(gxscene.Template{Ops:[]gxscene.Op{gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"bg",Slot:0,},gxscene.Op{Code:gxscene.OpDynAttr,Key:"height",Slot:1,},gxscene.Op{Code:gxscene.OpAttr,Arg:"hidden",Key:"overflow",},gxscene.Op{Code:gxscene.OpAttr,Arg:"row",Key:"flex-direction",},gxscene.Op{Code:gxscene.OpAttr,Arg:"center",Key:"align-items",},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"bg",Slot:2,},gxscene.Op{Code:gxscene.OpAttr,Arg:"#858585",Key:"color",},gxscene.Op{Code:gxscene.OpAttr,Arg:"42",Key:"width",},gxscene.Op{Code:gxscene.OpAttr,Arg:"12",Key:"font-size",},gxscene.Op{Code:gxscene.OpAttr,Arg:"right",Key:"text-align",},gxscene.Op{Code:gxscene.OpAttr,Arg:"4",Key:"padding",},gxscene.Op{Code:gxscene.OpDynChild,Slot:3,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpElem,Arg:"span",},gxscene.Op{Code:gxscene.OpAttr,Arg:"gx-code-line",Key:"class",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"data-code",Slot:4,},gxscene.Op{Code:gxscene.OpAttr,Arg:"pre",Key:"white-space",},gxscene.Op{Code:gxscene.OpAttr,Arg:"13",Key:"font-size",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"bg",Slot:5,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpClose,},},N:6,}, func() any{ return lineRowBg(idx) }, func() any{ return rowHeight(idx) }, func() any{ return lineGutterColor(idx) }, func() any{ return lineNumber(idx) }, func() any{ return lineText(idx) }, func() any{ return lineCodeGradient(idx) })
+    // 样式优先用直接属性（kebab key）走标量快路径。若需收进 style={{...}}，
+    // 驼峰 key 编译为 gxscene.Style 的强类型字段，伪状态用单词 key（hover 等）。
+    // 这里刻意不用 style 对象：它每次 effect 重算都要构造 Style + 展平 props，是切换热点。
+    // 固定行高 22px + flex-shrink:0：父容器是定高 flex column，若不锁行高会被
+    // 压缩到 ~13px，行号（padding+字号）与代码 span 各按自身高度居中就会错位。
+    // 行号与代码都用 line-height:22px 统一基线，diff 恒为 0（含空行/中文/注释）。
+    // 隐藏行 height=0 + overflow:hidden 裁掉内容，不占空间。
+    return gxscene.Render(gxscene.Template{Ops:[]gxscene.Op{gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"bg",Slot:0,},gxscene.Op{Code:gxscene.OpDynAttr,Key:"height",Slot:1,},gxscene.Op{Code:gxscene.OpAttr,Arg:"hidden",Key:"overflow",},gxscene.Op{Code:gxscene.OpAttr,Arg:"0",Key:"flex-shrink",},gxscene.Op{Code:gxscene.OpAttr,Arg:"row",Key:"flex-direction",},gxscene.Op{Code:gxscene.OpAttr,Arg:"center",Key:"align-items",},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"bg",Slot:2,},gxscene.Op{Code:gxscene.OpAttr,Arg:"#858585",Key:"color",},gxscene.Op{Code:gxscene.OpAttr,Arg:"42",Key:"width",},gxscene.Op{Code:gxscene.OpAttr,Arg:"12",Key:"font-size",},gxscene.Op{Code:gxscene.OpAttr,Arg:"22",Key:"height",},gxscene.Op{Code:gxscene.OpAttr,Arg:"22px",Key:"line-height",},gxscene.Op{Code:gxscene.OpAttr,Arg:"0",Key:"padding",},gxscene.Op{Code:gxscene.OpAttr,Arg:"0",Key:"flex-shrink",},gxscene.Op{Code:gxscene.OpAttr,Arg:"right",Key:"text-align",},gxscene.Op{Code:gxscene.OpDynChild,Slot:3,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpElem,Arg:"span",},gxscene.Op{Code:gxscene.OpAttr,Arg:"gx-code-line",Key:"class",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"data-code",Slot:4,},gxscene.Op{Code:gxscene.OpAttr,Arg:"pre",Key:"white-space",},gxscene.Op{Code:gxscene.OpAttr,Arg:"13",Key:"font-size",},gxscene.Op{Code:gxscene.OpAttr,Arg:"22",Key:"height",},gxscene.Op{Code:gxscene.OpAttr,Arg:"22px",Key:"line-height",},gxscene.Op{Code:gxscene.OpAttr,Arg:"0",Key:"flex-shrink",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"bg",Slot:5,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpClose,},},N:6,}, func() any{ return lineRowBg(idx) }, func() any{ return rowHeight(idx) }, func() any{ return lineGutterColor(idx) }, func() any{ return lineNumber(idx) }, func() any{ return lineText(idx) }, func() any{ return lineCodeGradient(idx) })
 }
 
 // 固定 24 行：For 的 each 是常量，所有行在首帧就完成叶子 effect 绑定。
@@ -590,7 +609,9 @@ func rowHeight(idx int) int {
 
 // Editor 渲染整个编辑器。每行文本/颜色/高亮走行版本 getter，内容变化才精确刷新。
  func Editor() *gxscene.Instance {
-    return gxscene.Render(gxscene.Template{Ops:[]gxscene.Op{gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpAttr,Arg:"#1e1e1e",Key:"bg",},gxscene.Op{Code:gxscene.OpAttr,Arg:"8",Key:"border-radius",},gxscene.Op{Code:gxscene.OpAttr,Arg:"6",Key:"padding",},gxscene.Op{Code:gxscene.OpAttr,Arg:"column",Key:"flex-direction",},gxscene.Op{Code:gxscene.OpAttr,Arg:"0",Key:"gap",},gxscene.Op{Code:gxscene.OpAttr,Arg:"320",Key:"height",},gxscene.Op{Code:gxscene.OpFor,Slot:0,},gxscene.Op{Code:gxscene.OpClose,},},N:1,}, gxscene.ForGetterOfSignal[int](func() []int { return editorRowIDs },nil,func(i func() int) *gxscene.Instance { return lineView(i()) }))
+    // 可视高度 22×14=308px，超出 24 行可滚动；overflow:auto 让长示例（含
+    // package/import 的展示版）超出部分可达，而不是被父容器裁掉无法编辑。
+    return gxscene.Render(gxscene.Template{Ops:[]gxscene.Op{gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpAttr,Arg:"#1e1e1e",Key:"bg",},gxscene.Op{Code:gxscene.OpAttr,Arg:"8",Key:"border-radius",},gxscene.Op{Code:gxscene.OpAttr,Arg:"6",Key:"padding",},gxscene.Op{Code:gxscene.OpAttr,Arg:"column",Key:"flex-direction",},gxscene.Op{Code:gxscene.OpAttr,Arg:"0",Key:"gap",},gxscene.Op{Code:gxscene.OpAttr,Arg:"320",Key:"height",},gxscene.Op{Code:gxscene.OpAttr,Arg:"auto",Key:"overflow",},gxscene.Op{Code:gxscene.OpFor,Slot:0,},gxscene.Op{Code:gxscene.OpClose,},},N:1,}, gxscene.ForGetterOfSignal[int](func() []int { return editorRowIDs },nil,func(i func() int) *gxscene.Instance { return lineView(i()) }))
 }
 
 // EditorStatus 返回编辑器状态栏文本（行列 + 行数），供 playground 头部展示。
