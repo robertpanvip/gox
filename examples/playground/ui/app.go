@@ -12,6 +12,49 @@ import (
     gxscene "github.com/robertpanvip/gox/runtime/scene"
 )
 
+// ---- 运行态：Run 按钮解释源码后的预览实例与错误 ----
+// 装配层（web wasm / desktop）调用 RunCurrent 解释当前源码，把结果存这里；
+// 预览槽读 runInstance 决定渲染解释结果还是预编译 demo。
+var runInstance *gxscene.Instance
+var runErr = ""
+var runStamp = 0     // 每次 Run 自增，驱动预览 getter 重算
+ var RunningSig = Signal.New(false)
+var runHandler func()  // 装配层注入的 Run 回调（解释源码 + 重渲染）
+
+// SetRunHandler 由装配层注入 Run 动作。
+ func SetRunHandler(fn func()) { runHandler = fn }
+ func TriggerRun() {
+    if runHandler != nil {
+        Signal.Batch(func() { RunningSig(true )})
+        runHandler()
+    }
+}
+
+// SetRunResult 由装配层在解释完成后调用；inst=nil 表示回落到预编译 demo。
+ func SetRunResult(inst *gxscene.Instance, err string) {
+    runInstance = inst
+    runErr = err
+    runStamp = runStamp + 1
+    Signal.Batch(func() { RunningSig(false )})
+}
+
+// RunInfo 返回运行状态文本（给状态栏展示）。
+ func RunInfo() string {
+    if runErr != "" { return "运行错误: " + runErr }
+    if runInstance != nil { return "已运行 · 解释执行当前源码" }
+    return "预览模式 · 点击 Run 解释当前源码"
+}
+
+func RunInfoColor() string {
+    if runErr != "" { return "#f85149" }
+    if runInstance != nil { return "#3fb950" }
+    return "#6e7681"
+}
+
+func hasRunResult() bool { return runInstance != nil }
+func currentRunErr() string { return runErr }
+func currentRunStamp() int { return runStamp }
+
 // ---- 示例库：元数据 + 源码文本（由 gen_samples.py 生成） ----
 
  type Sample struct {
@@ -59,26 +102,32 @@ var sampleStore []Sample = buildSamples()
     xs := Samples()
     if i < 0 { i = 0 }
     if i >= len(xs) { i = len(xs) - 1 }
+    runInstance = nil
+    runErr = ""
     Signal.Batch(func() {
         SampleIndex(i)
         EditorSetText(xs[i].Source)
         EditorHome()
         EditorFocus()
+        RunningSig(false)
     })
 }
 
  func NextSample() { LoadSample(SampleIndex() + 1) }
  func PrevSample() { LoadSample(SampleIndex() - 1) }
 
-// demoPreview 是"示例直接运行"的关键：它读 sampleIndex，调用运行版注册表
-// 构建对应示例的实时场景树。GX 编译器把它编译成 OpDynChild + getter，
-// 切换示例时只替换预览子树，编辑器与列表不受影响。
+// demoPreview 是预览槽：优先展示 Run 解释出的实例（runInstance），
+// 否则回落到当前示例的预编译运行版。装配层在 Run / 切换示例时会调用
+// app.Render 重建整棵树，因此这里返回的新实例会被正确挂载（不受
+// OpDynChild 常驻语义影响——那是同一棵树内多次求值才需担心）。
 func demoPreview() *gxscene.Instance {
+    if runInstance != nil { return runInstance }
     return demos.View(SampleIndex())
 }
 
 // ---- 配色与选中态（必须是读 sampleIndex 的 getter，不能是渲染快照） ----
 
+// 现代 IDE 风配色：画布 → 面板 → 卡片三层递进，主色湖蓝，分组用语义色。
 func groupColor(g string) string {
     if g == "基础" { return "#58a6ff" }
     if g == "响应式" { return "#3fb950" }
@@ -86,9 +135,14 @@ func groupColor(g string) string {
     return "#8b949e"
 }
 
+// 卡片统一阴影，制造悬浮层次（Pane 阴影更强）。
+func cardShadow() string { return "0 1px 3px rgba(0,0,0,.35)" }
+func paneShadow() string { return "0 8px 24px rgba(0,0,0,.28)" }
+
+// 选中示例的强调色与左侧 3px 指示条。
 func sampleRowBg(i int) string {
     if i == SampleIndex() { return "#1f6feb" }
-    return "#21262d"
+    return "#1c2333"
 }
 func sampleRowFg(i int) string {
     if i == SampleIndex() { return "#ffffff" }
@@ -99,7 +153,7 @@ func sampleRow(i int) *gxscene.Instance {
     xs := Samples()
     if i >= len(xs) { return gxscene.Render(gxscene.Template{Ops:[]gxscene.Op{gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpClose,},},N:0,}) }
     s := xs[i]
-    return gxscene.Render(gxscene.Template{Ops:[]gxscene.Op{gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:0,},gxscene.Op{Code:gxscene.OpEvent,Key:"onClick",Slot:1,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:2,},gxscene.Op{Code:gxscene.OpDynChild,Slot:3,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:4,},gxscene.Op{Code:gxscene.OpDynChild,Slot:5,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpClose,},},N:6,}, func() any{ return gxscene.Style{Background:sampleRowBg(i),Padding:"8",BorderRadius:"6",FlexDirection:"column",Gap:"2",Hover:&gxscene.Style{Background:"#30363d",},} }, func() any{ return func() { LoadSample(i) } }, func() any{ return gxscene.Style{Color:sampleRowFg(i),FontSize:"13",} }, func() any{ return s.Name }, func() any{ return gxscene.Style{Color:groupColor(s.Group),FontSize:"10",} }, func() any{ return s.Group + " · " + s.Tag })
+    return gxscene.Render(gxscene.Template{Ops:[]gxscene.Op{gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:0,},gxscene.Op{Code:gxscene.OpEvent,Key:"onClick",Slot:1,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:2,},gxscene.Op{Code:gxscene.OpDynChild,Slot:3,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:4,},gxscene.Op{Code:gxscene.OpDynChild,Slot:5,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpClose,},},N:6,}, func() any{ return gxscene.Style{Background:sampleRowBg(i),Padding:"8 10",BorderRadius:"8",Border:"1px solid #2a3446",FlexDirection:"column",Gap:"3",Cursor:"pointer",Transition:"background .15s",Hover:&gxscene.Style{Background:"#26314a",},} }, func() any{ return func() { LoadSample(i) } }, func() any{ return gxscene.Style{Color:sampleRowFg(i),FontSize:"13",Weight:"bold",} }, func() any{ return s.Name }, func() any{ return gxscene.Style{Color:groupColor(s.Group),FontSize:"10",} }, func() any{ return s.Group + " · " + s.Tag })
 }
 
 func sampleList() *gxscene.Instance {
@@ -109,30 +163,16 @@ func sampleList() *gxscene.Instance {
 // ---- 工具栏 ----
 
 func toolbarButton(label string, bg string, fn func()) *gxscene.Instance {
-    return gxscene.Render(gxscene.Template{Ops:[]gxscene.Op{gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:0,},gxscene.Op{Code:gxscene.OpEvent,Key:"onClick",Slot:1,},gxscene.Op{Code:gxscene.OpDynChild,Slot:2,},gxscene.Op{Code:gxscene.OpClose,},},N:3,}, func() any{ return gxscene.Style{Background:bg,Color:"#ffffff",Padding:"8",BorderRadius:"6",FontSize:"12",} }, func() any{ return fn }, func() any{ return label })
+    return gxscene.Render(gxscene.Template{Ops:[]gxscene.Op{gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:0,},gxscene.Op{Code:gxscene.OpEvent,Key:"onClick",Slot:1,},gxscene.Op{Code:gxscene.OpDynChild,Slot:2,},gxscene.Op{Code:gxscene.OpClose,},},N:3,}, func() any{ return gxscene.Style{Background:bg,Color:"#ffffff",Padding:"7 14",BorderRadius:"7",FontSize:"12",Weight:"bold",Cursor:"pointer",Transition:"opacity .15s",Hover:&gxscene.Style{Opacity:"0.85",},Active:&gxscene.Style{Opacity:"1",},} }, func() any{ return fn }, func() any{ return label })
 }
 
 func toolbar() *gxscene.Instance {
-    return gxscene.Render(gxscene.Template{Ops:[]gxscene.Op{gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:0,},gxscene.Op{Code:gxscene.OpDynChild,Slot:1,},gxscene.Op{Code:gxscene.OpDynChild,Slot:2,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:3,},gxscene.Op{Code:gxscene.OpDynChild,Slot:4,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpClose,},},N:5,}, func() any{ return gxscene.Style{FlexDirection:"row",Gap:"8",AlignItems:"center",} }, func() any{ return toolbarButton("◀ 上一个", "#30363d", PrevSample) }, func() any{ return toolbarButton("下一个 ▶", "#1f6feb", NextSample) }, func() any{ return gxscene.Style{Color:"#8b949e",FontSize:"11",Padding:"8",} }, func() any{ return EditorStatus() })
+    return gxscene.Render(gxscene.Template{Ops:[]gxscene.Op{gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:0,},gxscene.Op{Code:gxscene.OpDynChild,Slot:1,},gxscene.Op{Code:gxscene.OpDynChild,Slot:2,},gxscene.Op{Code:gxscene.OpDynChild,Slot:3,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:4,},gxscene.Op{Code:gxscene.OpDynChild,Slot:5,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpClose,},},N:6,}, func() any{ return gxscene.Style{FlexDirection:"row",Gap:"8",AlignItems:"center",} }, func() any{ return toolbarButton("◀ 上一个", "#30363d", PrevSample) }, func() any{ return toolbarButton("下一个 ▶", "#30363d", NextSample) }, func() any{ return toolbarButton("▶ Run", "#238636", TriggerRun) }, func() any{ return gxscene.Style{Color:"#8b949e",FontSize:"11",Padding:"8",} }, func() any{ return EditorStatus() })
 }
 
 // ---- 主界面 ----
 
  func Playground() *gxscene.Instance {
     n := len(Samples())
-    return gxscene.Render(gxscene.Template{Ops:[]gxscene.Op{gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:0,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:1,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:2,},gxscene.Op{Code:gxscene.OpChildText,Arg:"GX Playground",},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:3,},gxscene.Op{Code:gxscene.OpDynChild,Slot:4,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:5,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:6,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:7,},gxscene.Op{Code:gxscene.OpChildText,Arg:"示例 ·",},gxscene.Op{Code:gxscene.OpDynChild,Slot:8,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpDynChild,Slot:9,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:10,},gxscene.Op{Code:gxscene.OpDynChild,Slot:11,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:12,},gxscene.Op{Code:gxscene.OpChildText,Arg:"源码 —— 可直接编辑，LSP 诊断/补全在网页版可用",},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpDynChild,Slot:13,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:14,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:15,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:16,},gxscene.Op{Code:gxscene.OpChildText,Arg:"实时预览",},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:17,},gxscene.Op{Code:gxscene.OpDynChild,Slot:18,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:19,},gxscene.Op{Code:gxscene.OpBranch,Slot:20,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:21,},gxscene.Op{Code:gxscene.OpChildText,Arg:"预览区可直接点击交互；切换左侧示例即重新运行",},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:22,},gxscene.Op{Code:gxscene.OpChildText,Arg:"提示：网页版支持无服务端 LSP —— Ctrl+Space 补全，输入时实时诊断，悬停看符号信息。",},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpClose,},},N:23,}, func() any{ return gxscene.Style{Background:"#0d1117",Color:"#c9d1d9",Padding:"16",FlexDirection:"column",Gap:"12",Width:"1180",Height:"720",} }, func() any{ return gxscene.Style{FlexDirection:"column",Gap:"4",} }, func() any{ return gxscene.Style{Color:"#58a6ff",FontSize:"24",Weight:"bold",} }, func() any{ return gxscene.Style{Color:"#8b949e",FontSize:"12",} }, func() any{ return "用 GX 写 GX · 桌面与网页同源 · " + strconv.Itoa(n) + " 个可直接运行的示例 · 内建 LSP" }, func() any{ return gxscene.Style{FlexDirection:"row",Gap:"12",Height:"580",FlexGrow:"1",} }, func() any{ return gxscene.Style{Background:"#161b22",Padding:"12",BorderRadius:"10",Width:"240",FlexDirection:"column",Gap:"8",} }, func() any{ return gxscene.Style{Color:"#c9d1d9",FontSize:"13",Weight:"bold",} }, func() any{ return strconv.Itoa(n) }, func() any{ return sampleList() }, func() any{ return gxscene.Style{FlexDirection:"column",Gap:"8",Width:"470",} }, func() any{ return toolbar() }, func() any{ return gxscene.Style{Color:"#8b949e",FontSize:"11",} }, func() any{ return Editor() }, func() any{ return gxscene.Style{Background:"#161b22",Padding:"12",BorderRadius:"10",Width:"400",FlexDirection:"column",Gap:"8",} }, func() any{ return gxscene.Style{FlexDirection:"column",Gap:"2",} }, func() any{ return gxscene.Style{Color:"#3fb950",FontSize:"13",Weight:"bold",} }, func() any{ return gxscene.Style{Color:"#8b949e",FontSize:"11",} }, func() any{ return Samples()[SampleIndex()].Name + " · " + Samples()[SampleIndex()].Desc }, func() any{ return gxscene.Style{Background:"#0d1117",Padding:"12",BorderRadius:"8",MinHeight:"420",} }, gxscene.BranchGetter(func() int{if SampleIndex() == 0 { return 0 }
-if SampleIndex() == 1 { return 1 }
-if SampleIndex() == 2 { return 2 }
-if SampleIndex() == 3 { return 3 }
-if SampleIndex() == 4 { return 4 }
-if SampleIndex() == 5 { return 5 }
-if SampleIndex() == 6 { return 6 }
-if SampleIndex() == 7 { return 7 }
-if SampleIndex() == 8 { return 8 }
-if SampleIndex() == 9 { return 9 }
-if SampleIndex() == 10 { return 10 }
-if SampleIndex() == 11 { return 11 }
-if SampleIndex() == 12 { return 12 }
-if SampleIndex() == 13 { return 13 }
-return 14 }, func() *gxscene.Instance { return gxscene.Render(gxscene.Template{Ops:[]gxscene.Op{gxscene.Op{Code:gxscene.OpElem,Arg:"#frag",},gxscene.Op{Code:gxscene.OpDynChild,Slot:0,},gxscene.Op{Code:gxscene.OpClose,},},N:1,}, func() any{ return demos.View(0) }) }, func() *gxscene.Instance { return gxscene.Render(gxscene.Template{Ops:[]gxscene.Op{gxscene.Op{Code:gxscene.OpElem,Arg:"#frag",},gxscene.Op{Code:gxscene.OpDynChild,Slot:0,},gxscene.Op{Code:gxscene.OpClose,},},N:1,}, func() any{ return demos.View(1) }) }, func() *gxscene.Instance { return gxscene.Render(gxscene.Template{Ops:[]gxscene.Op{gxscene.Op{Code:gxscene.OpElem,Arg:"#frag",},gxscene.Op{Code:gxscene.OpDynChild,Slot:0,},gxscene.Op{Code:gxscene.OpClose,},},N:1,}, func() any{ return demos.View(2) }) }, func() *gxscene.Instance { return gxscene.Render(gxscene.Template{Ops:[]gxscene.Op{gxscene.Op{Code:gxscene.OpElem,Arg:"#frag",},gxscene.Op{Code:gxscene.OpDynChild,Slot:0,},gxscene.Op{Code:gxscene.OpClose,},},N:1,}, func() any{ return demos.View(3) }) }, func() *gxscene.Instance { return gxscene.Render(gxscene.Template{Ops:[]gxscene.Op{gxscene.Op{Code:gxscene.OpElem,Arg:"#frag",},gxscene.Op{Code:gxscene.OpDynChild,Slot:0,},gxscene.Op{Code:gxscene.OpClose,},},N:1,}, func() any{ return demos.View(4) }) }, func() *gxscene.Instance { return gxscene.Render(gxscene.Template{Ops:[]gxscene.Op{gxscene.Op{Code:gxscene.OpElem,Arg:"#frag",},gxscene.Op{Code:gxscene.OpDynChild,Slot:0,},gxscene.Op{Code:gxscene.OpClose,},},N:1,}, func() any{ return demos.View(5) }) }, func() *gxscene.Instance { return gxscene.Render(gxscene.Template{Ops:[]gxscene.Op{gxscene.Op{Code:gxscene.OpElem,Arg:"#frag",},gxscene.Op{Code:gxscene.OpDynChild,Slot:0,},gxscene.Op{Code:gxscene.OpClose,},},N:1,}, func() any{ return demos.View(6) }) }, func() *gxscene.Instance { return gxscene.Render(gxscene.Template{Ops:[]gxscene.Op{gxscene.Op{Code:gxscene.OpElem,Arg:"#frag",},gxscene.Op{Code:gxscene.OpDynChild,Slot:0,},gxscene.Op{Code:gxscene.OpClose,},},N:1,}, func() any{ return demos.View(7) }) }, func() *gxscene.Instance { return gxscene.Render(gxscene.Template{Ops:[]gxscene.Op{gxscene.Op{Code:gxscene.OpElem,Arg:"#frag",},gxscene.Op{Code:gxscene.OpDynChild,Slot:0,},gxscene.Op{Code:gxscene.OpClose,},},N:1,}, func() any{ return demos.View(8) }) }, func() *gxscene.Instance { return gxscene.Render(gxscene.Template{Ops:[]gxscene.Op{gxscene.Op{Code:gxscene.OpElem,Arg:"#frag",},gxscene.Op{Code:gxscene.OpDynChild,Slot:0,},gxscene.Op{Code:gxscene.OpClose,},},N:1,}, func() any{ return demos.View(9) }) }, func() *gxscene.Instance { return gxscene.Render(gxscene.Template{Ops:[]gxscene.Op{gxscene.Op{Code:gxscene.OpElem,Arg:"#frag",},gxscene.Op{Code:gxscene.OpDynChild,Slot:0,},gxscene.Op{Code:gxscene.OpClose,},},N:1,}, func() any{ return demos.View(10) }) }, func() *gxscene.Instance { return gxscene.Render(gxscene.Template{Ops:[]gxscene.Op{gxscene.Op{Code:gxscene.OpElem,Arg:"#frag",},gxscene.Op{Code:gxscene.OpDynChild,Slot:0,},gxscene.Op{Code:gxscene.OpClose,},},N:1,}, func() any{ return demos.View(11) }) }, func() *gxscene.Instance { return gxscene.Render(gxscene.Template{Ops:[]gxscene.Op{gxscene.Op{Code:gxscene.OpElem,Arg:"#frag",},gxscene.Op{Code:gxscene.OpDynChild,Slot:0,},gxscene.Op{Code:gxscene.OpClose,},},N:1,}, func() any{ return demos.View(12) }) }, func() *gxscene.Instance { return gxscene.Render(gxscene.Template{Ops:[]gxscene.Op{gxscene.Op{Code:gxscene.OpElem,Arg:"#frag",},gxscene.Op{Code:gxscene.OpDynChild,Slot:0,},gxscene.Op{Code:gxscene.OpClose,},},N:1,}, func() any{ return demos.View(13) }) }, func() *gxscene.Instance { return gxscene.Render(gxscene.Template{Ops:[]gxscene.Op{gxscene.Op{Code:gxscene.OpElem,Arg:"#frag",},gxscene.Op{Code:gxscene.OpDynChild,Slot:0,},gxscene.Op{Code:gxscene.OpClose,},},N:1,}, func() any{ return demos.View(14) }) }), func() any{ return gxscene.Style{Color:"#6e7681",FontSize:"10",} }, func() any{ return gxscene.Style{Color:"#6e7681",FontSize:"11",} })
+    return gxscene.Render(gxscene.Template{Ops:[]gxscene.Op{gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:0,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:1,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:2,},gxscene.Op{Code:gxscene.OpChildText,Arg:"GX Playground",},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:3,},gxscene.Op{Code:gxscene.OpDynChild,Slot:4,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:5,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:6,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:7,},gxscene.Op{Code:gxscene.OpDynChild,Slot:8,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpDynChild,Slot:9,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:10,},gxscene.Op{Code:gxscene.OpDynChild,Slot:11,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:12,},gxscene.Op{Code:gxscene.OpDynChild,Slot:13,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:14,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:15,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:16,},gxscene.Op{Code:gxscene.OpChildText,Arg:"⬤ 实时预览",},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:17,},gxscene.Op{Code:gxscene.OpDynChild,Slot:18,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:19,},gxscene.Op{Code:gxscene.OpDynChild,Slot:20,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:21,},gxscene.Op{Code:gxscene.OpDynChild,Slot:22,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:23,},gxscene.Op{Code:gxscene.OpChildText,Arg:"Ctrl+Enter 运行 · Ctrl+Z 撤销 · Ctrl+Space 补全 · Shift+Alt+F 格式化 · 悬停看符号",},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpClose,},},N:24,}, func() any{ return gxscene.Style{Background:"#0d1117",Color:"#c9d1d9",Padding:"0",FlexDirection:"column",Gap:"0",Width:"1180",Height:"720",BorderRadius:"14",Overflow:"hidden",BoxShadow:paneShadow(),} }, func() any{ return gxscene.Style{Background:"linear-gradient(90deg, #12213a 0%, #161b2b 55%, #1a1526 100%)",Padding:"16 20",FlexDirection:"column",Gap:"4",Border:"0 0 1px 0",} }, func() any{ return gxscene.Style{Color:"#e6edf3",FontSize:"22",Weight:"bold",LetterSpacing:"0.3",} }, func() any{ return gxscene.Style{Color:"#8b949e",FontSize:"12",} }, func() any{ return "用 GX 写 GX · 桌面与网页同源 · " + strconv.Itoa(n) + " 个示例 · 内建 LSP · Run 真正解释你的代码" }, func() any{ return gxscene.Style{FlexDirection:"row",Gap:"12",Padding:"16",FlexGrow:"1",Height:"620",} }, func() any{ return gxscene.Style{Background:"#111827",Padding:"12",BorderRadius:"10",Width:"240",FlexDirection:"column",Gap:"8",Border:"1px solid #232d3f",BoxShadow:cardShadow(),} }, func() any{ return gxscene.Style{Color:"#8b949e",FontSize:"11",Weight:"bold",LetterSpacing:"1",} }, func() any{ return "示例  /  " + strconv.Itoa(n) }, func() any{ return sampleList() }, func() any{ return gxscene.Style{FlexDirection:"column",Gap:"8",Width:"470",} }, func() any{ return toolbar() }, func() any{ return gxscene.Style{Background:"#111827",Padding:"12",BorderRadius:"10",Border:"1px solid #232d3f",BoxShadow:cardShadow(),} }, func() any{ return Editor() }, func() any{ return gxscene.Style{Background:"#111827",Padding:"12",BorderRadius:"10",Width:"400",FlexDirection:"column",Gap:"8",Border:"1px solid #232d3f",BoxShadow:cardShadow(),} }, func() any{ return gxscene.Style{FlexDirection:"column",Gap:"3",} }, func() any{ return gxscene.Style{Color:"#3fb950",FontSize:"13",Weight:"bold",} }, func() any{ return gxscene.Style{Color:"#8b949e",FontSize:"11",} }, func() any{ return Samples()[SampleIndex()].Name + " · " + Samples()[SampleIndex()].Desc }, func() any{ return gxscene.Style{Background:"#0b1020",Padding:"12",BorderRadius:"8",MinHeight:"400",Border:"1px solid #1c2740",} }, func() any{ return demoPreview() }, func() any{ return gxscene.Style{Color:RunInfoColor(),FontSize:"10",} }, func() any{ return RunInfo() }, func() any{ return gxscene.Style{Color:"#6e7681",FontSize:"11",Padding:"0 16 12 16",} })
 }

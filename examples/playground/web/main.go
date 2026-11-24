@@ -15,6 +15,7 @@ import (
 
 	gxweb "github.com/robertpanvip/gox-backend-web"
 	"github.com/robertpanvip/gox-playground/ui"
+	"github.com/robertpanvip/gox-playground/ui/interp"
 	gxapp "github.com/robertpanvip/gox/runtime/app"
 	"github.com/robertpanvip/gox/pkg/goxlsp"
 )
@@ -34,6 +35,20 @@ func main() {
 	// Web 后端提供 RAF UIExecutor：同一帧内的多次状态变化合并为一次 DOM 提交，
 	// 且事件回调不再被同步绘制阻塞。必须在 Render 之前设置。
 	app.SetUIExecutor(win)
+
+	// Run：解释当前编辑器源码生成场景树，替换预览后重渲染整棵树。
+	// 源码在包级 sig 中，重渲染不会丢失编辑内容；app.Render 会统一绑定响应式。
+	ui.SetRunHandler(func() {
+		res, err := interp.Interpret(ui.EditorText())
+		if err != nil {
+			ui.SetRunResult(nil, err.Error())
+		} else {
+			ui.SetRunResult(res.Instance, "")
+		}
+		if rerr := app.Render(func() any { return ui.Playground() }); rerr != nil {
+			ui.SetRunResult(nil, "重渲染失败: "+rerr.Error())
+		}
+	})
 
 	ui.LoadSample(0)
 	lsp.SetSource(ui.EditorText())
@@ -90,6 +105,11 @@ func main() {
 	g.Set("redo", js.FuncOf(func(this js.Value, args []js.Value) any {
 		ui.EditorRedo()
 		refreshLSP()
+		return nil
+	}))
+	// run 解释当前源码并运行（供 Ctrl+Enter 快捷键；工具栏 Run 按钮走 GX 节点）。
+	g.Set("run", js.FuncOf(func(this js.Value, args []js.Value) any {
+		ui.TriggerRun()
 		return nil
 	}))
 	g.Set("focus", js.FuncOf(func(this js.Value, args []js.Value) any {

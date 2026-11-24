@@ -12,6 +12,49 @@ import (
     gxscene "github.com/robertpanvip/gox/runtime/scene"
 )
 
+// ---- 运行态：Run 按钮解释源码后的预览实例与错误 ----
+// 装配层（web wasm / desktop）调用 RunCurrent 解释当前源码，把结果存这里；
+// 预览槽读 runInstance 决定渲染解释结果还是预编译 demo。
+var runInstance *gxscene.Instance
+var runErr = ""
+var runStamp = 0     // 每次 Run 自增，驱动预览 getter 重算
+pub sig runningSig = false
+var runHandler func()  // 装配层注入的 Run 回调（解释源码 + 重渲染）
+
+// SetRunHandler 由装配层注入 Run 动作。
+pub func SetRunHandler(fn func()) { runHandler = fn }
+pub func TriggerRun() {
+    if runHandler != nil {
+        Signal.batch(func() { runningSig = true })
+        runHandler()
+    }
+}
+
+// SetRunResult 由装配层在解释完成后调用；inst=nil 表示回落到预编译 demo。
+pub func SetRunResult(inst *gxscene.Instance, err string) {
+    runInstance = inst
+    runErr = err
+    runStamp = runStamp + 1
+    Signal.batch(func() { runningSig = false })
+}
+
+// RunInfo 返回运行状态文本（给状态栏展示）。
+pub func RunInfo() string {
+    if runErr != "" { return "运行错误: " + runErr }
+    if runInstance != nil { return "已运行 · 解释执行当前源码" }
+    return "预览模式 · 点击 Run 解释当前源码"
+}
+
+func RunInfoColor() string {
+    if runErr != "" { return "#f85149" }
+    if runInstance != nil { return "#3fb950" }
+    return "#6e7681"
+}
+
+func hasRunResult() bool { return runInstance != nil }
+func currentRunErr() string { return runErr }
+func currentRunStamp() int { return runStamp }
+
 // ---- 示例库：元数据 + 源码文本（由 gen_samples.py 生成） ----
 
 pub type sample struct {
@@ -59,26 +102,32 @@ pub func loadSample(i int) {
     xs := samples()
     if i < 0 { i = 0 }
     if i >= len(xs) { i = len(xs) - 1 }
+    runInstance = nil
+    runErr = ""
     Signal.batch(func() {
         sampleIndex = i
         EditorSetText(xs[i].source)
         EditorHome()
         EditorFocus()
+        runningSig = false
     })
 }
 
 pub func nextSample() { loadSample(sampleIndex + 1) }
 pub func prevSample() { loadSample(sampleIndex - 1) }
 
-// demoPreview 是"示例直接运行"的关键：它读 sampleIndex，调用运行版注册表
-// 构建对应示例的实时场景树。GX 编译器把它编译成 OpDynChild + getter，
-// 切换示例时只替换预览子树，编辑器与列表不受影响。
+// demoPreview 是预览槽：优先展示 Run 解释出的实例（runInstance），
+// 否则回落到当前示例的预编译运行版。装配层在 Run / 切换示例时会调用
+// app.Render 重建整棵树，因此这里返回的新实例会被正确挂载（不受
+// OpDynChild 常驻语义影响——那是同一棵树内多次求值才需担心）。
 func demoPreview() *gxscene.Instance {
+    if runInstance != nil { return runInstance }
     return demos.View(sampleIndex)
 }
 
 // ---- 配色与选中态（必须是读 sampleIndex 的 getter，不能是渲染快照） ----
 
+// 现代 IDE 风配色：画布 → 面板 → 卡片三层递进，主色湖蓝，分组用语义色。
 func groupColor(g string) string {
     if g == "基础" { return "#58a6ff" }
     if g == "响应式" { return "#3fb950" }
@@ -86,9 +135,14 @@ func groupColor(g string) string {
     return "#8b949e"
 }
 
+// 卡片统一阴影，制造悬浮层次（Pane 阴影更强）。
+func cardShadow() string { return "0 1px 3px rgba(0,0,0,.35)" }
+func paneShadow() string { return "0 8px 24px rgba(0,0,0,.28)" }
+
+// 选中示例的强调色与左侧 3px 指示条。
 func sampleRowBg(i int) string {
     if i == sampleIndex { return "#1f6feb" }
-    return "#21262d"
+    return "#1c2333"
 }
 func sampleRowFg(i int) string {
     if i == sampleIndex { return "#ffffff" }
@@ -102,15 +156,18 @@ func sampleRow(i int) *gxscene.Instance {
     return <div
         style={{
             background: sampleRowBg(i),
-            padding: 8,
-            borderRadius: 6,
+            padding: "8 10",
+            borderRadius: 8,
+            border: "1px solid #2a3446",
             flexDirection: "column",
-            gap: 2,
-            hover: { background: "#30363d" },
+            gap: 3,
+            cursor: "pointer",
+            transition: "background .15s",
+            hover: { background: "#26314a" },
         }}
         onClick={() => loadSample(i)}
     >
-        <div style={{ color: sampleRowFg(i), fontSize: 13 }}>{s.name}</div>
+        <div style={{ color: sampleRowFg(i), fontSize: 13, weight: "bold" }}>{s.name}</div>
         <div style={{ color: groupColor(s.group), fontSize: 10 }}>{s.group + " · " + s.tag}</div>
     </div>
 }
@@ -125,7 +182,18 @@ func sampleList() *gxscene.Instance {
 
 func toolbarButton(label string, bg string, fn func()) *gxscene.Instance {
     return <div
-        style={{ background: bg, color: "#ffffff", padding: 8, borderRadius: 6, fontSize: 12 }}
+        style={{
+            background: bg,
+            color: "#ffffff",
+            padding: "7 14",
+            borderRadius: 7,
+            fontSize: 12,
+            weight: "bold",
+            cursor: "pointer",
+            transition: "opacity .15s",
+            hover: { opacity: "0.85" },
+            active: { opacity: "1" },
+        }}
         onClick={fn}
     >
         {label}
@@ -135,7 +203,8 @@ func toolbarButton(label string, bg string, fn func()) *gxscene.Instance {
 func toolbar() *gxscene.Instance {
     return <div style={{ flexDirection: "row", gap: 8, alignItems: "center" }}>
         {toolbarButton("◀ 上一个", "#30363d", prevSample)}
-        {toolbarButton("下一个 ▶", "#1f6feb", nextSample)}
+        {toolbarButton("下一个 ▶", "#30363d", nextSample)}
+        {toolbarButton("▶ Run", "#238636", TriggerRun)}
         <div style={{ color: "#8b949e", fontSize: 11, padding: 8 }}>{EditorStatus()}</div>
     </div>
 }
@@ -148,88 +217,70 @@ pub func Playground() *gxscene.Instance {
         style={{
             background: "#0d1117",
             color: "#c9d1d9",
-            padding: 16,
+            padding: 0,
             flexDirection: "column",
-            gap: 12,
+            gap: 0,
             width: 1180,
             height: 720,
+            borderRadius: 14,
+            overflow: "hidden",
+            boxShadow: paneShadow(),
         }}
     >
-        <div style={{ flexDirection: "column", gap: 4 }}>
-            <div style={{ color: "#58a6ff", fontSize: 24, weight: "bold" }}>GX Playground</div>
+        <div
+            style={{
+                background: "linear-gradient(90deg, #12213a 0%, #161b2b 55%, #1a1526 100%)",
+                padding: "16 20",
+                flexDirection: "column",
+                gap: 4,
+                border: "0 0 1px 0",
+            }}
+        >
+            <div style={{ color: "#e6edf3", fontSize: 22, weight: "bold", letterSpacing: "0.3" }}>
+                GX Playground
+            </div>
             <div style={{ color: "#8b949e", fontSize: 12 }}>
-                {"用 GX 写 GX · 桌面与网页同源 · " + strconv.Itoa(n) + " 个可直接运行的示例 · 内建 LSP"}
+                {"用 GX 写 GX · 桌面与网页同源 · " + strconv.Itoa(n) + " 个示例 · 内建 LSP · Run 真正解释你的代码"}
             </div>
         </div>
-        <div style={{ flexDirection: "row", gap: 12, height: 580, flexGrow: 1 }}>
+        <div style={{ flexDirection: "row", gap: 12, padding: 16, flexGrow: 1, height: 620 }}>
             <div
-                style={{ background: "#161b22", padding: 12, borderRadius: 10, width: 240, flexDirection: "column", gap: 8 }}
+                style={{ background: "#111827", padding: 12, borderRadius: 10, width: 240, flexDirection: "column", gap: 8, border: "1px solid #232d3f", boxShadow: cardShadow() }}
             >
-                <div style={{ color: "#c9d1d9", fontSize: 13, weight: "bold" }}>
-                    示例 · {strconv.Itoa(n)}
+                <div style={{ color: "#8b949e", fontSize: 11, weight: "bold", letterSpacing: "1" }}>
+                    {"示例  /  " + strconv.Itoa(n)}
                 </div>
                 {sampleList()}
             </div>
             <div style={{ flexDirection: "column", gap: 8, width: 470 }}>
                 {toolbar()}
-                <div style={{ color: "#8b949e", fontSize: 11 }}>
-                    源码 —— 可直接编辑，LSP 诊断/补全在网页版可用
+                <div
+                    style={{ background: "#111827", padding: 12, borderRadius: 10, border: "1px solid #232d3f", boxShadow: cardShadow() }}
+                >
+                    {Editor()}
                 </div>
-                {Editor()}
             </div>
             <div
-                style={{ background: "#161b22", padding: 12, borderRadius: 10, width: 400, flexDirection: "column", gap: 8 }}
+                style={{ background: "#111827", padding: 12, borderRadius: 10, width: 400, flexDirection: "column", gap: 8, border: "1px solid #232d3f", boxShadow: cardShadow() }}
             >
-                <div style={{ flexDirection: "column", gap: 2 }}>
+                <div style={{ flexDirection: "column", gap: 3 }}>
                     <div style={{ color: "#3fb950", fontSize: 13, weight: "bold" }}>
-                        实时预览
+                        ⬤ 实时预览
                     </div>
                     <div style={{ color: "#8b949e", fontSize: 11 }}>
                         {samples()[sampleIndex].name + " · " + samples()[sampleIndex].desc}
                     </div>
                 </div>
                 <div
-                    style={{ background: "#0d1117", padding: 12, borderRadius: 8, minHeight: 420 }}
+                    style={{ background: "#0b1020", padding: 12, borderRadius: 8, minHeight: 400, border: "1px solid #1c2740" }}
                 >
-                    if sampleIndex == 0 {
-                        {demos.View(0)}
-                    } else if sampleIndex == 1 {
-                        {demos.View(1)}
-                    } else if sampleIndex == 2 {
-                        {demos.View(2)}
-                    } else if sampleIndex == 3 {
-                        {demos.View(3)}
-                    } else if sampleIndex == 4 {
-                        {demos.View(4)}
-                    } else if sampleIndex == 5 {
-                        {demos.View(5)}
-                    } else if sampleIndex == 6 {
-                        {demos.View(6)}
-                    } else if sampleIndex == 7 {
-                        {demos.View(7)}
-                    } else if sampleIndex == 8 {
-                        {demos.View(8)}
-                    } else if sampleIndex == 9 {
-                        {demos.View(9)}
-                    } else if sampleIndex == 10 {
-                        {demos.View(10)}
-                    } else if sampleIndex == 11 {
-                        {demos.View(11)}
-                    } else if sampleIndex == 12 {
-                        {demos.View(12)}
-                    } else if sampleIndex == 13 {
-                        {demos.View(13)}
-                    } else {
-                        {demos.View(14)}
-                    }
+                    {demoPreview()}
                 </div>
-                <div style={{ color: "#6e7681", fontSize: 10 }}>
-                    预览区可直接点击交互；切换左侧示例即重新运行
-                </div>
+                <div style={{ color: RunInfoColor(), fontSize: 10 }}>{RunInfo()}</div>
             </div>
         </div>
-        <div style={{ color: "#6e7681", fontSize: 11 }}>
-            提示：网页版支持无服务端 LSP —— Ctrl+Space 补全，输入时实时诊断，悬停看符号信息。
+        <div style={{ color: "#6e7681", fontSize: 11, padding: "0 16 12 16" }}>
+            Ctrl+Enter 运行 · Ctrl+Z 撤销 · Ctrl+Space 补全 · Shift+Alt+F 格式化 · 悬停看符号
         </div>
     </div>
 }

@@ -377,6 +377,12 @@ function bindKeyboard(elements: Elements, api: GoxPlaygroundAPI): void {
     app.focus();
   });
   app.addEventListener("keydown", (ev: KeyboardEvent): void => {
+    // Ctrl/Cmd+Enter：解释当前源码并运行（工具栏 Run 按钮走 GX 节点，同一动作）。
+    if ((ev.ctrlKey || ev.metaKey) && ev.key === "Enter") {
+      ev.preventDefault();
+      api.run();
+      return;
+    }
     // Ctrl/Cmd+Z 撤销、Ctrl/Cmd+Shift+Z / Ctrl+Y 重做。必须最先拦截：
     // 组合键不带可打印字符，落到后面的 isPrintableChar/navKeys 判定会被直接
     // return，所以此前按 Ctrl+Z 毫无反应。撤销/重做走 wasm 的独立 API。

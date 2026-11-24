@@ -21,6 +21,8 @@ export interface GoxCursor {
 /** wasm 侧暴露的编辑 + 内建 LSP API，由 main.go 用 syscall/js 注册。 */
 export interface GoxPlaygroundAPI {
   key(key: string): void;
+  /** 解释当前源码并运行（Ctrl+Enter）。 */
+  run(): void;
   /** 撤销一步编辑（Ctrl+Z）。 */
   undo(): void;
   /** 重做一步编辑（Ctrl+Shift+Z / Ctrl+Y）。 */
