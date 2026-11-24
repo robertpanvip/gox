@@ -58,6 +58,40 @@ const (
 	svgCloud = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M7 18 A4 4 0 0 1 7 10 A5 5 0 0 1 17 11 A3.5 3.5 0 0 1 17 18 Z"/></svg>`
 	svgSun = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2 L12 5 M12 19 L12 22 M2 12 L5 12 M19 12 L22 12 M4.9 4.9 L7 7 M17 17 L19.1 19.1 M4.9 19.1 L7 17 M17 7 L19.1 4.9"/></svg>`
 	svgMoon = `<svg viewBox="0 0 24 24"><path fill="currentColor" d="M20 14 A8 8 0 1 1 10 4 A6 6 0 0 0 20 14 Z"/></svg>`
+	// ---- 视图 ----
+	svgGrid = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>`
+	svgList = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"><path d="M9 6 L20 6 M9 12 L20 12 M9 18 L20 18"/><circle cx="4.5" cy="6" r="1.2" fill="currentColor" stroke="none"/><circle cx="4.5" cy="12" r="1.2" fill="currentColor" stroke="none"/><circle cx="4.5" cy="18" r="1.2" fill="currentColor" stroke="none"/></svg>`
+	svgMenu = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"><path d="M3 6 L21 6 M3 12 L21 12 M3 18 L21 18"/></svg>`
+	svgMore = `<svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.8" fill="currentColor"/><circle cx="12" cy="12" r="1.8" fill="currentColor"/><circle cx="19" cy="12" r="1.8" fill="currentColor"/></svg>`
+	// ---- 可见性 ----
+	svgEye = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12 C2 12 5.5 5 12 5 C18.5 5 22 12 22 12 C22 12 18.5 19 12 19 C5.5 19 2 12 2 12 Z"/><circle cx="12" cy="12" r="3"/></svg>`
+	svgEyeOff = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4 L20 20"/><path d="M9.9 5.3 A10 10 0 0 1 12 5 C18.5 5 22 12 22 12 C22 12 20.8 14 18.9 15.7 M6.1 6.6 C3.6 8.3 2 12 2 12 C2 12 5.5 19 12 19 C13.6 19 15 18.6 16.2 18.1"/><path d="M10 10 A3 3 0 0 0 14 14"/></svg>`
+	// ---- 更多操作 ----
+	svgRefresh = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12 A9 9 0 0 1 12 21 A9 9 0 0 1 3 12 A9 9 0 0 1 12 3 C16 3 19 5 20.5 8"/><path d="M20.5 3 L20.5 8 L15.5 8"/></svg>`
+	svgFilter = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M3 5 L21 5 L14 13 L14 20 L10 18 L10 13 Z"/></svg>`
+	svgSliders = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"><path d="M4 6 L20 6 M4 12 L20 12 M4 18 L20 18"/><circle cx="9" cy="6" r="2"/><circle cx="15" cy="12" r="2"/><circle cx="8" cy="18" r="2"/></svg>`
+	// ---- 通信 ----
+	svgPaperclip = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11 L11 20 A5 5 0 0 1 4 13 L14 3 A3.5 3.5 0 0 1 19 8 L9 18 A2 2 0 0 1 6 15"/></svg>`
+	svgSend = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2 L11 13 M22 2 L15 22 L11 13 L2 9 Z"/></svg>`
+	svgReply = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14 L4 9 L9 4 M4 9 L14 9 C18 9 20 11 20 15 L20 20"/></svg>`
+	svgVolume = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9 L8 9 L13 4 L13 20 L8 15 L4 15 Z"/><path d="M17 9 A4 4 0 0 1 17 15 M19.5 6.5 A7.5 7.5 0 0 1 19.5 17.5"/></svg>`
+	svgMic = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 11 A7 7 0 0 0 19 11 M12 18 L12 22 M8 22 L16 22"/></svg>`
+	// ---- 设备与状态 ----
+	svgWifi = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"><path d="M2 8 A15 15 0 0 1 22 8 M5.5 12 A10 10 0 0 1 18.5 12 M9 16 A5 5 0 0 1 15 16"/><circle cx="12" cy="20" r="1.2" fill="currentColor" stroke="none"/></svg>`
+	svgBattery = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="7" width="18" height="10" rx="2"/><path d="M22 10 L22 14"/><path d="M6 10 L6 14 M10 10 L10 14 M14 10 L14 14"/></svg>`
+	svgBolt = `<svg viewBox="0 0 24 24"><path fill="currentColor" d="M13 2 L4 14 L11 14 L10 22 L20 9 L13 9 Z"/></svg>`
+	svgPower = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"><path d="M12 3 L12 12 M6.5 6 A8 8 0 1 0 17.5 6"/></svg>`
+	svgLogout = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M10 4 L5 4 A2 2 0 0 0 3 6 L3 18 A2 2 0 0 0 5 20 L10 20 M14 16 L18 12 L14 8 M18 12 L8 12"/></svg>`
+	svgLogin = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4 L19 4 A2 2 0 0 1 21 6 L21 18 A2 2 0 0 1 19 20 L14 20 M10 8 L6 12 L10 16 M6 12 L16 12"/></svg>`
+	// ---- 对象与数据 ----
+	svgTag = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M20 13 L13 20 A2 2 0 0 1 10 20 L4 14 A2 2 0 0 1 4 11 L11 4 A2 2 0 0 1 14 4 L20 10 A2 2 0 0 1 20 13 Z"/><circle cx="16" cy="8" r="1.3"/></svg>`
+	svgFlag = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M5 21 L5 4 M5 4 L19 4 L16 9 L19 14 L5 14"/></svg>`
+	svgDoc = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2 L14 2 L19 7 L19 21 A1 1 0 0 1 18 22 L6 22 A1 1 0 0 1 5 21 L5 3 A1 1 0 0 1 6 2 Z"/><path d="M14 2 L14 7 L19 7 M9 12 L15 12 M9 16 L15 16"/></svg>`
+	svgCart = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="20" r="1.5"/><circle cx="18" cy="20" r="1.5"/><path d="M2 3 L5 3 L8 16 L20 16 L20 6 L6 6"/></svg>`
+	svgCard = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="5" width="20" height="14" rx="2.5"/><path d="M2 10 L22 10 M6 15 L10 15"/></svg>`
+	svgChart = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20 L4 4 M4 20 L20 20"/><path d="M8 20 L8 12 M13 20 L13 7 M18 20 L18 14"/></svg>`
+	svgZoomIn = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5 L21 21 M10.5 7.5 L10.5 13.5 M7.5 10.5 L13.5 10.5"/></svg>`
+	svgZoomOut = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5 L21 21 M7.5 10.5 L13.5 10.5"/></svg>`
 )
 
 // ---- 导航 ----
@@ -269,6 +303,152 @@ const (
 // IconMoon moon 图标。size 默认 20；color/tone 决定颜色；stroke-width 默认 1.8。
  func IconMoon(props gxscene.Props) *gxscene.Instance {
 	return iconFromSVG(svgMoon, props)
+}
+// ---- 视图 ----
+
+// IconGrid grid 图标。size 默认 20；color/tone 决定颜色；stroke-width 默认 1.8。
+ func IconGrid(props gxscene.Props) *gxscene.Instance {
+	return iconFromSVG(svgGrid, props)
+}
+
+// IconList list 图标。size 默认 20；color/tone 决定颜色；stroke-width 默认 1.8。
+ func IconList(props gxscene.Props) *gxscene.Instance {
+	return iconFromSVG(svgList, props)
+}
+
+// IconMenu menu 图标。size 默认 20；color/tone 决定颜色；stroke-width 默认 1.8。
+ func IconMenu(props gxscene.Props) *gxscene.Instance {
+	return iconFromSVG(svgMenu, props)
+}
+
+// IconMore more 图标。size 默认 20；color/tone 决定颜色；stroke-width 默认 1.8。
+ func IconMore(props gxscene.Props) *gxscene.Instance {
+	return iconFromSVG(svgMore, props)
+}
+// ---- 可见性 ----
+
+// IconEye eye 图标。size 默认 20；color/tone 决定颜色；stroke-width 默认 1.8。
+ func IconEye(props gxscene.Props) *gxscene.Instance {
+	return iconFromSVG(svgEye, props)
+}
+
+// IconEyeOff eye-off 图标。size 默认 20；color/tone 决定颜色；stroke-width 默认 1.8。
+ func IconEyeOff(props gxscene.Props) *gxscene.Instance {
+	return iconFromSVG(svgEyeOff, props)
+}
+// ---- 更多操作 ----
+
+// IconRefresh refresh 图标。size 默认 20；color/tone 决定颜色；stroke-width 默认 1.8。
+ func IconRefresh(props gxscene.Props) *gxscene.Instance {
+	return iconFromSVG(svgRefresh, props)
+}
+
+// IconFilter filter 图标。size 默认 20；color/tone 决定颜色；stroke-width 默认 1.8。
+ func IconFilter(props gxscene.Props) *gxscene.Instance {
+	return iconFromSVG(svgFilter, props)
+}
+
+// IconSliders sliders 图标。size 默认 20；color/tone 决定颜色；stroke-width 默认 1.8。
+ func IconSliders(props gxscene.Props) *gxscene.Instance {
+	return iconFromSVG(svgSliders, props)
+}
+// ---- 通信 ----
+
+// IconPaperclip paperclip 图标。size 默认 20；color/tone 决定颜色；stroke-width 默认 1.8。
+ func IconPaperclip(props gxscene.Props) *gxscene.Instance {
+	return iconFromSVG(svgPaperclip, props)
+}
+
+// IconSend send 图标。size 默认 20；color/tone 决定颜色；stroke-width 默认 1.8。
+ func IconSend(props gxscene.Props) *gxscene.Instance {
+	return iconFromSVG(svgSend, props)
+}
+
+// IconReply reply 图标。size 默认 20；color/tone 决定颜色；stroke-width 默认 1.8。
+ func IconReply(props gxscene.Props) *gxscene.Instance {
+	return iconFromSVG(svgReply, props)
+}
+
+// IconVolume volume 图标。size 默认 20；color/tone 决定颜色；stroke-width 默认 1.8。
+ func IconVolume(props gxscene.Props) *gxscene.Instance {
+	return iconFromSVG(svgVolume, props)
+}
+
+// IconMic mic 图标。size 默认 20；color/tone 决定颜色；stroke-width 默认 1.8。
+ func IconMic(props gxscene.Props) *gxscene.Instance {
+	return iconFromSVG(svgMic, props)
+}
+// ---- 设备与状态 ----
+
+// IconWifi wifi 图标。size 默认 20；color/tone 决定颜色；stroke-width 默认 1.8。
+ func IconWifi(props gxscene.Props) *gxscene.Instance {
+	return iconFromSVG(svgWifi, props)
+}
+
+// IconBattery battery 图标。size 默认 20；color/tone 决定颜色；stroke-width 默认 1.8。
+ func IconBattery(props gxscene.Props) *gxscene.Instance {
+	return iconFromSVG(svgBattery, props)
+}
+
+// IconBolt bolt 图标。size 默认 20；color/tone 决定颜色；stroke-width 默认 1.8。
+ func IconBolt(props gxscene.Props) *gxscene.Instance {
+	return iconFromSVG(svgBolt, props)
+}
+
+// IconPower power 图标。size 默认 20；color/tone 决定颜色；stroke-width 默认 1.8。
+ func IconPower(props gxscene.Props) *gxscene.Instance {
+	return iconFromSVG(svgPower, props)
+}
+
+// IconLogout logout 图标。size 默认 20；color/tone 决定颜色；stroke-width 默认 1.8。
+ func IconLogout(props gxscene.Props) *gxscene.Instance {
+	return iconFromSVG(svgLogout, props)
+}
+
+// IconLogin login 图标。size 默认 20；color/tone 决定颜色；stroke-width 默认 1.8。
+ func IconLogin(props gxscene.Props) *gxscene.Instance {
+	return iconFromSVG(svgLogin, props)
+}
+// ---- 对象与数据 ----
+
+// IconTag tag 图标。size 默认 20；color/tone 决定颜色；stroke-width 默认 1.8。
+ func IconTag(props gxscene.Props) *gxscene.Instance {
+	return iconFromSVG(svgTag, props)
+}
+
+// IconFlag flag 图标。size 默认 20；color/tone 决定颜色；stroke-width 默认 1.8。
+ func IconFlag(props gxscene.Props) *gxscene.Instance {
+	return iconFromSVG(svgFlag, props)
+}
+
+// IconDoc doc 图标。size 默认 20；color/tone 决定颜色；stroke-width 默认 1.8。
+ func IconDoc(props gxscene.Props) *gxscene.Instance {
+	return iconFromSVG(svgDoc, props)
+}
+
+// IconCart cart 图标。size 默认 20；color/tone 决定颜色；stroke-width 默认 1.8。
+ func IconCart(props gxscene.Props) *gxscene.Instance {
+	return iconFromSVG(svgCart, props)
+}
+
+// IconCard card 图标。size 默认 20；color/tone 决定颜色；stroke-width 默认 1.8。
+ func IconCard(props gxscene.Props) *gxscene.Instance {
+	return iconFromSVG(svgCard, props)
+}
+
+// IconChart chart 图标。size 默认 20；color/tone 决定颜色；stroke-width 默认 1.8。
+ func IconChart(props gxscene.Props) *gxscene.Instance {
+	return iconFromSVG(svgChart, props)
+}
+
+// IconZoomIn zoom-in 图标。size 默认 20；color/tone 决定颜色；stroke-width 默认 1.8。
+ func IconZoomIn(props gxscene.Props) *gxscene.Instance {
+	return iconFromSVG(svgZoomIn, props)
+}
+
+// IconZoomOut zoom-out 图标。size 默认 20；color/tone 决定颜色；stroke-width 默认 1.8。
+ func IconZoomOut(props gxscene.Props) *gxscene.Instance {
+	return iconFromSVG(svgZoomOut, props)
 }
 
 // ---- 常用别名组件（复用规范图标 SVG）----

@@ -459,9 +459,10 @@ host 只要把 SVG 规范化成 `canvas.Op`，三端天然一致、零后端改�
 - `currentColor` 由组件注入的 `color` 替换；`Resolve` 支持内置名/别名、原始 SVG、
   `data:image/svg+xml` URI、`.svg` 文件、http(s) URL。
 
-**内置图标**：`runtime/icon.Builtin` 预置约 40 个苹果风格 24×24 图标（house/search/
-heart/star/bell/gear/play/…），`Aliases` 提供常见别名（home→house、user→person 等），
-`Names()` 列出全部。
+**内置图标**：`runtime/icon.Builtin` 预置 69 个苹果风格 24×24 图标（house/search/
+heart/star/bell/gear/play/grid/list/eye/eye-off/refresh/filter/send/wifi/bolt/cart/chart/
+zoom-in/… 共 11 组），`Aliases` 提供约 60 个常见别名（home→house、user→person、
+reload→refresh、hidden→eye-off、file→doc 等），`Names()` 列出全部。
 
 **用法**：
 ```go
@@ -491,9 +492,12 @@ widgets.IconHeart(gxscene.Props{"size": 20, "color": "#ff453a"})
 </div>
 ```
 
-- **覆盖**：41 个规范名具名组件（`IconHouse`/`IconChevronRight`/`IconPlay`/`IconHeart`/
-  `IconBell`/`IconWarning`/`IconMoon`…）+ 3 个高频别名（`IconHome`/`IconUser`/
-  `IconSettings`，复用规范图标 SVG）。全部经 `make gxbuild` 从 `.gx` 转译为 `.go`，幂等。
+- **覆盖**：69 个规范名具名组件 + 3 个高频别名（`IconHome`/`IconUser`/`IconSettings`，
+  复用规范图标 SVG）。分 11 组：导航/操作/媒体/对象/状态/视图/可见性/更多操作/通信/
+  设备与状态/对象与数据，含 `IconHouse`/`IconChevronRight`/`IconPlay`/`IconHeart`/
+  `IconGrid`/`IconList`/`IconEye`/`IconEyeOff`/`IconRefresh`/`IconFilter`/`IconSend`/
+  `IconWifi`/`IconBolt`/`IconCart`/`IconChart`/`IconZoomIn` 等。全部经 `make gxbuild`
+  从 `.gx` 转译为 `.go`，幂等。穷举测试保证每个组件都产出非空矢量指令。
 - **一致性**：测试逐字节校验组件库 SVG 常量与 `runtime/icon.Builtin` 相同，防止两套
   数据漂移；别名组件与规范名产出完全相同的矢量指令。
 - 新增图标时在 `runtime/icon/builtin.go` 与 `widgets/iconSet.gx` 同时登记即可。

@@ -62,6 +62,46 @@ var Builtin = map[string]string{
 	"cloud":    `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M7 18 A4 4 0 0 1 7 10 A5 5 0 0 1 17 11 A3.5 3.5 0 0 1 17 18 Z"/></svg>`,
 	"sun":      `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2 L12 5 M12 19 L12 22 M2 12 L5 12 M19 12 L22 12 M4.9 4.9 L7 7 M17 17 L19.1 19.1 M4.9 19.1 L7 17 M17 7 L19.1 4.9"/></svg>`,
 	"moon":     `<svg viewBox="0 0 24 24"><path fill="currentColor" d="M20 14 A8 8 0 1 1 10 4 A6 6 0 0 0 20 14 Z"/></svg>`,
+
+	// ---- 视图 ----
+	"grid": `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>`,
+	"list": `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"><path d="M9 6 L20 6 M9 12 L20 12 M9 18 L20 18"/><circle cx="4.5" cy="6" r="1.2" fill="currentColor" stroke="none"/><circle cx="4.5" cy="12" r="1.2" fill="currentColor" stroke="none"/><circle cx="4.5" cy="18" r="1.2" fill="currentColor" stroke="none"/></svg>`,
+	"menu": `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"><path d="M3 6 L21 6 M3 12 L21 12 M3 18 L21 18"/></svg>`,
+	"more": `<svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.8" fill="currentColor"/><circle cx="12" cy="12" r="1.8" fill="currentColor"/><circle cx="19" cy="12" r="1.8" fill="currentColor"/></svg>`,
+
+	// ---- 可见性 ----
+	"eye":     `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12 C2 12 5.5 5 12 5 C18.5 5 22 12 22 12 C22 12 18.5 19 12 19 C5.5 19 2 12 2 12 Z"/><circle cx="12" cy="12" r="3"/></svg>`,
+	"eye-off": `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4 L20 20"/><path d="M9.9 5.3 A10 10 0 0 1 12 5 C18.5 5 22 12 22 12 C22 12 20.8 14 18.9 15.7 M6.1 6.6 C3.6 8.3 2 12 2 12 C2 12 5.5 19 12 19 C13.6 19 15 18.6 16.2 18.1"/><path d="M10 10 A3 3 0 0 0 14 14"/></svg>`,
+
+	// ---- 更多操作 ----
+	"refresh": `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12 A9 9 0 0 1 12 21 A9 9 0 0 1 3 12 A9 9 0 0 1 12 3 C16 3 19 5 20.5 8"/><path d="M20.5 3 L20.5 8 L15.5 8"/></svg>`,
+	"filter":  `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M3 5 L21 5 L14 13 L14 20 L10 18 L10 13 Z"/></svg>`,
+	"sliders": `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"><path d="M4 6 L20 6 M4 12 L20 12 M4 18 L20 18"/><circle cx="9" cy="6" r="2"/><circle cx="15" cy="12" r="2"/><circle cx="8" cy="18" r="2"/></svg>`,
+
+	// ---- 通信 ----
+	"paperclip": `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11 L11 20 A5 5 0 0 1 4 13 L14 3 A3.5 3.5 0 0 1 19 8 L9 18 A2 2 0 0 1 6 15"/></svg>`,
+	"send":      `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2 L11 13 M22 2 L15 22 L11 13 L2 9 Z"/></svg>`,
+	"reply":     `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14 L4 9 L9 4 M4 9 L14 9 C18 9 20 11 20 15 L20 20"/></svg>`,
+	"volume":    `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9 L8 9 L13 4 L13 20 L8 15 L4 15 Z"/><path d="M17 9 A4 4 0 0 1 17 15 M19.5 6.5 A7.5 7.5 0 0 1 19.5 17.5"/></svg>`,
+	"mic":       `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 11 A7 7 0 0 0 19 11 M12 18 L12 22 M8 22 L16 22"/></svg>`,
+
+	// ---- 设备与状态 ----
+	"wifi":     `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"><path d="M2 8 A15 15 0 0 1 22 8 M5.5 12 A10 10 0 0 1 18.5 12 M9 16 A5 5 0 0 1 15 16"/><circle cx="12" cy="20" r="1.2" fill="currentColor" stroke="none"/></svg>`,
+	"battery":  `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="7" width="18" height="10" rx="2"/><path d="M22 10 L22 14"/><path d="M6 10 L6 14 M10 10 L10 14 M14 10 L14 14"/></svg>`,
+	"bolt":     `<svg viewBox="0 0 24 24"><path fill="currentColor" d="M13 2 L4 14 L11 14 L10 22 L20 9 L13 9 Z"/></svg>`,
+	"power":    `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"><path d="M12 3 L12 12 M6.5 6 A8 8 0 1 0 17.5 6"/></svg>`,
+	"logout":   `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M10 4 L5 4 A2 2 0 0 0 3 6 L3 18 A2 2 0 0 0 5 20 L10 20 M14 16 L18 12 L14 8 M18 12 L8 12"/></svg>`,
+	"login":    `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4 L19 4 A2 2 0 0 1 21 6 L21 18 A2 2 0 0 1 19 20 L14 20 M10 8 L6 12 L10 16 M6 12 L16 12"/></svg>`,
+
+	// ---- 对象与数据 ----
+	"tag":      `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M20 13 L13 20 A2 2 0 0 1 10 20 L4 14 A2 2 0 0 1 4 11 L11 4 A2 2 0 0 1 14 4 L20 10 A2 2 0 0 1 20 13 Z"/><circle cx="16" cy="8" r="1.3"/></svg>`,
+	"flag":     `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M5 21 L5 4 M5 4 L19 4 L16 9 L19 14 L5 14"/></svg>`,
+	"doc":      `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2 L14 2 L19 7 L19 21 A1 1 0 0 1 18 22 L6 22 A1 1 0 0 1 5 21 L5 3 A1 1 0 0 1 6 2 Z"/><path d="M14 2 L14 7 L19 7 M9 12 L15 12 M9 16 L15 16"/></svg>`,
+	"cart":     `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="20" r="1.5"/><circle cx="18" cy="20" r="1.5"/><path d="M2 3 L5 3 L8 16 L20 16 L20 6 L6 6"/></svg>`,
+	"card":     `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="5" width="20" height="14" rx="2.5"/><path d="M2 10 L22 10 M6 15 L10 15"/></svg>`,
+	"chart":    `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20 L4 4 M4 20 L20 20"/><path d="M8 20 L8 12 M13 20 L13 7 M18 20 L18 14"/></svg>`,
+	"zoom-in":  `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5 L21 21 M10.5 7.5 L10.5 13.5 M7.5 10.5 L13.5 10.5"/></svg>`,
+	"zoom-out": `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5 L21 21 M7.5 10.5 L13.5 10.5"/></svg>`,
 }
 
 // Aliases 是常见别名 → 规范名，方便业务侧用不同叫法。
@@ -73,6 +113,26 @@ var Aliases = map[string]string{
 	"cancel": "close", "add": "plus", "remove": "minus", "back": "arrow-left",
 	"forward": "arrow-right", "caret-left": "chevron-left", "caret-right": "chevron-right",
 	"cog": "gear", "lock-closed": "lock", "unlock": "lock",
+	// 补充图标别名（视图/可见性/操作/通信/设备/对象）。
+	"apps": "grid", "tiles": "grid", "grid-view": "grid",
+	"bullets": "list", "hamburger": "menu", "ellipsis": "more", "dots": "more",
+	"visible": "eye", "hidden": "eye-off", "eye-slash": "eye-off",
+	"reload": "refresh", "sync": "refresh", "funnel": "filter",
+	"tune": "sliders", "adjust": "sliders", "controls": "sliders",
+	"attach": "paperclip", "attachment": "paperclip", "paper-clip": "paperclip",
+	"volume-up": "volume", "sound": "volume", "speaker": "volume",
+	"microphone": "mic", "mute": "mic",
+	"wireless": "wifi", "battery-full": "battery",
+	"flash": "bolt", "lightning": "bolt", "power-off": "power",
+	"signout": "logout", "sign-out": "logout", "log-out": "logout",
+	"signin": "login", "sign-in": "login", "log-in": "login",
+	"label": "tag", "report": "flag",
+	"file": "doc", "document": "doc", "files": "doc",
+	"shopping-cart": "cart", "basket": "cart",
+	"credit-card": "card", "payment": "card",
+	"graph": "chart", "bar-chart": "chart", "analytics": "chart",
+	"zoom": "zoom-in", "magnify": "zoom-in", "search-plus": "zoom-in",
+	"search-minus": "zoom-out",
 }
 
 // Names 返回所有可用的内置图标名（规范名，不含别名），已排序。
