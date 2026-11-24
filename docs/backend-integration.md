@@ -429,6 +429,54 @@ widgets.Video(gxscene.Props{
 **边界**：无 ffmpeg 时降级为 poster；音频未接入；seek 通过重启解码进程实现（毫秒级）；
 时间戳按 30fps 近似（未走 ffmpeg PTS 通道）；暂停期间仍抽帧但丢弃（不省解码 CPU）。
 
+### 2.9 Icon 矢量图标组件（`runtime/icon` + `widgets.Icon`）
+
+**目标**：预置苹果 SF Symbols 风格的矢量图标，并支持读取任意 SVG 渲染为矢量，
+**全程不栅格化为位图**——放大不失真、零后端改动、零新增依赖。
+
+**架构（host 统一解析 → 各后端矢量绘制）**：
+
+> `widgets.Icon` → `runtime/icon`（纯标准库解析 SVG）→ `Props["canvas-ops"]`
+> → 各后端已有的 canvas 矢量 path 管线。
+
+选这条路的理由：canvas 原语的三个后端本就用矢量 path API 绘制（Skia `DrawPath`、
+Rust `tiny-skia::fill_path/stroke_path`、Web `CanvasRenderingContext2D.bezierCurveTo`），
+host 只要把 SVG 规范化成 `canvas.Op`，三端天然一致、零后端改动。
+图标 path 输出的绝对 M/L/C/Z 格式与三端解析器（含 Web `dom_js.go` 的 `applyPath`）兼容。
+
+曾评估在 Rust 端接入 `usvg`/`resvg`（性能最好的 Rust SVG
+库，且 tiny-skia 版本 0.11.4 与本项目完全兼容、实测可直接把解析出的 Path 喂给绘制管线），
+但它是 Rust-only，会破坏多后端一致性并显著增大静态库（fontdb/image 依赖），故不在
+解析层接入——host 层纯 Go 解析对图标规模足够快，且保持主模块零依赖。
+
+**解析层（`runtime/icon`，纯标准库）**：
+- `Parse` 解析 `<svg>` 及 `<path>/<circle>/<ellipse>/<rect>/<line>/<polygon>/<polyline>/<g>`
+  （含样式继承），应用 viewBox 等比缩放（默认 xMidYMid meet）并把变换**烘焙进绝对坐标**，
+  后端直接绘制无需再做坐标变换；
+- SVG path 完整命令集 M/L/H/V/C/Q/A/Z（含相对坐标、隐式重复参数、S/T 平滑曲线、
+  科学计数法），规范化成后端支持的绝对 M/L/C/Z：H/V→L、Q→C、A→C（端点参数化）、
+  S/T 展开为 C；
+- `currentColor` 由组件注入的 `color` 替换；`Resolve` 支持内置名/别名、原始 SVG、
+  `data:image/svg+xml` URI、`.svg` 文件、http(s) URL。
+
+**内置图标**：`runtime/icon.Builtin` 预置约 40 个苹果风格 24×24 图标（house/search/
+heart/star/bell/gear/play/…），`Aliases` 提供常见别名（home→house、user→person 等），
+`Names()` 列出全部。
+
+**用法**：
+```go
+widgets.Icon(gxscene.Props{"name": "house", "size": 24, "tone": "primary"})
+widgets.Icon(gxscene.Props{"name": "heart", "size": 20, "color": "#ff453a"})
+widgets.Icon(gxscene.Props{"src": "<svg viewBox='0 0 24 24'>...</svg>", "size": 28})
+```
+props：`name`（内置名/别名）、`src`（外部 SVG）、`size`（默认 20）、`color`、
+`tone`（语义色，默认 primary）、`stroke-width`（默认 1.8，随 size 缩放）。
+`name` 优先于 `src`；都无效时降级为空图标（不崩溃）。
+
+**边界**：仅静态矢量图元（无 SVG 滤镜/渐变/文本/外部 image 引用）；fill-rule 固定
+Winding（内置图标用描边或单轮廓实心规避镂空方向问题）；动画图标需用 signal 重建
+canvas-ops。
+
 ## 3. 拆成两个项目如何跑通
 
 假设后端项目为 `github.com/yourorg/gox-desktop`，module 独立。

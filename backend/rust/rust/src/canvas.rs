@@ -245,6 +245,20 @@ mod tests {
     }
 
     #[test]
+    fn parse_icon_vector_path() {
+        // 来自 runtime/icon 的真实图标 path（heart，24×24，含 C 曲线）。
+        // 验证后端矢量解析器能直接吃下图标组件生成的绝对路径。
+        let d = "M12 21 C12 21 3 15 3 9 C3 6 5 4 8 4 C10 4 11.5 5.5 12 6.5 C12.5 5.5 14 4 16 4 C19 4 21 6 21 9 C21 15 12 21 12 21 Z";
+        let path = parse_svg_path(d, 0.0, 0.0);
+        assert!(path.is_some(), "图标矢量 path 应解析有效");
+
+        let mut pm = tiny_skia::Pixmap::new(24, 24).unwrap();
+        let ops = decode(&format!(r##"[{{"op":"path","d":"{}","fill":"#ff0000"}}]"##, d));
+        paint(&mut pm, &ops, 0.0, 0.0);
+        assert!(pm.data().iter().any(|&x| x != 0), "图标 path 应画出非透明像素");
+    }
+
+    #[test]
     fn paint_all_ops_no_panic() {
         let mut pm = tiny_skia::Pixmap::new(100, 100).unwrap();
         let ops = decode(r##"[
