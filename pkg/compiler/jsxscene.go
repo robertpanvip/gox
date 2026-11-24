@@ -395,41 +395,34 @@ func isEventAttrName(name string) bool {
 	return c >= 'A' && c <= 'Z'
 }
 
-// normalizeEventHandlerExpr 把事件属性上的简化 handler 写法规范化成协议推荐的
-// `gxscene.Handler(func(ctx gxscene.EventContext) { ... })` 表达式文本，使下面四种
-// 写法都能编译且点击时真正触发（运行时只认推荐签名 gxscene.Handler）：
+// normalizeEventHandlerExpr 只做一件事：把事件属性上的箭头语法 `=>`
+// 展开成 Go 的 func 字面量（JSX 属性路径不跑 transformLambdas，=> 会残留）。
+// 其余形态——具名函数 inc、func 字面量 func(ctx EventContext){...}、完整签名、
+// 以及显式的 gxscene.Handler(...)——全部原样透传，编译器不套任何包装。
 //
-//	onClick={inc}                          具名函数（按无参调用 inc()）
-//	onClick={func() { ... }}               func 字面量
-//	onClick={() => inc()}                  无参箭头
-//	onClick={() => n = n + 1}              箭头 + 赋值 body（原 B6 会报诊断）
+// 于是 `onClick={inc}` 编译后传入的就是 inc 函数本身；运行时 dispatchLocal 按
+// 实际签名分派（func() 无参调用，func(EventContext) 带 ctx 调用），无需包装类。
 //
-// 已是 gxscene.Handler(...) / Handler(...) 的保持原样（幂等），带事件参数
-// （如 (e) => ...）的形态把参数名接到 ctx 上，body 里读 e 即读 ctx。
+//	onClick={inc}                                     → inc
+//	onClick={() => inc()}                             → func() { inc() }
+//	onClick={() => n = n + 1}                         → func() { n(n()+1) }   （原 B6）
+//	onClick={(e) => n = e.X}                          → func(e gxscene.EventContext) { n(e.X) }
+//	onClick={func(ctx gxscene.EventContext) { inc() }} → 原样
+//	onClick={gxscene.Handler(func(ctx ...) {...})}    → 原样（幂等兼容）
+//
 // 返回的是一段 GX 表达式源码，随后照常走 lexExprScene 做 sig 读写改写。
 func normalizeEventHandlerExpr(expr string) string {
 	s := strings.TrimSpace(expr)
 	if s == "" {
 		return expr
 	}
-	// 幂等：已是推荐签名包装，原样放过。
-	if strings.HasPrefix(s, "gxscene.Handler(") || strings.HasPrefix(s, "Handler(") {
-		return expr
-	}
-	// 箭头函数：PARAMS => BODY。参数名（若有）接到 ctx，body 直接作函数体。
+	// 只有箭头语法需要展开；其余（含 gxscene.Handler(...)）原样透传。
 	if arrow := topLevelArrow(s); arrow >= 0 {
 		params := strings.TrimSpace(s[:arrow])
 		body := strings.TrimSpace(s[arrow+2:])
-		return wrapHandlerLambda(params, body)
+		return arrowToFuncLit(params, body)
 	}
-	// func 字面量：func(...) { ... }。取其签名与 body，包进 Handler。
-	if strings.HasPrefix(s, "func") {
-		if sig, body, ok := splitFuncLit(s); ok {
-			return wrapHandlerFuncLit(sig, body)
-		}
-	}
-	// 其余按具名函数/函数值处理：统一无参调用 fn()。
-	return "gxscene.Handler(func(ctx gxscene.EventContext) { " + s + "() })"
+	return expr
 }
 
 // topLevelArrow 找顶层 `=>` 的下标（跳过括号/花括号/方括号内部），没有返回 -1。
@@ -450,76 +443,22 @@ func topLevelArrow(s string) int {
 	return -1
 }
 
-// wrapHandlerLambda 把箭头参数与 body 包成 Handler。无参用 ctx；
-// 单参数（如 e 或 e gxscene.EventContext）把参数名接到 ctx 上。
-func wrapHandlerLambda(params, body string) string {
+// arrowToFuncLit 把箭头 `PARAMS => BODY` 展开成 Go func 字面量。
+// 参数规则：()→无参；单名字 e→补 gxscene.EventContext 类型；已带类型则原样。
+// body 里的 sig 读写由后续 lexExprScene 改写。
+func arrowToFuncLit(params, body string) string {
 	p := strings.TrimSpace(params)
 	p = strings.TrimPrefix(p, "(")
 	p = strings.TrimSuffix(p, ")")
 	p = strings.TrimSpace(p)
-	name := "ctx"
-	if p != "" {
-		// 取第一个标识符作为参数名（`(e gxscene.EventContext)` → e）。
-		if j := strings.IndexAny(p, " \t"); j > 0 {
-			p = p[:j]
-		}
-		if isGoIdent(p) {
-			name = p
-		}
+	if p != "" && !strings.ContainsAny(p, " \t") && isGoIdent(p) {
+		// `(e)` → `e gxscene.EventContext`
+		p = p + " gxscene.EventContext"
 	}
 	if body == "" {
-		body = " _ = ctx "
+		body = " _ = nil "
 	}
-	return "gxscene.Handler(func(" + name + " gxscene.EventContext) { " + body + " })"
-}
-
-// splitFuncLit 拆分 `func(签名) { body }`，返回签名（含括号）与 body。
-func splitFuncLit(s string) (sig, body string, ok bool) {
-	open := strings.IndexByte(s, '(')
-	if open < 0 {
-		return "", "", false
-	}
-	depth := 0
-	close := -1
-	for i := open; i < len(s); i++ {
-		switch s[i] {
-		case '(':
-			depth++
-		case ')':
-			depth--
-			if depth == 0 {
-				close = i
-			}
-		}
-		if close >= 0 {
-			break
-		}
-	}
-	if close < 0 {
-		return "", "", false
-	}
-	brace := strings.IndexByte(s[close+1:], '{')
-	if brace < 0 {
-		return "", "", false
-	}
-	brace += close + 1
-	if !strings.HasSuffix(strings.TrimSpace(s), "}") {
-		return "", "", false
-	}
-	return s[open : close+1], strings.TrimSpace(s[brace+1 : len(strings.TrimSpace(s))-1]), true
-}
-
-// wrapHandlerFuncLit 把 func 字面量的 body 包成标准签名 Handler。
-// 原样保留签名里的形参——func(){} 补成 ctx，已有参数则沿用。
-func wrapHandlerFuncLit(sig, body string) string {
-	params := strings.TrimSpace(sig)
-	params = strings.TrimPrefix(params, "(")
-	params = strings.TrimSuffix(params, ")")
-	params = strings.TrimSpace(params)
-	if params == "" {
-		params = "ctx gxscene.EventContext"
-	}
-	return "gxscene.Handler(func(" + params + ") { " + body + " })"
+	return "func(" + p + ") { " + body + " }"
 }
 
 // isGoIdent 判断 s 是否是 Go 标识符（用作箭头参数名）。

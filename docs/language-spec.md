@@ -128,22 +128,23 @@ app.render(() =>
 
 #### 事件 handler（`onClick` 等）
 
-`onXxx` 属性（`onClick` / `onInput` / `onMouseEnter` …，无白名单）统一编译成 `gxscene.OpEvent`，值是推荐签名 `gxscene.Handler`（即 `func(gxscene.EventContext)`）。**无需再手写冗长的 `gxscene.Handler(func(ctx gxscene.EventContext){...})` 包装**——编译器会把下面五种写法规范化成它，点击时都能真正触发：
+`onXxx` 属性（`onClick` / `onInput` / `onMouseEnter` …，无白名单）统一编译成 `gxscene.OpEvent`，**传入的就是你写的函数原值，编译器不加任何包装**。运行时派发按函数签名自动分派：`func()` 无参调用，`func(gxscene.EventContext)` 传入事件上下文：
 
 ```jsx
 sig count = 0
 func inc() { count = count + 1 }
 
-<button onClick={inc}>具名函数（无参调用 inc()）</button>
-<button onClick={() => inc()}>箭头调函数</button>
-<button onClick={() => count = count + 1}>箭头 + 赋值 body</button>
-<button onClick={func() { count = count + 1 }}>func 字面量</button>
-<button onClick={gxscene.Handler(func(ctx gxscene.EventContext) { inc() })}>完整写法（兼容）</button>
+<button onClick={inc}>具名函数 —— 编译后传入的就是 inc</button>
+<button onClick={() => inc()}>箭头 → func() { inc() }</button>
+<button onClick={() => count = count + 1}>箭头 + 赋值 → func() { count(count()+1) }</button>
+<button onClick={func() { count = count + 1 }}>func 字面量，原样传入</button>
+<button onClick={func(ctx gxscene.EventContext) { count = count + 1 }}>带 ctx 的完整签名</button>
 ```
 
-- 箭头可带事件参数：`(e) => ...` 里的 `e` 接到 `ctx gxscene.EventContext`，可读 `e.Synthetic`（归一化事件对象，含 `X`/`Y`/`Key`/`Mods` 等）。
-- 箭头/函数体里的 sig 读写照常按普通变量写（`count = count + 1`），编译器补 `()`；跨线程更新用 `Signal.safe`。
-- `gxscene.Handler(...)` 已是推荐签名时原样放过（幂等），保持兼容性。
+- 编译器只把箭头 `=>` 展开成 Go func 字面量（JSX 属性路径不做 lambda 转换）；具名函数、`func` 字面量、显式 `gxscene.Handler(...)` 全部原样透传。**编译产物不含 `gxscene.Handler(...)` 包装**。
+- 箭头可带事件参数：`(e) => ...` 展开成 `func(e gxscene.EventContext) {...}`，可读 `e.Synthetic`（归一化事件对象，含 `X`/`Y`/`Key`/`Mods` 等）。
+- 函数体里的 sig 读写照常按普通变量写（`count = count + 1`），编译器补 `()`；跨线程更新用 `Signal.safe`。
+- `gxscene.Handler` 是 `func(EventContext)` 的类型别名，老代码里显式写的 `gxscene.Handler(func(ctx ...){...})` 仍然合法、原样透传，保持兼容。
 
 ### 3.1 `ref` 模板引用（命令式逃生口）
 

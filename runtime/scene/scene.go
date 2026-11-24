@@ -119,9 +119,10 @@ type EventContext struct {
 	Synthetic *SyntheticEvent
 }
 
-// Handler 是协议推荐的事件处理器签名。注意 Node.Handlers 存的是 any（handler 原值），
-// 后端可自行断言为 Handler 或自己约定的任意签名——前端不强制签名，不阻拦自定义事件。
-type Handler func(ctx EventContext)
+// Handler 是协议推荐的事件处理器签名（func(EventContext) 的类型别名）。
+// Node.Handlers 存的是 any（handler 原值），可以是裸函数 func()/func(EventContext)，
+// 后端派发时按签名分派；其它自定义签名原值仍可经 n.Handler(name) 取得。
+type Handler = func(ctx EventContext)
 
 // NodeID 是节点的稳定身份，一个 App/Instance 生命周期内唯一且不复用。
 //
@@ -1027,29 +1028,38 @@ func (n *Node) Handler(name string) any {
 	return n.Handlers[name]
 }
 
-// Dispatch 是便利派发方法：若 name 对应的 handler 是协议推荐的 Handler 签名，
-// 则构造 EventContext 调用之并返回 true；否则返回 false，由后端按自定义签名自行处理。
-// 这不影响自定义事件——handler 原值始终可通过 n.Handler(name) 取得。
-// 只在命中节点本地派发，不冒泡；需要冒泡见 DispatchBubble。
+// Dispatch 是便利派发方法：按 name 对应 handler 的实际签名调用之——
+//   - func(EventContext)（含 Handler 别名）：传入 ctx；
+//   - func()：无参调用；
+//
+// 两者都返回 true；其它自定义签名返回 false，由后端自行处理（原值仍可经
+// n.Handler(name) 取得）。只在命中节点本地派发，不冒泡；需要冒泡见 DispatchBubble。
 func (n *Node) Dispatch(name string, ctx EventContext) bool {
 	return dispatchLocal(n, name, ctx)
 }
 
 // dispatchLocal 是单节点派发的内部实现，供 Dispatch 与冒泡/捕获共用。
 // 冒泡/捕获时在调用前会更新 ctx.Synthetic.CurrentTarget。
+//
+// handler 是用户传入的函数原值（编译器不再套包装），这里按签名分派：
+// 无参 func() 直接调用，带 ctx 的 func(EventContext) 传入事件上下文。
+// 用 type switch 而非反射，零额外分配；这是事件热路径。
 func dispatchLocal(n *Node, name string, ctx EventContext) bool {
 	if n == nil {
 		return false
 	}
-	h := n.Handler(name)
-	if h == nil {
+	switch fn := n.Handler(name).(type) {
+	case nil:
 		return false
-	}
-	if fn, ok := h.(Handler); ok {
+	case func():
+		fn()
+		return true
+	case func(EventContext): // Handler 是它的别名，显式 Handler 写法也落这里
 		fn(ctx)
 		return true
+	default:
+		return false
 	}
-	return false
 }
 
 // String 用 TextBackend 把常驻场景树渲染成文本，便于 fmt.Println 直接查看。

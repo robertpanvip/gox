@@ -7,7 +7,7 @@ import (
 	"github.com/robertpanvip/gox/runtime/signal"
 )
 
-const benchLine = `    return <button onClick={gxscene.Handler(func(ctx gxscene.EventContext) { inc() })}>{count()}</button>`
+const benchLine = `    return <button onClick={func(ctx gxscene.EventContext) { inc() }}>{count}</button>`
 
 // BenchmarkHighlightLine 度量单行分词开销。
 func BenchmarkHighlightLine(b *testing.B) {

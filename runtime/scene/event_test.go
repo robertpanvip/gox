@@ -205,3 +205,57 @@ func TestBubbleRespectsBackendSynthetic(t *testing.T) {
 		t.Fatal("后端填的 Mods 丢失")
 	}
 }
+
+// TestDispatchBareFunctions 守护：onClick 传入的是函数原值（编译器不套包装），
+// dispatchLocal 按实际签名分派——func() 无参调用、func(EventContext) 带 ctx 调用。
+// 若有人把 Handler 改回具名类型、或派发只认单一签名，这些裸函数会静默失效。
+func TestDispatchBareFunctions(t *testing.T) {
+	t.Run("func()", func(t *testing.T) {
+		called := 0
+		inst := Render(Template{Ops: []Op{
+			{Code: OpElem, Arg: "button"},
+			{Code: OpEvent, Key: "onClick", Slot: 0},
+			{Code: OpClose},
+		}, N: 1}, func() any {
+			return func() { called++ } // 裸无参函数，无 Handler(...) 包装
+		})
+		if !inst.Root().Children[0].Dispatch("onClick", EventContext{}) {
+			t.Fatal("裸 func() 应被 Dispatch 认出")
+		}
+		if called != 1 {
+			t.Fatalf("无参 handler 应被调用一次, got %d", called)
+		}
+	})
+	t.Run("func(EventContext)", func(t *testing.T) {
+		called := 0
+		inst := Render(Template{Ops: []Op{
+			{Code: OpElem, Arg: "button"},
+			{Code: OpEvent, Key: "onClick", Slot: 0},
+			{Code: OpClose},
+		}, N: 1}, func() any {
+			return func(ctx EventContext) { called++ } // 裸带 ctx 函数
+		})
+		if !inst.Root().Children[0].Dispatch("onClick", EventContext{}) {
+			t.Fatal("裸 func(EventContext) 应被 Dispatch 认出")
+		}
+		if called != 1 {
+			t.Fatalf("带 ctx handler 应被调用一次, got %d", called)
+		}
+	})
+	t.Run("显式Handler仍兼容", func(t *testing.T) {
+		called := 0
+		inst := Render(Template{Ops: []Op{
+			{Code: OpElem, Arg: "button"},
+			{Code: OpEvent, Key: "onClick", Slot: 0},
+			{Code: OpClose},
+		}, N: 1}, func() any {
+			return Handler(func(ctx EventContext) { called++ })
+		})
+		if !inst.Root().Children[0].Dispatch("onClick", EventContext{}) {
+			t.Fatal("显式 Handler 写法应仍被 Dispatch 认出")
+		}
+		if called != 1 {
+			t.Fatalf("Handler 应被调用一次, got %d", called)
+		}
+	})
+}

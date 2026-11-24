@@ -30,19 +30,21 @@ func TestJSXControlStatementDiagnostic(t *testing.T) {
 	}
 }
 
-// 事件 handler 简化写法（原 B6）：箭头函数体含赋值（() => n = n + 1）曾因
-// JSX 属性路径不展开箭头而残留 => 产非法 Go。现统一规范化成 gxscene.Handler，
-// 箭头赋值、具名函数、func 字面量都应产合法 Go 且不再报诊断。
+// 事件 handler 简化写法（原 B6）：编译器不再套任何包装——onClick 传入的就是
+// 用户写的函数原值。箭头仅展开成 Go func 字面量（JSX 属性路径不跑 lambda 转换），
+// 具名函数/func 字面量/显式 Handler 全部原样透传。运行时 dispatchLocal 按签名分派。
 func TestEventHandlerSimplifiedForms(t *testing.T) {
 	cases := []struct {
 		name, decl, handler, jsx string
+		wantExpr                 string // 产物 getter 应原样/展开成此表达式
 	}{
-		{"箭头赋值", "sig n = 0\n", "() => n = n + 1", `<button onClick={%s}>a</button>`},
-		{"带参箭头", "sig n = 0\n", "(e) => n = n + 1", `<input onInput={%s} />`},
-		{"箭头调函数", "sig n = 0\nfunc inc(){ n = n + 1 }\n", "() => inc()", `<button onClick={%s}>a</button>`},
-		{"具名函数", "sig n = 0\nfunc inc(){ n = n + 1 }\n", "inc", `<button onClick={%s}>a</button>`},
-		{"func字面量", "sig n = 0\n", "func() { n = n + 1 }", `<button onClick={%s}>a</button>`},
-		{"已Handler", "sig n = 0\n", "gxscene.Handler(func(ctx gxscene.EventContext) { n = n + 1 })", `<button onClick={%s}>a</button>`},
+		{"箭头赋值", "sig n = 0\n", "() => n = n + 1", `<button onClick={%s}>a</button>`, "func() { n(n() + 1 )}"},
+		{"带参箭头", "sig n = 0\n", "(e) => n = e", `<input onInput={%s} />`, "func(e gxscene.EventContext) { n(e )}"},
+		{"箭头调函数", "sig n = 0\nfunc inc(){ n = n + 1 }\n", "() => inc()", `<button onClick={%s}>a</button>`, "func() { inc() }"},
+		{"具名函数", "sig n = 0\nfunc inc(){ n = n + 1 }\n", "inc", `<button onClick={%s}>a</button>`, "return inc"},
+		{"func字面量", "sig n = 0\n", "func() { n = n + 1 }", `<button onClick={%s}>a</button>`, "func() { n(n() + 1 )}"},
+		{"完整带ctx", "sig n = 0\n", "func(ctx gxscene.EventContext) { n = n + 1 }", `<button onClick={%s}>a</button>`, "func(ctx gxscene.EventContext) { n(n() + 1 )}"},
+		{"已Handler", "sig n = 0\n", "gxscene.Handler(func(ctx gxscene.EventContext) { n = n + 1 })", `<button onClick={%s}>a</button>`, "gxscene.Handler(func("},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -58,8 +60,11 @@ func TestEventHandlerSimplifiedForms(t *testing.T) {
 			if hasDiag(res, "event-arrow-statement") {
 				t.Errorf("事件写法不应再报 event-arrow-statement: %v", res.Analysis.Diagnostics())
 			}
-			if !strings.Contains(res.GoSource, "gxscene.Handler(func(") {
-				t.Errorf("事件应包装成 gxscene.Handler:\n%s", res.GoSource)
+			if !strings.Contains(res.GoSource, c.wantExpr) {
+				t.Errorf("编译产物应含 %q:\n%s", c.wantExpr, res.GoSource)
+			}
+			if c.name != "已Handler" && strings.Contains(res.GoSource, "gxscene.Handler(") {
+				t.Errorf("编译产物不应出现 gxscene.Handler 包装:\n%s", res.GoSource)
 			}
 		})
 	}

@@ -69,7 +69,7 @@ func sampleRow(i int) *gxscene.Instance {
     if i >= len(xs) { return <div/> }
     name := xs[i].name
     return <div bg={sampleRowBg(i)} color={sampleRowFg(i)} padding="8" font-size="13" border-radius="4"
-        onClick={gxscene.Handler(func(ctx gxscene.EventContext) { loadSample(i) })}>
+        onClick={() => loadSample(i)}>
         {name}
     </div>
 }
@@ -77,14 +77,14 @@ func sampleRow(i int) *gxscene.Instance {
 // 工具栏按钮：Next / Prev。显式写 *gxscene.Instance 注解。
 pub func nextButton() *gxscene.Instance {
     return <div bg="#0e639c" color="#ffffff" padding="8" font-size="13" border-radius="4"
-        onClick={gxscene.Handler(func(ctx gxscene.EventContext) { nextSample() })}>
+        onClick={nextSample}>
         {"下一个 ▶"}
     </div>
 }
 
 pub func prevButton() *gxscene.Instance {
     return <div bg="#3a3d45" color="#ffffff" padding="8" font-size="13" border-radius="4"
-        onClick={gxscene.Handler(func(ctx gxscene.EventContext) { prevSample() })}>
+        onClick={prevSample}>
         {"◀ 上一个"}
     </div>
 }
