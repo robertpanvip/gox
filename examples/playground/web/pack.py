@@ -3,9 +3,12 @@
 产出可用 file:// 双击打开的单文件 playground.html。
 
 浏览器在 file:// 下禁止 fetch 本地文件，因此 wasm 以 base64 注入全局变量，
-由 src/main.ts 的 decodeBase64 分支离线实例化（服务器部署仍走 fetch 回退）。
+由 src/main.ts 离线实例化（服务器部署仍走 fetch 回退）。wasm 先 gzip 压缩
+再 base64：单文件从 ~6.8MB 降到 ~1.9MB，加载更快；前端用原生
+DecompressionStream('gzip') 解压。
 """
 import base64
+import gzip
 import re
 from pathlib import Path
 
@@ -27,7 +30,10 @@ def main() -> None:
     main_js = re.sub(r"//[#@] sourceMappingURL=.*", "", main_js)
     main_js = js_block(main_js, "dist/main.js (strict TS 7)")
 
-    wasm_b64 = base64.b64encode((ROOT / "app.wasm").read_bytes()).decode("ascii")
+    # 先 gzip 再 base64：wasm 从 ~5MB 压到 ~1.4MB，单文件体积大幅下降，
+    # 浏览器加载/传输更快；前端用原生 DecompressionStream('gzip') 还原。
+    wasm_gz = gzip.compress((ROOT / "app.wasm").read_bytes(), compresslevel=9)
+    wasm_b64 = base64.b64encode(wasm_gz).decode("ascii")
     inject = ('<script>window.__GX_PLAYGROUND_WASM_B64__="' + wasm_b64 + '";</script>')
 
     html = html.replace("<script src=\"wasm_exec.js\"></script>",

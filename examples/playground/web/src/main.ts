@@ -103,14 +103,38 @@ function decodeBase64(base64: string): ArrayBuffer {
   return buffer;
 }
 
+/** 用浏览器原生 DecompressionStream 把 gzip 字节解压为 wasm 字节。 */
+async function gunzip(compressed: ArrayBuffer): Promise<ArrayBuffer> {
+  if (typeof DecompressionStream === "undefined") {
+    throw new Error("当前浏览器不支持 DecompressionStream，无法打开单文件页面");
+  }
+  const stream: ReadableStream<Uint8Array> =
+    new Blob([compressed]).stream().pipeThrough(new DecompressionStream("gzip"));
+  return await new Response(stream).arrayBuffer();
+}
+
 /**
- * 实例化 wasm：单文件 file:// 打开时用内嵌 base64；服务器部署时回退 fetch。
- * 浏览器在 file:// 下禁止 fetch 本地文件，故必须走 base64 分支。
+ * 实例化 wasm：单文件 file:// 打开时用内嵌的 gzip+base64；服务器部署时回退 fetch。
+ * 内嵌数据先解压再实例化；wasm 体积从 ~6.75MB(base64) 降到 ~1.8MB，加载明显更快。
  */
 async function instantiateWasm(go: InstanceType<Window["Go"]>): Promise<WebAssembly.WebAssemblyInstantiatedSource> {
   const embedded: string | undefined = window.__GX_PLAYGROUND_WASM_B64__;
   if (embedded !== undefined && embedded.length > 0) {
-    return await WebAssembly.instantiate(decodeBase64(embedded), go.importObject);
+    const tStart: number = performance.now();
+    const gzBuffer: ArrayBuffer = decodeBase64(embedded);
+    const tDecoded: number = performance.now();
+    const wasmBytes: ArrayBuffer = await gunzip(gzBuffer);
+    const tInflated: number = performance.now();
+    const result: WebAssembly.WebAssemblyInstantiatedSource =
+      await WebAssembly.instantiate(wasmBytes, go.importObject);
+    const tReady: number = performance.now();
+    window.__GX_TIMING__ = {
+      decodeMs: +(tDecoded - tStart).toFixed(1),
+      inflateMs: +(tInflated - tDecoded).toFixed(1),
+      compileMs: +(tReady - tInflated).toFixed(1),
+      readyMs: +tReady.toFixed(1),
+    };
+    return result;
   }
   const response: Response = await fetch("app.wasm");
   if (!response.ok) {

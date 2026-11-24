@@ -29,7 +29,17 @@ declare global {
     readonly Gox?: GoxPlaygroundAPI;
     // file:// 直接打开时由单文件 HTML 注入的 wasm base64；服务器部署时不存在。
     readonly __GX_PLAYGROUND_WASM_B64__?: string;
+    // 加载阶段埋点：解码/编译/就绪耗时（毫秒），仅诊断用。
+    __GX_TIMING__?: LoadTiming;
   }
+}
+
+/** wasm 加载各阶段耗时（毫秒）。 */
+interface LoadTiming {
+  decodeMs: number;
+  inflateMs: number;
+  compileMs: number;
+  readyMs: number;
 }
 
 export {};
