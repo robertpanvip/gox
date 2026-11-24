@@ -39,6 +39,7 @@ type mirrorNode struct {
 	node      *gxscene.Node                // 最新场景节点指针（结构变化后刷新，供事件回投）
 	firstElem ElemID                       // 透明节点(#frag)第一个真实 DOM 子元素；作为 before 锚点时用
 	attrs     map[string]string           // 最近一次下传的普通属性/样式（含空串=已移除）
+	richHTML  string                      // 最近一次下传的富文本 HTML（rich-text 属性）
 	handlers  map[string]func(FiredEvent) // 已注册的事件监听（key=规范化事件名）
 }
 
@@ -293,7 +294,10 @@ func (w *Window) buildLocked(n *gxscene.Node, parent ElemID, before ElemID) Elem
 	if n == nil {
 		return 0
 	}
-	if n.Kind == "#text" || n.Type == gxscene.NodeText {
+	// 富文本节点虽是 NodeText（供 skia 测量/无障碍用纯文本），但 web 端必须
+	// 建成真实 span 元素才能用 innerHTML 一次写入多段着色，故绕过文本节点分支。
+	_, isRich := gxscene.RichTextFromProps(n.Props)
+	if (n.Kind == "#text" || n.Type == gxscene.NodeText) && !isRich {
 		e := w.driver.Create("#text", n.ID)
 		m := newMirrorNode(n.ID, e, "#text")
 		m.node = n
@@ -320,13 +324,29 @@ func (w *Window) buildLocked(n *gxscene.Node, parent ElemID, before ElemID) Elem
 		}
 		return 0
 	}
-	e := w.driver.Create(n.Kind, n.ID)
-	m := newMirrorNode(n.ID, e, n.Kind)
+	createKind := n.Kind
+	if isRich && (createKind == "#text" || createKind == "") {
+		createKind = "span" // 富文本节点必须有真实元素承载 innerHTML
+	}
+	e := w.driver.Create(createKind, n.ID)
+	m := newMirrorNode(n.ID, e, createKind)
 	m.node = n
+	if isRich {
+		m.text = n.Text
+	}
 	w.registerLocked(m)
 
 	// 属性/样式：展平后的标量写属性，事件名单独注册监听。
+	// rich-text 是结构化分段值，走 innerHTML 一次写入（不进标量属性循环）。
+	if rt, ok := gxscene.RichTextFromProps(n.Props); ok {
+		h := rt.HTML()
+		w.driver.SetRichText(e, h)
+		m.richHTML = h
+	}
 	for k, v := range n.Props {
+		if k == gxscene.PropRichText {
+			continue
+		}
 		s := scalarString(v)
 		if s == "" {
 			continue
@@ -342,8 +362,12 @@ func (w *Window) buildLocked(n *gxscene.Node, parent ElemID, before ElemID) Elem
 		w.driver.CanvasOps(e, ops)
 	}
 	w.driver.InsertBefore(parent, e, before)
-	for _, c := range n.Children {
-		w.buildLocked(c, e, 0)
+	// 富文本节点的全部可见内容已在 rich-text 的 innerHTML 里；其子节点只是
+	// 供 skia 测量用的纯文本镜像，渲染到 web 会造成文字重复显示，故跳过。
+	if !isRich {
+		for _, c := range n.Children {
+			w.buildLocked(c, e, 0)
+		}
 	}
 	return e
 }
@@ -418,6 +442,18 @@ func (w *Window) applyChangesLocked(changes []gxscene.Change, root *gxscene.Node
 			if m == nil {
 				continue
 			}
+			if c.Key == gxscene.PropRichText {
+				// 富文本：一次 innerHTML 写入所有着色分段。
+				var h string
+				if rt, ok := c.Value.(gxscene.RichText); ok {
+					h = rt.HTML()
+				}
+				if h != m.richHTML {
+					w.driver.SetRichText(m.elem, h)
+					m.richHTML = h
+				}
+				continue
+			}
 			s := scalarString(c.Value)
 			w.driver.SetAttr(m.elem, c.Key, s)
 			m.attrs[c.Key] = s
@@ -426,6 +462,11 @@ func (w *Window) applyChangesLocked(changes []gxscene.Change, root *gxscene.Node
 			}
 		case gxscene.ChangeSetText:
 			if m == nil {
+				continue
+			}
+			// 富文本节点的内容由 innerHTML 承载；纯文本变化已随 rich-text 一起下发，
+			// 此处跳过 SetText，否则会抹掉着色 span。
+			if m.richHTML != "" {
 				continue
 			}
 			s := scalarString(c.Value)

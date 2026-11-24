@@ -48,6 +48,11 @@ var StylePropNames = []string{
 	"position", "top", "right", "bottom", "left",
 	"overflow", "scroll-top", "scroll-left",
 	"transform", "transition", "box-shadow", "white-space",
+	// 下列 key 后端 web stylemap 已支持（backend/web/stylemap.go），此前白名单遗漏，
+	// 驼峰 style={{...}} 的静态 JSON 路径（ParseStyle→Validate）会被误拒，补齐对齐。
+	"flex-grow", "flex-shrink", "min-width", "max-width", "min-height", "max-height",
+	"margin", "margin-top", "margin-bottom", "margin-left", "margin-right",
+	"text-align", "line-height", "letter-spacing", "z-index", "cursor",
 }
 
 var stylePropSet = func() map[string]bool {

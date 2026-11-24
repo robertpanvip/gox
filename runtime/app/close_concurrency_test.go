@@ -25,11 +25,36 @@ func (w *closeRaceWindow) Run() error           { return nil }
 func (w *closeRaceWindow) Close() error         { return nil }
 func (w *closeRaceWindow) Config() WindowConfig { return w.cfg }
 
-// TestCloseConcurrentWithMutationAndDraw 验收评审 P0：Close 与持续 signal 写入
-// （Scene Mutation）+ Draw 并发，在 -race 下不得报数据竞争、不得 panic。
-// 关键修复：teardownTree 在 commit gate 内、gate 内二次检查 closed/inst、
-// drawNow/Update 取局部 inst 引用。
-func TestCloseConcurrentWithMutationAndDraw(t *testing.T) {
+// chanExecutor 是一个测试用 UIExecutor：把任务投递到单一 UI goroutine 执行。
+type chanExecutor struct {
+	ch   chan func()
+	done chan struct{}
+}
+
+func newChanExecutor() *chanExecutor {
+	e := &chanExecutor{ch: make(chan func(), 1<<16), done: make(chan struct{})}
+	go func() {
+		defer close(e.done)
+		for fn := range e.ch {
+			fn()
+		}
+	}()
+	return e
+}
+
+func (e *chanExecutor) Post(fn func()) error {
+	select {
+	case e.ch <- fn:
+		return nil
+	default:
+		return nil // 队列满则丢弃，模拟关闭
+	}
+}
+
+// 严格单线程模型：后台 goroutine 只通过 Signal.Safe 投递更新，经 UIExecutor
+// 到单一 UI goroutine 执行。验证 Close 与持续 Safe 更新并发时无 panic、无数据竞争，
+// 且关闭后不再提交新帧、投递的任务被丢弃。
+func TestCloseConcurrentWithSafeMutationAndDraw(t *testing.T) {
 	for round := 0; round < 20; round++ {
 		val := signal.New(0)
 		inst := gxscene.Render(gxscene.Template{Ops: []gxscene.Op{
@@ -43,42 +68,54 @@ func TestCloseConcurrentWithMutationAndDraw(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		exec := newChanExecutor()
+		app.SetUIExecutor(exec) // 注入 UI Runtime：Safe 投递到这里串行执行
 		if err := app.Render(func() any { return inst }); err != nil {
 			t.Fatal(err)
 		}
 
 		var wg sync.WaitGroup
-		// 3 个写者持续写 signal（触发 effect mutation + draw 请求）。
+		// 3 个后台写者：只通过 Signal.Safe 投递，绝不直接写 signal。
 		for k := 0; k < 3; k++ {
 			wg.Add(1)
-			go func(k int) {
+			go func() {
 				defer wg.Done()
 				for i := 0; i < 500; i++ {
-					val(i)
+					v := i
+					signal.Safe(func() { val(v) })
 				}
-			}(k)
+			}()
 		}
-		// 1 个绘制者持续 Draw。
+		// 1 个绘制者：Draw 经派发器投递，是并发安全入口；Update 会重算 getter
+		// （读 signal），必须经 Safe 投递到 UI Runtime 执行，不能后台直接调。
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			for i := 0; i < 500; i++ {
 				app.Draw()
-				app.Update()
+				signal.Safe(func() { app.Update() })
 			}
 		}()
-		// 关闭者：稍后关闭，制造与上述操作的交错。
+		// 关闭者：制造与 Safe 更新的交错。Close 会销毁响应式树（Owner.Dispose
+		// 摘订阅表），属于 UI Runtime 的工作，必须同样经 Safe 投递执行——否则
+		// 后台直接 Close 会与 UI goroutine 的 signal 写入并发（普通变量需自己同步）。
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			for i := 0; i < 100; i++ {
-				val(i) // 关闭前也写，确保关闭瞬间有 in-flight mutation
+				v := i
+				signal.Safe(func() { val(v) })
 			}
-			_ = app.Close()
+			signal.Safe(func() { _ = app.Close() })
 		}()
 
 		wg.Wait()
-		_ = app.Close() // 幂等
+		// 不在主 goroutine 直接 Close——那会与 UI goroutine 正在执行的 signal
+		// 写并发。关闭者已把 Close 作为最后一个闭包投递到同一 FIFO 队列，这里
+		// 用屏障等它（及其之前所有任务）执行完。
+		barrier := make(chan struct{})
+		exec.ch <- func() { close(barrier) }
+		<-barrier
 
 		// 关闭后 Draw/Update 不得再触发任何帧。
 		before := w.draws.Load()
@@ -87,5 +124,11 @@ func TestCloseConcurrentWithMutationAndDraw(t *testing.T) {
 		if after := w.draws.Load(); after != before {
 			t.Fatalf("关闭后不应再提交新帧: before=%d after=%d", before, after)
 		}
+
+		// 清理 UI goroutine。
+		close(exec.ch)
+		<-exec.done
+		// 恢复全局 UI post 为 nil，避免影响下一轮/其它测试。
+		signal.SetUIPost(nil)
 	}
 }

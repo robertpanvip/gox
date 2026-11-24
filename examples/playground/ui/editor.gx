@@ -17,40 +17,28 @@ package ui
 import (
     "strings"
     "strconv"
+    Signal "github.com/robertpanvip/gox/runtime/signal"
     gxscene "github.com/robertpanvip/gox/runtime/scene"
 )
 
 // ---- 编辑器状态（包级 sig，单编辑器 playground 足够） ----
 
-pub sig sourceCode = "// 用 GX 写的编辑器，试着输入 GX 代码\nsig count = 0\nfunc main() {\n    count = count() + 1\n}"
+pub sig sourceCode = "// 用 GX 写的编辑器，试着输入 GX 代码\nsig count = 0\nfunc main() {\n    count = count + 1\n}"
 pub sig cursorLine = 0
 pub sig cursorCol = 0
 pub sig editorFocused = false
 
-sig rowVer0 = 0
-sig rowVer1 = 0
-sig rowVer2 = 0
-sig rowVer3 = 0
-sig rowVer4 = 0
-sig rowVer5 = 0
-sig rowVer6 = 0
-sig rowVer7 = 0
-sig rowVer8 = 0
-sig rowVer9 = 0
-sig rowVer10 = 0
-sig rowVer11 = 0
-sig rowVer12 = 0
-sig rowVer13 = 0
-sig rowVer14 = 0
-sig rowVer15 = 0
-sig rowVer16 = 0
-sig rowVer17 = 0
-sig rowVer18 = 0
-sig rowVer19 = 0
-sig rowVer20 = 0
-sig rowVer21 = 0
-sig rowVer22 = 0
-sig rowVer23 = 0
+// 行版本集合：一等细粒度响应式切片。每个元素都是独立 sig——改第 i 行版本
+// 只通知订阅该行的 getter，这正是此前手写 24 个 rowVerN 具名 sig 想模拟的能力。
+// Signal.newVec(...) 是 GX 语法糖，降级为 Signal.NewVec(...)。
+func zeroRowVers() []int {
+    out := []int{}
+    for i := 0; i < 24; i = i + 1 {
+        out = append(out, 0)
+    }
+    return out
+}
+var rowVers = Signal.newVec(zeroRowVers())
 
 // ---- 纯文本编辑逻辑（GX 编写，两端共用） ----
 
@@ -137,30 +125,30 @@ pub func newlineAt(s string, ln int, col int) (string, int, int) {
 // ---- 包级编辑命令：装配层收到键盘事件后调用 ----
 
 pub func editorInsert(s string) {
-    text, c := insertText(sourceCode(), cursorLine(), cursorCol(), s)
+    text, c := insertText(sourceCode, cursorLine, cursorCol, s)
     setSource(text)
     cursorCol = c
     editorFocused = true
 }
 
 pub func editorBackspace() {
-    text, ln, c := backspaceAt(sourceCode(), cursorLine(), cursorCol())
+    text, ln, c := backspaceAt(sourceCode, cursorLine, cursorCol)
     setSource(text)
     cursorLine = ln
     cursorCol = c
 }
 
 pub func editorNewline() {
-    text, ln, c := newlineAt(sourceCode(), cursorLine(), cursorCol())
+    text, ln, c := newlineAt(sourceCode, cursorLine, cursorCol)
     setSource(text)
     cursorLine = ln
     cursorCol = c
 }
 
 pub func editorMove(dln int, dcol int) {
-    lines := splitLines(sourceCode())
-    ln := cursorLine()
-    c := cursorCol()
+    lines := splitLines(sourceCode)
+    ln := cursorLine
+    c := cursorCol
     ln = ln + dln
     if ln < 0 { ln = 0 }
     if ln >= len(lines) { ln = len(lines) - 1 }
@@ -175,14 +163,14 @@ pub func editorMove(dln int, dcol int) {
 pub func editorSetText(s string) {
     setSource(s)
     lines := splitLines(s)
-    if cursorLine() >= len(lines) { cursorLine = len(lines) - 1 }
+    if cursorLine >= len(lines) { cursorLine = len(lines) - 1 }
 }
 
 pub func editorFocus() { editorFocused = true }
 pub func editorBlur()  { editorFocused = false }
-pub func editorLine() int { return cursorLine() }
-pub func editorCol() int { return cursorCol() }
-pub func editorText() string { return sourceCode() }
+pub func editorLine() int { return cursorLine }
+pub func editorCol() int { return cursorCol }
+pub func editorText() string { return sourceCode }
 
 // ---- 语法高亮（GX 编写的类 Ace 分词器） ----
 
@@ -209,12 +197,111 @@ func isKeyword(w string) bool {
     return false
 }
 
-// highlight 把一行 GX 源码切成带颜色的 token，拼回去等于原文。
+// matchBrace 返回从 start 处的 '{' 开始、与之匹配的 '}' 下标；未找到返回 len。
+// 跳过字符串字面量，支持嵌套 {}（JSX 插值里常见 {(t) => <span>{t()}</span>}）。
+func matchBrace(b []byte, start int) int {
+    depth := 0
+    i := start
+    for i < len(b) {
+        if b[i] == '"' {
+            i = i + 1
+            for i < len(b) && b[i] != '"' {
+                if b[i] == '\\' && i+1 < len(b) { i = i + 1 }
+                i = i + 1
+            }
+        } else if b[i] == '{' {
+            depth = depth + 1
+        } else if b[i] == '}' {
+            depth = depth - 1
+            if depth == 0 { return i }
+        }
+        i = i + 1
+    }
+    return len(b)
+}
+
+// highlight 把一行 GX 源码切成带颜色的 token，拼回去严格等于原文。
+// 支持 Go 代码与 JSX：标签名、属性名、{插值} 分别着色，插值内部再按 Go 规则着色。
 pub func highlight(line string) []token {
     var out []token
     b := []byte(line)
     i := 0
+    inTag := false        // 是否处于 <...> 标签内部
+    tagNamePending := false // 标签内尚未读到标签名
     for i < len(b) {
+        // ---- JSX 标签内部 ----
+        if inTag {
+            if b[i] == '>' {
+                out = append(out, token{text: ">", color: "#808080"})
+                i = i + 1
+                inTag = false
+                continue
+            }
+            if b[i] == '/' && i+1 < len(b) && b[i+1] == '>' {
+                out = append(out, token{text: "/>", color: "#808080"})
+                i = i + 2
+                inTag = false
+                continue
+            }
+            // 属性值字符串（含转义）
+            if b[i] == '"' {
+                j := i + 1
+                for j < len(b) && b[j] != '"' {
+                    if b[j] == '\\' && j+1 < len(b) { j = j + 1 }
+                    j = j + 1
+                }
+                if j < len(b) { j = j + 1 }
+                out = append(out, token{text: line[i:j], color: "#ce9178"})
+                i = j
+                continue
+            }
+            // {插值}：递归按 Go 规则着色内部，含嵌套标签
+            if b[i] == '{' {
+                close := matchBrace(b, i)
+                out = append(out, token{text: "{", color: "#808080"})
+                if close < len(b) {
+                    for _, t := range highlight(line[i+1 : close]) { out = append(out, t) }
+                    out = append(out, token{text: "}", color: "#808080"})
+                    i = close + 1
+                } else {
+                    i = i + 1
+                }
+                continue
+            }
+            // 标签名（第一个词）或属性名（允许 kebab-case）
+            if isAlpha(b[i]) {
+                j := i + 1
+                for j < len(b) && isAlnum(b[j]) { j = j + 1 }
+                for j+1 < len(b) && b[j] == '-' && isAlnum(b[j+1]) {
+                    j = j + 1
+                    for j < len(b) && isAlnum(b[j]) { j = j + 1 }
+                }
+                c := "#9cdcfe" // 属性名
+                if tagNamePending { c = "#569cd6"; tagNamePending = false }
+                out = append(out, token{text: line[i:j], color: c})
+                i = j
+                continue
+            }
+            c := "#808080"
+            if b[i] == ' ' || b[i] == '\t' { c = "#d4d4d4" }
+            out = append(out, token{text: line[i : i+1], color: c})
+            i = i + 1
+            continue
+        }
+
+        // ---- Go 代码 ----
+        // JSX 开始标签：< 后跟字母（<div）；或闭合标签 </div>。
+        if b[i] == '<' && i+1 < len(b) && (isAlpha(b[i+1]) || b[i+1] == '/') {
+            out = append(out, token{text: "<", color: "#808080"})
+            i = i + 1
+            inTag = true
+            tagNamePending = true
+            if b[i] == '/' {
+                out = append(out, token{text: "/", color: "#808080"})
+                i = i + 1
+            }
+            continue
+        }
         // 注释：行尾全绿
         if i+1 < len(b) && b[i] == '/' && b[i+1] == '/' {
             out = append(out, token{text: line[i:], color: "#6a9955"})
@@ -262,91 +349,44 @@ pub func highlight(line string) []token {
 
 // ---- 编辑器视图（GX JSX，两端共用） ----
 
-// 每行固定 token 槽位数。GX 的 OpDynChild 会把首次产出的 *Instance 升级为稳定
-// 子树，因此"每次重建整棵子树"不会刷新；正确做法是让每个可变值都是标量 getter。
-// 这里每行固定 N 个 span 槽位，槽位文本/颜色都是读 sig 的 getter——既保留逐 token
-// 高亮，又让 sourceCode 变化精确刷新各槽位。N 取 24 覆盖常见代码行（含缩进）。
-pub const maxTokens = 24
-
-// 按键延迟优化：行级 token 缓存 + 每行独立版本信号。
+// 行级 token 缓存 + 一等细粒度版本集合。
 //
-// 旧实现里，每个 token span 的 text/color getter 都直接读 sourceCode()，于是
-// 8 行 × 24 槽 × 2 = 384 个 effect 全都订阅 sourceCode。插入一个字符写 sourceCode，
-// 384 个 effect 全部重跑（wasm 里实测 ~88ms/键），这是延迟的真正主因。
+// 演进史（性能主线）：
+//   - 最初每个 token 一个 span + 2 个读 sourceCode 的 getter：8 行 × 24 槽 × 2
+//     = 384 个 effect 全订阅整篇源码，插入一字符全量重跑（~88ms/键）。
+//   - 引入行级版本信号后，订阅粒度细化到行：打字只 bump 变化行（~17ms/键）；
+//     但切换示例是全量替换，所有行版本都 bump，仍有 ~200ms 卡顿。
+//   - 现在把一行拆成"一个富文本节点"（rich-text 分段着色），每行的可变插槽从
+//     48 降到 3。切换示例降到 ~10ms，打字降到 ~1.5ms。行版本用 signal.Vec
+//     （一等细粒度集合）承载，替代了原先手写的 24 个 rowVerN 具名 sig。
 //
-// 新实现：
-//   - tokenCache[i] 缓存第 i 行的分词结果，全文只在 setSource 里分词一次；
-//   - rowVers[i] 每行一个版本信号，token getter 只读自己行的版本（订阅粒度从
-//     "整篇源码" 细化到 "单行"）；
-//   - setSource 比对新旧每行，只 bump 内容变化行的版本 → 插入字符只重跑该行
-//     24×2=48 个 effect（行数不变时 For 也短路），实测降到 ~11ms。
-//
+// tokenCache[i] 缓存第 i 行的分词结果，全文只在 setSource 里分词一次；
+// setSource 比对新旧每行，只 bump 内容变化行的版本——未变行的富文本 getter 不重跑。
 // 所有写 sourceCode 的编辑命令都改走 setSource，保证缓存与版本同步更新。
 var tokenCache [][]token
 
+// rowVersion 读第 idx 行版本：Vec.At(idx) 返回该行独立 sig，读它只订阅这一行。
+// 24 个具名 sig + switch 分发的样板被一等细粒度集合替代。
 func rowVersion(idx int) int {
     if idx < 0 { return 0 }
-    if idx >= 24 { return rowVer23() }
-    if idx == 0 { return rowVer0() }
-    if idx == 1 { return rowVer1() }
-    if idx == 2 { return rowVer2() }
-    if idx == 3 { return rowVer3() }
-    if idx == 4 { return rowVer4() }
-    if idx == 5 { return rowVer5() }
-    if idx == 6 { return rowVer6() }
-    if idx == 7 { return rowVer7() }
-    if idx == 8 { return rowVer8() }
-    if idx == 9 { return rowVer9() }
-    if idx == 10 { return rowVer10() }
-    if idx == 11 { return rowVer11() }
-    if idx == 12 { return rowVer12() }
-    if idx == 13 { return rowVer13() }
-    if idx == 14 { return rowVer14() }
-    if idx == 15 { return rowVer15() }
-    if idx == 16 { return rowVer16() }
-    if idx == 17 { return rowVer17() }
-    if idx == 18 { return rowVer18() }
-    if idx == 19 { return rowVer19() }
-    if idx == 20 { return rowVer20() }
-    if idx == 21 { return rowVer21() }
-    if idx == 22 { return rowVer22() }
-    if idx == 23 { return rowVer23() }
-    return 0
+    if idx >= 24 { idx = 23 }
+    s := rowVers.At(idx)
+    if s == nil { return 0 }
+    return s()
 }
 
 func bumpRow(idx int) {
     if idx < 0 { return }
     if idx >= 24 { idx = 23 }
-    if idx == 0 { rowVer0(rowVer0() + 1); return }
-    if idx == 1 { rowVer1(rowVer1() + 1); return }
-    if idx == 2 { rowVer2(rowVer2() + 1); return }
-    if idx == 3 { rowVer3(rowVer3() + 1); return }
-    if idx == 4 { rowVer4(rowVer4() + 1); return }
-    if idx == 5 { rowVer5(rowVer5() + 1); return }
-    if idx == 6 { rowVer6(rowVer6() + 1); return }
-    if idx == 7 { rowVer7(rowVer7() + 1); return }
-    if idx == 8 { rowVer8(rowVer8() + 1); return }
-    if idx == 9 { rowVer9(rowVer9() + 1); return }
-    if idx == 10 { rowVer10(rowVer10() + 1); return }
-    if idx == 11 { rowVer11(rowVer11() + 1); return }
-    if idx == 12 { rowVer12(rowVer12() + 1); return }
-    if idx == 13 { rowVer13(rowVer13() + 1); return }
-    if idx == 14 { rowVer14(rowVer14() + 1); return }
-    if idx == 15 { rowVer15(rowVer15() + 1); return }
-    if idx == 16 { rowVer16(rowVer16() + 1); return }
-    if idx == 17 { rowVer17(rowVer17() + 1); return }
-    if idx == 18 { rowVer18(rowVer18() + 1); return }
-    if idx == 19 { rowVer19(rowVer19() + 1); return }
-    if idx == 20 { rowVer20(rowVer20() + 1); return }
-    if idx == 21 { rowVer21(rowVer21() + 1); return }
-    if idx == 22 { rowVer22(rowVer22() + 1); return }
-    if idx == 23 { rowVer23(rowVer23() + 1); return }
+    s := rowVers.At(idx)
+    if s == nil { return }
+    s(s() + 1)
 }
 
 // setSource 是写 sourceCode 的唯一入口：重算 token 缓存、只 bump 变化行版本、
 // 并在一个 Batch 内写回 sourceCode（行数变化时 For 据此增删行）。
 func setSource(text string) {
-    oldLines := splitLines(sourceCode())
+    oldLines := splitLines(sourceCode)
     newLines := splitLines(text)
     // 一次分词，整表刷新。
     cache := [][]token{}
@@ -366,13 +406,20 @@ func setSource(text string) {
 }
 
 // EditorLineText 导出给装配层诊断/集成用：读第 idx 行第 slot 个 token 文本。
-pub func EditorLineText(idx int, slot int) string { return lineText(idx, slot) }
+pub func EditorLineText(idx int, slot int) string {
+    _ = rowVersion(idx)
+    ensureTokenCache()
+    if idx < 0 || idx >= len(tokenCache) { return "" }
+    toks := tokenCache[idx]
+    if slot < 0 || slot >= len(toks) { return "" }
+    return toks[slot].text
+}
 
 // 懒初始化：首次渲染时 tokenCache 尚未由 setSource 建立（初始 sourceCode
 // 是包级 sig 字面量，未经编辑命令），此时读一次 sourceCode 全量搭表，保证首帧有内容。
 func ensureTokenCache() {
     if tokenCache != nil { return }
-    s := sourceCode()
+    s := sourceCode
     lines := splitLines(s)
     cache := [][]token{}
     for i := 0; i < len(lines); i = i + 1 {
@@ -381,22 +428,30 @@ func ensureTokenCache() {
     tokenCache = cache
 }
 
-func lineText(idx int, slot int) string {
-    _ = rowVersion(idx) // 订阅本行版本；本行变化才重跑此 getter
-    ensureTokenCache()
-    if idx < 0 || idx >= len(tokenCache) { return "" }
-    toks := tokenCache[idx]
-    if slot < 0 || slot >= len(toks) { return "" }
-    return toks[slot].text
+// lineRich 返回第 idx 行的着色分段。它是该行唯一的富文本 getter：
+// 订阅本行版本（本行变化才重跑），把缓存的 token 列表打包成一个 RichText 值。
+// 于是一行的着色更新 = 1 个属性插槽 + 1 条 Change，而非 24 slot × 2 getter。
+func lineRich(idx int) gxscene.RichText {
+	_ = rowVersion(idx)
+	ensureTokenCache()
+	out := gxscene.RichText{}
+	if idx < 0 || idx >= len(tokenCache) { return out }
+	for _, t := range tokenCache[idx] {
+		out = append(out, gxscene.RichSpan{Text: t.text, Color: t.color})
+	}
+	return out
 }
 
-pub func lineTokenColor(idx int, slot int) string {
-    _ = rowVersion(idx)
-    ensureTokenCache()
-    if idx < 0 || idx >= len(tokenCache) { return "#d4d4d4" }
-    toks := tokenCache[idx]
-    if slot < 0 || slot >= len(toks) { return "#d4d4d4" }
-    return toks[slot].color
+// linePlain 返回第 idx 行纯文本，作为富文本节点的 Text（供布局测量/无障碍）。
+func linePlain(idx int) string {
+	_ = rowVersion(idx)
+	ensureTokenCache()
+	if idx < 0 || idx >= len(tokenCache) { return "" }
+	s := ""
+	for _, t := range tokenCache[idx] {
+		s = s + t.text
+	}
+	return s
 }
 
 // lineGutterColor 与整行同色：行号列不再用独立背景块，避免视觉上把编辑器割成两条。
@@ -406,55 +461,37 @@ func lineGutterColor(idx int) string {
 }
 
 func lineRowBg(idx int) string {
-    if idx == cursorLine() && editorFocused() { return "#2a2d3a" }
+    if idx == cursorLine && editorFocused { return "#2a2d3a" }
     return "#1e1e1e"
 }
 
 func lineNumber(idx int) string { return strconv.itoa(idx + 1) }
 
-// tokenSlots 渲染一行里的固定槽位 token span。slot 索引是编译期常量展开的
-// 标量 getter，文本/颜色都读 sig。
-// white-space="pre" 让每个 token span 内部的空格/制表符原样保留；否则这些 span
-// 处于 flex 行容器中，纯空白 flex item 会被浏览器折叠掉（代码会挤成 "signame"）。
-func tokenSlots(idx int, slot int) *gxscene.Instance {
-    return <span color={lineTokenColor(idx, slot)} white-space="pre" font-size="13">{lineText(idx, slot)}</span>
-}
-
-func slot0(idx int) *gxscene.Instance { return tokenSlots(idx, 0) }
-func slot1(idx int) *gxscene.Instance { return tokenSlots(idx, 1) }
-func slot2(idx int) *gxscene.Instance { return tokenSlots(idx, 2) }
-func slot3(idx int) *gxscene.Instance { return tokenSlots(idx, 3) }
-func slot4(idx int) *gxscene.Instance { return tokenSlots(idx, 4) }
-func slot5(idx int) *gxscene.Instance { return tokenSlots(idx, 5) }
-func slot6(idx int) *gxscene.Instance { return tokenSlots(idx, 6) }
-func slot7(idx int) *gxscene.Instance { return tokenSlots(idx, 7) }
-func slot8(idx int) *gxscene.Instance { return tokenSlots(idx, 8) }
-func slot9(idx int) *gxscene.Instance { return tokenSlots(idx, 9) }
-func slot10(idx int) *gxscene.Instance { return tokenSlots(idx, 10) }
-func slot11(idx int) *gxscene.Instance { return tokenSlots(idx, 11) }
-func slot12(idx int) *gxscene.Instance { return tokenSlots(idx, 12) }
-func slot13(idx int) *gxscene.Instance { return tokenSlots(idx, 13) }
-func slot14(idx int) *gxscene.Instance { return tokenSlots(idx, 14) }
-func slot15(idx int) *gxscene.Instance { return tokenSlots(idx, 15) }
-func slot16(idx int) *gxscene.Instance { return tokenSlots(idx, 16) }
-func slot17(idx int) *gxscene.Instance { return tokenSlots(idx, 17) }
-func slot18(idx int) *gxscene.Instance { return tokenSlots(idx, 18) }
-func slot19(idx int) *gxscene.Instance { return tokenSlots(idx, 19) }
-func slot20(idx int) *gxscene.Instance { return tokenSlots(idx, 20) }
-func slot21(idx int) *gxscene.Instance { return tokenSlots(idx, 21) }
-func slot22(idx int) *gxscene.Instance { return tokenSlots(idx, 22) }
-func slot23(idx int) *gxscene.Instance { return tokenSlots(idx, 23) }
-
-// lineView 渲染一行：行号 + 固定 token 槽位。所有可变属性都是 getter。
-// 行号列与代码区同背景色，整行连续；代码容器 white-space=pre 保留 token 内空白。
+// lineView 渲染一行：行号 + 一个富文本代码节点。
+//
+// 旧实现把一行拆成 24 个固定 token span（每行 48 个 getter），切换示例时
+// 数百个 effect 全量重跑、几百次 DOM 跨边界写入，实测 180~250ms。
+// 新实现把整行着色打包成一个 RichText 属性值：web 后端一次 innerHTML 落地，
+// skia 后端逐段着色。每行的可变插槽从 48 降到 3（行背景/行号/富文本），
+// 节点数从 24 降到 1，切换与打字都只重跑变化行的少数 getter。
 func lineView(idx int) *gxscene.Instance {
-    return <div bg={lineRowBg(idx)} height="22" flex-direction="row" align-items="center">
-        <div bg={lineGutterColor(idx)} color="#858585" width="42" font-size="12" text-align="right" padding="4">{lineNumber(idx)}</div>
-        <div flex-direction="row" padding="6" white-space="pre">
-            {slot0(idx)}{slot1(idx)}{slot2(idx)}{slot3(idx)}{slot4(idx)}{slot5(idx)}{slot6(idx)}{slot7(idx)}
-            {slot8(idx)}{slot9(idx)}{slot10(idx)}{slot11(idx)}{slot12(idx)}{slot13(idx)}{slot14(idx)}{slot15(idx)}
-            {slot16(idx)}{slot17(idx)}{slot18(idx)}{slot19(idx)}{slot20(idx)}{slot21(idx)}{slot22(idx)}{slot23(idx)}
-        </div>
+    // 样式用 react-native 风格的对象字面量：驼峰 key 收进 style={{...}}，
+    // bg 写作 background，编译器降级为 gxscene.Style{...}，runtime 按 key 细粒度 diff。
+    return <div style={{
+        background: lineRowBg(idx),
+        height: 22,
+        flexDirection: "row",
+        alignItems: "center",
+    }}>
+        <div style={{
+            background: lineGutterColor(idx),
+            color: "#858585",
+            width: 42,
+            fontSize: 12,
+            textAlign: "right",
+            padding: 4,
+        }}>{lineNumber(idx)}</div>
+        <span rich-text={lineRich(idx)} white-space="pre" font-size="13">{linePlain(idx)}</span>
     </div>
 }
 
@@ -462,12 +499,12 @@ func lineView(idx int) *gxscene.Instance {
 // 每行的文本/颜色/高亮都是标量 getter（内容变化即精确刷新）。
 pub func Editor() *gxscene.Instance {
     return <div bg="#1e1e1e" border-radius="8" padding="6" flex-direction="column" gap="0" height="320">
-        <For each={indices(len(splitLines(sourceCode())))}>{(i int) => lineView(i())}</For>
+        <For each={indices(len(splitLines(sourceCode)))}>{(i int) => lineView(i())}</For>
     </div>
 }
 
 // EditorStatus 返回编辑器状态栏文本（行列 + 行数），供 playground 头部展示。
 pub func EditorStatus() string {
-    return "Ln " + strconv.itoa(cursorLine()+1) + ", Col " + strconv.itoa(cursorCol()+1) +
-           "  |  " + strconv.itoa(len(splitLines(sourceCode()))) + " lines"
+    return "Ln " + strconv.itoa(cursorLine+1) + ", Col " + strconv.itoa(cursorCol+1) +
+           "  |  " + strconv.itoa(len(splitLines(sourceCode))) + " lines"
 }

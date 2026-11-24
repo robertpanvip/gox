@@ -34,6 +34,10 @@ type Driver interface {
 	RemoveAttr(e ElemID, key string)
 	// SetText 设置文本节点的文本内容。
 	SetText(e ElemID, text string)
+	// SetRichText 用一次 innerHTML 写入带内联着色的富文本分段（语法高亮场景：
+	// 一行代码不再是几十个 span 节点，而是单个节点一次写入）。text 为拼接后的
+	// 纯文本回退，html 为已转义、带 <span style=color> 的片段。
+	SetRichText(e ElemID, html string)
 	// Listen 为元素注册事件监听。event 是规范化事件名（click/input/...，无 on 前缀）。
 	// 回调 fired 由浏览器/测试触发，携带合成事件字段；后端据此构造 SyntheticEvent 回投。
 	Listen(e ElemID, event string, cb func(fired FiredEvent))

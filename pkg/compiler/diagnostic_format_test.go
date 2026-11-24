@@ -14,7 +14,7 @@ func TestDiagnosticFormatConsistency(t *testing.T) {
 		"package main\nfunc main(){ rows:=[]int{1}; _ = <ul> for _, r := range rows { <li>{r}</li> } </ul> }\n",
 		"package main\nfunc main(){ sig n = 0; _ = <button onClick={() => n = n + 1}>a</button> }\n",
 		"package main\nfunc main(){ n:=\"x\"; _ = <input bind:value={n}/> }\n",
-		"package main\ntype Row struct{ name string }\nfunc main(){ sig rows = []Row{{name:\"a\"}}; rows[0].name = \"b\"; _ = rows() }\n",
+		"package main\ntype Row struct{ name string }\nfunc main(){ sig rows = []Row{{name:\"a\"}}; rows[0].name = \"b\"; _ = rows }\n",
 	}
 	total := 0
 	for i, src := range sources {

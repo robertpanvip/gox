@@ -1,7 +1,6 @@
 package signal
 
 import (
-	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -122,21 +121,19 @@ func TestComputedInEffect(t *testing.T) {
 	}
 }
 
-func TestConcurrentReadWrite(t *testing.T) {
+// 严格单线程模型：signal 读写只属于 UI Runtime。后台 goroutine 不得直接读写，
+// 必须经 Signal.Safe 投递（见 safe_test.go）。这里验证单线程顺序读写的正确性。
+func TestSerialReadWrite(t *testing.T) {
 	count := New(0)
 	Effect(func() { _ = count() })
-	var wg sync.WaitGroup
 	for i := 0; i < 8; i++ {
-		wg.Add(1)
-		go func(base int) {
-			defer wg.Done()
-			for j := 0; j < 100; j++ {
-				count(base*100 + j)
-				_ = count()
+		for j := 0; j < 100; j++ {
+			count(i*100 + j)
+			if got := count(); got != i*100+j {
+				t.Fatalf("读回 %d, want %d", got, i*100+j)
 			}
-		}(i)
+		}
 	}
-	wg.Wait()
 }
 
 func TestEffectCounterAtomic(t *testing.T) {
@@ -182,79 +179,52 @@ func TestComputedMutualCyclePanicsRecoverably(t *testing.T) {
 	_ = a()
 }
 
-func TestComputedConcurrentReadComputesOnce(t *testing.T) {
-	// 回归 H-9：并发读同一个被标脏的 computed，f() 对每个脏周期只应执行一次，
-	// 且不能因其它 goroutine 正在重算而误判为循环依赖 panic。
+func TestComputedReadComputesOnce(t *testing.T) {
+	// 惰性求值：读同一个 computed，f() 对每个脏周期只执行一次——单线程下反复读
+	// 不会重复重算，也不会误判为循环依赖。
 	src := New(1)
-	var calls int64
+	calls := 0
 	doubled := Computed(func() int {
-		atomic.AddInt64(&calls, 1)
+		calls++
 		return src() * 2
 	})
-	const readers = 16
-	var wg sync.WaitGroup
-	for i := 0; i < readers; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			if got := doubled(); got != 2 {
-				t.Errorf("doubled() = %d, want 2", got)
-			}
-		}()
+	for i := 0; i < 16; i++ {
+		if got := doubled(); got != 2 {
+			t.Errorf("doubled() = %d, want 2", got)
+		}
 	}
-	wg.Wait()
-	if got := atomic.LoadInt64(&calls); got != 1 {
-		t.Fatalf("compute calls after concurrent first read = %d, want 1", got)
+	if calls != 1 {
+		t.Fatalf("compute calls after repeated reads = %d, want 1", calls)
 	}
 
-	// 写脏后再并发读：仍只重算一次。
+	// 写脏后再读多次：仍只重算一次。
 	src(5)
-	atomic.StoreInt64(&calls, 0)
-	for i := 0; i < readers; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			if got := doubled(); got != 10 {
-				t.Errorf("doubled() = %d, want 10", got)
-			}
-		}()
+	calls = 0
+	for i := 0; i < 16; i++ {
+		if got := doubled(); got != 10 {
+			t.Errorf("doubled() = %d, want 10", got)
+		}
 	}
-	wg.Wait()
-	if got := atomic.LoadInt64(&calls); got != 1 {
-		t.Fatalf("compute calls after concurrent invalidated read = %d, want 1", got)
+	if calls != 1 {
+		t.Fatalf("compute calls after invalidated reads = %d, want 1", calls)
 	}
 }
 
-func TestConcurrentEffectsIsolatedDeps(t *testing.T) {
-	// 回归 H-8：两个 goroutine 各自建立 effect 依赖，观察者栈必须隔离——
-	// 写 B 只应触发 B 的 effect，不得因共享全局 observer 而登记到 A 的 effect。
+func TestEffectsIsolatedDeps(t *testing.T) {
+	// 两个 effect 各自建立依赖：写 b 只应触发依赖 b 的 effect，不得串到依赖 a 的那个。
 	a := New(0)
 	b := New(0)
-	var runsA, runsB int64
-	ready := make(chan struct{})
-	var wg sync.WaitGroup
-	wg.Add(2)
-	go func() {
-		defer wg.Done()
-		Effect(func() { atomic.AddInt64(&runsA, 1); _ = a() })
-		<-ready
-	}()
-	go func() {
-		defer wg.Done()
-		Effect(func() { atomic.AddInt64(&runsB, 1); _ = b() })
-		<-ready
-	}()
-	close(ready)
-	wg.Wait()
+	runsA, runsB := 0, 0
+	Effect(func() { runsA++; _ = a() })
+	Effect(func() { runsB++; _ = b() })
 
-	atomic.StoreInt64(&runsA, 0)
-	atomic.StoreInt64(&runsB, 0)
+	runsA, runsB = 0, 0
 	b(1)
-	if got := atomic.LoadInt64(&runsA); got != 0 {
-		t.Fatalf("effect A ran %d times on b write, want 0 (deps crossed goroutines)", got)
+	if runsA != 0 {
+		t.Fatalf("effect A ran %d times on b write, want 0", runsA)
 	}
-	if got := atomic.LoadInt64(&runsB); got != 1 {
-		t.Fatalf("effect B ran %d times on b write, want 1", got)
+	if runsB != 1 {
+		t.Fatalf("effect B ran %d times on b write, want 1", runsB)
 	}
 }
 
@@ -270,133 +240,89 @@ func containsChineseSubstr(s, sub string) bool {
 	return false
 }
 
-// TestComputedNoStaleOnConcurrentWrite 回归 P1-2：computed 的 f() 在锁外计算期间，
-// 若另一 goroutine 写了源信号并标脏，旧结果不得写回冲掉失效标记。
-// 用 channel 屏障确定性复现该竞态窗口。
-func TestComputedNoStaleOnConcurrentWrite(t *testing.T) {
+// TestComputedNoStale 验证 computed 在源信号变化后惰性重算得到新值、不返回陈旧缓存。
+// 严格单线程模型下计算不会被其它 goroutine 打断，「计算期间写脏」的竞态窗口不复存在，
+// version 校验仍保留作为防御；这里验证对外的正确性契约。
+func TestComputedNoStale(t *testing.T) {
 	src := New(2)
-	started := make(chan struct{})
-	release := make(chan struct{})
-	done := make(chan int, 1)
-
-	d := Computed(func() int {
-		v := src() // 读旧值 2，登记依赖
-		select {
-		case started <- struct{}{}:
-		default:
-		}
-		<-release // 期间放行另一 goroutine 写源
-		return v * 2
-	})
-
-	go func() { done <- d() }()
-	<-started // f() 已读到 2
-	src(5)    // 写 5 → collectDirty 标脏 d（version++）
-	close(release)
-	got := <-done
-
-	if got != 10 {
-		t.Errorf("计算期间写入被吞：d()=%d, want=10", got)
+	d := Computed(func() int { return src() * 2 })
+	if got := d(); got != 4 {
+		t.Fatalf("initial d()=%d, want 4", got)
+	}
+	src(5) // 标脏
+	if got := d(); got != 10 {
+		t.Errorf("写脏后 d()=%d, want=10", got)
 	}
 	if again := d(); again != 10 {
-		t.Errorf("后续读取仍是陈旧值：d()=%d, want=10", again)
+		t.Errorf("再次读取 d()=%d, want=10", again)
 	}
 }
 
-// TestEffectSerialUnderConcurrentWrites 回归 P1-3：多个 goroutine 并发写同一 signal
-// 触发 effect 时，effect 回调不得并发执行（否则用户回调里的共享状态会数据竞争）。
-// 在 -race 下运行此测试可验证无竞争；无 -race 时验证回调串行（用原子计数检测重入）。
-func TestEffectSerialUnderConcurrentWrites(t *testing.T) {
+// TestEffectSerialUnderWrites 验证 effect 回调不并发执行（单线程模型下天然串行），
+// 且每次写都触发一次重跑。
+func TestEffectSerialUnderWrites(t *testing.T) {
 	count := New(0)
-	var active, maxActive, total int32
+	active, maxActive, total := 0, 0, 0
 	Effect(func() {
-		cur := atomic.AddInt32(&active, 1)
-		for {
-			m := atomic.LoadInt32(&maxActive)
-			if cur <= m || atomic.CompareAndSwapInt32(&maxActive, m, cur) {
-				break
-			}
+		active++
+		if active > maxActive {
+			maxActive = active
 		}
 		_ = count() // 登记依赖
-		atomic.AddInt32(&total, 1)
-		atomic.AddInt32(&active, -1)
+		total++
+		active--
 	})
 
-	var wg sync.WaitGroup
-	for i := 0; i < 200; i++ {
-		wg.Add(1)
-		go func(v int) {
-			defer wg.Done()
-			count(v)
-		}(i)
+	for i := 1; i <= 200; i++ {
+		count(i) // 从 1 开始，避免首写与初值 0 相等被短路
 	}
-	wg.Wait()
 
-	if got := atomic.LoadInt32(&maxActive); got != 1 {
-		t.Errorf("effect 回调发生并发执行：maxActive=%d, want=1", got)
+	if maxActive != 1 {
+		t.Errorf("effect 回调发生并发执行：maxActive=%d, want=1", maxActive)
 	}
-	if atomic.LoadInt32(&total) == 0 {
-		t.Error("effect 从未执行")
+	if total != 201 {
+		t.Errorf("effect 执行次数=%d, want=201", total)
 	}
 }
 
-// TestNestedComputedConcurrentRead 回归 P1-3：嵌套 computed（观察者栈多层）在并发读写下
-// 栈的 push/pop 不共享 node.prev，不破坏彼此的栈结构。
-func TestNestedComputedConcurrentRead(t *testing.T) {
+// TestNestedComputedRead 验证嵌套 computed（观察者栈多层）读写正确、栈结构不被破坏。
+func TestNestedComputedRead(t *testing.T) {
 	a := New(1)
 	b := New(2)
 	outer := Computed(func() int {
 		inner := Computed(func() int { return b() })
 		return a() + inner()
 	})
-	var wg sync.WaitGroup
 	for i := 0; i < 100; i++ {
-		wg.Add(1)
-		go func(v int) {
-			defer wg.Done()
-			b(v)
-			_ = outer()
-		}(i)
+		b(i)
+		if got := outer(); got != 1+i {
+			t.Fatalf("outer()=%d, want=%d", got, 1+i)
+		}
 	}
-	wg.Wait()
 }
 
-// TestComputedComputesOncePerInvalidation 回归 P1-1（recompute 计算权竞争窗口）：
-// 旧实现「检查 dirty」与「设置 computing」分处两个临界区，中间窗口让并发读者
-// 都能越过检查、各自执行 f()。修复后计算权在同一临界区内原子占用，f() 永不并发。
-// 这里检测 f() 的最大并发执行数必须恒为 1；200 轮 × 8 读者提供足够并发压力。
+// TestComputedComputesOncePerInvalidation 验证每个失效周期内 f() 只执行一次：
+// 写脏一次后反复读，f() 只在首次读时重算。单线程模型下计算权天然唯一。
 func TestComputedComputesOncePerInvalidation(t *testing.T) {
 	src := New(0)
-	var inFlight, maxInFlight int32
+	calls := 0
 	d := Computed(func() int {
-		cur := atomic.AddInt32(&inFlight, 1)
-		for {
-			m := atomic.LoadInt32(&maxInFlight)
-			if cur <= m || atomic.CompareAndSwapInt32(&maxInFlight, m, cur) {
-				break
-			}
-		}
-		v := src()
-		runtime.Gosched() // 放大重叠窗口（若有多个 f() 同时进入）
-		atomic.AddInt32(&inFlight, -1)
-		return v
+		calls++
+		return src()
 	})
 
 	const rounds, readers = 200, 8
-	var wg sync.WaitGroup
 	for r := 0; r < rounds; r++ {
 		src(r)
-		wg.Add(readers)
+		before := calls
 		for i := 0; i < readers; i++ {
-			go func() {
-				defer wg.Done()
-				_ = d()
-			}()
+			if got := d(); got != r {
+				t.Fatalf("d()=%d, want %d", got, r)
+			}
 		}
-		wg.Wait()
-	}
-	if got := atomic.LoadInt32(&maxInFlight); got != 1 {
-		t.Fatalf("computed f() 发生并发执行：maxInFlight=%d, want 1", got)
+		if calls != before+1 {
+			t.Fatalf("第 %d 轮 f() 执行 %d 次，want 1", r, calls-before)
+		}
 	}
 }
 
@@ -433,73 +359,38 @@ func TestEffectRecoversAfterPanic(t *testing.T) {
 	}
 }
 
-// TestFastPathNoLostDependency 回归性能优化引入的 activeObservers 快路径：
-// 当普通读者（不在 observer 栈内）与 effect 重算并发混跑时，effect 的依赖
-// 不得因读快路径跳过 track 而丢失。这里让一个 effect 依赖 src，随后高频
-// 并发写 src，同时大量普通读者走快路径读 src；最后写 src 必须仍触发 effect。
+// TestFastPathNoLostDependency 验证读快路径（非 observer 上下文的普通读）不会
+// 破坏已建立的依赖：高频普通读混在写之间后，effect 的依赖仍完整，再写恰好重跑一次。
 func TestFastPathNoLostDependency(t *testing.T) {
 	src := New(0)
-	var runs int64
-	Effect(func() { atomic.AddInt64(&runs, 1); _ = src() })
-	base := atomic.LoadInt64(&runs)
+	runs := 0
+	Effect(func() { runs++; _ = src() })
+	base := runs
 
-	var wg sync.WaitGroup
-	// 8 个普通读者高频走快路径读（它们从不进 observer 栈）
-	for i := 0; i < 8; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for j := 0; j < 500; j++ {
-				_ = src()
-			}
-		}()
-	}
-	// 同时若干写者触发 effect 重算
 	for i := 0; i < 4; i++ {
-		wg.Add(1)
-		go func(base int) {
-			defer wg.Done()
-			for j := 1; j <= 100; j++ {
-				src(base*100 + j)
-			}
-		}(i)
+		for j := 1; j <= 100; j++ {
+			_ = src() // 普通读者走读快路径
+			src(i*100 + j)
+		}
 	}
-	wg.Wait()
 
-	// 混跑结束后依赖必须仍完整：再写一次应恰好触发 effect 一次。
-	before := atomic.LoadInt64(&runs)
+	before := runs
 	src(99999)
-	if got := atomic.LoadInt64(&runs); got != before+1 {
+	if got := runs; got != before+1 {
 		t.Fatalf("快路径疑似丢失依赖：写后 effect runs %d→%d, want +1 (base=%d)", before, got, base)
 	}
 }
 
-// TestFastPathValueAtomicUnderWrites 回归 value 原子化后的读一致性：
-// 并发读写时读者只能看到写入过的值之一，不得看到撕裂/零值。
-func TestFastPathValueAtomicUnderWrites(t *testing.T) {
+// TestSerialValueConsistency 验证顺序读写时值始终一致——单线程模型下 value 是
+// 普通字段，不存在撕裂读写，这里确认读回的总是最后一次写入的值。
+func TestSerialValueConsistency(t *testing.T) {
 	s := New(uint64(0))
-	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		for i := uint64(1); i <= 20000; i++ {
-			s(i)
+	for i := uint64(1); i <= 20000; i++ {
+		s(i)
+		if v := s(); v != i {
+			t.Fatalf("读写不一致: wrote %d, read %d", i, v)
 		}
-	}()
-	for r := 0; r < 4; r++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for j := 0; j < 20000; j++ {
-				v := s()
-				if v > 20000 {
-					t.Errorf("读到撕裂/越界值: %d", v)
-					return
-				}
-			}
-		}()
 	}
-	wg.Wait()
 }
 
 // 第十轮 P1-2：LockedGetter 使"读跟随/写落回变量"的 getter 并发安全。

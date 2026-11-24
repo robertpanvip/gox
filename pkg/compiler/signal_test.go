@@ -9,7 +9,7 @@ func TestSignalDeclDesugar(t *testing.T) {
 	// sig name = expr → var name = Signal.New(expr)，并注入 import
 	src := `package main
 sig count = 0
-func main() { println(count()) }
+func main() { println(count) }
 `
 	got := compileOK(t, "sig1.gx", src)
 	containsAll(t, got,
@@ -84,7 +84,7 @@ func main() {
     var b Box = Box{count: 1}
     println(b.count)
     println(use(2))
-    println(count())
+    println(count)
 }
 `
 	got := compileOK(t, "sig6.gx", src)
@@ -156,7 +156,7 @@ func TestSignalImportReuseAlias(t *testing.T) {
 	src := `package main
 import S "github.com/robertpanvip/gox/runtime/signal"
 sig count = 0
-func main() { println(count()) }
+func main() { println(count) }
 `
 	got := compileOK(t, "sig8.gx", src)
 	containsAll(t, got, `S.New(0)`)
@@ -191,7 +191,7 @@ func main() {
 	sig c = 2
 	b = c
 	c += a
-	println(b(), c())
+	println(b, c)
 }
 `
 	got := compileOK(t, "sigrhs.gx", src)
@@ -237,7 +237,7 @@ func TestSignalNameShadowedByParam(t *testing.T) {
 	src := `package main
 sig count = 0
 func getCount(count int) int { return count + 1 }
-func main() { println(getCount(1), count()) }
+func main() { println(getCount(1), count) }
 `
 	got := compileOK(t, "sigshadowparam.gx", src)
 	if strings.Contains(got, "return count()") {
@@ -252,7 +252,7 @@ func TestSignalNameShadowedByLocal(t *testing.T) {
 	src := `package main
 sig count = 0
 func test() { count := 100; println(count) }
-func main() { test(); println(count()) }
+func main() { test(); println(count) }
 `
 	got := compileOK(t, "sigshadowlocal.gx", src)
 	if strings.Contains(got, "count := 100; println(count())") {

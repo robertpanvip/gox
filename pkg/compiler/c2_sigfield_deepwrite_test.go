@@ -47,8 +47,8 @@ func TestSigFieldDeepWriteDiagnosticGuards(t *testing.T) {
 		{"只读不报", "package main\ntype S struct { n int }; type H struct { sig s S }\nfunc main() { h := H{s: S{n:1}}; _ = h.s.n }\n", false},
 		{"sig字段自身写不报", "package main\ntype H struct { sig n int }\nfunc main() { h := H{n: 1}; h.n = 2; _ = h }\n", false},
 		{"普通字段深写不报", "package main\ntype S struct { n int }; type H struct { s S }\nfunc main() { h := H{s: S{n:1}}; h.s.n = 2; _ = h }\n", false},
-		{"B4仍报", "package main\ntype S struct { n int }\nfunc main() { sig s = S{n:1}; s.n = 2; _ = s() }\n", true},
-		{"C2仍报", "package main\ntype Row struct { name string }\nfunc main() { sig rows = []Row{{name:\"a\"}}; rows[0].name = \"b\"; _ = rows() }\n", true},
+		{"B4仍报", "package main\ntype S struct { n int }\nfunc main() { sig s = S{n:1}; s.n = 2; _ = s }\n", true},
+		{"C2仍报", "package main\ntype Row struct { name string }\nfunc main() { sig rows = []Row{{name:\"a\"}}; rows[0].name = \"b\"; _ = rows }\n", true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

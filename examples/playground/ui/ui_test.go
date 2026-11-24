@@ -60,6 +60,42 @@ func TestHighlight(t *testing.T) {
 	}
 }
 
+// 验证 JSX 着色：标签名、属性名、属性值、{插值} 各自着色，且 token 严格拼回原文。
+func TestHighlightJSX(t *testing.T) {
+	line := `<div flex-direction="column"><For each={todos()}>{(t string) => <span>{t()}</span>}</For></div>`
+	toks := Highlight(line)
+	var sb strings.Builder
+	for _, tk := range toks {
+		sb.WriteString(tk.Text)
+	}
+	if sb.String() != line {
+		t.Fatalf("JSX tokens 拼回不等原文:\n got %q\nwant %q", sb.String(), line)
+	}
+
+	// 按位置取颜色（同名 token 可能出现多次，逐个断言其颜色集合）。
+	has := func(text, color string) bool {
+		for _, tk := range toks {
+			if tk.Text == text && tk.Color == color {
+				return true
+			}
+		}
+		return false
+	}
+	for _, c := range []struct{ text, color string }{
+		{"div", "#569cd6"},            // 标签名
+		{"flex-direction", "#9cdcfe"}, // kebab-case 属性名
+		{`"column"`, "#ce9178"},       // 属性值字符串
+		{"each", "#9cdcfe"},           // 插值外的属性名
+		{"todos", "#d4d4d4"},          // 插值内的 Go 标识符
+		{"string", "#c586c0"},         // 插值内的 Go 类型关键字
+		{"For", "#569cd6"},            // 闭合标签名
+	} {
+		if !has(c.text, c.color) {
+			t.Errorf("缺少 token %q 颜色 %q；实际: %+v", c.text, c.color, toks)
+		}
+	}
+}
+
 // 验证 GX JSX 编译产物能构建出完整场景树（自举核心：GX 写的 UI 是真实场景树）。
 func TestPlaygroundSceneTree(t *testing.T) {
 	inst := Playground()

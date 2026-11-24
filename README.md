@@ -606,6 +606,9 @@ gox build demo.gx -check -module example.com/app \
     -replace example.com/app=/path/to/runtime     # 转译 + 真实编译检查（错误回投 .gx）
 gox sourcemap demo.gx -o map.json                 # sourcemap
 gox map-lookup -to-go map.json 5 16               # 位置正查
+gox fmt demo.gx                                   # 格式化 JSX（输出到 stdout）
+gox fmt -w ./examples                             # 递归格式化目录内 .gx 并写回
+gox fmt -check demo.gx                            # CI 检查是否已格式化
 gox lsp-map ./examples                            # 项目符号 JSON
 gox lsp                                           # 启动 LSP
 ```

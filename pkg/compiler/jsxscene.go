@@ -35,6 +35,9 @@ import (
 type jsxSceneCtx struct {
 	sigs  map[string]bool
 	comps map[string]string
+	// explicitSigCallErr: JSX 插值里用户显式调用 sig（{count()}）时记录，
+	// 编译结束后由 transformJSXScene 返回给上层报错。
+	explicitSigCallErr error
 	// sigTypes: sig 变量声明类型（改写前收集，如 users→[]User），
 	// 供 <For> 在 render 参数无类型注解时从 each 推断元素类型。
 	sigTypes map[string]string
@@ -425,11 +428,26 @@ func walkScene(n *jsxNode, ops *[]sceneOp, getters *[]sceneGetter, slotCounter *
 		// 非 JSON 的对象字面量（如 {{ color: "red" }}，key 无引号）仍报原诊断。
 		// class 无样式表语义，保持原诊断不变。
 		if a.kind == attrExpr && isObjectLitText(a.value) {
-			if a.name == "style" && json.Valid([]byte(a.value)) {
-				a.value = "gxscene.parseStyle(" + strconv.Quote(a.value) + ")"
-			} else if a.name == "class" || a.name == "style" {
+			if a.name == "style" {
+				// React-native 风格：驼峰 key + 动态表达式值 → gxscene.Style{...}。
+				// 整块作为一个动态属性插槽，runtime writeAttr 按 key 细粒度 diff。
+				if styleToks, ok := styleObjToTokens(a.value, a.pos, ctx); ok {
+					s := *slotCounter
+					*slotCounter++
+					*ops = append(*ops, sceneOp{code: "OpDynAttr", key: "style", slot: s})
+					*getters = append(*getters, sceneGetter{pos: a.pos, call: styleToks})
+					continue
+				}
+				// 兼容既有 JSON 形态（key 带引号）：静态 parseStyle。
+				if json.Valid([]byte(a.value)) {
+					a.value = "gxscene.parseStyle(" + strconv.Quote(a.value) + ")"
+				} else {
+					ctx.reportAttrUnsupported(a.pos, a.name,
+						"style 对象字面量无法识别：key 请用驼峰（如 { fontSize: 12 }）或带引号 JSON（如 {\"&:hover\":{\"bg\":\"#eee\"}}）")
+				}
+			} else if a.name == "class" {
 				ctx.reportAttrUnsupported(a.pos, a.name,
-					a.name+" 不支持对象字面量；style 请用带引号 key 的 JSON（如 {\"&:hover\":{\"bg\":\"#eee\"}}）或条件表达式")
+					"class 不支持对象字面量；请用字符串类名或条件表达式")
 			}
 		}
 		// B10：双引号字符串里的 ${...} 不会被 GX 模板串展开（模板串用反引号），
@@ -778,7 +796,7 @@ func forTokens(n *jsxNode, ctx *jsxSceneCtx) []Token {
 		// key body 是以 kName 为自由变量的表达式，需补 sig 读 ()。
 		bodyToks := New(kBody).AllTokens()
 		if len(ctx.sigs) > 0 {
-			bodyToks = rewriteJSXInterpSignals(bodyToks, ctx.sigs)
+			bodyToks = rewriteJSXInterpSignals(bodyToks, ctx.sigs, &ctx.explicitSigCallErr, "")
 		}
 		// Bug 01（处 2）：key lambda 读 item 的 sig 字段（如 key={(u)=>u.name}）
 		// 也要补 ()，否则 key 取到函数地址、去重永远不相等。注入 kName 的静态
@@ -1393,7 +1411,7 @@ func lexExprScene(expr string, base Pos, ctx *jsxSceneCtx) []Token {
 			}
 			effective[ctx.forItemParam] = true
 		}
-		toks = rewriteJSXInterpSignals(toks, effective)
+		toks = rewriteJSXInterpSignals(toks, effective, &ctx.explicitSigCallErr, ctx.forItemParam)
 	}
 	// sig 字段 selector 读补 ()（如组件内 {p.name} → p.name()）。
 	// 与 rewriteJSXInterpSignals 独立：后者只认全局 sig 名，不管 sig 字段。

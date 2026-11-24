@@ -477,10 +477,10 @@ func TestIntegrationArrowBlockCallbacks(t *testing.T) {
 import "fmt"
 sig n = 0
 func main() {
-    let doubled = Signal.computed(() => n() * 2)
-    Signal.effect(() => { fmt.Println("init", doubled()) })
+    let doubled = Signal.computed(() => n * 2)
+    Signal.effect(() => { fmt.Println("init", doubled) })
     Signal.batch(() => { n = 4; n = 5 })
-    fmt.Println("final", n(), doubled())
+    fmt.Println("final", n, doubled)
 }
 `
 	out := runGX(t, src)
@@ -867,7 +867,7 @@ func main() {
     sig src = "x"
     p := CardProps{name: src, age: 3}
     println(show(p))
-    src("changed")
+    src = "changed"
     println(show(p))
     p.name = "direct"
     println(p.name)
@@ -895,9 +895,9 @@ type CardProps struct { sig label string }
 func show(p CardProps) string { return p.label }
 func main() {
 	sig n = 1
-	p := CardProps{label: "n=" + Itoa(n())}
+	p := CardProps{label: "n=" + Itoa(n)}
 	println(show(p))
-	n(2)
+	n = 2
 	println(show(p))
 }
 func Itoa(x int) string {
@@ -931,7 +931,7 @@ func main() {
 	p := P{a: src}
 	q := Q{a: p.a}
 	println(q.a)
-	src("y")
+	src = "y"
 	println(q.a)
 }
 `
@@ -1071,7 +1071,7 @@ func main() {
 	o := Outer{mid: Mid{b: lb}}
 	q := Q{v: o.mid.b.c}
 	fmt.Println("read1", q.v())
-	lb(Leaf{c: "second"})
+	lb = Leaf{c: "second"}
 	fmt.Println("read2", q.v())
 	q.v = "written"
 	fmt.Println("read3", q.v())

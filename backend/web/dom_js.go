@@ -150,6 +150,16 @@ func (d *jsDriver) SetText(e ElemID, text string) {
 	}
 }
 
+// SetRichText 一次 innerHTML 写入着色片段。 syscall/js 的每次跨边界调用都昂贵，
+// 富文本把一行的 N 个 token 从 N 次 textContent/setAttribute 合并为 1 次 innerHTML。
+func (d *jsDriver) SetRichText(e ElemID, richHTML string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if el := d.elements[e]; el != nil {
+		el.v.Set("innerHTML", richHTML)
+	}
+}
+
 func (d *jsDriver) Listen(e ElemID, event string, cb func(FiredEvent)) {
 	d.mu.Lock()
 	defer d.mu.Unlock()

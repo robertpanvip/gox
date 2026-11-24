@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/robertpanvip/gox/internal/buildcheck"
+	"github.com/robertpanvip/gox/pkg/compiler"
 )
 
 // Server 是 GX 语言服务器。
@@ -92,8 +93,9 @@ func (s *Server) handleRequest(req *RequestMessage, body []byte) (any, *RPCError
 				DefinitionProvider:     true,
 				HoverProvider:          true,
 				CompletionProvider:     &CompletionOptions{TriggerCharacters: []string{"."}},
-				DocumentSymbolProvider: true,
-				RenameProvider:         true,
+				DocumentSymbolProvider:     true,
+				RenameProvider:             true,
+				DocumentFormattingProvider: true,
 			},
 			ServerInfo: ServerInfo{Name: "gox-lsp", Version: "0.1.0"},
 		}, nil
@@ -109,6 +111,8 @@ func (s *Server) handleRequest(req *RequestMessage, body []byte) (any, *RPCError
 		return s.documentSymbol(body)
 	case "textDocument/rename":
 		return s.rename(body)
+	case "textDocument/formatting":
+		return s.formatting(body)
 	default:
 		return nil, &RPCError{Code: -32601, Message: fmt.Sprintf("method not found: %s", req.Method)}
 	}
@@ -402,6 +406,32 @@ func (s *Server) rename(body []byte) (any, *RPCError) {
 }
 
 // findIdentifierEdits 扫描所有行的标识符，按 replacements 精确替换，编辑范围按实际拼写宽度。
+// formatting 处理 textDocument/formatting：返回覆盖全文的 TextEdit。
+// 与 gox fmt 共用 compiler.Format，确保 CLI 与 LSP 行为一致。
+func (s *Server) formatting(body []byte) (any, *RPCError) {
+	var p DocumentFormattingParams
+	if err := json.Unmarshal(body, &p); err != nil {
+		return nil, &RPCError{Code: -32700, Message: err.Error()}
+	}
+	d := s.docs[p.TextDocument.URI]
+	if d == nil {
+		return []TextEdit{}, nil
+	}
+	out := compiler.Format(d.Text)
+	if out == d.Text {
+		return []TextEdit{}, nil
+	}
+	lines := strings.Split(d.Text, "\n")
+	endLine := len(lines) - 1
+	return []TextEdit{{
+		Range: Range{
+			Start: Position{Line: 0, Character: 0},
+			End:   Position{Line: endLine, Character: len(lines[endLine])},
+		},
+		NewText: out,
+	}}, nil
+}
+
 func findIdentifierEdits(lines []string, replacements map[string]string) []TextEdit {
 	var edits []TextEdit
 	for li, line := range lines {

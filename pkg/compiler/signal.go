@@ -84,6 +84,55 @@ func startsUpper(s string) bool {
 	return false
 }
 
+// checkNoExplicitSigCall 禁止用户显式调用 sig 变量（如 count()）。
+//
+// GX 的 sig 是「透明响应式变量」：读写都按普通变量书写（count + 1、count = 5），
+// 编译器统一降级为函数式 Signal 的调用式（count()、count(5)）。用户手写 count()
+// 是把实现细节当语法用——它虽被「已是调用」形态排除而原样保留、侥幸能跑，但语义
+// 脆弱（JSX 插值里绕过订阅登记、与隐式读混用易错），且误导读者以为 GX 需要 ()
+// 读信号。故统一报错，强制惯用写法。
+//
+// 判据：用户手写（IsGen==false）的标识符解析到 BkSignal/BkComputed 绑定，且下一
+// 有效 token 是 '('（显式调用）。形态排除与 ParseSignalExprs 一致：selector 右侧
+// (obj.name)、复合字段键 ({name: ...})、声明目标、声明区不报。
+//
+// 不误伤：
+//   - context getter（score := scoreCtx.use() 后的 score()）是 BkLocal，不是 sig；
+//   - 编译器生成物带 IsGen，跳过；
+//   - sig 声明的初值、赋值目标均非「后跟 (」。
+//
+// 调用时机：与 checkNoRawSignalAPI 同处——Bind 之后、transformSignals 之前。
+func checkNoExplicitSigCall(toks []Token, b *Bindings) error {
+	if b == nil {
+		return nil
+	}
+	for i := 0; i < len(toks); i++ {
+		t := toks[i]
+		if t.Kind != Ident || t.IsGen {
+			continue
+		}
+		bd := bindingAt(b, t.Text, t.Pos)
+		if bd == nil || (bd.Kind != BkSignal && bd.Kind != BkComputed) {
+			continue
+		}
+		// 形态排除：与 ParseSignalExprs 的读改写排除保持一致。
+		if p := prevSig(toks, i-1); p >= 0 && toks[p].Text == "." {
+			continue // selector 右侧 obj.name
+		}
+		if n := nextSig(toks, i+1); n >= 0 && toks[n].Text == ":" {
+			continue // 复合字段键 {name: ...}
+		}
+		if isSignalDeclTarget(toks, i) || inDeclZone(toks, i) {
+			continue // 声明目标 / 函数参数 / struct 字段
+		}
+		if n := nextSig(toks, i+1); n >= 0 && toks[n].Text == "(" {
+			return fmt.Errorf("%d:%d: sig 变量 %s 应像普通变量一样读写（写 %s 而非 %s()）；GX 会编译期自动补全信号读写",
+				t.Pos.Line, t.Pos.Col, t.Text, t.Text, t.Text)
+		}
+	}
+	return nil
+}
+
 // transformSignals 执行 sig 语法糖降级，返回改写后的 token 流。
 // 放在 Analyze 之前：Analyze 看到的是标准 Go（sig/let 已消除、读写已是调用式）。
 //
@@ -536,7 +585,13 @@ func trimSignalText(s string) string { return strings.TrimSpace(s) }
 // 补上读调用 count()。这里的片段已脱离原始 token 流、无对应 Binding/AST，故沿用
 // 基于 sigs 名字集合的改写逻辑（保留 sig 声明/赋值/复合赋值/自增等完整形态），
 // 与上游三参数 rewriteSignals 分工不同、名字不冲突。
-func rewriteJSXInterpSignals(toks []Token, sigs map[string]bool) []Token {
+func rewriteJSXInterpSignals(toks []Token, sigs map[string]bool, errSink *error, allowCall string) []Token {
+	// errSink：JSX 插值里的 sig 显式调用 count() 应报错（与主 token 流的
+	// checkNoExplicitSigCall 同源）。插值 token 已脱离原始流、无 IsGen，按 sigs
+	// 名字集合判定；遮蔽由调用方传入的 effective 集合 + 本函数形态排除处理。
+	// allowCall：For item getter 参数名——它虽在 sigs 集合里，但 item 是 func() T，
+	// 必须显式 t() 读取（写 t 会拿到函数地址），故排除报错。
+	sink := errSink
 	out := make([]Token, 0, len(toks))
 	for i := 0; i < len(toks); i++ {
 		t := toks[i]
@@ -561,6 +616,10 @@ func rewriteJSXInterpSignals(toks []Token, sigs map[string]bool) []Token {
 			continue
 		}
 		if n := nextSig(toks, i+1); n >= 0 && toks[n].Text == "(" {
+			if sink != nil && *sink == nil && t.Text != allowCall {
+				*sink = fmt.Errorf("%d:%d: sig 变量 %s 应像普通变量一样读写（写 %s 而非 %s()）；GX 会编译期自动补全信号读写",
+					t.Pos.Line, t.Pos.Col, t.Text, t.Text, t.Text)
+			}
 			out = append(out, t)
 			continue
 		}
@@ -578,7 +637,7 @@ func rewriteJSXInterpSignals(toks []Token, sigs map[string]bool) []Token {
 			// load = load + 1 → load(load() + 1)，漏改会生成 load(load + 1)
 			// 导致 Signal[int] 与 int 相加的类型错误。形态排除（selector 右侧 /
 			// 字段键 / 声明目标 / 已是调用 / 嵌套复合赋值）由本函数递归统一处理。
-			out = append(out, rewriteJSXInterpSignals(toks[k:end], sigs)...)
+			out = append(out, rewriteJSXInterpSignals(toks[k:end], sigs, sink, "")...)
 			out = append(out, tokOp(")", t.Pos))
 			i = end - 1
 			continue
@@ -602,7 +661,7 @@ func rewriteJSXInterpSignals(toks []Token, sigs map[string]bool) []Token {
 				k++
 			}
 			// 简单赋值 RHS 同样递归补读调用：a = b → a(b())。
-			out = append(out, rewriteJSXInterpSignals(toks[k:end], sigs)...)
+			out = append(out, rewriteJSXInterpSignals(toks[k:end], sigs, sink, "")...)
 			out = append(out, tokOp(")", t.Pos))
 			i = end - 1
 			continue

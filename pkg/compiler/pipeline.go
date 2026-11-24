@@ -133,6 +133,12 @@ func compileWithMode(file, src, module string, imports map[string]ImportInfo) (*
 	if err := checkNoRawSignalAPI(toks, bindings); err != nil {
 		return nil, err
 	}
+	// 禁止显式调用 sig 变量（count()）：GX 的 sig 读写都按普通变量书写，
+	// 编译器自动降级为函数式 Signal。同样必须在 transformSignals 之前——
+	// 改写后所有 sig 读都会变成 count()，那时的 () 是编译器产物（IsGen），不是用户手写。
+	if err := checkNoExplicitSigCall(toks, bindings); err != nil {
+		return nil, err
+	}
 	// P1：传入 bindings，用 ResolveAt 做遮蔽判断（P1-1 根治）。
 	toks = transformSignals(toks, bindings)
 	analysis := Analyze(toks)    // desugar 之前的 GX 语义层（联合未擦除）
@@ -183,6 +189,11 @@ func compileWithMode(file, src, module string, imports map[string]ImportInfo) (*
 	comps := collectCompContracts(toks, structs)
 	ctx := &jsxSceneCtx{sigs: sigs, comps: comps, sigTypes: sigTypes, bindings: bindings, signalFields: signalFields, diags: &analysis.diags}
 	toks = transformJSXScene(toks, ctx)
+	// JSX 插值里的显式 sig 调用（{count()}）在插值词法化后由 rewriteJSXInterpSignals
+	// 记录到 ctx，与主 token 流的 checkNoExplicitSigCall 同源，统一在此报错。
+	if ctx.explicitSigCallErr != nil {
+		return nil, ctx.explicitSigCallErr
+	}
 	// 第二次对象字面量变换：补全 JSX 转换新产生的 Card({...}) 期望类型并校验。
 	// 第一次已在 desugar 早期处理非 JSX 字面量；这里处理 JSX 阶段新增的。
 	// 原生 Go 模式同样跳过。

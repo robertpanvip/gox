@@ -66,6 +66,39 @@ pub enum perm { read = 1 << iota, write, exec }  // 位标志 1,2,4
 | `<br/>` 空元素 | `gxscene.OpElem Arg:"br"` + `gxscene.OpClose` |
 | `<Foo/>` 组件 | `gxscene.OpComp` + `Foo(gxscene.Props{…})` |
 
+#### `style={{…}}` 对象字面量（react-native 风格样式）
+
+样式既可逐个写成散属性（`bg="#fff" font-size="12"`），也可收进一个 `style` 对象字面量——key 用驼峰，值为普通 GX 表达式（静态字面量或动态 getter），`bg` 语义写作 `background`：
+
+```jsx
+<div style={{
+    background: lineGutterColor(idx),   // 动态值：随 signal 重新求值
+    color: "#858585",
+    width: 42,
+    fontSize: 12,                        // 驼峰 → font-size
+    textAlign: "right",                  // 驼峰 → text-align
+    padding: 4,
+    "&:hover": { bg: "#eee" },           // 伪状态子表递归成嵌套 Style
+}}>
+```
+
+编译为单个 `gxscene.Style{...}` 复合字面量、整块作为一个 `OpDynAttr Slot` 的 getter：
+
+```go
+func() any {
+    return gxscene.Style{
+        "background": lineGutterColor(idx), "color": "#858585", "width": 42,
+        "font-size": 12, "text-align": "right", "padding": 4,
+        "&:hover": gxscene.Style{"bg": "#eee"},
+    }
+}
+```
+
+- **key 映射**：驼峰自动转短横线（`fontSize`→`font-size`、`textAlign`→`text-align`、`borderRadius`→`border-radius`）；已是短横线或 `&:` / `$:` 伪状态的 key 原样保留。合法 key 见 `gxscene.StylePropNames`（与 web 后端 stylemap 对齐）。
+- **动态值**：整块 getter 每次求值重建 Style map，runtime 的 `writeAttr` 按 key 做细粒度 diff（只发变化的属性增量），与散属性写法性能等价。
+- **伪状态**：值为对象字面量时递归编译成嵌套 `gxscene.Style`，展平规则不变（`Flatten` / `Props`）。
+- **兼容**：既有的带引号 key JSON 写法（`style={{"bg":"#fff"}}`）同样编译为 `gxscene.Style{...}`，语义不变。`class` 仍不支持对象字面量。
+
 **JSX 可跨行**：闭合标签后的换行若属于排版缩进（换行后紧跟宿主调用的 `)` / `]` / `,`，中间可夹行注释），编译器会吞掉这段空白，避免 Go 在参数列表换行处要求 trailing comma。因此下面两种写法等价，无需为规避语法错误而把 JSX 挤成单行：
 
 ```jsx
@@ -77,6 +110,17 @@ app.render(() =>
 ```
 
 > 只有紧邻调用闭合符号的排版换行会被吞；后接标识符或 `}`（函数体/语句结束）的换行是真正的语句分隔，保留——不会把 `return` 与函数闭合挤到同一行。
+
+#### `gox fmt`：JSX 格式化
+
+`gox fmt <file.gx>|<dir>...` 格式化 GX 源码：默认输出到 stdout，`-w` 写回文件，`-check` 只检查是否已格式化（CI 用，需要格式化时返回非零）。目录参数递归收集其中的 `.gx`。API 是 `compiler.Format(src) string`。
+
+- **范围**：Go 片段原样保留（编译产物由 gofmt 保证规范）；只重排 JSX 区域。格式化与编译器共用同一个 `jsxParser`，语义一致。
+- **属性**：单行宽度（含缩进）超过 100 列时逐行排列，`>` / `/>` 独占一行；短属性列表保持单行。
+- **子节点**：逐行缩进 4 空格；仅一个文本/插值子节点且宽度允许时保持单行；连续文本/插值（如 `Hello, {name}!`）合并为一行；排版用的纯空白文本丢弃（与 `normalizeText` 一致）。
+- **条件分支**：`if cond { … } else if … { … } else { … }` 按 Go 风格缩进。
+- **lambda**：`{(t string) => <span>…</span>}` 中 `=>` 后的 JSX 递归格式化。
+- **语义保证**：属性/插值的表达式原文原样保留，文本折叠规则与编译器 `normalizeText` 相同；格式化是幂等的，前后编译产物的有效 token 序列一致。
 
 运行时 `runtime/scene/`：`Template` / `Op` / `Render` / `Instance`。`Render` 缓存静态骨架、clone 出常驻场景树；`Instance.Update()` 只回写变化的插槽（可观测指标 `Writes`），不含调度。host 不定义绘制后端接口：GUI 后端实现 `gxapp.Window`，可用 `Node.ID`（整数稳定身份）/ `Changes()` 做增量绘制；内置 `TextBackend` 只是文本工具。
 
@@ -311,6 +355,39 @@ println(doubled)                                   // → println(doubled())，�
 
 - **声明**：`sig n = v` → `var n = Signal.New(v)`；`let n = v` → `n := v`（let 即短声明，无新语义）。
 - **读写改写**：sig 变量的读（裸标识符）自动补 `()`；写改写 `n = v` → `n(v)`、`n += v` → `n(n() + v)`、`n++` → `n(n() + 1)`。
+
+#### 线程模型：单线程响应式 + `Signal.safe`
+
+GoX 的核心线程规则：**响应式系统是单线程的，业务任务可以是多线程的。** Go 负责并发执行网络请求、IO、计算；UI Runtime 负责单线程响应式更新（Signal 读写、Computed 重算、Effect 执行、场景树变更、帧提交）。因此 Signal 读热路径只有一次切片判空 + 一次 map 写入——没有 goroutine id、没有 `runtime.Stack()` 抓栈、没有全局锁、没有原子装箱。
+
+`runtime/signal` 的 benchmark（`go test ./runtime/signal -run '^$' -bench . -benchmem`）前后对比：
+
+| 基准 | 重构前（多 goroutine 锁模型） | 重构后（单线程） | 变化 |
+|---|---|---|---|
+| Signal 读（无观察者） | 2.0 ns/op | 1.6 ns/op | 接近裸变量读（1.2 ns） |
+| Computed 读（缓存干净） | 13.8 ns/op | 2.8 ns/op | **约 5× 快**（去掉 goid 抓栈 + 锁快路径判定） |
+| Signal 写（无订阅者） | 72 ns / 47 B / 5 alloc | 44 ns / 24 B / 2 alloc | 分配减半（去掉 boxedValue 原子装箱；余下是函数式 sig 的可变参数 slice） |
+
+依赖追踪热路径（Effect 内读，含依赖登记）约 12 ns/op、0 分配。写信号成本随订阅者数量线性增长（这是依赖图传播本身，1 / 10 / 100 / 1000 订阅者约 0.2 / 1.2 / 11.7 / 115 µs）。
+
+- **后台 goroutine**：不得直接读写响应式 Signal，必须经 `Signal.safe(() => {...})` 把更新闭包投递给 UI Runtime。编译器把 `Signal.safe` 映射为 `signal.Safe`（通用首字母大写规则，与 `Signal.batch` → `Signal.Batch` 一致）。`Safe` 是**异步投递**——调用后立即返回，不等待执行；投递到已注入的 `UIExecutor`（由 `app.SetUIExecutor` 接线），UI 关闭后任务被丢弃。
+- **UI Runtime 内**（事件回调、effect、`Signal.effect` 等）：直接读写，或用 `Signal.batch(() => {...})` 合并一批写入——`Batch` 只负责合并、不做线程切换，一批写完统一调度 effect 并只提交一帧。若 UI Runtime 内误用 `Safe`，任务会在下一帧执行，语义仍安全但非同步。
+- **职责分离**：`Safe` 只管线程切换（后台 → UI Runtime），`Batch` 只管合并更新。第一版不提供同步等待的 `SafeSync`。
+- **未注入 UI Runtime 时**（headless / 纯测试）：`Safe` 退化为同步执行，调用方须自行保证单线程顺序。
+
+```gx
+// 后台任务：网络回包后更新 UI
+go func() {
+    let data = fetch()
+    Signal.safe(() => { items = data })   // 投递到 UI Runtime，不等待
+}()
+
+// UI Runtime 内：批量更新，合并为一帧
+Signal.batch(() => {
+    count = count + 1
+    name = "Pan"
+})
+```
 - **作用域排除**：selector `obj.n`、复合字段键 `{n: ...}`、struct 字段、函数参数、已显式调用 `n()` 均不改写（注：struct 里显式声明的 `sig name T` 字段是另一项特性，见 §11.1）。
 - **computed**：惰性求值 + 缓存，仅依赖变化时失效；链式派生正确传播。
 - **effect**：立即执行一次，依赖变化时重跑；每次重跑动态重建依赖集合（条件分支依赖可增删）。

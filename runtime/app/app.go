@@ -202,6 +202,24 @@ func (a *App) SetUIExecutor(exec UIExecutor) {
 		return
 	}
 	a.setDispatcher(NewUIExecutorDispatcher(exec))
+
+	// 严格单线程响应式：把 UIExecutor 注入 signal 包，使后台 goroutine 调用的
+	// Signal.Safe(fn) 能把更新闭包投递到 UI Runtime 线程执行。这样 signal 内部
+	// 得以彻底去掉 goroutine id、观察者栈按线程分桶与全局锁。
+	// Post 失败（UI 已关闭）时返回 false，任务由 Safe 侧丢弃。
+	a.bindUITaskPoster(exec.Post)
+}
+
+// bindUITaskPoster 把后端 UIExecutor.Post 适配为 signal.TaskPoster 并注入。
+// 重复调用（如 SetUIExecutor 多次）以最后一次为准；Close 时统一 CloseUITasks。
+func (a *App) bindUITaskPoster(post func(func()) error) {
+	if post == nil {
+		return
+	}
+	poster := signal.TaskPoster(func(fn func()) bool {
+		return post(fn) == nil
+	})
+	signal.SetUIPost(poster)
 }
 
 // drawNow 是派发器最终执行的绘制动作：真正调用窗口 Draw 并记录错误（T2.2）。
@@ -544,6 +562,9 @@ func (a *App) Run() error {
 func (a *App) Close() error {
 	a.closeOnce.Do(func() {
 		a.closed.Store(true)
+		// 先关闭 UI 任务投递：此后后台 goroutine 的 Signal.Safe 更新一律丢弃，
+		// 不会在已销毁的响应式树 / 窗口上执行闭包。
+		signal.CloseUITasks()
 		// 先销毁整棵响应式树：停订阅、执行组件 onCleanup，避免关闭过程中 signal 写入
 		// 触发已关闭窗口的重绘。
 		a.teardownTree()

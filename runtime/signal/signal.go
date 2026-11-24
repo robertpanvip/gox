@@ -1,5 +1,16 @@
 // Package signal 是 GX 响应式 signal 语法糖的运行时。
 //
+// 线程模型（GX 响应式系统的正式设计原则）：
+//
+//	响应式系统是单线程的，业务任务可以是多线程的。
+//
+// Signal 读写、Computed 重算、Effect 执行、Owner 生命周期全部发生在唯一的
+// UI Runtime 执行上下文中。因此依赖追踪不需要 goroutine id、不需要全局锁、
+// 不需要 runtime.Stack 抓栈——Signal 读热路径只有一次切片判空 + 一次 map 写入。
+// 后台 goroutine（网络 / IO / 定时器）不得直接读写响应式 Signal，而应通过
+// Signal.Safe(fn) 把更新闭包投递给 UI Runtime；Signal.Batch(fn) 只负责在同一
+// 上下文内合并一批写入，不做线程切换。
+//
 // GX 写法（signal/let/effect）：
 //
 //	signal count = 0
@@ -19,54 +30,39 @@
 //   - 读 signal/computed 时，若存在当前观察者，登记依赖边；
 //   - 写 signal 时，向下游传播脏标记（computed）并收集 effect 重跑；
 //   - computed 惰性求值：脏标记只在真正被读时触发重算，避免中间抖动。
-//
-// 并发安全：全局互斥锁保护各 goroutine 的观察者栈与节点的订阅/依赖集合；
-// 用户回调（compute/effect 函数体）在锁外执行，回调内仍可安全地读写 signal。
-// 观察者栈按 goroutine id 隔离（observers map），避免并发下两个 withObserver
-// 互相覆盖导致依赖登记到错误节点（H-8）。
 package signal
 
 import (
 	"reflect"
 	"sync"
-	"sync/atomic"
 )
 
 // Signal[T] 是读写一体的 signal。无参调用读，返回当前值；带参调用写第一个参数。
 type Signal[T any] func(...T) T
 
-// ---------- 依赖追踪核心（非泛型） ----------
+// ---------- 依赖追踪核心（单线程，无锁） ----------
 
-var (
-	mu              sync.Mutex
-	recalc          = sync.NewCond(&mu)    // computed 重算完成广播，供并发读者等待（H-9）
-	observers       = map[uint64][]*node{} // 各 goroutine 的观察者栈，按 goroutine id 隔离（H-8/P1-3）
-	activeObservers atomic.Int64           // 当前正在重算的 observer 数量；为 0 时读可走无锁快路径
-)
+// observers 是当前观察者栈，栈顶即正在重算的 computed/effect。
+// 严格单线程模型下它只被 UI Runtime 访问，无需按 goroutine 分桶，也无需加锁。
+var observers []*node
 
 // node 是一个依赖图节点：源 signal、computed 或 effect 共用。
 type node struct {
 	subs        map[*node]struct{} // 下游：谁依赖我
 	deps        map[*node]struct{} // 上游：我依赖谁
 	dirty       bool               // computed 的缓存是否失效
-	version     uint64             // 失效版本号：每次被标脏递增，用于检测「计算期间又变脏」（P1-2）
-	computing   bool               // computed 是否正在重算（循环依赖检测）
-	computingBy uint64             // 正在重算的 goroutine id（区分自身重入 vs 其它 goroutine）
+	version     uint64             // 失效版本号：检测「计算期间又变脏」
+	computing   bool               // computed 是否正在重算（单线程重入即环）
 	isEffect    bool               // 是否为 effect（写时直接重跑，而非仅标脏）
 	run         func()             // computed 的重算 / effect 的函数体
-	// effect 串行执行调度（P1-3）：running 表示该 effect 正在某 goroutine 上执行，
-	// queued 表示执行期间又收到重跑请求。合并重复请求，保证同一 effect 不并发。
-	running bool
-	queued  bool
-	// owner 是该计算所属的响应式作用域，销毁 owner 时级联 Dispose。
-	owner *Owner
-	// disposed 标记节点是否已销毁：销毁后不再重跑、不再登记依赖。
-	disposed bool
-	// equals 是源 signal 的相等性策略：写入值相等则不触发下游。
-	equals func(a, b any) bool
-	// runCleanups 是当前计算注册的 onCleanup 回调：每次重跑前执行并清空，
-	// 节点销毁时也执行一次（幂等地清空）。
+	running     bool               // effect 是否正在执行（合并执行期间的重跑请求）
+	queued      bool               // 执行期间又收到重跑请求
+	owner       *Owner             // 所属响应式作用域，销毁时级联 Dispose
+	disposed    bool               // 已销毁：不再重跑、不再登记依赖
+	equals      func(a, b any) bool
 	runCleanups []func()
+	mark        uint64 // collectDirty 去重标记（epoch）
+	batchMark   uint64 // Batch 收集 pending 时去重标记（epoch）
 }
 
 func newNode(isEffect bool) *node {
@@ -78,47 +74,46 @@ func newNode(isEffect bool) *node {
 	}
 }
 
-// track 在 mu 持有期间调用：把当前 goroutine 观察者栈的栈顶登记为 n 的下游。
+// track 把当前观察者栈顶登记为 n 的下游。调用方已确认 observers 非空。
 func track(n *node) {
-	if st := observers[goid()]; len(st) > 0 {
-		ob := st[len(st)-1]
-		ob.deps[n] = struct{}{}
-		n.subs[ob] = struct{}{}
-	}
+	ob := observers[len(observers)-1]
+	ob.deps[n] = struct{}{}
+	n.subs[ob] = struct{}{}
 }
 
-// markDirty 在 mu 持有期间调用：把一个 computed 节点标脏并递增失效版本号。
-// version 让重算能发现「计算期间又脏了」——旧结果不得写回（P1-2）。
+// markDirty 把一个 computed 节点标脏并递增失效版本号。
 func markDirty(n *node) {
 	n.dirty = true
 	n.version++
 }
 
-// clearDeps 在 mu 持有期间调用：清空节点的上游依赖（重跑前调用，避免陈旧依赖）。
+// clearDeps 清空 n 的上游依赖。复用原 map（clear 保留 bucket），避免每次
+// 重跑都 make 新 map 制造持续的 GC 压力。
 func clearDeps(n *node) {
 	for dep := range n.deps {
 		delete(dep.subs, n)
 	}
-	n.deps = make(map[*node]struct{})
+	clear(n.deps)
 }
 
-// collectDirty 在 mu 持有期间调用：从 n 向下游传播脏标记，返回需要重跑的 effect。
-// computed 节点被标脏后继续向下传播；effect 节点收集去重后返回（锁外执行）。
+var dirtyEpoch uint64
+
+// collectDirty 从 n 向下游传播脏标记，返回需要重跑的 effect。
+// 用节点上的 mark + 全局 epoch 去重，零 map 分配（相比旧的每次 new seen map）。
 func collectDirty(n *node) []*node {
-	// 快路径：没有任何订阅者时无需建去重 map，直接返回。
-	// 大量 signal 没有下游（叶子信号 / 未被 effect 依赖），写它们不该付分配代价。
 	if len(n.subs) == 0 {
 		return nil
 	}
+	dirtyEpoch++
+	epoch := dirtyEpoch
 	var effects []*node
-	seen := make(map[*node]bool)
 	var walk func(*node)
 	walk = func(cur *node) {
 		for sub := range cur.subs {
-			if seen[sub] {
+			if sub.mark == epoch {
 				continue
 			}
-			seen[sub] = true
+			sub.mark = epoch
 			if sub.isEffect {
 				effects = append(effects, sub)
 			} else {
@@ -131,57 +126,51 @@ func collectDirty(n *node) []*node {
 	return effects
 }
 
-// withObserver 在锁外执行 fn，执行期间把 n 压入「当前 goroutine」的观察者栈并重建依赖集合。
-// 观察者栈按 goroutine id 隔离且每个 goroutine 持有独立的栈切片（P1-3）：彻底移除共享的
-// node.prev —— 之前两个 goroutine 同时执行同一节点时会互相覆盖 prev，破坏对方的栈恢复。
-// 恢复用 defer 保证：即便 fn panic（如循环依赖检测触发），当前 goroutine 的栈也不会被污染（M-10）。
+// withObserver 执行 fn，期间把 n 压入观察者栈并重建依赖集合。
+// 恢复用 defer 保证：即便 fn panic（如循环依赖检测触发），栈也不会被污染。
 func withObserver(n *node, fn func()) {
-	id := goid()
-	activeObservers.Add(1) // 进入重算：此后其它 goroutine 的读必须走 track 慢路径
-	mu.Lock()
-	observers[id] = append(observers[id], n)
+	observers = append(observers, n)
 	clearDeps(n)
-	// 重跑前执行上一轮注册的 onCleanup（SolidJS 语义：每次重新执行前先清理）。
 	cleanups := n.runCleanups
 	n.runCleanups = nil
-	mu.Unlock()
-
 	for _, c := range cleanups {
-		c() // 锁外执行用户 cleanup，回调内可安全读写 signal
+		c() // 每次重跑前执行上一轮的 onCleanup（SolidJS 语义）
 	}
-
 	defer func() {
-		mu.Lock()
-		st := observers[id]
-		if len(st) <= 1 {
-			delete(observers, id) // 栈空即删除条目，避免长期积累空栈（goroutine id 不复用时尤其明显）
-		} else {
-			observers[id] = st[:len(st)-1] // 弹出栈顶（n 必为最后压入者）
-		}
-		mu.Unlock()
-		activeObservers.Add(-1) // 退出重算
+		observers = observers[:len(observers)-1]
 	}()
-
-	// 恢复创建时的 Owner 作用域（React Context 语义的关键一环）：
-	// effect / computed 重跑、条件分支与 keyed 列表重建子树时，fn 内会新建
-	// 计算、注册 cleanup，并在其中沿 Owner 链 Lookup context。若不在 n.owner
-	// 下执行，这些查找会走空（读到默认 context）或把副作用挂到错误 Owner。
-	// runWithOwner 自带「已是栈顶则跳过」保护，避免与外层 CreateRoot 重复压栈。
+	// 恢复创建时的 Owner 作用域：重跑/条件分支/列表重建子树时 fn 内会
+	// 新建计算、注册 cleanup，并沿 Owner 链 Lookup context。
 	runWithOwner(n.owner, fn)
 }
 
 // ---------- 公开 API ----------
 
-// New 创建一个值为 v 的源 signal。默认用 reflect.DeepEqual 判断相等：
-// 写入值未变化时短路，不触发下游 computed/effect（避免 count=10 连续写三次
-// 触发三次无效重跑）。不可比较类型（slice/map/func）也能安全判定。
-// 需要「每次写都通知」的场景请用 NewWithEquals(v, func(a,b T) bool { return false })。
+// New 创建一个值为 v 的源 signal。相等性判断对可比较类型走 `==` 快路径，
+// 不可比较类型（slice/map/func）回退 reflect.DeepEqual——避免无谓的深比较。
+// 写入值未变化时短路，不触发下游。需要「每次写都通知」请用
+// NewWithEquals(v, func(a,b T) bool { return false })。
 func New[T any](v T) Signal[T] {
-	return NewWithEquals(v, func(a, b T) bool { return reflect.DeepEqual(a, b) })
+	return NewWithEquals(v, defaultEquals[T])
 }
 
-// NewWithEquals 用自定义相等策略创建 signal。equals(a,b) 返回 true 表示两值相等，
-// 写入被忽略、不触发下游。equals 为 nil 时退化为「永不相等」（每次写都通知）。
+// defaultEquals 动态类型相同且可比较时用 ==，否则用 reflect.DeepEqual。
+// 用动态类型判断而非类型参数约束，使 interface{} 类型 signal 也安全
+// （写入不同动态类型→不相等；写入不可比较动态值→深比较，不会 panic）。
+func defaultEquals[T any](a, b T) bool {
+	av, bv := any(a), any(b)
+	ta, tb := reflect.TypeOf(av), reflect.TypeOf(bv)
+	if ta != tb {
+		return false
+	}
+	if ta == nil || ta.Comparable() {
+		return av == bv
+	}
+	return reflect.DeepEqual(a, b)
+}
+
+// NewWithEquals 用自定义相等策略创建 signal。equals(a,b) 返回 true 表示两值
+// 相等，写入被忽略、不触发下游。equals 为 nil 时退化为「永不相等」（每次写都通知）。
 func NewWithEquals[T any](v T, equals func(a, b T) bool) Signal[T] {
 	n := newNode(false)
 	if equals != nil {
@@ -195,56 +184,36 @@ func NewWithEquals[T any](v T, equals func(a, b T) bool) Signal[T] {
 			return eq(av, bv)
 		}
 	}
-	st := &state[T]{n: n}
-	st.value.Store(&boxedValue[T]{v: v})
+	st := &state[T]{n: n, value: v}
 	return func(args ...T) T {
 		if len(args) > 0 {
-			mu.Lock()
 			next := args[0]
-			changed := true
-			if n.equals != nil {
-				changed = !n.equals(st.value.Load().v, next)
+			if n.equals != nil && n.equals(st.value, next) {
+				return st.value // 相等：跳过标脏与调度
 			}
-			if !changed {
-				v := st.value.Load().v
-				mu.Unlock()
-				return v // 相等：跳过标脏与调度
-			}
-			st.value.Store(&boxedValue[T]{v: next})
-			effects := collectDirty(st.n)
-			mu.Unlock()
-			dispatchEffects(effects)
+			st.value = next
+			dispatchEffects(collectDirty(st.n))
 		}
-		// 读快路径：没有任何 observer 在重算时，track 必然是 no-op
-		// （观察者栈只在 withObserver 内非空），因此无需抓栈、无需加锁，
-		// 直接原子读取即可。这是绝大多数读取所处的路径。
-		if activeObservers.Load() == 0 {
-			return st.value.Load().v
+		// 读热路径：无观察者时只做一次切片判空，直接返回——无锁、无 goid、
+		// 无原子操作。 observers 非空说明当前在 computed/effect 内，登记依赖。
+		if len(observers) > 0 {
+			track(st.n)
 		}
-		mu.Lock()
-		track(st.n)
-		v := st.value.Load().v
-		mu.Unlock()
-		return v
+		return st.value
 	}
 }
 
 // LockedGetter 把一个「读跟随变量、写落回变量」的 getter 包装成并发安全的 Signal[T]。
 //
-// 场景（第十轮 P1-2）：struct 的 signal 字段由普通变量构造时，编译器生成
-// func(arg ...T) T { if len(arg)>0 { v = arg[0] }; return v }——读跟随 v 的最新值、
-// 写真正落回 v。但 v=arg[0] / return v 是对捕获裸变量的无锁访问，两个 goroutine
-// 并发读写同一字段会触发数据竞争。LockedGetter 用一把实例级互斥锁把 get/set 包住，
-// 使经由该 getter 的所有读写串行化，消除竞态；读写仍落在原变量，故"跟随"语义不变。
-//
-// 注意：并发安全仅覆盖经由本 getter 的访问。若用户代码在别处直接读写同一变量，
-// 需自行同步——编译器无法给用户的裸变量读写加锁。这是"跟随普通变量"语义的固有边界；
-// 需要完整响应式（写通知依赖）请改用 New/Computed 创建的真 signal 源。
+// 编译器为 struct 的 signal 字段生成的 getter 读写的是捕获的普通变量，
+// 并非核心响应式节点。保留实例级锁仅为兼容这类「跟随普通变量」的写法，
+// 使经由该 getter 的访问串行化（用户代码在别处直接读写同一变量需自行同步）。
+// 需要完整响应式请改用 New/Computed 创建的真 signal 源。
 func LockedGetter[T any](get func() T, set func(T)) Signal[T] {
 	var mu sync.Mutex
 	return func(args ...T) T {
 		mu.Lock()
-		defer mu.Unlock() // N-5：get/set 若 panic，锁必须释放，避免永久死锁。
+		defer mu.Unlock()
 		if len(args) > 0 {
 			set(args[0])
 		}
@@ -252,18 +221,12 @@ func LockedGetter[T any](get func() T, set func(T)) Signal[T] {
 	}
 }
 
-// lockedMuRegistry 让"跟随同一变量"的多个 getter 复用同一把互斥锁（第十一轮 N-3）。
-//
-// 背景：档5 的每个 getter 若各自 new 一把锁，则同一变量 v 被两个字段引用时
-// （P{a: v, b: v}），写 a 与读 b 各持一把锁、彼此不互斥，仍会 data race。
-// 编译器为同一被跟随变量生成稳定 key（根标识符的声明位置 + ref 文本），
-// 同 key 的 getter 在此注册表取到同一把 *sync.Mutex，从而覆盖同实例多字段、
-// 跨实例共享同一变量两类场景。用户代码在别处直接读写该变量仍属固有边界。
+// lockedMuRegistry 让「跟随同一变量」的多个 getter 复用同一把互斥锁。
+// key 由编译器按被跟随变量的声明位置生成，保证同实例多字段/跨实例共享同一
+// 变量时访问互斥。
 var lockedMuRegistry sync.Map // map[string]*sync.Mutex
 
-// LockedGetterShared 与 LockedGetter 语义相同，但按 key 共享互斥锁：同一 key
-// 的所有 getter 用同一把锁串行化对同一被跟随变量的读写。key 由编译器按变量的
-// 声明位置生成，保证同实例多字段/跨实例对同一变量的访问互斥。
+// LockedGetterShared 与 LockedGetter 语义相同，但按 key 共享互斥锁。
 func LockedGetterShared[T any](key string, get func() T, set func(T)) Signal[T] {
 	muAny, _ := lockedMuRegistry.LoadOrStore(key, new(sync.Mutex))
 	mu := muAny.(*sync.Mutex)
@@ -278,163 +241,92 @@ func LockedGetterShared[T any](key string, get func() T, set func(T)) Signal[T] 
 }
 
 // Computed 创建一个派生 signal：f 的结果被缓存，仅在依赖变化时惰性重算。
-// 派生 signal 是只读的（带参调用写入被忽略）。
+// 派生 signal 是只读的（带参调用写入会 panic）。
 func Computed[T any](f func() T) Signal[T] {
 	s, _ := ComputedWithHandle(f)
 	return s
 }
 
 // ComputedWithHandle 创建派生 signal 并返回其 Computation 句柄。句柄可 Dispose
-// 以断开依赖、停止参与下游传播；若在某个 Owner 内创建，Owner 销毁时级联销毁。
+// 以断开依赖；若在某个 Owner 内创建，Owner 销毁时级联销毁。
 func ComputedWithHandle[T any](f func() T) (Signal[T], Computation) {
 	st := &state[T]{n: newNode(false)}
-	attachToOwner(st.n)              // 当前分支：Owner 级联销毁
-	st.value.Store(&boxedValue[T]{}) // main：占位，recompute 首次成功后覆盖
+	attachToOwner(st.n)
 	recompute := func() {
-		mu.Lock()
-		// 性能快路径：缓存干净且无人重算时，绝大多数读取在此直接返回，
-		// 完全跳过 goid()（runtime.Stack 抓栈，约占原读取耗时的 80%）。
-		// 只有确有并发重算时才需要 goid() 来区分等待与重入（H-9）。
-		if !st.n.dirty && !st.n.computing {
-			mu.Unlock()
-			return
-		}
-		id := goid() // 延迟到此：只在可能需要等待/重入检测时才抓栈
-		for st.n.computing && st.n.computingBy != id {
-			// 别的 goroutine 正在重算：等待其完成，而不是重复执行 f()（H-9）。
-			// cond 唤醒后回到循环重新判定 dirty——若对方已完成且已清 dirty，直接返回。
-			recalc.Wait()
-		}
 		if !st.n.dirty {
-			mu.Unlock()
 			return
 		}
-		if st.n.computing && st.n.computingBy == id {
-			// 同一 goroutine 重入到这里说明 f() 直接或间接读取了自身（如
-			// c = Computed(func() int { return c()+1 })），形成环。立即 panic
-			// 阻止无限递归导致的栈溢出（栈溢出不可 recover，普通 panic 可）。
-			mu.Unlock()
+		// 单线程下 computing 即可区分「首次重算」与「重入成环」：同一个调用栈
+		// 再次进入说明 f() 直接或间接读取了自身。立即 panic 阻止无限递归。
+		if st.n.computing {
 			panic("gx/signal: 检测到循环依赖：computed 直接或间接读取了自身")
 		}
-		// 关键：在同一个临界区内完成「检查 dirty」和「占用计算权」。
-		// 旧实现在这两步之间解锁了一次，形成竞争窗口：A、B 都能越过 dirty
-		// 检查，随后各自 computing=true（后者覆盖 computingBy），双双进入 f()。
-		// 现在于首次持锁期间即置 computing/computingBy，窗口消除（P1-1 修复）。
 		st.n.computing = true
-		st.n.computingBy = id
-		mu.Unlock()
-
-		// 计算直到「版本稳定」：若 f() 执行期间依赖又变化（被标脏 → version++），
-		// 则本次结果基于过期输入，丢弃并重试。这是 P1-2 的核心：不能让旧结果
-		// 写回时把计算期间新产生的 dirty 标记冲掉。
-		// computing 在整个重算期间保持为 true，defer 保证任何退出路径都复位。
-		defer func() {
-			mu.Lock()
-			st.n.computing = false
-			st.n.computingBy = 0
-			recalc.Broadcast()
-			mu.Unlock()
-		}()
+		defer func() { st.n.computing = false }()
 
 		for {
-			mu.Lock()
 			startVersion := st.n.version
-			mu.Unlock()
-
 			var result T
 			panicked := true
 			func() {
-				// withObserver 内部重建依赖集合；f 在锁外执行（会读其它 signal）。
 				withObserver(st.n, func() { result = f() })
 				panicked = false
 			}()
 			if panicked {
 				return // f() panic：result 无效，不写回
 			}
-
-			mu.Lock()
 			if st.n.version != startVersion {
-				// 计算期间又脏了：丢弃旧结果，保持 dirty 并重试。
-				// 此时 computing 仍为 true（本 goroutine 持有），继续下一次循环。
-				mu.Unlock()
-				continue
+				continue // 计算期间又脏：丢弃旧结果，保持 dirty 并重试
 			}
-			st.value.Store(&boxedValue[T]{v: result})
+			st.value = result
 			st.n.dirty = false
-			mu.Unlock()
 			return
 		}
 	}
 	st.n.run = recompute
 	sig := func(args ...T) T {
 		if len(args) > 0 {
-			// 第十轮 P2-3：Computed 只读，写入不再静默丢弃——显式 panic 让误写在
-			// 开发期立刻暴露。静默忽略比 panic 更难查（读回仍是旧值，无任何线索）。
 			panic("signal.Computed: computed 值是只读的，不能写入")
 		}
 		recompute()
-		if activeObservers.Load() == 0 {
-			return st.value.Load().v
+		if len(observers) > 0 {
+			track(st.n)
 		}
-		mu.Lock()
-		track(st.n)
-		v := st.value.Load().v
-		mu.Unlock()
-		return v
+		return st.value
 	}
 	return sig, &handle{n: st.n}
 }
 
-// scheduleEffect 串行调度一个 effect 的执行（P1-3）。
-// 同一 effect 的回调绝不在两个 goroutine 上并发执行——用户回调常写共享状态，
-// 并发执行会引入数据竞争。执行期间若又收到重跑请求，只记 queued，待本次结束后
-// 合并重跑一次，避免重复抖动。
+// scheduleEffect 串行调度一个 effect 的执行。单线程下同一 effect 不会并发，
+// 但执行期间写信号可能递归触发本 effect 的重跑请求：running 期间只记 queued，
+// 本次结束后合并重跑一次，避免重复抖动。panic 时调度状态仍由 defer 复位。
 func scheduleEffect(e *node) {
-	mu.Lock()
 	if e.disposed {
-		mu.Unlock()
-		return // 已销毁的计算不再重跑
+		return
 	}
 	if e.running {
 		e.queued = true
-		mu.Unlock()
 		return
 	}
 	e.running = true
-	mu.Unlock()
-
-	// 用 defer 保证调度状态在「正常结束」和「用户回调 panic」两条路径上都复位。
-	// 旧实现只在循环正常退出时清 running；若 e.run()（用户 effect 回调）panic，
-	// running 会永久停留在 true，之后所有写信号都只会置 queued 而不再重跑（P2-2）。
-	// panic 本身继续向上传播（由调用方决定是否 recover），但本 effect 的调度状态
-	// 必须干净，否则该节点被永久「卡死」。queued 一并清除：panic 期间的请求丢弃，
-	// 与「回调未跑完」语义一致；后续新写入会重新触发一次正常调度。
 	defer func() {
-		mu.Lock()
 		e.running = false
 		e.queued = false
-		mu.Unlock()
 	}()
-
 	for {
-		e.run() // 用户回调在锁外执行
-		mu.Lock()
+		e.run()
 		if e.queued {
 			e.queued = false
-			mu.Unlock()
-			continue // 合并执行期间的请求，再跑一次
+			continue
 		}
-		mu.Unlock()
-		return // defer 负责清 running/queued（含正常路径）
+		return
 	}
 }
 
 // Effect 立即执行一次 f，并在其依赖的任意 signal 变化时自动重跑。
-// f 在每次执行前会重建依赖集合，因此条件分支里的依赖会被正确增删。
-// 重跑由 scheduleEffect 串行调度，保证同一 effect 的回调不并发（P1-3）。
-//
-// 返回 Computation 句柄：调用 Dispose() 可停止该 effect 并清理其订阅；
-// 若 effect 在某个 Owner 内创建，Owner 销毁时也会级联销毁它。
+// f 每次执行前重建依赖集合，因此条件分支里的依赖会被正确增删。
+// 返回 Computation 句柄：Dispose() 可停止该 effect 并清理订阅；若在某个
+// Owner 内创建，Owner 销毁时也会级联销毁它。
 func Effect(f func()) Computation {
 	n := newNode(true)
 	n.run = func() { withObserver(n, f) }
@@ -450,13 +342,9 @@ func EffectWithOwner(o *Owner, f func()) Computation {
 	return h
 }
 
-// boxedValue 把任意类型 T 装进指针，使 value 能用 atomic.Pointer 无锁读写。
-type boxedValue[T any] struct{ v T }
-
-// state 保存 signal 的节点与当前值。
-// value 用原子指针存储：读走无锁快路径，写仍在 mu 临界区内 Store，
-// 保证读者要么看到旧值、要么看到完整新值，不会撕裂。
+// state 保存 signal 的节点与当前值。单线程模型下 value 是普通字段——
+// 只有 UI Runtime 会读写它，无需原子指针（省去每次写的装箱分配）。
 type state[T any] struct {
 	n     *node
-	value atomic.Pointer[boxedValue[T]]
+	value T
 }

@@ -7,13 +7,9 @@
 //   - effect 回调内若又写 signal（递归写入），只在最外层边界触发一次 hook，
 //     避免中途重绘出「半成品」帧。
 //
-// 设计要点：
-//   - flushDepth 按 goroutine 隔离（复用 signal 的 goid），保证并发写入的
-//     后台 goroutine 不干扰 UI 所在 goroutine 的边界判断；
-//   - hook 回调在 mu 锁外执行，回调内不应再写 signal（只做绘制/通知这类
-//     终端动作），否则会开启新的帧边界；
-//   - 与 Batch 协同：Batch 期间写入只收集 effect，最外层 Batch 结束时统一
-//     调度并在其后 flush 一次。
+// 单线程模型：帧边界深度是唯一实例——只有 UI Runtime 会进入边界。
+// hook 注册表用 RWMutex 保护，因为 AfterEffects 允许在初始化阶段从任意
+// goroutine 注册/注销（这是低频控制面，不属 Signal 读取热路径）。
 package signal
 
 import "sync"
@@ -22,7 +18,7 @@ var (
 	flushMu     sync.RWMutex
 	flushHooks  = map[uint64]func(){}
 	nextFlushID uint64
-	flushDepth  = map[uint64]int{}
+	flushDepth  int // 当前帧边界嵌套深度（单实例）
 )
 
 // AfterEffects 注册一个「帧边界」回调，返回注销函数（幂等）。
@@ -48,25 +44,19 @@ func AfterEffects(fn func()) func() {
 	}
 }
 
-// withFlush 在帧边界内执行 fn：fn 调度的所有 effect 跑完后，若当前 goroutine
-// 处于最外层边界（深度归零），触发所有 AfterEffects 回调。
-func withFlush(gid uint64, fn func()) {
-	mu.Lock()
-	flushDepth[gid]++
-	mu.Unlock()
-
+// withFlush 在帧边界内执行 fn：fn 调度的所有 effect 跑完后，若当前处于
+// 最外层边界（深度归零），触发所有 AfterEffects 回调。
+func withFlush(fn func()) {
+	flushDepth++
+	// defer 保证即便 fn（effect 回调链）panic，帧深度也能复位——否则
+	// flushDepth 永久卡在非零，后续所有写入都不再触发帧边界 hook。
+	defer func() {
+		flushDepth--
+		if flushDepth == 0 {
+			runFlushHooks()
+		}
+	}()
 	fn()
-
-	mu.Lock()
-	flushDepth[gid]--
-	last := flushDepth[gid] == 0
-	if last {
-		delete(flushDepth, gid)
-	}
-	mu.Unlock()
-	if last {
-		runFlushHooks()
-	}
 }
 
 // runFlushHooks 在锁外快照并执行所有注册的帧边界回调。

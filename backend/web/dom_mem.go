@@ -27,6 +27,7 @@ type memElem struct {
 	attrs    map[string]string
 	styles   map[string]string
 	canvas   []string // canvas 指令 JSON 历史
+	richHTML string   // 最近一次 innerHTML 写入的富文本片段（测试断言用）
 	parent   ElemID
 	children []ElemID
 	listeners map[string]func(FiredEvent)
@@ -154,6 +155,14 @@ func (d *memDriver) SetText(e ElemID, text string) {
 	defer d.mu.Unlock()
 	if el := d.elements[e]; el != nil {
 		el.text = text
+	}
+}
+
+func (d *memDriver) SetRichText(e ElemID, richHTML string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if el := d.elements[e]; el != nil {
+		el.richHTML = richHTML
 	}
 }
 

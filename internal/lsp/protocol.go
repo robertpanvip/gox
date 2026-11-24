@@ -67,9 +67,10 @@ type ServerCapabilities struct {
 	DefinitionProvider     bool                   `json:"definitionProvider"`
 	HoverProvider          bool                   `json:"hoverProvider"`
 	CompletionProvider     *CompletionOptions     `json:"completionProvider,omitempty"`
-	DocumentSymbolProvider bool                   `json:"documentSymbolProvider"`
-	RenameProvider         bool                   `json:"renameProvider"`
-	SemanticTokensProvider *SemanticTokensOptions `json:"semanticTokensProvider,omitempty"`
+	DocumentSymbolProvider      bool                   `json:"documentSymbolProvider"`
+	RenameProvider              bool                   `json:"renameProvider"`
+	DocumentFormattingProvider  bool                   `json:"documentFormattingProvider"`
+	SemanticTokensProvider      *SemanticTokensOptions `json:"semanticTokensProvider,omitempty"`
 }
 
 type CompletionOptions struct {
@@ -171,6 +172,12 @@ type RenameParams struct {
 type TextEdit struct {
 	Range   Range  `json:"range"`
 	NewText string `json:"newText"`
+}
+
+// DocumentFormattingParams 是 textDocument/formatting 的请求参数。
+// FormattingOptions 对 GX 目前无 tunable 项，忽略即可。
+type DocumentFormattingParams struct {
+	TextDocument TextDocumentIdentifier `json:"textDocument"`
 }
 
 type WorkspaceEdit struct {

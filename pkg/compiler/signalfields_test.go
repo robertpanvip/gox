@@ -308,7 +308,7 @@ import "fmt"
 type CardProps struct { sig name string }
 func main() {
 	sig n = 1
-	p := CardProps{name: fmt.Sprint(n())}
+	p := CardProps{name: fmt.Sprint(n)}
 	_ = p
 }
 `

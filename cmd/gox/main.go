@@ -33,6 +33,8 @@ func main() {
 		err = cmdCheck(args)
 	case "union", "typeguard", "jsx", "pub", "enum", "collections", "external", "all":
 		err = cmdStage(cmd, args)
+	case "fmt":
+		err = cmdFmt(args)
 	case "sourcemap":
 		err = cmdSourcemap(args)
 	case "map-lookup":
@@ -69,6 +71,8 @@ func usage() {
   gox union|typeguard|jsx|jsxscene|pub|enum|collections|external|all <file.gx>   单步 / 全管线调试
   gox check <file.gx> [-root dir] [-prefer gx|go]        GX 语义层类型检查（AST + side table，含跨文件大小写诊断）
        -root   项目根目录；启用跨文件 GX 模块检查（大小写错误由检查器直接报出）
+  gox fmt [-w|-check] <file.gx>|<dir>...  格式化 GX 源码（JSX 区域按统一规则排版，Go 部分原样保留）
+       默认输出到 stdout；-w 写回文件；-check 仅检查是否已格式化（需要格式化时返回非零）
   gox sourcemap <file.gx> [-o map.json]                 输出 GX↔Go 位置映射 JSON
   gox map-lookup [-to-go] <map.json> <line> <col>        位置反查（默认 Go→GX）
   gox lsp-map <dir-or-file>                              项目符号映射 JSON
@@ -467,6 +471,93 @@ func cmdCheckProject(file, root, prefer string) error {
 	}
 	printGxDiagnostics(all)
 	return fmt.Errorf("GX 语义检查未通过")
+}
+
+// cmdFmt 格式化 GX 源码。默认打印到 stdout；-w 写回；-check 只检查不改文件。
+// 目录参数会递归收集其中的 .gx 文件。
+func cmdFmt(args []string) error {
+	var write, check bool
+	var paths []string
+	for _, a := range args {
+		switch a {
+		case "-w":
+			write = true
+		case "-check":
+			check = true
+		default:
+			paths = append(paths, a)
+		}
+	}
+	if write && check {
+		return fmt.Errorf("fmt: -w 与 -check 不能同时使用")
+	}
+	if len(paths) == 0 {
+		return fmt.Errorf("fmt: 需要 <file.gx> 或 <dir>")
+	}
+
+	var files []string
+	for _, p := range paths {
+		info, err := os.Stat(p)
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			err = filepath.WalkDir(p, func(path string, d os.DirEntry, err error) error {
+				if err != nil {
+					return err
+				}
+				if !d.IsDir() && strings.HasSuffix(path, ".gx") {
+					files = append(files, path)
+				}
+				return nil
+			})
+			if err != nil {
+				return err
+			}
+			continue
+		}
+		if !strings.HasSuffix(p, ".gx") {
+			return fmt.Errorf("fmt: %s 不是 .gx 文件", p)
+		}
+		files = append(files, p)
+	}
+	if len(files) == 0 {
+		return fmt.Errorf("fmt: 未找到 .gx 文件")
+	}
+
+	changed := 0
+	for _, f := range files {
+		src, err := readFile(f)
+		if err != nil {
+			return err
+		}
+		out := compiler.Format(src)
+		same := src == out
+		switch {
+		case write:
+			if !same {
+				if err := os.WriteFile(f, []byte(out), 0644); err != nil {
+					return err
+				}
+				fmt.Printf("已格式化 %s\n", f)
+				changed++
+			}
+		case check:
+			if !same {
+				fmt.Printf("需要格式化: %s\n", f)
+				changed++
+			}
+		default:
+			if len(files) > 1 {
+				fmt.Printf("--- %s ---\n", f)
+			}
+			fmt.Print(out)
+		}
+	}
+	if check && changed > 0 {
+		return fmt.Errorf("fmt: %d 个文件需要格式化", changed)
+	}
+	return nil
 }
 
 func cmdStage(stage string, args []string) error {

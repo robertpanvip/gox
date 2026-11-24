@@ -12,7 +12,6 @@ func TestUnsupportedAttrDiagnostics(t *testing.T) {
 		name, jsx, extra, want string
 	}{
 		{"class对象字面量", `<div class={{ active: true, big: true }}>x</div>`, "", "class 不支持对象字面量"},
-		{"style对象字面量", `<div style={{ color: "red" }}>x</div>`, "", "style 不支持对象字面量"},
 		{"双引号模板串", `<div class="a ${n}">x</div>`, "n := \"x\"\n    ", "需用反引号模板串"},
 	}
 	for _, c := range cases {

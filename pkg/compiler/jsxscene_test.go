@@ -165,7 +165,7 @@ func TestJSXSceneSignalAttrAndComputed(t *testing.T) {
 	res, err := CompileScene("sig.gx", `package main
 func main() {
 	sig title = "hi"
-	let upper = Signal.computed(func() string { return title() })
+	let upper = Signal.computed(func() string { return title })
 	_ = <a href={title}>{upper}</a>
 }
 `)

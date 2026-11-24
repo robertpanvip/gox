@@ -390,6 +390,22 @@ func (p *painter) paintText(n *gxscene.Node, box layoutBox, st textStyle) {
 	if n.Text == "" {
 		return
 	}
+	// 富文本（语法高亮）：一行的分段着色数据挂在 rich-text 属性上。逐段用各自
+	// 颜色绘制，段内再按字体回退切 run；落笔 x 累加 widths，与测量口径一致。
+	if rt, ok := gxscene.RichTextFromProps(n.Props); ok && len(rt) > 0 {
+		p.paintRichText(n, rt, box, st)
+		lineH := box.H
+		if lineH <= 0 {
+			lineH = float32(st.fontSize) * 1.3
+		}
+		*p.log = append(*p.log, DrawOp{Kind: "text", Name: n.Text, X: box.X, Y: box.Y, W: box.W, H: lineH, ARGB: st.color})
+		if p.hits != nil {
+			hb := hitFrom(n, box)
+			hb.H = lineH
+			*p.hits = append(*p.hits, hb)
+		}
+		return
+	}
 	if p.shouldDraw(box) {
 		paint := sk.NewPaint()
 		paint.SetColor(sk.Color(st.color))
@@ -417,6 +433,38 @@ func (p *painter) paintText(n *gxscene.Node, box layoutBox, st textStyle) {
 		hb := hitFrom(n, box)
 		hb.H = lineH
 		*p.hits = append(*p.hits, hb)
+	}
+}
+
+// paintRichText 逐段绘制富文本：每个 RichSpan 用其自身颜色，段内按字体回退切 run。
+// 颜色为空的段沿用继承色 st.color。落笔 x 全程累加，与 skiaMeasureFunc(纯文本) 一致。
+func (p *painter) paintRichText(n *gxscene.Node, rt gxscene.RichText, box layoutBox, st textStyle) {
+	if !p.shouldDraw(box) {
+		return
+	}
+	baseline := box.Y + float32(st.fontSize)
+	x := box.X
+	paint := sk.NewPaint()
+	defer paint.Delete()
+	paint.SetAntiAlias(true)
+	for _, span := range rt {
+		if span.Text == "" {
+			continue
+		}
+		col := st.color
+		if span.Color != "" {
+			if c, ok := parseColor(span.Color); ok {
+				col = c
+			}
+		}
+		paint.SetColor(sk.Color(col))
+		for _, r := range splitRuns(span.Text, st.fontSize, st.bold) {
+			if r.text == "" || r.font.IsNil() {
+				continue
+			}
+			p.canvas.DrawString(r.text, x, baseline, r.font, paint)
+			x += r.font.MeasureText([]byte(r.text), uint32(len(r.text)), sk.TextEncodingUTF8, nil)
+		}
 	}
 }
 

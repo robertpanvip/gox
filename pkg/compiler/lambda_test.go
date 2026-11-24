@@ -202,10 +202,10 @@ func main() {
 	sig count = 0
 	sig name = "gx"
 	sig ok = true
-	_ = Signal.computed(() => count())
-	_ = Signal.computed(() => name())
-	_ = Signal.computed(() => ok())
-	_ = Signal.computed(() => count() * 2)
+	_ = Signal.computed(() => count)
+	_ = Signal.computed(() => name)
+	_ = Signal.computed(() => ok)
+	_ = Signal.computed(() => count * 2)
 }
 `
 	got := compileOK(t, "lambdacomp.gx", src)
@@ -228,16 +228,18 @@ func TestLambdaBlockBody(t *testing.T) {
 	src := `package main
 func main() {
 	sig count = 0
-	Signal.batch(() => { count = 5; println("batch", count()) })
+	Signal.batch(() => { count = 5; println("batch", count) })
+	Signal.safe(() => { count = 6 })
 	Signal.effect(() => {
-		println("eff", count())
-		println("again", count())
+		println("eff", count)
+		println("again", count)
 	})
 }
 `
 	got := compileOK(t, "lambdablock.gx", src)
 	containsAll(t, got,
 		`Signal.Batch(func() { count(5); println("batch", count()) })`,
+		`Signal.Safe(func() { count(6 )})`, // 后台跨线程更新入口（通用首字母大写映射）
 		`println("eff", count())`,
 		`println("again", count())`,
 	)
