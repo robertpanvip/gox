@@ -1,0 +1,56 @@
+// Gox 图标画廊 —— 具名矢量图标组件集 showcase。
+// 用 GX 语言编写，展示 widgets 组件库预制的具名图标组件（IconXxx）与全部内置图标。
+//
+// 演示两点：
+//   1. 具名组件强类型用法：<widgets.iconHouse size="24" tone="blue"/>（源码小写，
+//      编译器 upperFirst 还原为 widgets.IconHouse）；
+//   2. 全量图标网格：<For each={names}> + 通用 <widgets.icon name={name}/> 遍历
+//      runtime/icon.Names() 的全部内置图标名。
+//
+// 全部图标走 host SVG 解析 → canvas 矢量指令 → 各后端矢量绘制，放大不失真、零位图。
+// 本示例用 headless app 后端，无需 GUI 即可编译运行验证场景树构建。
+// 转译：gox build examples/icon-gallery/app.gx -o main.go && go run .
+package main
+
+import (
+    gxscene "github.com/robertpanvip/gox/runtime/scene"
+    gxapp "github.com/robertpanvip/gox/runtime/app"
+    gxicon "github.com/robertpanvip/gox/runtime/icon"
+    widgets "github.com/robertpanvip/gox/widgets"
+    "fmt"
+)
+
+// NamedDemo 具名组件演示行：直接以组件形式引用预制图标，size/color/tone 由 props 决定。
+pub func NamedDemo(props gxscene.Props) *gxscene.Instance {
+    return <div flex-direction="row" gap="18" align="center">
+        <widgets.iconHouse size="28" tone="blue"/>
+        <widgets.iconSearch size="28" tone="primary"/>
+        <widgets.iconHeart size="28" color="#ff453a"/>
+        <widgets.iconStar size="28" tone="orange"/>
+        <widgets.iconGear size="28" tone="primary"/>
+        <widgets.iconBolt size="28" tone="yellow"/>
+    </div>
+}
+
+func main() {
+    // 显式类型注解，让 <For> 推断 ForGetterOf[string]（否则外部函数返回值退化为 any）。
+    var names []string = gxicon.names()
+
+    app, err := gxapp.open({title:"Gox Icon Gallery", width:980, height:760})
+    if err != nil { panic(err) }
+    defer app.close()
+
+    // 头部 + 具名演示 + 全量网格。网格每项 = 图标 + 名称文本。
+    app.render(() => <div bg="#1c1c1e" padding="24" flex-direction="column" gap="16" height="760">
+        <div flex-direction="column" gap="6">
+            <div color="#ffffff" font-size="26" weight="bold">Gox Icon Gallery</div>
+            <div color="#98989f" font-size="13">{fmt.sprint(len(names)) + " 个内置矢量图标 · 组件库预制具名组件"}</div>
+        </div>
+        <widgets.card title="NAMED COMPONENTS" tone="primary" width="932"><NamedDemo/></widgets.card>
+        <widgets.card title="ALL ICONS" tone="info" width="932">
+            <div flex-direction="row" gap="12" flex-wrap="wrap" width="900">
+                <For each={names}>{(name) => <div flex-direction="column" gap="4" align="center" width="88" padding="8"><widgets.icon name={name} size="24" color="#0a84ff"/><span color="#98989f" font-size="10">{name}</span></div>}</For>
+            </div>
+        </widgets.card>
+    </div>)
+}

@@ -102,6 +102,24 @@ var Builtin = map[string]string{
 	"chart":    `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20 L4 4 M4 20 L20 20"/><path d="M8 20 L8 12 M13 20 L13 7 M18 20 L18 14"/></svg>`,
 	"zoom-in":  `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5 L21 21 M10.5 7.5 L10.5 13.5 M7.5 10.5 L13.5 10.5"/></svg>`,
 	"zoom-out": `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5 L21 21 M7.5 10.5 L13.5 10.5"/></svg>`,
+
+	// ---- 表单与编辑 ----
+	"text-field": `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="18" height="12" rx="2"/><path d="M7 10 L7 14 M7 12 L11 12"/></svg>`,
+	"textarea":   `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9 L17 9 M7 13 L17 13 M7 17 L13 17"/></svg>`,
+	"checkbox":   `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M8 12 L11 15 L16 9"/></svg>`,
+	"check-square": `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M8 12 L11 15 L16 9"/></svg>`,
+	"radio":      `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4" fill="currentColor" stroke="none"/></svg>`,
+	"select":     `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="18" height="12" rx="2"/><path d="M15 11 L17.5 13.5 L20 11"/></svg>`,
+	"stepper":    `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="7" width="16" height="10" rx="2"/><path d="M14 9.5 L16.5 9.5 M15.25 8.25 L15.25 10.75 M14 14.5 L16.5 14.5"/></svg>`,
+	"toggle":     `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="2" y="7" width="20" height="10" rx="5"/><circle cx="16" cy="12" r="3" fill="currentColor" stroke="none"/></svg>`,
+	"slider":     `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"><path d="M4 12 L20 12"/><circle cx="9" cy="12" r="3"/><path d="M9 4 L9 7 M9 17 L9 20"/></svg>`,
+	"sidebar":    `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4 L9 20 M5.5 8 L6.5 8 M5.5 12 L6.5 12"/></svg>`,
+	"tab":        `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8 A2 2 0 0 1 5 6 L10 6 L12 9 L20 9 A2 2 0 0 1 22 11 L22 18 A2 2 0 0 1 20 20 L5 20 A2 2 0 0 1 3 18 Z"/></svg>`,
+	"toolbar":    `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="5" width="20" height="6" rx="1.5"/><path d="M6 8 L8 8 M11 8 L13 8 M16 8 L18 8"/></svg>`,
+	"pencil":     `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20 L4 16 L16 4 L20 8 L8 20 L4 20 Z M14 6 L18 10"/></svg>`,
+	"eraser":     `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M8 20 L4 16 A2 2 0 0 1 4 13 L13 4 A2 2 0 0 1 16 4 L20 8 A2 2 0 0 1 20 11 L12 20 Z M8 20 L20 20 M9 9 L15 15"/></svg>`,
+	"cursor":     `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M5 3 L5 19 L10 14 L13.5 21 L16.5 19.5 L13 13 L20 12 Z"/></svg>`,
+	"command":    `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M9 7 A2 2 0 1 0 7 5 L7 19 A2 2 0 1 0 9 17 L15 17 A2 2 0 1 0 17 19 L17 5 A2 2 0 1 0 15 7 Z"/></svg>`,
 }
 
 // Aliases 是常见别名 → 规范名，方便业务侧用不同叫法。
@@ -133,6 +151,18 @@ var Aliases = map[string]string{
 	"graph": "chart", "bar-chart": "chart", "analytics": "chart",
 	"zoom": "zoom-in", "magnify": "zoom-in", "search-plus": "zoom-in",
 	"search-minus": "zoom-out",
+	// 表单与编辑别名。
+	"input": "text-field", "entry": "text-field",
+	"multiline": "textarea", "text-area": "textarea",
+	"tick": "checkbox", "checked": "checkbox",
+	"radio-button": "radio",
+	"dropdown": "select", "combo": "select", "picker": "select",
+	"switch": "toggle", "toggle-switch": "toggle",
+	"range": "slider", "seek": "slider",
+	"panel": "sidebar", "drawer": "sidebar",
+	"tabbar": "tab", "tabs": "tab",
+	"edit-pencil": "pencil", "write": "pencil",
+	"cmd": "command",
 }
 
 // Names 返回所有可用的内置图标名（规范名，不含别名），已排序。

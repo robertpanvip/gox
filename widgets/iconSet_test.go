@@ -35,6 +35,12 @@ var namedIconCases = []struct {
 	{"cart", IconCart},
 	{"chart", IconChart},
 	{"zoom-in", IconZoomIn},
+	// 表单与编辑分区代表
+	{"text-field", IconTextField},
+	{"checkbox", IconCheckbox},
+	{"toggle", IconToggle},
+	{"sidebar", IconSidebar},
+	{"pencil", IconPencil},
 	{"home(alias)", IconHome},
 	{"user(alias)", IconUser},
 	{"settings(alias)", IconSettings},
@@ -125,6 +131,9 @@ func TestNamedIcon_SVGMatchBuiltin(t *testing.T) {
 		"refresh": svgRefresh, "send": svgSend, "wifi": svgWifi,
 		"bolt": svgBolt, "cart": svgCart, "chart": svgChart,
 		"zoom-in": svgZoomIn, "zoom-out": svgZoomOut, "mic": svgMic,
+		"text-field": svgTextField, "checkbox": svgCheckbox, "radio": svgRadio,
+		"toggle": svgToggle, "sidebar": svgSidebar, "pencil": svgPencil,
+		"command": svgCommand,
 	}
 	for name, svg := range cases {
 		builtin, ok := gxicon.Lookup(name)
@@ -158,6 +167,12 @@ var allNamedIcons = map[string]func(gxscene.Props) *gxscene.Instance{
 	"logout": IconLogout, "login": IconLogin,
 	"tag": IconTag, "flag": IconFlag, "doc": IconDoc, "cart": IconCart, "card": IconCard,
 	"chart": IconChart, "zoom-in": IconZoomIn, "zoom-out": IconZoomOut,
+	// 表单与编辑
+	"text-field": IconTextField, "textarea": IconTextarea, "checkbox": IconCheckbox,
+	"check-square": IconCheckSquare, "radio": IconRadio, "select": IconSelect,
+	"stepper": IconStepper, "toggle": IconToggle, "slider": IconSlider,
+	"sidebar": IconSidebar, "tab": IconTab, "toolbar": IconToolbar,
+	"pencil": IconPencil, "eraser": IconEraser, "cursor": IconCursor, "command": IconCommand,
 	"home(alias)": IconHome, "user(alias)": IconUser, "settings(alias)": IconSettings,
 }
 
