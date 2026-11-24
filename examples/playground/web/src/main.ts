@@ -446,23 +446,32 @@ function afterEdit(api: GoxPlaygroundAPI, elements: Elements): void {
 function bindKeyboard(elements: Elements, api: GoxPlaygroundAPI): void {
   const app: HTMLElement = elements.app;
   app.tabIndex = 0;
+  // 触摸代码区后会聚焦隐藏 textarea 唤起软键盘。浏览器随后会合成 mousedown，
+  // app 有 tabindex，默认焦点行为会把焦点从 textarea 抢回 app，导致键盘弹起又收起。
+  // 用时间戳标记「刚刚发生过触摸」，在合成的 mousedown 上阻止其默认聚焦行为。
+  // 不在 pointerdown 上 preventDefault：那会破坏 iOS 的触摸焦点链，反而让键盘收起。
+  let lastTouchAt: number = 0;
+  app.addEventListener("mousedown", (ev: MouseEvent): void => {
+    if (performance.now() - lastTouchAt < 800) {
+      ev.preventDefault();
+    }
+  }, true);
   app.addEventListener("pointerdown", (ev: PointerEvent): void => {
     // 点击代码行：行号从 DOM 顺序取，列交给 wasm 的 pickColumn（与 caret 同源）。
     // caret 是 GX 场景节点，光标列写入后由响应式 getter 自动重绘，无需前端追随。
     // lineAt/columnFromEvent 接受 MouseEvent，PointerEvent 是其子类，可直接传入。
+    if (ev.pointerType === "touch") {
+      lastTouchAt = performance.now();
+    }
     const hit = lineAt(app, ev);
     if (hit !== null) {
       api.setCursor(hit.line, columnFromEvent(api, hit.el, hit.line, ev));
     }
     settleCaret(api);
     if (ev.pointerType === "touch") {
-      // 触摸代码区：阻止浏览器后续的合成 mousedown——app 有 tabindex，默认
-      // mousedown 会把它聚焦，从而抢走 textarea 焦点让软键盘立刻收起（这正是
-      // 手机打不开键盘的根因）。仅对命中代码行的触摸 preventDefault，不影响
-      // 点工具栏/示例（那些 hit=null，仍保留正常 click）。
-      if (hit !== null) {
-        ev.preventDefault();
-      }
+      // 触摸代码区：同步聚焦隐藏 textarea 唤起软键盘（iOS 要求 focus 必须在
+      // 用户手势的同步调用栈里，否则不弹键盘）。不要 preventDefault——那会破坏
+      // iOS 焦点链；合成的 mousedown 由上面的捕获监听拦截，避免 app 抢焦点。
       focusMobileInput(api, elements.mobileInput);
     } else {
       api.focus();
