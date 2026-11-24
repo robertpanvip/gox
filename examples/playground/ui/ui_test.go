@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	gxscene "github.com/robertpanvip/gox/runtime/scene"
+	"github.com/robertpanvip/gox/runtime/signal"
 )
 
 // 验证 GX 编译产物里的纯编辑逻辑（插入/退格/换行/中文）。
@@ -94,5 +95,27 @@ func TestLoadSample(t *testing.T) {
 	PrevSample()
 	if !strings.Contains(EditorText(), "sig count") {
 		t.Fatalf("上一个示例源码未更新: %q", EditorText())
+	}
+}
+
+// 复现：点击示例切换后行数应随之增删（Counter 是 8 行，Hello 是 5 行）。
+// 需要像真实 app 那样 BindReactive，否则 getter 不重算。
+func TestEditorLineCountOnSampleSwitch(t *testing.T) {
+	// 用 signal.Effect 作为绑定器，与 gxapp 实际接线一致。
+	LoadSample(0) // Hello GX: 5 行
+	inst := Playground()
+	inst.BindStructural(signal.Effect)
+	inst.BindLeafEffects(signal.Effect)
+	_ = (gxscene.TextBackend{}).Paint(inst.Root()) // 首帧 5 行已建
+
+	LoadSample(1) // Counter: 8 行
+	txt8 := (gxscene.TextBackend{}).Paint(inst.Root())
+
+	// 代码是逐 token 的 span，连续串不会出现；改数行号 gutter 节点（完整文本）。
+	// 5 行示例行号为 1..5，8 行示例行号为 1..8，故 "6"/"7"/"8" 这些行号应新出现。
+	for _, gutter := range []string{`"6"`, `"7"`, `"8"`} {
+		if !strings.Contains(txt8, gutter) {
+			t.Errorf("切到 8 行 Counter 后应出现行号 gutter %s\n---8行---\n%s", gutter, txt8)
+		}
 	}
 }

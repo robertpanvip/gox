@@ -47,15 +47,22 @@ import (
 
 // ---- 主界面 ----
 
+// 选中态必须是读 sampleIndex 的 getter（不能是渲染时求值的局部变量快照），
+// 否则切换示例后高亮不刷新——局部变量捕获的是渲染那一刻的 active 值。
+func sampleRowBg(i int) string {
+    if i == SampleIndex() { return "#094771" }
+    return "#252526"
+}
+func sampleRowFg(i int) string {
+    if i == SampleIndex() { return "#ffffff" }
+    return "#cccccc"
+}
+
 func sampleRow(i int) *gxscene.Instance {
     xs := Samples()
     if i >= len(xs) { return gxscene.Render(gxscene.Template{Ops:[]gxscene.Op{gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpClose,},},N:0,}) }
     name := xs[i].Name
-    active := i == SampleIndex()
-    bg := "#252526"
-    fg := "#cccccc"
-    if active { bg = "#094771"; fg = "#ffffff" }
-    return gxscene.Render(gxscene.Template{Ops:[]gxscene.Op{gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"bg",Slot:0,},gxscene.Op{Code:gxscene.OpDynAttr,Key:"color",Slot:1,},gxscene.Op{Code:gxscene.OpAttr,Arg:"8",Key:"padding",},gxscene.Op{Code:gxscene.OpAttr,Arg:"13",Key:"font-size",},gxscene.Op{Code:gxscene.OpAttr,Arg:"4",Key:"border-radius",},gxscene.Op{Code:gxscene.OpEvent,Key:"onClick",Slot:2,},gxscene.Op{Code:gxscene.OpDynChild,Slot:3,},gxscene.Op{Code:gxscene.OpClose,},},N:4,}, func() any{ return bg }, func() any{ return fg }, func() any{ return gxscene.Handler(func(ctx gxscene.EventContext) { LoadSample(i) }) }, func() any{ return name })
+    return gxscene.Render(gxscene.Template{Ops:[]gxscene.Op{gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"bg",Slot:0,},gxscene.Op{Code:gxscene.OpDynAttr,Key:"color",Slot:1,},gxscene.Op{Code:gxscene.OpAttr,Arg:"8",Key:"padding",},gxscene.Op{Code:gxscene.OpAttr,Arg:"13",Key:"font-size",},gxscene.Op{Code:gxscene.OpAttr,Arg:"4",Key:"border-radius",},gxscene.Op{Code:gxscene.OpEvent,Key:"onClick",Slot:2,},gxscene.Op{Code:gxscene.OpDynChild,Slot:3,},gxscene.Op{Code:gxscene.OpClose,},},N:4,}, func() any{ return sampleRowBg(i) }, func() any{ return sampleRowFg(i) }, func() any{ return gxscene.Handler(func(ctx gxscene.EventContext) { LoadSample(i) }) }, func() any{ return name })
 }
 
 // 工具栏按钮：Next / Prev。显式写 *gxscene.Instance 注解。

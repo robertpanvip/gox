@@ -45,15 +45,22 @@ pub func prevSample() { loadSample(sampleIndex() - 1) }
 
 // ---- 主界面 ----
 
+// 选中态必须是读 sampleIndex 的 getter（不能是渲染时求值的局部变量快照），
+// 否则切换示例后高亮不刷新——局部变量捕获的是渲染那一刻的 active 值。
+func sampleRowBg(i int) string {
+    if i == sampleIndex() { return "#094771" }
+    return "#252526"
+}
+func sampleRowFg(i int) string {
+    if i == sampleIndex() { return "#ffffff" }
+    return "#cccccc"
+}
+
 func sampleRow(i int) *gxscene.Instance {
     xs := samples()
     if i >= len(xs) { return <div/> }
     name := xs[i].name
-    active := i == sampleIndex()
-    bg := "#252526"
-    fg := "#cccccc"
-    if active { bg = "#094771"; fg = "#ffffff" }
-    return <div bg={bg} color={fg} padding="8" font-size="13" border-radius="4"
+    return <div bg={sampleRowBg(i)} color={sampleRowFg(i)} padding="8" font-size="13" border-radius="4"
         onClick={gxscene.Handler(func(ctx gxscene.EventContext) { loadSample(i) })}>
         {name}
     </div>

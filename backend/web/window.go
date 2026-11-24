@@ -32,13 +32,14 @@ type Window struct {
 
 // mirrorNode 记录一个场景节点在 DOM 侧的镜像状态。
 type mirrorNode struct {
-	id       gxscene.NodeID
-	elem     ElemID
-	kind     string
-	text     string
-	node     *gxscene.Node                 // 最新场景节点指针（结构变化后刷新，供事件回投）
-	attrs    map[string]string            // 最近一次下传的普通属性/样式（含空串=已移除）
-	handlers map[string]func(FiredEvent)  // 已注册的事件监听（key=规范化事件名）
+	id        gxscene.NodeID
+	elem      ElemID
+	kind      string
+	text      string
+	node      *gxscene.Node                // 最新场景节点指针（结构变化后刷新，供事件回投）
+	firstElem ElemID                       // 透明节点(#frag)第一个真实 DOM 子元素；作为 before 锚点时用
+	attrs     map[string]string           // 最近一次下传的普通属性/样式（含空串=已移除）
+	handlers  map[string]func(FiredEvent) // 已注册的事件监听（key=规范化事件名）
 }
 
 func newMirrorNode(id gxscene.NodeID, elem ElemID, kind string) *mirrorNode {
@@ -281,12 +282,14 @@ func (w *Window) rebuildLocked(root *gxscene.Node) {
 		return
 	}
 	for _, c := range root.Children {
-		w.buildLocked(c, w.root)
+		w.buildLocked(c, w.root, 0)
 	}
 }
 
 // buildLocked 递归把节点建成 DOM 并登记镜像。返回该节点对应的元素。
-func (w *Window) buildLocked(n *gxscene.Node, parent ElemID) ElemID {
+// before 非 0 时，本层产生的真实元素插到该锚点之前（用于增量插入子树）；
+// 连续插到同一锚点前会保持子树顺序（后插的排在先插的后面）。递归子节点时传 0。
+func (w *Window) buildLocked(n *gxscene.Node, parent ElemID, before ElemID) ElemID {
 	if n == nil {
 		return 0
 	}
@@ -297,13 +300,23 @@ func (w *Window) buildLocked(n *gxscene.Node, parent ElemID) ElemID {
 		m.text = n.Text
 		w.registerLocked(m)
 		w.driver.SetText(e, n.Text)
-		w.driver.InsertBefore(parent, e, 0)
+		w.driver.InsertBefore(parent, e, before)
 		return e
 	}
 	if n.Kind == "#frag" || n.Kind == "#root" || n.Type == gxscene.NodeFragment {
 		// 透明节点：子节点直接挂到 parent，不产生 DOM 元素。
+		// 但仍登记一个指向 parent 的"透明镜像"（只进 nodes、不进 elems）：For/Branch
+		// 的增删指令以该透明节点的 NodeID 为父（ChangeInsertBefore.NodeID），定位时
+		// 用它拿到真实 DOM 父元素。若不登记，父定位失败会回退到 w.root，导致 For
+		// 新增的列表项被插到页面根容器（表现为新行跑到界面最底部）。
+		m := newMirrorNode(n.ID, parent, "#frag")
+		m.node = n
+		w.nodes[n.ID] = m
 		for _, c := range n.Children {
-			w.buildLocked(c, parent)
+			childElem := w.buildLocked(c, parent, before)
+			if m.firstElem == 0 {
+				m.firstElem = childElem
+			}
 		}
 		return 0
 	}
@@ -328,9 +341,9 @@ func (w *Window) buildLocked(n *gxscene.Node, parent ElemID) ElemID {
 	if ops, ok := n.Props["canvas-ops"].(string); ok {
 		w.driver.CanvasOps(e, ops)
 	}
-	w.driver.InsertBefore(parent, e, 0)
+	w.driver.InsertBefore(parent, e, before)
 	for _, c := range n.Children {
-		w.buildLocked(c, e)
+		w.buildLocked(c, e, 0)
 	}
 	return e
 }
@@ -359,6 +372,39 @@ func (w *Window) attachHandlerLocked(m *mirrorNode, ev, native string) {
 	}
 	m.handlers[ev] = cb
 	w.driver.Listen(m.elem, ev, cb)
+}
+
+// destroyTreeLocked 递归销毁一棵子树在 DOM 侧的镜像与元素。透明 #frag 无独立元素，
+// 仅递归其子节点；真实节点销毁 DOM 元素并从 nodes/elems 索引移除。
+func (w *Window) destroyTreeLocked(n *gxscene.Node) {
+	if n == nil {
+		return
+	}
+	m := w.nodes[n.ID]
+	if m != nil && m.kind != "#frag" {
+		w.driver.Destroy(m.elem)
+		delete(w.elems, m.elem)
+	}
+	delete(w.nodes, n.ID)
+	for _, c := range n.Children {
+		w.destroyTreeLocked(c)
+	}
+}
+
+// beforeElemLocked 把锚点 NodeID 解析为 DOM 元素。透明 #frag 节点本身无 DOM 元素，
+// 作为 before 锚点时要落到它的第一个真实子元素（"插到该项之前"= 插到该项首个 DOM 元素前）。
+func (w *Window) beforeElemLocked(id gxscene.NodeID) ElemID {
+	if id == 0 {
+		return 0
+	}
+	bm := w.nodes[id]
+	if bm == nil {
+		return 0
+	}
+	if bm.kind == "#frag" {
+		return bm.firstElem
+	}
+	return bm.elem
 }
 
 // applyChangesLocked 按 Change 序列打增量补丁。结构指令按 ChildID 定位元素，
@@ -394,8 +440,16 @@ func (w *Window) applyChangesLocked(changes []gxscene.Change, root *gxscene.Node
 		case gxscene.ChangeRemoveChild:
 			cid := gxscene.ParseNodeID(c.ChildID)
 			if child := w.nodes[cid]; child != nil {
-				w.driver.Destroy(child.elem)
-				delete(w.elems, child.elem)
+				if child.kind == "#frag" {
+					// 透明节点无独立 DOM 元素（elem 指向父容器，绝不能 Destroy）。
+					// 递归销毁其子树里的真实元素并清理镜像。
+					if sub, ok := c.Value.(*gxscene.Node); ok && sub != nil {
+						w.destroyTreeLocked(sub)
+					}
+				} else {
+					w.driver.Destroy(child.elem)
+					delete(w.elems, child.elem)
+				}
 				delete(w.nodes, cid)
 			}
 		case gxscene.ChangeReplaceChildren:
@@ -410,16 +464,15 @@ func (w *Window) applyChangesLocked(changes []gxscene.Change, root *gxscene.Node
 		case gxscene.ChangeInsertBefore:
 			cid := gxscene.ParseNodeID(c.ChildID)
 			before := gxscene.ParseNodeID(c.BeforeID)
-			var beforeElem ElemID
-			if bm := w.nodes[before]; bm != nil {
-				beforeElem = bm.elem
-			}
+			beforeElem := w.beforeElemLocked(before)
 			parentElem := w.root
 			if m != nil {
 				parentElem = m.elem
 			}
 			if sub, ok := c.Value.(*gxscene.Node); ok && sub != nil {
-				w.buildLocked(sub, parentElem)
+				// 子树顶层真实元素必须插到锚点之前，不能 append 到末尾——
+				// 否则 For 从右往左发的插入会倒序（新行变 8,7,6）。
+				w.buildLocked(sub, parentElem, beforeElem)
 			} else if child := w.nodes[cid]; child != nil {
 				w.driver.InsertBefore(parentElem, child.elem, beforeElem)
 			}
@@ -430,10 +483,7 @@ func (w *Window) applyChangesLocked(changes []gxscene.Change, root *gxscene.Node
 			if child == nil || m == nil {
 				continue
 			}
-			var beforeElem ElemID
-			if bm := w.nodes[before]; bm != nil {
-				beforeElem = bm.elem
-			}
+			beforeElem := w.beforeElemLocked(before)
 			w.driver.InsertBefore(m.elem, child.elem, beforeElem)
 		}
 	}
