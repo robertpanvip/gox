@@ -80,6 +80,18 @@ func main() {
 		refreshLSP()
 		return nil
 	}))
+	// undo / redo 由前端 Ctrl+Z / Ctrl+Shift+Z 触发。wasm 侧恢复源码后同步 LSP，
+	// 保证撤销后的诊断/补全立即反映回退后的文本。
+	g.Set("undo", js.FuncOf(func(this js.Value, args []js.Value) any {
+		ui.EditorUndo()
+		refreshLSP()
+		return nil
+	}))
+	g.Set("redo", js.FuncOf(func(this js.Value, args []js.Value) any {
+		ui.EditorRedo()
+		refreshLSP()
+		return nil
+	}))
 	g.Set("focus", js.FuncOf(func(this js.Value, args []js.Value) any {
 		ui.EditorFocus()
 		return nil

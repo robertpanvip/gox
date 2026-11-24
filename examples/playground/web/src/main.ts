@@ -118,19 +118,28 @@ const HANDLED_KEYS: ReadonlySet<string> = new Set<string>([
   "Home", "End", "PageUp", "PageDown",
 ]);
 
-/** 找到鼠标所在的代码行元素与 0 基行号。 */
+/** 找到鼠标所在的行容器与 0 基行号。
+ *
+ * 整行（行号槽 + 代码 + 行尾空白）都带 .gx-editor-row，点击空行或文字之后的
+ * 空白处也能命中——此前只认 .gx-code-line，空行 span 宽度为 0，点到空白直接
+ * 返回 null，所以"有字的行能点、没字的行点不了"。列换算仍用行内代码 span 的
+ * 左缘：空行的 span 没有内容但左缘位置是准确的，pickColumn 会算出列 0。 */
 function lineAt(app: HTMLElement, ev: MouseEvent): { el: HTMLElement; line: number } | null {
   const target: EventTarget | null = ev.target;
   if (!(target instanceof HTMLElement)) {
     return null;
   }
-  const el: HTMLElement | null = target.closest(".gx-code-line");
-  if (el === null) {
+  const row: HTMLElement | null = target.closest<HTMLElement>(".gx-editor-row");
+  if (row === null) {
     return null;
   }
-  const lines: HTMLElement[] = Array.from(app.querySelectorAll<HTMLElement>(".gx-code-line"));
-  const line: number = lines.indexOf(el);
-  return line >= 0 ? { el, line } : null;
+  const rows: HTMLElement[] = Array.from(app.querySelectorAll<HTMLElement>(".gx-editor-row"));
+  const line: number = rows.indexOf(row);
+  if (line < 0) {
+    return null;
+  }
+  const el: HTMLElement = row.querySelector<HTMLElement>(".gx-code-line") ?? row;
+  return { el, line };
 }
 
 // ---- 字符度量注入 + caret 常亮计时（Ace 风格） ----
@@ -336,6 +345,23 @@ function bindKeyboard(elements: Elements, api: GoxPlaygroundAPI): void {
     app.focus();
   });
   app.addEventListener("keydown", (ev: KeyboardEvent): void => {
+    // Ctrl/Cmd+Z 撤销、Ctrl/Cmd+Shift+Z / Ctrl+Y 重做。必须最先拦截：
+    // 组合键不带可打印字符，落到后面的 isPrintableChar/navKeys 判定会被直接
+    // return，所以此前按 Ctrl+Z 毫无反应。撤销/重做走 wasm 的独立 API。
+    if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === "z") {
+      ev.preventDefault();
+      if (ev.shiftKey) { api.redo(); } else { api.undo(); }
+      window.setTimeout((): void => { renderDiagnostics(api, elements); }, 0);
+      settleCaret(api);
+      return;
+    }
+    if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === "y") {
+      ev.preventDefault();
+      api.redo();
+      window.setTimeout((): void => { renderDiagnostics(api, elements); }, 0);
+      settleCaret(api);
+      return;
+    }
     // Ctrl+Space：补全；Shift+Alt+F：格式化；先于编辑器转发处理。
     if (ev.ctrlKey && ev.key === " ") {
       ev.preventDefault();
@@ -452,7 +478,7 @@ async function boot(elements: Elements): Promise<void> {
   });
   renderDiagnostics(api, elements);
   settleCaret(api);
-  elements.hint.textContent = "就绪 · 点击代码任意位置定位 · Ctrl+Space 补全 · Shift+Alt+F 格式化 · 悬停看符号 · 左侧选示例即运行";
+  elements.hint.textContent = "就绪 · 点击代码任意位置定位（含空行） · Ctrl+Z 撤销 / Ctrl+Shift+Z 重做 · Ctrl+Space 补全 · Shift+Alt+F 格式化 · 悬停看符号 · 左侧选示例即运行";
 }
 
 function main(): void {

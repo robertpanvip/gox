@@ -182,12 +182,63 @@ var rowVers = Signal.NewVec(zeroRowVers())
     return JoinLines(newLines), ln + 1, 0
 }
 
+// ---- 撤销 / 重做（Ctrl+Z / Ctrl+Shift+Z） ----
+// 每个编辑步骤压入"编辑前"的完整状态（源码 + 光标行列）；撤销恢复上一步，
+// 重做把当前状态压回撤销栈。栈是普通 Go 状态，不参与响应式。恢复统一走
+// setSource，因此 token 缓存、行版本与 LSP 会话都随源码一起同步。
+// 连续插入单个字符各自成一步：Ace 也保留每一次击键的撤销粒度，playground
+// 里连按 Ctrl+Z 即可逐字回退，语义简单可预期。
+ type EditSnapshot struct {
+     Text string
+     Ln   int
+     Col  int
+}
+var undoStack []EditSnapshot
+var redoStack []EditSnapshot
+
+// pushUndo 在任何改变源码的命令之前调用，记录编辑前状态并清空重做分支。
+func pushUndo() {
+    undoStack = append(undoStack, EditSnapshot{Text: SourceCode(), Ln: CursorLine(), Col: CursorCol()})
+    redoStack = []EditSnapshot{}
+}
+
+// EditorUndo 撤销上一步编辑；无历史时什么也不做。
+ func EditorUndo() {
+    if len(undoStack) == 0 { return }
+    n := len(undoStack)
+    st := undoStack[n-1]
+    undoStack = undoStack[:n-1]
+    redoStack = append(redoStack, EditSnapshot{Text: SourceCode(), Ln: CursorLine(), Col: CursorCol()})
+    Signal.Batch(func() {
+        setSource(st.Text)
+        CursorLine(st.Ln)
+        CursorCol(st.Col)
+        EditorFocused(true)
+    })
+}
+
+// EditorRedo 重做一步；无重做历史时什么也不做。
+ func EditorRedo() {
+    if len(redoStack) == 0 { return }
+    n := len(redoStack)
+    st := redoStack[n-1]
+    redoStack = redoStack[:n-1]
+    undoStack = append(undoStack, EditSnapshot{Text: SourceCode(), Ln: CursorLine(), Col: CursorCol()})
+    Signal.Batch(func() {
+        setSource(st.Text)
+        CursorLine(st.Ln)
+        CursorCol(st.Col)
+        EditorFocused(true)
+    })
+}
+
 // ---- 包级编辑命令：装配层收到键盘事件后调用 ----
 
 // 所有编辑命令都在一个 Batch 内写信号：否则源码、行版本、光标、焦点各自独立
 // 触发帧边界，一次点击/按键会提交多帧 DOM 补丁（点击示例曾观察到 4~5 次 Present）。
 // Batch 只合并更新，不改变任何编辑语义；嵌套在 setSource 内部的 Batch 由最外层统一冲刷。
  func EditorInsert(s string) {
+    pushUndo()
     text, c := InsertText(SourceCode(), CursorLine(), CursorCol(), s)
     Signal.Batch(func() {
         setSource(text)
@@ -197,6 +248,7 @@ var rowVers = Signal.NewVec(zeroRowVers())
 }
 
  func EditorBackspace() {
+    pushUndo()
     text, ln, c := BackspaceAt(SourceCode(), CursorLine(), CursorCol())
     Signal.Batch(func() {
         setSource(text)
@@ -206,6 +258,7 @@ var rowVers = Signal.NewVec(zeroRowVers())
 }
 
  func EditorNewline() {
+    pushUndo()
     text, ln, c := NewlineAt(SourceCode(), CursorLine(), CursorCol())
     Signal.Batch(func() {
         setSource(text)
@@ -232,6 +285,7 @@ var rowVers = Signal.NewVec(zeroRowVers())
 }
 
  func EditorSetText(s string) {
+    pushUndo()
     Signal.Batch(func() {
         setSource(s)
         lines := SplitLines(s)
@@ -678,7 +732,9 @@ func lineView(idx int) *gxscene.Instance {
     // 压缩到 ~13px，行号（padding+字号）与代码 span 各按自身高度居中就会错位。
     // 行号与代码都用 line-height:22px 统一基线，diff 恒为 0（含空行/中文/注释）。
     // 隐藏行 height=0 + overflow:hidden 裁掉内容，不占空间。
-    return gxscene.Render(gxscene.Template{Ops:[]gxscene.Op{gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"bg",Slot:0,},gxscene.Op{Code:gxscene.OpDynAttr,Key:"height",Slot:1,},gxscene.Op{Code:gxscene.OpAttr,Arg:"hidden",Key:"overflow",},gxscene.Op{Code:gxscene.OpAttr,Arg:"0",Key:"flex-shrink",},gxscene.Op{Code:gxscene.OpAttr,Arg:"row",Key:"flex-direction",},gxscene.Op{Code:gxscene.OpAttr,Arg:"center",Key:"align-items",},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"bg",Slot:2,},gxscene.Op{Code:gxscene.OpAttr,Arg:"#858585",Key:"color",},gxscene.Op{Code:gxscene.OpAttr,Arg:"42",Key:"width",},gxscene.Op{Code:gxscene.OpAttr,Arg:"12",Key:"font-size",},gxscene.Op{Code:gxscene.OpAttr,Arg:"22",Key:"height",},gxscene.Op{Code:gxscene.OpAttr,Arg:"22px",Key:"line-height",},gxscene.Op{Code:gxscene.OpAttr,Arg:"8",Key:"margin-right",},gxscene.Op{Code:gxscene.OpAttr,Arg:"0",Key:"flex-shrink",},gxscene.Op{Code:gxscene.OpAttr,Arg:"right",Key:"text-align",},gxscene.Op{Code:gxscene.OpDynChild,Slot:3,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpElem,Arg:"span",},gxscene.Op{Code:gxscene.OpAttr,Arg:"gx-code-line",Key:"class",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"data-code",Slot:4,},gxscene.Op{Code:gxscene.OpAttr,Arg:"pre",Key:"white-space",},gxscene.Op{Code:gxscene.OpAttr,Arg:"13",Key:"font-size",},gxscene.Op{Code:gxscene.OpAttr,Arg:"22",Key:"height",},gxscene.Op{Code:gxscene.OpAttr,Arg:"22px",Key:"line-height",},gxscene.Op{Code:gxscene.OpAttr,Arg:"0",Key:"flex-shrink",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"bg",Slot:5,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpClose,},},N:6,}, func() any{ return lineRowBg(idx) }, func() any{ return rowHeight(idx) }, func() any{ return lineGutterColor(idx) }, func() any{ return lineNumber(idx) }, func() any{ return lineText(idx) }, func() any{ return lineCodeGradient(idx) })
+    // 整行（含行号槽 + 代码后的空白）都带 gx-editor-row：点击落在空行或行尾
+    // 空白处时前端用 closest 命中这一层拿行号，代码列仍交给 wasm 的 pickColumn。
+    return gxscene.Render(gxscene.Template{Ops:[]gxscene.Op{gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpAttr,Arg:"gx-editor-row",Key:"class",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"bg",Slot:0,},gxscene.Op{Code:gxscene.OpDynAttr,Key:"height",Slot:1,},gxscene.Op{Code:gxscene.OpAttr,Arg:"hidden",Key:"overflow",},gxscene.Op{Code:gxscene.OpAttr,Arg:"0",Key:"flex-shrink",},gxscene.Op{Code:gxscene.OpAttr,Arg:"row",Key:"flex-direction",},gxscene.Op{Code:gxscene.OpAttr,Arg:"center",Key:"align-items",},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"bg",Slot:2,},gxscene.Op{Code:gxscene.OpAttr,Arg:"#858585",Key:"color",},gxscene.Op{Code:gxscene.OpAttr,Arg:"42",Key:"width",},gxscene.Op{Code:gxscene.OpAttr,Arg:"12",Key:"font-size",},gxscene.Op{Code:gxscene.OpAttr,Arg:"22",Key:"height",},gxscene.Op{Code:gxscene.OpAttr,Arg:"22px",Key:"line-height",},gxscene.Op{Code:gxscene.OpAttr,Arg:"8",Key:"margin-right",},gxscene.Op{Code:gxscene.OpAttr,Arg:"0",Key:"flex-shrink",},gxscene.Op{Code:gxscene.OpAttr,Arg:"right",Key:"text-align",},gxscene.Op{Code:gxscene.OpDynChild,Slot:3,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpElem,Arg:"span",},gxscene.Op{Code:gxscene.OpAttr,Arg:"gx-code-line",Key:"class",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"data-code",Slot:4,},gxscene.Op{Code:gxscene.OpAttr,Arg:"pre",Key:"white-space",},gxscene.Op{Code:gxscene.OpAttr,Arg:"13",Key:"font-size",},gxscene.Op{Code:gxscene.OpAttr,Arg:"22",Key:"height",},gxscene.Op{Code:gxscene.OpAttr,Arg:"22px",Key:"line-height",},gxscene.Op{Code:gxscene.OpAttr,Arg:"0",Key:"flex-shrink",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"bg",Slot:5,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpClose,},},N:6,}, func() any{ return lineRowBg(idx) }, func() any{ return rowHeight(idx) }, func() any{ return lineGutterColor(idx) }, func() any{ return lineNumber(idx) }, func() any{ return lineText(idx) }, func() any{ return lineCodeGradient(idx) })
 }
 
 // 固定 24 行：For 的 each 是常量，所有行在首帧就完成叶子 effect 绑定。

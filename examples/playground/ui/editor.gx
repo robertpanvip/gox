@@ -182,12 +182,63 @@ pub func newlineAt(s string, ln int, col int) (string, int, int) {
     return joinLines(newLines), ln + 1, 0
 }
 
+// ---- 撤销 / 重做（Ctrl+Z / Ctrl+Shift+Z） ----
+// 每个编辑步骤压入"编辑前"的完整状态（源码 + 光标行列）；撤销恢复上一步，
+// 重做把当前状态压回撤销栈。栈是普通 Go 状态，不参与响应式。恢复统一走
+// setSource，因此 token 缓存、行版本与 LSP 会话都随源码一起同步。
+// 连续插入单个字符各自成一步：Ace 也保留每一次击键的撤销粒度，playground
+// 里连按 Ctrl+Z 即可逐字回退，语义简单可预期。
+pub type editSnapshot struct {
+    pub text string
+    pub ln   int
+    pub col  int
+}
+var undoStack []editSnapshot
+var redoStack []editSnapshot
+
+// pushUndo 在任何改变源码的命令之前调用，记录编辑前状态并清空重做分支。
+func pushUndo() {
+    undoStack = append(undoStack, editSnapshot{text: sourceCode, ln: cursorLine, col: cursorCol})
+    redoStack = []editSnapshot{}
+}
+
+// EditorUndo 撤销上一步编辑；无历史时什么也不做。
+pub func EditorUndo() {
+    if len(undoStack) == 0 { return }
+    n := len(undoStack)
+    st := undoStack[n-1]
+    undoStack = undoStack[:n-1]
+    redoStack = append(redoStack, editSnapshot{text: sourceCode, ln: cursorLine, col: cursorCol})
+    Signal.batch(func() {
+        setSource(st.text)
+        cursorLine = st.ln
+        cursorCol = st.col
+        editorFocused = true
+    })
+}
+
+// EditorRedo 重做一步；无重做历史时什么也不做。
+pub func EditorRedo() {
+    if len(redoStack) == 0 { return }
+    n := len(redoStack)
+    st := redoStack[n-1]
+    redoStack = redoStack[:n-1]
+    undoStack = append(undoStack, editSnapshot{text: sourceCode, ln: cursorLine, col: cursorCol})
+    Signal.batch(func() {
+        setSource(st.text)
+        cursorLine = st.ln
+        cursorCol = st.col
+        editorFocused = true
+    })
+}
+
 // ---- 包级编辑命令：装配层收到键盘事件后调用 ----
 
 // 所有编辑命令都在一个 Batch 内写信号：否则源码、行版本、光标、焦点各自独立
 // 触发帧边界，一次点击/按键会提交多帧 DOM 补丁（点击示例曾观察到 4~5 次 Present）。
 // Batch 只合并更新，不改变任何编辑语义；嵌套在 setSource 内部的 Batch 由最外层统一冲刷。
 pub func editorInsert(s string) {
+    pushUndo()
     text, c := insertText(sourceCode, cursorLine, cursorCol, s)
     Signal.batch(func() {
         setSource(text)
@@ -197,6 +248,7 @@ pub func editorInsert(s string) {
 }
 
 pub func editorBackspace() {
+    pushUndo()
     text, ln, c := backspaceAt(sourceCode, cursorLine, cursorCol)
     Signal.batch(func() {
         setSource(text)
@@ -206,6 +258,7 @@ pub func editorBackspace() {
 }
 
 pub func editorNewline() {
+    pushUndo()
     text, ln, c := newlineAt(sourceCode, cursorLine, cursorCol)
     Signal.batch(func() {
         setSource(text)
@@ -232,6 +285,7 @@ pub func editorMove(dln int, dcol int) {
 }
 
 pub func editorSetText(s string) {
+    pushUndo()
     Signal.batch(func() {
         setSource(s)
         lines := splitLines(s)
@@ -678,14 +732,40 @@ func lineView(idx int) *gxscene.Instance {
     // 压缩到 ~13px，行号（padding+字号）与代码 span 各按自身高度居中就会错位。
     // 行号与代码都用 line-height:22px 统一基线，diff 恒为 0（含空行/中文/注释）。
     // 隐藏行 height=0 + overflow:hidden 裁掉内容，不占空间。
-    return <div bg={lineRowBg(idx)} height={rowHeight(idx)} overflow="hidden"
-        flex-shrink="0" flex-direction="row" align-items="center">
-        <div bg={lineGutterColor(idx)} color="#858585" width="42" font-size="12"
-            height="22" line-height="22px" margin-right="8" flex-shrink="0"
-            text-align="right">{lineNumber(idx)}</div>
-        <span class="gx-code-line" data-code={lineText(idx)} white-space="pre" font-size="13"
-            height="22" line-height="22px" flex-shrink="0"
-            bg={lineCodeGradient(idx)}></span>
+    // 整行（含行号槽 + 代码后的空白）都带 gx-editor-row：点击落在空行或行尾
+    // 空白处时前端用 closest 命中这一层拿行号，代码列仍交给 wasm 的 pickColumn。
+    return <div
+        class="gx-editor-row"
+        bg={lineRowBg(idx)}
+        height={rowHeight(idx)}
+        overflow="hidden"
+        flex-shrink="0"
+        flex-direction="row"
+        align-items="center"
+    >
+        <div
+            bg={lineGutterColor(idx)}
+            color="#858585"
+            width="42"
+            font-size="12"
+            height="22"
+            line-height="22px"
+            margin-right="8"
+            flex-shrink="0"
+            text-align="right"
+        >
+            {lineNumber(idx)}
+        </div>
+        <span
+            class="gx-code-line"
+            data-code={lineText(idx)}
+            white-space="pre"
+            font-size="13"
+            height="22"
+            line-height="22px"
+            flex-shrink="0"
+            bg={lineCodeGradient(idx)}
+        />
     </div>
 }
 
@@ -705,12 +785,27 @@ pub func Editor() *gxscene.Instance {
     // package/import 的展示版）超出部分可达，而不是被父容器裁掉无法编辑。
     // position="relative"：caret 是绝对定位子节点，左上角相对本容器；容器滚动时
     // 绝对子节点随内容一起滚动（与 Ace 把 cursor layer 放进 scroller 同理）。
-    return <div bg="#1e1e1e" border-radius="8" padding="6" flex-direction="column" gap="0"
-        height="320" overflow="auto" position="relative">
+    return <div
+        bg="#1e1e1e"
+        border-radius="8"
+        padding="6"
+        flex-direction="column"
+        gap="0"
+        height="320"
+        overflow="auto"
+        position="relative"
+    >
         <For each={editorRowIDs}>{(i int) => lineView(i())}</For>
-        <div class={caretClass()} position="absolute"
-            left={caretLeft()} top={caretTop()} width="2" height="22"
-            bg="#aeafad" z-index="6"></div>
+        <div
+            class={caretClass()}
+            position="absolute"
+            left={caretLeft()}
+            top={caretTop()}
+            width="2"
+            height="22"
+            bg="#aeafad"
+            z-index="6"
+        />
     </div>
 }
 
