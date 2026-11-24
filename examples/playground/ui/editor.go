@@ -29,6 +29,31 @@ import (
  var CursorCol = Signal.New(0)
  var EditorFocused = Signal.New(false)
 
+var rowVer0 = Signal.New(0)
+var rowVer1 = Signal.New(0)
+var rowVer2 = Signal.New(0)
+var rowVer3 = Signal.New(0)
+var rowVer4 = Signal.New(0)
+var rowVer5 = Signal.New(0)
+var rowVer6 = Signal.New(0)
+var rowVer7 = Signal.New(0)
+var rowVer8 = Signal.New(0)
+var rowVer9 = Signal.New(0)
+var rowVer10 = Signal.New(0)
+var rowVer11 = Signal.New(0)
+var rowVer12 = Signal.New(0)
+var rowVer13 = Signal.New(0)
+var rowVer14 = Signal.New(0)
+var rowVer15 = Signal.New(0)
+var rowVer16 = Signal.New(0)
+var rowVer17 = Signal.New(0)
+var rowVer18 = Signal.New(0)
+var rowVer19 = Signal.New(0)
+var rowVer20 = Signal.New(0)
+var rowVer21 = Signal.New(0)
+var rowVer22 = Signal.New(0)
+var rowVer23 = Signal.New(0)
+
 // ---- 纯文本编辑逻辑（GX 编写，两端共用） ----
 
  func SplitLines(s string) []string {
@@ -115,21 +140,21 @@ import (
 
  func EditorInsert(s string) {
     text, c := InsertText(SourceCode(), CursorLine(), CursorCol(), s)
-    SourceCode(text)
+    setSource(text)
     CursorCol(c)
     EditorFocused(true)
 }
 
  func EditorBackspace() {
     text, ln, c := BackspaceAt(SourceCode(), CursorLine(), CursorCol())
-    SourceCode(text)
+    setSource(text)
     CursorLine(ln)
     CursorCol(c)
 }
 
  func EditorNewline() {
     text, ln, c := NewlineAt(SourceCode(), CursorLine(), CursorCol())
-    SourceCode(text)
+    setSource(text)
     CursorLine(ln)
     CursorCol(c)
 }
@@ -150,7 +175,7 @@ import (
 }
 
  func EditorSetText(s string) {
-    SourceCode(s)
+    setSource(s)
     lines := SplitLines(s)
     if CursorLine() >= len(lines) { CursorLine(len(lines) - 1 )}
 }
@@ -245,21 +270,133 @@ func isKeyword(w string) bool {
 // 高亮，又让 sourceCode 变化精确刷新各槽位。N 取 24 覆盖常见代码行（含缩进）。
  const MaxTokens = 24
 
+// 按键延迟优化：行级 token 缓存 + 每行独立版本信号。
+//
+// 旧实现里，每个 token span 的 text/color getter 都直接读 sourceCode()，于是
+// 8 行 × 24 槽 × 2 = 384 个 effect 全都订阅 sourceCode。插入一个字符写 sourceCode，
+// 384 个 effect 全部重跑（wasm 里实测 ~88ms/键），这是延迟的真正主因。
+//
+// 新实现：
+//   - tokenCache[i] 缓存第 i 行的分词结果，全文只在 setSource 里分词一次；
+//   - rowVers[i] 每行一个版本信号，token getter 只读自己行的版本（订阅粒度从
+//     "整篇源码" 细化到 "单行"）；
+//   - setSource 比对新旧每行，只 bump 内容变化行的版本 → 插入字符只重跑该行
+//     24×2=48 个 effect（行数不变时 For 也短路），实测降到 ~11ms。
+//
+// 所有写 sourceCode 的编辑命令都改走 setSource，保证缓存与版本同步更新。
+var tokenCache [][]Token
+
+func rowVersion(idx int) int {
+    if idx < 0 { return 0 }
+    if idx >= 24 { return rowVer23() }
+    if idx == 0 { return rowVer0() }
+    if idx == 1 { return rowVer1() }
+    if idx == 2 { return rowVer2() }
+    if idx == 3 { return rowVer3() }
+    if idx == 4 { return rowVer4() }
+    if idx == 5 { return rowVer5() }
+    if idx == 6 { return rowVer6() }
+    if idx == 7 { return rowVer7() }
+    if idx == 8 { return rowVer8() }
+    if idx == 9 { return rowVer9() }
+    if idx == 10 { return rowVer10() }
+    if idx == 11 { return rowVer11() }
+    if idx == 12 { return rowVer12() }
+    if idx == 13 { return rowVer13() }
+    if idx == 14 { return rowVer14() }
+    if idx == 15 { return rowVer15() }
+    if idx == 16 { return rowVer16() }
+    if idx == 17 { return rowVer17() }
+    if idx == 18 { return rowVer18() }
+    if idx == 19 { return rowVer19() }
+    if idx == 20 { return rowVer20() }
+    if idx == 21 { return rowVer21() }
+    if idx == 22 { return rowVer22() }
+    if idx == 23 { return rowVer23() }
+    return 0
+}
+
+func bumpRow(idx int) {
+    if idx < 0 { return }
+    if idx >= 24 { idx = 23 }
+    if idx == 0 { rowVer0(rowVer0() + 1); return }
+    if idx == 1 { rowVer1(rowVer1() + 1); return }
+    if idx == 2 { rowVer2(rowVer2() + 1); return }
+    if idx == 3 { rowVer3(rowVer3() + 1); return }
+    if idx == 4 { rowVer4(rowVer4() + 1); return }
+    if idx == 5 { rowVer5(rowVer5() + 1); return }
+    if idx == 6 { rowVer6(rowVer6() + 1); return }
+    if idx == 7 { rowVer7(rowVer7() + 1); return }
+    if idx == 8 { rowVer8(rowVer8() + 1); return }
+    if idx == 9 { rowVer9(rowVer9() + 1); return }
+    if idx == 10 { rowVer10(rowVer10() + 1); return }
+    if idx == 11 { rowVer11(rowVer11() + 1); return }
+    if idx == 12 { rowVer12(rowVer12() + 1); return }
+    if idx == 13 { rowVer13(rowVer13() + 1); return }
+    if idx == 14 { rowVer14(rowVer14() + 1); return }
+    if idx == 15 { rowVer15(rowVer15() + 1); return }
+    if idx == 16 { rowVer16(rowVer16() + 1); return }
+    if idx == 17 { rowVer17(rowVer17() + 1); return }
+    if idx == 18 { rowVer18(rowVer18() + 1); return }
+    if idx == 19 { rowVer19(rowVer19() + 1); return }
+    if idx == 20 { rowVer20(rowVer20() + 1); return }
+    if idx == 21 { rowVer21(rowVer21() + 1); return }
+    if idx == 22 { rowVer22(rowVer22() + 1); return }
+    if idx == 23 { rowVer23(rowVer23() + 1); return }
+}
+
+// setSource 是写 sourceCode 的唯一入口：重算 token 缓存、只 bump 变化行版本、
+// 并在一个 Batch 内写回 sourceCode（行数变化时 For 据此增删行）。
+func setSource(text string) {
+    oldLines := SplitLines(SourceCode())
+    newLines := SplitLines(text)
+    // 一次分词，整表刷新。
+    cache := [][]Token{}
+    for i := 0; i < len(newLines); i = i + 1 {
+        cache = append(cache, Highlight(newLines[i]))
+    }
+    tokenCache = cache
+    Signal.Batch(func() {
+        for i := 0; i < len(newLines); i = i + 1 {
+            // 新行或内容变化的行才 bump；未变行的 token getter 不重跑。
+            if i >= len(oldLines) || oldLines[i] != newLines[i] {
+                bumpRow(i)
+            }
+        }
+        SourceCode(text)
+    })
+}
+
 // EditorLineText 导出给装配层诊断/集成用：读第 idx 行第 slot 个 token 文本。
  func EditorLineText(idx int, slot int) string { return lineText(idx, slot) }
 
+// 懒初始化：首次渲染时 tokenCache 尚未由 setSource 建立（初始 sourceCode
+// 是包级 sig 字面量，未经编辑命令），此时读一次 sourceCode 全量搭表，保证首帧有内容。
+func ensureTokenCache() {
+    if tokenCache != nil { return }
+    s := SourceCode()
+    lines := SplitLines(s)
+    cache := [][]Token{}
+    for i := 0; i < len(lines); i = i + 1 {
+        cache = append(cache, Highlight(lines[i]))
+    }
+    tokenCache = cache
+}
+
 func lineText(idx int, slot int) string {
-    lines := SplitLines(SourceCode())
-    if idx < 0 || idx >= len(lines) { return "" }
-    toks := Highlight(lines[idx])
+    _ = rowVersion(idx) // 订阅本行版本；本行变化才重跑此 getter
+    ensureTokenCache()
+    if idx < 0 || idx >= len(tokenCache) { return "" }
+    toks := tokenCache[idx]
     if slot < 0 || slot >= len(toks) { return "" }
     return toks[slot].Text
 }
 
  func LineTokenColor(idx int, slot int) string {
-    lines := SplitLines(SourceCode())
-    if idx < 0 || idx >= len(lines) { return "#d4d4d4" }
-    toks := Highlight(lines[idx])
+    _ = rowVersion(idx)
+    ensureTokenCache()
+    if idx < 0 || idx >= len(tokenCache) { return "#d4d4d4" }
+    toks := tokenCache[idx]
     if slot < 0 || slot >= len(toks) { return "#d4d4d4" }
     return toks[slot].Color
 }

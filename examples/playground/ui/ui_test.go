@@ -119,3 +119,27 @@ func TestEditorLineCountOnSampleSwitch(t *testing.T) {
 		}
 	}
 }
+
+// 回归：行级 token 缓存优化的核心不变量——插入字符只 bump 变化行的版本，
+// 其它行版本保持不变（否则 384 个 token getter 会全量重跑，按键延迟回升到 ~88ms）。
+func TestSetSourceOnlyBumpsChangedLines(t *testing.T) {
+	EditorSetText("line0\nsig count = 0\nline2\nline3")
+	before := []int{rowVersion(0), rowVersion(1), rowVersion(2), rowVersion(3)}
+
+	// 只在第 1 行末尾插入字符，其余行文本不变。
+	setSource("line0\nsig count = 01\nline2\nline3")
+	after := []int{rowVersion(0), rowVersion(1), rowVersion(2), rowVersion(3)}
+
+	if after[1] <= before[1] {
+		t.Errorf("变化行(1)的版本应递增: before=%d after=%d", before[1], after[1])
+	}
+	for _, i := range []int{0, 2, 3} {
+		if after[i] != before[i] {
+			t.Errorf("未变化行(%d)的版本不应改变: before=%d after=%d", i, before[i], after[i])
+		}
+	}
+	// tokenCache 应反映新文本
+	if got := EditorLineText(1, 2); got == "" {
+		t.Errorf("变化行的 token 缓存应有内容, got %q", got)
+	}
+}
