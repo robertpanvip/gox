@@ -1,0 +1,7 @@
+// For + item getter（t() 读值）+ 样式进 style struct
+sig todos = []string{"a", "b", "c"}
+func view() *gxscene.Instance {
+    return <div style={{ flexDirection: "column", gap: 6 }}>
+        <For each={todos}>{(t string) => <span>{t()}</span>}</For>
+    </div>
+}

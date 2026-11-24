@@ -1,0 +1,5 @@
+// sig 声明 + 裸读（编译器自动补 ()）
+sig name = "GX"
+func view() *gxscene.Instance {
+    return <div>Hello, {name}!</div>
+}

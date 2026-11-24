@@ -1,0 +1,8 @@
+// 事件传函数原值 + sig 读写 + 样式进 style struct
+sig count = 0
+func inc() {
+    count = count + 1
+}
+func view() *gxscene.Instance {
+    return <button onClick={inc} style={{ background: "#3b82f6", padding: 10 }}>Count: {count}</button>
+}

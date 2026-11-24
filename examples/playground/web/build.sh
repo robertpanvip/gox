@@ -8,6 +8,18 @@ GOTOOLCHAIN="${GOTOOLCHAIN:-go1.27.4}"
 GOPROXY="${GOPROXY:-https://goproxy.cn,direct}"
 export GOTOOLCHAIN GOPROXY
 
+echo "[0/5] 校验 playground 示例（gox fmt -check + gox build -check 门禁）并生成 app.go..."
+# demo 源码真相源在 ../ui/samples/*.gx。必须先过格式化与语义检查，
+# 全部通过后 gen_samples.py 才写入 app.gx 并转译 app.go；任一失败立即中止构建。
+UI_DIR="$(cd "$(dirname "$0")/../ui" && pwd)"
+GOX_BIN="${GOX_BIN:-gox}"
+if [ ! -x "$GOX_BIN" ] && ! command -v "$GOX_BIN" >/dev/null 2>&1; then
+  echo "未找到 gox，先构建：go build -o gox ../../../cmd/gox"
+  (cd "$(dirname "$0")/../../.." && GOTOOLCHAIN="$GOTOOLCHAIN" GOPROXY="$GOPROXY" go build -o /tmp/gox ./cmd/gox)
+  GOX_BIN=/tmp/gox
+fi
+GOX="$GOX_BIN" python3 "$UI_DIR/gen_samples.py"
+
 echo "[1/4] 前端严格类型检查 + 编译（TypeScript 7）..."
 if [ ! -x node_modules/.bin/tsc ]; then
   echo "未找到本地 tsc，先安装依赖（typescript 7.0.2）..."

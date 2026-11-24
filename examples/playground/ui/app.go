@@ -20,13 +20,17 @@ import (
  var SampleIndex = Signal.New(0)
 
 // 示例源码是常量，缓存一份切片，避免每次切换/渲染列表都重新构造 5 个结构体。
+// 下面的 sample 列表由 gen_samples.py 从 samples/*.gx 生成：
+// 构建前必须先通过 gox fmt -check 与 gox check 门禁，全部通过才会写入。请勿手改。
 func buildSamples() []Sample {
     return []Sample{
+    // @@BEGIN-GENERATED-SAMPLES@@
         Sample{Name: "01 Hello GX", Source: "// sig 声明 + 裸读（编译器自动补 ()）\nsig name = \"GX\"\nfunc view() *gxscene.Instance {\n    return <div>Hello, {name}!</div>\n}"},
         Sample{Name: "02 Counter", Source: "// 事件传函数原值 + sig 读写 + 样式进 style struct\nsig count = 0\nfunc inc() {\n    count = count + 1\n}\nfunc view() *gxscene.Instance {\n    return <button onClick={inc} style={{ background: \"#3b82f6\", padding: 10 }}>Count: {count}</button>\n}"},
         Sample{Name: "03 For 列表", Source: "// For + item getter（t() 读值）+ 样式进 style struct\nsig todos = []string{\"a\", \"b\", \"c\"}\nfunc view() *gxscene.Instance {\n    return <div style={{ flexDirection: \"column\", gap: 6 }}>\n        <For each={todos}>{(t string) => <span>{t()}</span>}</For>\n    </div>\n}"},
         Sample{Name: "04 样式卡片", Source: "// style={{...}} 强类型 struct + 驼峰 key + 伪状态单词 key\nfunc view() *gxscene.Instance {\n    return <div\n        style={{\n            background: \"#0b1020\",\n            padding: 20,\n            borderRadius: 12,\n            flexDirection: \"column\",\n            gap: 8,\n            hover: { background: \"#1e293b\" },\n        }}\n    >\n        <b style={{ color: \"#7dd3fc\", fontSize: 24 }}>Card</b>\n        <span style={{ color: \"#94a3b8\" }}>用 GX style struct 写的样式</span>\n    </div>\n}"},
         Sample{Name: "05 响应式 computed", Source: "// Signal.computed 派生 + Signal.batch 合并 + 事件传函数原值\nsig price = 10\nsig qty = 2\nvar total = Signal.computed(() => price * qty)\nfunc bump() {\n    Signal.batch(() => {\n        price = price + 1\n        qty = qty + 1\n    })\n}\nfunc view() *gxscene.Instance {\n    return <div style={{ flexDirection: \"column\", gap: 6 }}>\n        <span>Total: {total}</span>\n        <button onClick={bump}>加价加量</button>\n    </div>\n}"},
+    // @@END-GENERATED-SAMPLES@@
     }
 }
 
