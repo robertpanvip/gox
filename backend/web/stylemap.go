@@ -3,6 +3,8 @@ package gxweb
 import (
 	"strconv"
 	"strings"
+
+	"github.com/robertpanvip/gox/cssbox"
 )
 
 // isStyleKey 判断 key 是否为受限 CSS sheet 属性（与 gxscene.StylePropNames 一致，
@@ -38,16 +40,35 @@ func cssName(key string) string {
 	return key
 }
 
-// cssValue 把样式值规整为 CSS 值：纯数字的长度属性补 px；颜色/关键字原样。
+// boxShorthandProps 是支持 1~4 值简写的盒模型属性。这些属性的值先经 cssbox
+// 解析成四边，再逐边补 px 拼回 CSS 简写串；避免 "7 14" 被整串 ParseFloat 失败后
+// 输出无单位 CSS（浏览器忽略）导致 padding / margin 失效。
+var boxShorthandProps = map[string]bool{
+	"padding": true, "margin": true, "border-radius": true, "gap": true,
+}
+
+// dimensionlessProps 是无量纲属性，数值不加 px。
+var dimensionlessProps = map[string]bool{
+	"opacity": true, "weight": true, "z-index": true,
+	"flex-grow": true, "flex-shrink": true, "line-height": true, "order": true,
+}
+
+// cssValue 把样式值规整为 CSS 值：纯数字的长度属性补 px；盒模型简写属性支持
+// 1~4 值逐边补单位；颜色/关键字原样。
 func cssValue(key, v string) string {
 	if v == "" {
 		return v
 	}
+	if boxShorthandProps[key] {
+		if edges, ok := cssbox.Values(v); ok {
+			return cssbox.Shorthand(cssbox.WithUnit(edges))
+		}
+		return v // 非数值简写（如 auto）原样透传
+	}
 	if _, err := strconv.ParseFloat(v, 64); err != nil {
 		return v
 	}
-	switch key {
-	case "opacity", "weight", "z-index", "flex-grow", "flex-shrink", "line-height", "order":
+	if dimensionlessProps[key] {
 		return v // 无量纲
 	}
 	return v + "px"

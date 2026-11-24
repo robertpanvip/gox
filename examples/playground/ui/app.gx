@@ -186,9 +186,13 @@ func toolbarButton(label string, bg string, fn func()) *gxscene.Instance {
             background: bg,
             color: "#ffffff",
             padding: "7 14",
+            minWidth: 78,
+            flexShrink: 0,
+            border: "1px solid #3a4457",
             borderRadius: 7,
             fontSize: 12,
             weight: "bold",
+            textAlign: "center",
             cursor: "pointer",
             transition: "opacity .15s",
             hover: { opacity: "0.85" },
@@ -229,11 +233,10 @@ pub func Playground() *gxscene.Instance {
     >
         <div
             style={{
-                background: "linear-gradient(90deg, #12213a 0%, #161b2b 55%, #1a1526 100%)",
+                background: "#141c2f",
                 padding: "16 20",
                 flexDirection: "column",
                 gap: 4,
-                border: "0 0 1px 0",
             }}
         >
             <div style={{ color: "#e6edf3", fontSize: 22, weight: "bold", letterSpacing: "0.3" }}>
@@ -279,7 +282,7 @@ pub func Playground() *gxscene.Instance {
                 <div style={{ color: RunInfoColor(), fontSize: 10 }}>{RunInfo()}</div>
             </div>
         </div>
-        <div style={{ color: "#6e7681", fontSize: 11, padding: "0 16 12 16" }}>
+        <div style={{ color: "#6e7681", fontSize: 11, padding: "12 16" }}>
             Ctrl+Enter 运行 · Ctrl+Z 撤销 · Ctrl+Space 补全 · Shift+Alt+F 格式化 · 悬停看符号
         </div>
     </div>

@@ -37,12 +37,22 @@ interface Elements {
   readonly diagnostics: HTMLElement;
   readonly completion: HTMLElement;
   readonly hover: HTMLElement;
+  /** 移动端软键盘代理：隐藏但可聚焦的 textarea。 */
+  readonly mobileInput: HTMLTextAreaElement;
 }
 
 function requireElement(id: string): HTMLElement {
   const el: HTMLElement | null = document.getElementById(id);
   if (el === null) {
     throw new Error(`缺少挂载元素 #${id}`);
+  }
+  return el;
+}
+
+function requireTextArea(id: string): HTMLTextAreaElement {
+  const el: HTMLElement = requireElement(id);
+  if (!(el instanceof HTMLTextAreaElement)) {
+    throw new Error(`元素 #${id} 必须是 textarea`);
   }
   return el;
 }
@@ -57,6 +67,7 @@ function collectElements(): Elements {
     diagnostics: requireElement("lsp-diagnostics"),
     completion: requireElement("lsp-completion"),
     hover: requireElement("lsp-hover"),
+    mobileInput: requireTextArea("mobile-input"),
   };
 }
 
@@ -360,21 +371,103 @@ function showHover(api: GoxPlaygroundAPI, elements: Elements, ev: MouseEvent): v
   elements.hover.hidden = false;
 }
 
+// ---- 移动端软键盘代理 ----
+//
+// 编辑器是 GX 场景树渲染的 div，本身不可聚焦输入；桌面有物理键盘，keydown 转发即可，
+// 但手机/平板点 div 不会唤起软键盘。做法：页面放一个隐藏但可聚焦的 textarea，
+// 触摸代码区时聚焦它唤起输入法，再把它的输入转成与桌面完全相同的 Gox 编辑命令。
+// 桌面鼠标路径不经过 textarea，行为零变化。
+
+/** 聚焦软键盘代理并阻止页面滚动到隐藏元素（preventScroll 保证视口不动）。 */
+function focusMobileInput(api: GoxPlaygroundAPI, input: HTMLTextAreaElement): void {
+  input.value = "";
+  input.focus({ preventScroll: true });
+  api.focus(); // 让 GX 编辑器的 caret 进入常亮/可见态
+}
+
+function bindMobileInput(elements: Elements, api: GoxPlaygroundAPI): void {
+  const input: HTMLTextAreaElement = elements.mobileInput;
+  let composing: boolean = false;
+
+  // 中文/日文等输入法：组合期间的值不是最终结果，跳过；组合结束一次性提交，
+  // 避免把拼音串 "ni" 之类的中间态灌进源码。
+  input.addEventListener("compositionstart", (): void => { composing = true; });
+  input.addEventListener("compositionend", (): void => {
+    composing = false;
+    const text: string = input.value;
+    input.value = "";
+    if (text.length > 0) {
+      api.insert(text);
+      afterEdit(api, elements);
+    }
+  });
+
+  // 软键盘可打印字符：keydown 的 key 常是 "Unidentified"，真正的字符只在
+  // input 事件里给出。逐字符转发，保持与桌面逐键插入一致的语义。
+  input.addEventListener("input", (): void => {
+    if (composing) {
+      return;
+    }
+    const text: string = input.value;
+    input.value = "";
+    for (const ch of text) {
+      api.key(ch);
+    }
+    if (text.length > 0) {
+      afterEdit(api, elements);
+    }
+  });
+
+  // 导航/编辑键：软键盘对 Backspace/Enter/方向键通常仍给 keydown，拦截后
+  // 走与桌面相同的语义命令；preventDefault 阻止 textarea 自身改动（它只是代理）。
+  input.addEventListener("keydown", (ev: KeyboardEvent): void => {
+    if (composing) {
+      return;
+    }
+    const nav: ReadonlySet<string> = new Set<string>([
+      "Backspace", "Enter", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight",
+    ]);
+    if (nav.has(ev.key)) {
+      ev.preventDefault();
+      api.key(ev.key);
+      afterEdit(api, elements);
+    }
+  });
+}
+
+/** 每次输入后刷新诊断并让 caret 常亮（移动端与桌面共用）。 */
+function afterEdit(api: GoxPlaygroundAPI, elements: Elements): void {
+  window.setTimeout((): void => { renderDiagnostics(api, elements); }, 0);
+  settleCaret(api);
+}
+
 // ---- 输入绑定 ----
 
 function bindKeyboard(elements: Elements, api: GoxPlaygroundAPI): void {
   const app: HTMLElement = elements.app;
   app.tabIndex = 0;
-  app.addEventListener("mousedown", (ev: MouseEvent): void => {
+  app.addEventListener("pointerdown", (ev: PointerEvent): void => {
     // 点击代码行：行号从 DOM 顺序取，列交给 wasm 的 pickColumn（与 caret 同源）。
     // caret 是 GX 场景节点，光标列写入后由响应式 getter 自动重绘，无需前端追随。
+    // lineAt/columnFromEvent 接受 MouseEvent，PointerEvent 是其子类，可直接传入。
     const hit = lineAt(app, ev);
     if (hit !== null) {
       api.setCursor(hit.line, columnFromEvent(api, hit.el, hit.line, ev));
     }
     settleCaret(api);
-    api.focus();
-    app.focus();
+    if (ev.pointerType === "touch") {
+      // 触摸代码区：阻止浏览器后续的合成 mousedown——app 有 tabindex，默认
+      // mousedown 会把它聚焦，从而抢走 textarea 焦点让软键盘立刻收起（这正是
+      // 手机打不开键盘的根因）。仅对命中代码行的触摸 preventDefault，不影响
+      // 点工具栏/示例（那些 hit=null，仍保留正常 click）。
+      if (hit !== null) {
+        ev.preventDefault();
+      }
+      focusMobileInput(api, elements.mobileInput);
+    } else {
+      api.focus();
+      app.focus();
+    }
   });
   app.addEventListener("keydown", (ev: KeyboardEvent): void => {
     // Ctrl/Cmd+Enter：解释当前源码并运行（工具栏 Run 按钮走 GX 节点，同一动作）。
@@ -509,6 +602,7 @@ async function boot(elements: Elements): Promise<void> {
   void go.run(result.instance);
   const api: GoxPlaygroundAPI = await waitForGox();
   bindKeyboard(elements, api);
+  bindMobileInput(elements, api);
   // 等 GX 首帧把代码行挂到 DOM 后再实测字体宽度并注入，保证 caret 与点击换算同源。
   window.requestAnimationFrame((): void => {
     injectCharWidth(api, elements.app);

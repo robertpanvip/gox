@@ -226,8 +226,18 @@ func buildYogaTree(n *gxscene.Node, measure fontMeasurer, inherited textStyle) (
 		if s.height > 0 {
 			yn.SetHeight(s.height)
 		}
-		if s.padding > 0 {
-			yn.SetPadding(yoga.EdgeAll, s.padding)
+		// padding 四边分别设置，支持 1~4 值 CSS 简写（top,right,bottom,left）。
+		if s.padding[0] > 0 {
+			yn.SetPadding(yoga.EdgeTop, s.padding[0])
+		}
+		if s.padding[1] > 0 {
+			yn.SetPadding(yoga.EdgeRight, s.padding[1])
+		}
+		if s.padding[2] > 0 {
+			yn.SetPadding(yoga.EdgeBottom, s.padding[2])
+		}
+		if s.padding[3] > 0 {
+			yn.SetPadding(yoga.EdgeLeft, s.padding[3])
 		}
 		// 原生 gap（新版 Yoga 3.x）：row-gap / column-gap / 统一 gap 分别映射。
 		if s.gap > 0 {

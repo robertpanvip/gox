@@ -8,18 +8,34 @@ package main
 import (
 	gxapp "github.com/robertpanvip/gox/runtime/app"
 	"github.com/robertpanvip/gox-playground/ui"
+	"github.com/robertpanvip/gox-playground/ui/interp"
 )
 
 func main() {
+	// 窗口需容纳 Playground() 的 1180x720 界面，另留边距，否则内容被裁切。
 	app, err := gxapp.OpenWith(gxapp.WindowConfig{
 		Title:  "GX Playground (Desktop)",
-		Width:  960,
-		Height: 680,
+		Width:  1220,
+		Height: 820,
 	}, openGL())
 	if err != nil {
 		panic(err)
 	}
 	defer app.Close()
+
+	// 桌面端 Run 与网页端同源：解释当前编辑器源码生成场景树，替换预览后
+	// 重渲染整棵树。源码在包级 sig 中，重建不丢编辑内容。
+	ui.SetRunHandler(func() {
+		res, err := interp.Interpret(ui.EditorText())
+		if err != nil {
+			ui.SetRunResult(nil, err.Error())
+		} else {
+			ui.SetRunResult(res.Instance, "")
+		}
+		if rerr := app.Render(func() any { return ui.Playground() }); rerr != nil {
+			ui.SetRunResult(nil, "重渲染失败: "+rerr.Error())
+		}
+	})
 
 	// 初始化第一个示例，让编辑器有内容（Render 前写 signal，首帧即正确）。
 	ui.LoadSample(0)

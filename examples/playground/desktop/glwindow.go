@@ -97,6 +97,25 @@ func (g *glWindow) Open(cfg gxapp.WindowConfig) error {
 			w.SetShouldClose(true)
 			return
 		}
+		// 与网页端对齐的快捷键：Ctrl+Enter 运行、Ctrl+Z 撤销、Ctrl+Shift+Z /
+		// Ctrl+Y 重做。这些是带修饰键的组合，可打印字符不会进 CharCallback。
+		ctrl := mods&glfw.ModControl != 0
+		if ctrl && key == glfw.KeyEnter {
+			ui.TriggerRun()
+			return
+		}
+		if ctrl && key == glfw.KeyZ {
+			if mods&glfw.ModShift != 0 {
+				ui.EditorRedo()
+			} else {
+				ui.EditorUndo()
+			}
+			return
+		}
+		if ctrl && key == glfw.KeyY {
+			ui.EditorRedo()
+			return
+		}
 		switch key {
 		case glfw.KeyBackspace:
 			ui.EditorBackspace()

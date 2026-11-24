@@ -100,7 +100,7 @@ func TestStyleParsing(t *testing.T) {
 		}
 	}
 	s := parseStyle(map[string]any{"font-size": "24px", "padding": 8, "width": "300px"})
-	if s.fontSize != 24 || s.padding != 8 || s.width != 300 {
+	if s.fontSize != 24 || s.padding != (edges{8, 8, 8, 8}) || s.width != 300 {
 		t.Errorf("parseStyle 数值解析失败: %+v", s)
 	}
 }
@@ -110,5 +110,26 @@ func TestDrawBeforeOpenFails(t *testing.T) {
 	w := NewWindow()
 	if err := w.Draw(sampleTree()); err == nil {
 		t.Error("未 Open 就 Draw 应报错")
+	}
+}
+
+// TestParseStylePaddingShorthand：padding 支持 1~4 值 CSS 简写，四边按
+// [top,right,bottom,left] 落位；这也是 web 端按钮 "7 14" 挤压问题的桌面侧回归测试。
+func TestParseStylePaddingShorthand(t *testing.T) {
+	cases := []struct {
+		in   any
+		want edges
+	}{
+		{"7 14", edges{7, 14, 7, 14}},
+		{"0 16 12 16", edges{0, 16, 12, 16}},
+		{"1 2 3", edges{1, 2, 3, 2}},
+		{10, edges{10, 10, 10, 10}},
+		{"8px", edges{8, 8, 8, 8}},
+	}
+	for _, c := range cases {
+		s := parseStyle(map[string]any{"padding": c.in})
+		if s.padding != c.want {
+			t.Errorf("padding %v = %v, want %v", c.in, s.padding, c.want)
+		}
 	}
 }

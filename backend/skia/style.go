@@ -6,6 +6,8 @@ import (
 	"math"
 	"strconv"
 	"strings"
+
+	"github.com/robertpanvip/gox/cssbox"
 )
 
 // 本后端对 Node.Props 的样式约定（additive，host 不解释这些键）。
@@ -197,7 +199,7 @@ type style struct {
 	width    float32
 	height   float32
 	fontSize int
-	padding  float32
+	padding  edges // 四边内边距 [top,right,bottom,left]，支持 1~4 值简写
 	bold     bool
 	opacity  float32 // 0..1
 
@@ -235,7 +237,7 @@ type style struct {
 
 func defaultStyle() style {
 	return style{
-		color: argb(255, 0, 0, 0), fontSize: 16, padding: 4,
+		color: argb(255, 0, 0, 0), fontSize: 16, padding: edges{4, 4, 4, 4},
 		opacity: 1, transform: transformSpec{scale: 1},
 	}
 }
@@ -277,8 +279,16 @@ func parseStyle(props map[string]any) style {
 	if v, ok := propNum(props[propFontSize]); ok && v > 0 {
 		s.fontSize = int(v)
 	}
-	if v, ok := propNum(props[propPadding]); ok && v >= 0 {
-		s.padding = float32(v)
+	if v, ok := propString(props[propPadding]); ok {
+		if sides, ok := cssbox.Float32s(v); ok {
+			// 负值无意义，逐边裁剪到 0。
+			for i := range sides {
+				if sides[i] < 0 {
+					sides[i] = 0
+				}
+			}
+			s.padding = edges(sides)
+		}
 	}
 	if v, ok := propString(props[propWeight]); ok {
 		s.bold = strings.EqualFold(v, "bold") || v == "700"
