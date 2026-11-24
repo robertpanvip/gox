@@ -26,16 +26,18 @@ func main() { greet() } // func main() { Greet() }
 
 展开为具名类型 + const 组 + `String()` + `Parse<T>()`。
 
-### 前缀式命名
+### 前缀式命名与可见性
 
-常量 = `upperFirst(类型名)` + `upperFirst(成员名)`：
+**enum 的可见性决定它生成的全部符号的可见性**——不允许私有 enum 泄漏出公开常量
+或公开解析函数这类「部分公开 API」（评审 P1）。常量 = 前缀 + `upperFirst(成员名)`：
 
-| enum 声明 | 类型名（Go） | 常量 | Parse |
+| enum 声明 | 类型名（Go） | 常量前缀 | Parse |
 |---|---|---|---|
-| `pub enum color { red }` | `Color` | `ColorRed` | `ParseColor` |
-| `enum status { pending }` | `status`（私有） | `StatusPending` | `ParseStatus` |
+| `pub enum color { red }` | `Color` | `Color` → `ColorRed` | `ParseColor` |
+| `enum status { pending }` | `status`（私有） | `status` → `statusPending` | `parseStatus` |
 
-即使 enum 私有，常量与 Parse 名仍以大写前缀开头（遵循 Go 导出惯例）。
+即 `pub` 时常量/Parse 全程导出；非 `pub` 时类型、常量、Parse **全部私有**（小写）。
+私有 enum 的引用在 GX 源码里也写小写全名（如 `statusPending`、`parseStatus(...)`）。
 
 ### 三种底层类型
 
@@ -341,6 +343,33 @@ labels := nums.map(fn).filter(keep).reduce(0, add)
 - 右值类型未知（如外部包函数返回）→ 宽松生成 `x.field`，字段存在性交由 Go 编译器检查。
 - 解构变量遵循 Go 的作用域与 `:=` 重声明规则（同作用域重复声明由 Go 判错）。
 
+## 10.1 联合类型与 `is` 守卫（擦除语义边界）
+
+联合类型 `int | string` 与类型守卫 `x is T` 是**语法便利层**，复用 Go 的 `any`
+与类型断言，**不是一套独立的静态联合类型系统**。这一点需要明确边界，避免误当成
+TypeScript 式的联合类型。
+
+```gx
+type Value = int | string          // → type Value = any（擦除为 any）
+func show(v int | string) string { // → func show(v any) string
+    if v is string { return v }    // → 类型断言，块内 v 收窄为 string
+    return str(v)
+}
+```
+
+- **擦除规则**：所有出现联合类型的位置（变量声明、函数参数/返回值、类型别名、
+  struct 字段）都擦除为 `any`；`x is T` 改写为 Go 类型断言 / type switch。类型别名
+  `type V = int|string` 生成 `type V = any`。`is` 守卫链由编译器的语义层（Analysis）
+  做合法性检查：不在联合成员内的守卫报 `union-member`、冗余守卫报 `redundant-guard`、
+  覆盖不全报 `non-exhaustive`、类型不匹配报 `type-mismatch`。
+- **定位**：当前路线刻意保留 `any` 擦除、不自建 Union Runtime，实现成本低、复用 Go
+  运行时。它是**语法便利层**，尚未演进为真正的静态类型系统。
+- **静态检查边界（当前不做，需知晓）**：因为擦除为 `any`，以下约束被削弱或不具备——
+  ① 不同联合类型之间的赋值兼容性不再检查（`type A=int|string` 与 `type B=int|bool`
+  擦除后都是 `any`，可互相赋值）；② 函数调用可能接受联合声明之外的类型（底层是
+  `any`）；③ 不经过 `is` 守卫时编译器不知道当前具体类型；④ 守卫的控制流分析只覆盖
+  本文件可直接判定的形态。需要强约束的场景请用 Go 原生类型与 `interface`。
+
 ## 11. Signal 响应式
 
 `sig` 声明源信号，`Signal.computed` 派生只读信号，`Signal.effect` 注册副作用；依赖变化时 effect 自动重跑。底层为函数式 sig（`Signal[T] = func(...T) T`，无参读、带参写）+ 依赖追踪运行时 `runtime/signal`。
@@ -414,6 +443,23 @@ struct 的字段可以声明为 `sig`，编译器生成一个 getter 字段（`S
 > 3. **不自动传染给其他字段**：响应式语义不沿链扩散到普通字段。链上的普通字段段、以及「同名但未被 `sig` 修饰」的字段都不补 `()`，按普通 Go 字段读取。判据始终是「该字段在其 receiver 类型上是否被声明为 `sig`」，不是按字段名猜测，也不是从某个 `sig` 祖先传播而来。
 >
 > 这三条共同保证：显式标注即响应、嵌套链上处处保鲜、未标注字段零副作用。
+>
+> **零值与复制语义（评审 P1，必须明确）**
+>
+> 4. **零值不可用，必须初始化**：`sig` 字段是函数类型（`Signal.Signal[T]`），Go 零值为
+>    `nil`，直接读取会触发 nil function panic。因此 `sig` 字段**必须初始化**，不能依赖零值。
+>    两条受支持的构造路径都由编译器自动包装并覆盖全部 sig 字段：对象字面量
+>    `CardProps{name: v}` 与 JSX props（档位表，见下文）；因此经这两条路径得到的实例
+>    不会有 nil sig 字段。**已知边界**：`var p CardProps` 这种纯零值声明不会自动初始化
+>    sig 字段，随后读 `p.name` 会 panic——需用户保证在读取前完成构造赋值。不要用复杂的
+>    自动初始化包装对象去掩盖这一点，保持「显式标注 + 显式构造」的语义清晰。
+> 5. **struct 复制 = 字段值复制，sig 字段共享底层 Signal**：`a := CardProps{name: "A"};
+>    b := a` 之后 `a.name` 与 `b.name` **共享同一个 Signal**——这与 Go 复制一个含指针的
+>    struct 的直觉一致（函数闭包是多字段值，复制的是同一份引用）。改 `b.name` 会反映到
+>    `a.name`。如需独立副本，用 `sig` 源语法糖重新构造字段。
+> 6. **嵌套指针按普通 Go nil 语义**：`sig child *ChildProps` 为 nil 时访问 `props.child.name`
+>    按普通 Go 指针规则处理（nil 解引用），Signal 只负责字段本身的依赖追踪，不隐藏 nil、
+>    不在 `child` 换成另一个指针时自动重绑旧对象的依赖——这些交给普通 Go 代码显式管理。
 
 ```gx
 type CardProps struct {

@@ -120,6 +120,7 @@ type App struct {
 	stateMu       sync.Mutex        // 保护 errHook / lastDrawErr / frameVersion / needsFullSync 的并发读写
 	closed        atomic.Bool       // 并发安全的关闭标记（Run/Close/Draw 契约）
 	closeOnce     sync.Once         // 保证 Close 幂等且只释放一次资源
+	closeErr      error             // 保存首次 Close 的结果，供并发/重复调用一致返回（评审 P2）
 	frameVersion  uint64            // 单调递增的提交序号（Frame 契约）
 	needsFullSync bool              // 上次 Present 失败后置位：下帧要求后端全量重建（Frame 契约）
 	rendered      bool
@@ -559,6 +560,10 @@ func (a *App) Run() error {
 // Close 关闭窗口。可重复调用（幂等），且并发调用安全（Host 评审 P1）：
 // closeOnce 保证响应式树销毁、派发器关闭、窗口关闭只执行一次；closed 用原子标记，
 // 使并发的 Run/Draw/Update 能立即观察到关闭状态并 no-op。
+//
+// 评审 P2：底层 win.Close() 的错误不再被吞掉，而是保存到 closeErr 并返回。
+// sync.Once 保证首次执行的写入对后续所有 Do 调用可见（Go 内存模型），因此并发/
+// 重复的 Close 调用会得到一致的结果，而不是时而 error 时而 nil。
 func (a *App) Close() error {
 	a.closeOnce.Do(func() {
 		a.closed.Store(true)
@@ -571,9 +576,9 @@ func (a *App) Close() error {
 		if a.dispatcher != nil {
 			a.dispatcher.Close()
 		}
-		_ = a.win.Close()
+		a.closeErr = a.win.Close()
 	})
-	return nil
+	return a.closeErr
 }
 
 // Instance 返回底层场景树实例（Render 之前为 nil；供 SetPart / SetGetter 等高级用法）。

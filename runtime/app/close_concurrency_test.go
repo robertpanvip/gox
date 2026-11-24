@@ -132,3 +132,47 @@ func TestCloseConcurrentWithSafeMutationAndDraw(t *testing.T) {
 		signal.SetUIPost(nil)
 	}
 }
+
+// closeErrWindow 返回指定关闭错误，用于验证 App.Close 传递底层错误（评审 P2）。
+type closeErrWindow struct {
+	closeRaceWindow
+	err   error
+	calls int
+}
+
+func (w *closeErrWindow) Close() error { w.calls++; return w.err }
+
+type sentinelCloseErr struct{}
+
+func (sentinelCloseErr) Error() string { return "close failed" }
+
+// TestClosePropagatesWindowError 验收评审 P2：底层 win.Close() 的错误必须返回给调用方，
+// 且并发/重复 Close 的所有调用方得到一致结果（sync.Once + 保存 closeErr）。
+func TestClosePropagatesWindowError(t *testing.T) {
+	sentinel := sentinelCloseErr{}
+	w := &closeErrWindow{err: sentinel}
+	app, err := OpenWith(DefaultConfig(), w)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 并发调用 Close，全部应拿到同一个错误。
+	const n = 8
+	errs := make([]error, n)
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			errs[i] = app.Close()
+		}(i)
+	}
+	wg.Wait()
+	for i, e := range errs {
+		if e != sentinel {
+			t.Errorf("Close#%d 应返回底层错误，got %v", i, e)
+		}
+	}
+	if w.calls != 1 {
+		t.Fatalf("win.Close 应只调用一次，got %d", w.calls)
+	}
+}

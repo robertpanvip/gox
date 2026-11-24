@@ -459,9 +459,11 @@ host 只要把 SVG 规范化成 `canvas.Op`，三端天然一致、零后端改�
 - `currentColor` 由组件注入的 `color` 替换；`Resolve` 支持内置名/别名、原始 SVG、
   `data:image/svg+xml` URI、`.svg` 文件、http(s) URL。
 
-**内置图标**：`runtime/icon.Builtin` 预置约 40 个苹果风格 24×24 图标（house/search/
-heart/star/bell/gear/play/…），`Aliases` 提供常见别名（home→house、user→person 等），
-`Names()` 列出全部。
+**内置图标**：`runtime/icon.Builtin` 预置 85 个苹果风格 24×24 图标（house/search/
+heart/star/bell/gear/play/grid/list/eye/eye-off/refresh/filter/send/wifi/bolt/cart/chart/
+zoom-in/text-field/checkbox/radio/toggle/sidebar/pencil/… 共 12 组），`Aliases` 提供
+约 80 个常见别名（home→house、user→person、reload→refresh、hidden→eye-off、file→doc、
+switch→toggle 等），`Names()` 列出全部。
 
 **用法**：
 ```go
@@ -491,9 +493,13 @@ widgets.IconHeart(gxscene.Props{"size": 20, "color": "#ff453a"})
 </div>
 ```
 
-- **覆盖**：41 个规范名具名组件（`IconHouse`/`IconChevronRight`/`IconPlay`/`IconHeart`/
-  `IconBell`/`IconWarning`/`IconMoon`…）+ 3 个高频别名（`IconHome`/`IconUser`/
-  `IconSettings`，复用规范图标 SVG）。全部经 `make gxbuild` 从 `.gx` 转译为 `.go`，幂等。
+- **覆盖**：85 个规范名具名组件 + 3 个高频别名（`IconHome`/`IconUser`/`IconSettings`，
+  复用规范图标 SVG）。分 12 组：导航/操作/媒体/对象/状态/视图/可见性/更多操作/通信/
+  设备与状态/对象与数据/表单与编辑，含 `IconHouse`/`IconChevronRight`/`IconPlay`/
+  `IconHeart`/`IconGrid`/`IconList`/`IconEye`/`IconEyeOff`/`IconRefresh`/`IconFilter`/
+  `IconSend`/`IconWifi`/`IconBolt`/`IconCart`/`IconChart`/`IconZoomIn`/`IconTextField`/
+  `IconCheckbox`/`IconRadio`/`IconToggle`/`IconSidebar`/`IconPencil` 等。全部经
+  `make gxbuild` 从 `.gx` 转译为 `.go`，幂等。穷举测试保证每个组件都产出非空矢量指令。
 - **一致性**：测试逐字节校验组件库 SVG 常量与 `runtime/icon.Builtin` 相同，防止两套
   数据漂移；别名组件与规范名产出完全相同的矢量指令。
 - 新增图标时在 `runtime/icon/builtin.go` 与 `widgets/iconSet.gx` 同时登记即可。
@@ -501,6 +507,39 @@ widgets.IconHeart(gxscene.Props{"size": 20, "color": "#ff453a"})
 **边界**：仅静态矢量图元（无 SVG 滤镜/渐变/文本/外部 image 引用）；fill-rule 固定
 Winding（内置图标用描边或单轮廓实心规避镂空方向问题）；动画图标需用 signal 重建
 canvas-ops。
+
+### 2.10 Rust 后端的帧传输、生命周期与事件驱动（工程评审整改）
+
+针对 Rust 后端的多轮工程评审，以下四项在 `backend/rust` 落地（这也适用于任何
+走 cgo/Wire 的独立后端，作为实现范式）：
+
+1. **帧 FIFO 队列，杜绝增量丢失**（P0）：旧实现 `Arc<Mutex<Option<Vec<u8>>>>` 是单槽，
+   连续多个增量帧在事件循环消费前会被覆盖，导致镜像缺修改。现改为
+   `FrameQueue.pending: VecDeque<Vec<u8>>`——`gx_window_draw` 逐帧入队，redraw 时 drain
+   全部按序 `apply_frame`；队列版本由 Go 侧 `Frame.Version` 连续性检查 + draw 失败回退
+   全量快照兜底。
+2. **生命周期：退出通知 + Arc 引用计数，消除 use-after-free**（P0）：`gx_window_close`
+   只设置 shutdown 并经 `EventLoopProxy<GxEvent>` 发退出请求，**不释放内存**；
+   `gx_window_run` 用 `Arc::increment_strong_count` 在事件循环期间保活，返回时 drop；
+   新增 `gx_window_destroy` 由 Go 在 `runDone` 之后释放调用方那份 Arc。Go `Window.Close`
+   严格按「请求退出 → 等 runDone → destroy → 注销注册表」顺序执行。同时移除 Go 侧
+   `LockOSThread`（锁定的线程与事件循环线程并非同一条），由 Rust 后端自管事件循环线程。
+3. **事件驱动重绘，停止空转**（P1）：去掉 `RedrawRequested` 结尾的无条件
+   `request_redraw`。新帧到达时 `gx_window_draw` 经 proxy 发合并式 `Wake` 请求一次重绘；
+   仅当 `Renderer::needs_continuous_redraw()` 为真（transition 动画 / 播放中的视频 /
+   滚动条淡入淡出过渡）才继续调度下一帧。`EventLoopProxy` 是这套机制的关键——否则
+   新帧提交后无人唤醒事件循环。
+4. **事件分级可靠性**（P1）：Rust→Go 事件回调的通道满时不再一律丢弃。`inputEvent.reliable()`
+   把 IME 提交/预编辑、键盘、点击、焦点等归为可靠事件——通道满时进 mutex 保护的
+   `overflow` 无界队列（不丢、有序），`pump` 信号唤醒 Run 去 drain；光标/hover 等高频
+   状态事件用 `mergeSlot` 只保留最新。全程非阻塞，不卡 Rust 事件线程。
+
+此外：**Wire 版本协商**（P2）——`Open` 时解析 `gx_window_version()` 的 major，与
+`expectedProtocolMajor` 不一致直接拒绝启动，防止 core 更新协议而用户仍用旧后端；
+**注册表注销**（P1）——`Window.regKey` 在 Close 时 `delete(windows, key)`，不再泄漏；
+**App.Close 错误传递**（P2）——底层 `win.Close()` 错误保存到 `closeErr` 并返回，
+`sync.Once` 保证并发重复调用结果一致。Rust Adapter 的 `go.mod` 去除对 Skia 后端的
+冗余依赖，可独立成仓。
 
 ## 3. 拆成两个项目如何跑通
 

@@ -22,6 +22,25 @@ var namedIconCases = []struct {
 	{"bell", IconBell},
 	{"warning", IconWarning},
 	{"moon", IconMoon},
+	// 新增分区代表
+	{"grid", IconGrid},
+	{"list", IconList},
+	{"eye", IconEye},
+	{"eye-off", IconEyeOff},
+	{"refresh", IconRefresh},
+	{"filter", IconFilter},
+	{"send", IconSend},
+	{"wifi", IconWifi},
+	{"bolt", IconBolt},
+	{"cart", IconCart},
+	{"chart", IconChart},
+	{"zoom-in", IconZoomIn},
+	// 表单与编辑分区代表
+	{"text-field", IconTextField},
+	{"checkbox", IconCheckbox},
+	{"toggle", IconToggle},
+	{"sidebar", IconSidebar},
+	{"pencil", IconPencil},
 	{"home(alias)", IconHome},
 	{"user(alias)", IconUser},
 	{"settings(alias)", IconSettings},
@@ -108,6 +127,13 @@ func TestNamedIcon_SVGMatchBuiltin(t *testing.T) {
 	cases := map[string]string{
 		"house": svgHouse, "search": svgSearch, "heart": svgHeart,
 		"gear": svgGear, "warning": svgWarning, "moon": svgMoon,
+		"grid": svgGrid, "eye": svgEye, "eye-off": svgEyeOff,
+		"refresh": svgRefresh, "send": svgSend, "wifi": svgWifi,
+		"bolt": svgBolt, "cart": svgCart, "chart": svgChart,
+		"zoom-in": svgZoomIn, "zoom-out": svgZoomOut, "mic": svgMic,
+		"text-field": svgTextField, "checkbox": svgCheckbox, "radio": svgRadio,
+		"toggle": svgToggle, "sidebar": svgSidebar, "pencil": svgPencil,
+		"command": svgCommand,
 	}
 	for name, svg := range cases {
 		builtin, ok := gxicon.Lookup(name)
@@ -117,5 +143,63 @@ func TestNamedIcon_SVGMatchBuiltin(t *testing.T) {
 		if builtin != svg {
 			t.Fatalf("内置 SVG %q 与组件库常量不一致", name)
 		}
+	}
+}
+
+// allNamedIcons 汇总所有具名组件（规范名 + 别名），用于穷举验证。
+var allNamedIcons = map[string]func(gxscene.Props) *gxscene.Instance{
+	"house": IconHouse, "chevron-left": IconChevronLeft, "chevron-right": IconChevronRight,
+	"chevron-up": IconChevronUp, "chevron-down": IconChevronDown,
+	"arrow-left": IconArrowLeft, "arrow-right": IconArrowRight, "arrow-up": IconArrowUp, "arrow-down": IconArrowDown,
+	"plus": IconPlus, "minus": IconMinus, "close": IconClose, "check": IconCheck, "edit": IconEdit,
+	"trash": IconTrash, "search": IconSearch, "share": IconShare, "download": IconDownload,
+	"upload": IconUpload, "link": IconLink,
+	"play": IconPlay, "pause": IconPause, "camera": IconCamera, "photo": IconPhoto,
+	"person": IconPerson, "heart": IconHeart, "star": IconStar, "bell": IconBell, "gear": IconGear,
+	"folder": IconFolder, "bookmark": IconBookmark, "mail": IconMail, "lock": IconLock,
+	"calendar": IconCalendar, "clock": IconClock, "location": IconLocation,
+	"info": IconInfo, "warning": IconWarning, "cloud": IconCloud, "sun": IconSun, "moon": IconMoon,
+	"grid": IconGrid, "list": IconList, "menu": IconMenu, "more": IconMore,
+	"eye": IconEye, "eye-off": IconEyeOff,
+	"refresh": IconRefresh, "filter": IconFilter, "sliders": IconSliders,
+	"paperclip": IconPaperclip, "send": IconSend, "reply": IconReply, "volume": IconVolume, "mic": IconMic,
+	"wifi": IconWifi, "battery": IconBattery, "bolt": IconBolt, "power": IconPower,
+	"logout": IconLogout, "login": IconLogin,
+	"tag": IconTag, "flag": IconFlag, "doc": IconDoc, "cart": IconCart, "card": IconCard,
+	"chart": IconChart, "zoom-in": IconZoomIn, "zoom-out": IconZoomOut,
+	// 表单与编辑
+	"text-field": IconTextField, "textarea": IconTextarea, "checkbox": IconCheckbox,
+	"check-square": IconCheckSquare, "radio": IconRadio, "select": IconSelect,
+	"stepper": IconStepper, "toggle": IconToggle, "slider": IconSlider,
+	"sidebar": IconSidebar, "tab": IconTab, "toolbar": IconToolbar,
+	"pencil": IconPencil, "eraser": IconEraser, "cursor": IconCursor, "command": IconCommand,
+	"home(alias)": IconHome, "user(alias)": IconUser, "settings(alias)": IconSettings,
+}
+
+// TestAllNamedIconsProduceVector 穷举所有具名组件：每个都必须产出非空矢量指令，
+// 防止新增图标时漏接组件或 SVG 常量写错导致静默空白。
+func TestAllNamedIconsProduceVector(t *testing.T) {
+	// 规范名数量应与具名组件表一致（不含 3 个别名）。
+	canonical := len(gxicon.Names())
+	if len(allNamedIcons) != canonical+3 {
+		t.Fatalf("具名组件数 %d ≠ 内置图标数 %d + 3 别名", len(allNamedIcons), canonical)
+	}
+	for name, fn := range allNamedIcons {
+		t.Run(name, func(t *testing.T) {
+			inst := fn(gxscene.Props{"size": 24, "color": "#123456"})
+			n := findKind(inst.Root(), "canvas")
+			if n == nil {
+				t.Fatal("缺 canvas 节点")
+			}
+			ops := canvas.Decode(n.Props[canvas.PropKey].(string))
+			if len(ops) == 0 {
+				t.Fatal("矢量指令为空")
+			}
+			for _, op := range ops {
+				if op.Kind == canvas.OpPath && op.D == "" {
+					t.Fatal("存在空 path 指令")
+				}
+			}
+		})
 	}
 }

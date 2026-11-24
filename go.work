@@ -8,4 +8,5 @@ use (
 	./examples/desktop-demo
 	./examples/wasm-demo
 	./examples/playground
+	./examples/icon-gallery
 )

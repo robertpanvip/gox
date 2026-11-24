@@ -34,32 +34,32 @@ func ParseColor(s string) (Color, bool) {
 }
 
 
-// 显式赋值的枚举（私有 enum：类型名保持小写，常量前缀仍大写）
+// 显式赋值的枚举（私有 enum：类型/常量/Parse 全部私有，不泄漏公开符号）
 type status int
 const (
-	StatusPending status = 1
-	StatusActive status = 2
-	StatusDone status = 3
+	statusPending status = 1
+	statusActive status = 2
+	statusDone status = 3
 )
 func (x status) String() string {
 	switch x {
-	case StatusPending:
+	case statusPending:
 		return "pending"
-	case StatusActive:
+	case statusActive:
 		return "active"
-	case StatusDone:
+	case statusDone:
 		return "done"
 	}
 	return strconv.Itoa(int(x))
 }
-func ParseStatus(s string) (status, bool) {
+func parseStatus(s string) (status, bool) {
 	switch s {
 	case "pending":
-		return StatusPending, true
+		return statusPending, true
 	case "active":
-		return StatusActive, true
+		return statusActive, true
 	case "done":
-		return StatusDone, true
+		return statusDone, true
 	}
 	return 0, false
 }
@@ -123,5 +123,5 @@ func ParsePerm(s string) (Perm, bool) {
 func main() {
     c := ColorRed
     m, _ := ParseMethod("GET")
-    fmt.Println(Name(c), StatusPending, m, PermRead|PermWrite)
+    fmt.Println(Name(c), statusPending, m, PermRead|PermWrite)
 }

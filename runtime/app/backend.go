@@ -1,8 +1,9 @@
 // Package gxapp 的 Backend 契约入口。
 //
-// 本文件把分散在 app.go / frame.go / dispatcher.go 的后端协议面集中为一份
-// 「Backend Contract」权威声明，并引入 Backend 注册表。它不改变任何既有类型，
-// 只用类型别名把它们聚合为单一入口，因此 host 与所有已实现后端零改动。
+// 本文件是分散在 app.go / frame.go / dispatcher.go 的后端协议面的权威说明，
+// 并引入可选的 Backend 注册表。契约类型（Window / FramePresenter / UIExecutor /
+// Frame）本身定义在各自文件里，本文件不复制别名、不改变任何既有类型，
+// 因此 host 与所有已实现后端零改动。
 //
 // # 两层契约模型（Contract + Adapter）
 //
@@ -37,35 +38,20 @@ import (
 	"fmt"
 	"sort"
 	"sync"
-
-	gxscene "github.com/robertpanvip/gox/runtime/scene"
 )
 
-// ---- 契约别名：把分散定义的协议类型聚合为单一 Backend 入口 ----
+// ---- 契约类型 ----
 //
-// 这些是 type alias（非新类型），与原始类型完全等价，后端可任选其一引用。
-
-// BackendWindow 是窗口生命周期契约（别名自 Window）。
-type BackendWindow = Window
-
-// BackendPresenter 是场景提交契约（别名自 FramePresenter）。
-type BackendPresenter = FramePresenter
-
-// BackendExecutor 是 UI 线程投递契约（别名自 UIExecutor）。
-type BackendExecutor = UIExecutor
-
-// BackendDispatcher 是帧派发契约（别名自 FrameDispatcher）。
-type BackendDispatcher = FrameDispatcher
-
-// BackendFrame 是一次 Host → Backend 的完整提交（别名自 Frame）。
-type BackendFrame = Frame
-
-// BackendConfig 是窗口/后端配置（别名自 WindowConfig）。
-type BackendConfig = WindowConfig
-
-// BackendNode / BackendChange 是场景树与增量数据类型（别名自 gxscene）。
-type BackendNode = gxscene.Node
-type BackendChange = gxscene.Change
+// 后端契约统一使用原始名字 Window / FramePresenter / UIExecutor / Frame，
+// 不再另设 BackendXxx 别名——两套命名只会增加认知负担，且不提供任何额外能力。
+//
+// # Backend 注入：OpenWith 是基础，Register 是可选便利
+//
+// 核心架构只依赖 OpenWith(cfg, win)——装配层直接构造后端实例注入即可工作，
+// 这是拆仓后各后端接入的基础机制。Register / OpenBackend 只是建立在 OpenWith
+// 之上的可选便利层：便于按 cfg.Backend 名字集中装配。核心能力不依赖注册表。
+// Register 允许同名覆盖（后注册者胜），因此注册顺序会影响 OpenBackend 最终选到的实现；
+// 这是有意的替换机制，装配层应保证同名只注册一次或明确覆盖顺序。
 
 // BackendFactory 构造一个后端实例。装配层实现它并注册到注册表。
 // 传入的是已规范化的配置；工厂可据此选择具体窗口实现。

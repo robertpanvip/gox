@@ -1262,6 +1262,33 @@ struct VSOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f };
         );
     }
 
+    /// 事件驱动重绘：渲染完成后判断场景是否仍有"会随时间自行变化"的内容。
+    /// 只有返回 true 时才继续 request_redraw；否则停止，直到下一帧/事件/新帧唤醒。
+    /// 覆盖三类持续动画源：transition 动画、播放中的视频、滚动条淡入淡出过渡。
+    pub fn needs_continuous_redraw(&self) -> bool {
+        // transition 动画进行中
+        if self.animator.is_active() {
+            return true;
+        }
+        // 视频正在播放：解码线程持续产出新帧，必须保持重绘调度。
+        if crate::video::has_active() {
+            return true;
+        }
+        // 滚动条淡入淡出过渡期（滚动后 1.2s~1.7s）；alpha 为 0 或 1 时静止。
+        let has_bar = !self.display.scrollbars.is_empty();
+        if has_bar {
+            let a = self.scrollbar_alpha;
+            if (a > 0.0 && a < 1.0)
+                || std::time::Instant::now()
+                    .duration_since(self.scrollbar_last_activity)
+                    .as_millis() < 1700
+            {
+                return true;
+            }
+        }
+        false
+    }
+
     pub fn render(&mut self) {
         let Some(scene) = self.scene.as_ref() else { return; };
         // transition：按当前时间推进动画。动画进行中必须逐帧重算（插值值在变）。
