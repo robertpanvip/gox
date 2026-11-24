@@ -97,3 +97,43 @@ func Icon(props gxscene.Props) *gxscene.Instance {
 func iconFromSVG(svg string, props gxscene.Props) *gxscene.Instance {
 	return iconSVGNode("", svg, parseIconProps(props))
 }
+
+// iconNode 是「组件内嵌图标」的统一入口：按内置图标名/别名构造一个 canvas 子树
+// 实例，供其它预制组件经 opComp 插槽挂进场景树。
+//
+//	name  内置图标名（如 "search" / "chevron-down" / "check"，支持别名）
+//	size  显示尺寸 px（≤0 时用 16，组件内联图标默认比独立图标小一档）
+//	tone  语义色名；为空则用 muted（内嵌图标多为次要信息，默认中性色）
+//
+// name 为空时返回 nil，插槽会渲染成空子树——这样组件可以按需省略图标。
+// 颜色在构建期经 appleToneColor 解析为当前主题色，主题切换时组件整体重建即更新。
+func iconNode(name string, size float64, tone string) *gxscene.Instance {
+	if name == "" {
+		return nil
+	}
+	if size <= 0 {
+		size = 16
+	}
+	if tone == "" {
+		tone = "muted"
+	}
+	// 语义令牌名先解析成当前主题色，再交给 SVG 解析器（后者只认颜色字面量
+	// 或语义 tone；这里显式传色，保证浅色主题下图标也是浅色适配）。
+	color := ""
+	switch tone {
+	case "muted":
+		color = ThemeMuted
+	case "text":
+		color = ThemeText
+	case "faint":
+		color = ThemeFaint
+	case "onaccent":
+		color = ThemeOnAccent
+	case "panel":
+		color = ThemePanel
+	}
+	if color != "" {
+		return Icon(gxscene.Props{"name": name, "size": size, "color": color})
+	}
+	return Icon(gxscene.Props{"name": name, "size": size, "tone": tone})
+}

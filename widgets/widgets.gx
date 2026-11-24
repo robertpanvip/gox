@@ -121,9 +121,10 @@ func Button(props gxscene.Props) *gxscene.Instance {
 	variant := gxscene.get[string](props, "variant")
 	width := gxscene.get[string](props, "width")
 	height := gxscene.get[string](props, "height")
+	icon := gxscene.get[string](props, "icon") // 可选前置矢量图标名
 
 	bgSlot, colorSlot, borderSlot := 0, 1, 2
-	clickSlot, labelSlot := 3, 4
+	clickSlot, labelSlot, iconSlot := 3, 4, 5
 
 	// 全部走主题 getter：主题切换时按钮自动重绘（浅色模式不再残留深色底）。
 	accentOf := tkTone("primary")
@@ -172,26 +173,47 @@ func Button(props gxscene.Props) *gxscene.Instance {
 		// macOS 控件高 28pt：固定 height + 对称 padding，紧凑对齐 HIG。
 		attr("padding", "7"), attr("border-radius", RadiusSmall),
 		attr("border-width", "1"), attr("font-size", FontBody), attr("weight", "bold"),
+		// icon + label 横向并排：显式 row，否则默认 column 会把图标与文字竖排。
+		attr("flex-direction", "row"), attr("gap", "5"),
 		attr("align-items", "center"), attr("justify-content", "center"),
 		attr("height", ControlHeight),
 		dynAttr("bg", bgSlot), dynAttr("color", colorSlot), dynAttr("border", borderSlot),
 	}
 	n := 5
+	hasIcon := icon() != ""
+	if hasIcon {
+		n = 6
+	}
 	if w := width(); w != "" {
 		ops = append(ops, attr("width", w))
 	}
 	if h := height(); h != "" {
 		ops = append(ops, attr("height", h))
 	}
-	ops = append(ops, event("onClick", clickSlot), dynChild(labelSlot), closeEl())
+	ops = append(ops, event("onClick", clickSlot))
+	if hasIcon {
+		ops = append(ops, gxscene.Op{Code: gxscene.opComp, Arg: "ButtonIcon", Slot: iconSlot})
+	}
+	ops = append(ops, dynChild(labelSlot), closeEl())
 
-	return gxscene.render(gxscene.Template{Ops: ops, N: n},
+	getters := []func() any{
 		func() any { return bgGetter() },
 		func() any { return colorGetter() },
 		func() any { return borderGetter() },
 		func() any { return gxscene.get[gxscene.Handler](props, "onClick")() },
 		func() any { return label() },
-	)
+	}
+	if hasIcon {
+		getters = append(getters, func() any {
+			// 实色按钮（primary/danger）图标用白，其它用正文色。
+			tone := "text"
+			if v := variant(); v == "primary" || v == "danger" {
+				tone = "onaccent"
+			}
+			return iconNode(icon(), 15, tone)
+		})
+	}
+	return gxscene.render(gxscene.Template{Ops: ops, N: n}, getters...)
 }
 
 // ---------- Input ----------
@@ -219,6 +241,7 @@ func Input(props gxscene.Props) *gxscene.Instance {
 	placeholder := gxscene.get[string](props, "placeholder")
 	width := gxscene.get[string](props, "width")
 	tone := gxscene.get[string](props, "tone")
+	icon := gxscene.get[string](props, "icon") // 可选前置矢量图标名
 
 	w := width()
 	if w == "" {
@@ -239,9 +262,11 @@ func Input(props gxscene.Props) *gxscene.Instance {
 		textSlot
 		valueSlot // 把当前值写回根 Props["value"]，供 GUI 层计算插入/退格后的新文本
 		inputSlot
+		iconSlot
 		nSlots
 	)
 
+	hasIcon := icon() != ""
 	ops := []gxscene.Op{
 		el("input"),
 		attr("gx-input-id", focusID),
@@ -252,12 +277,18 @@ func Input(props gxscene.Props) *gxscene.Instance {
 		dynAttr("bg", bgSlot), dynAttr("border", borderSlot),
 		dynAttr("value", valueSlot),
 		event("onInput", inputSlot),
+	}
+	if hasIcon {
+		// 可选前置矢量图标（如 search），随主题用 muted 色。
+		ops = append(ops, gxscene.Op{Code: gxscene.opComp, Arg: "InputIcon", Slot: iconSlot})
+	}
+	ops = append(ops,
 		// 文本：值非空显示值（亮色），否则显示占位符（灰）。
 		el("span"), attr("font-size", FontBody), dynAttr("color", textColorSlot), dynChild(textSlot), closeEl(),
 		// 光标：2px 宽的色块；未聚焦或非闪烁相位时用输入底同色隐藏。
 		el("span"), attr("width", "2"), attr("height", "13"), dynAttr("bg", cursorSlot), closeEl(),
 		closeEl(),
-	}
+	)
 
 	focused := func() bool { return focusToken() == focusID }
 	text := func() string {
@@ -268,7 +299,13 @@ func Input(props gxscene.Props) *gxscene.Instance {
 		return placeholder()
 	}
 
-	return gxscene.render(gxscene.Template{Ops: ops, N: nSlots},
+	// 无前置图标时不声明 iconSlot，N 收敛到 inputSlot+1，避免空 getter 返回 nil
+	// 被 embedValue 当子树解引用而崩溃。
+	n := nSlots
+	if !hasIcon {
+		n = inputSlot + 1
+	}
+	return gxscene.render(gxscene.Template{Ops: ops, N: n},
 		func() any { // border
 			if focused() {
 				return accentOf()
@@ -299,6 +336,7 @@ func Input(props gxscene.Props) *gxscene.Instance {
 			}
 			return h
 		},
+		func() any { return iconNode(icon(), 15, "muted") },
 	)
 }
 

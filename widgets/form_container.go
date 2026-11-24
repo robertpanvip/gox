@@ -146,7 +146,11 @@ func Form(props gxscene.Props) *gxscene.Instance {
 	if sl == "" {
 		n = submitSlot
 	} else {
+		// 提交按钮单独包一层横向居中容器：column 根的其它字段保持左对齐，
+		// 只有按钮在自身行内水平居中（macOS 表单常见布局）。
 		ops = append(ops,
+			el("div"), attr("gx-role", "form-submit-wrap"),
+			attr("flex-direction", "row"), attr("justify-content", "center"),
 			el("button"), attr("gx-role", "form-submit"),
 			attr("variant", "primary"), attr("bg", ThemeAccent),
 			attr("color", ThemeOnAccent), attr("border-radius", RadiusControl),
@@ -154,6 +158,7 @@ func Form(props gxscene.Props) *gxscene.Instance {
 			attr("padding", "10"), attr("width", "100"),
 			gxscene.Op{Code: gxscene.OpEvent, Key: "onClick", Slot: submitSlot},
 			gxscene.Op{Code: gxscene.OpChildText, Arg: sl}, closeEl(),
+			closeEl(),
 		)
 	}
 	ops = append(ops, closeEl())

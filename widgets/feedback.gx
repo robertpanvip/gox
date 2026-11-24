@@ -22,9 +22,13 @@ func Alert(props gxscene.Props) *gxscene.Instance {
 	tone := gxscene.get[string](props, "tone")
 	width := gxscene.get[string](props, "width")
 
-	accent := toneColor(tone())
+	toneName := tone()
+	accent := toneColor(toneName)
+	// 语义图标：Alert 用预制矢量图标替代纯色条旁的信息层级。
+	iconName := alertIconName(toneName)
 	const (
-		titleSlot = iota
+		iconSlot = iota
+		titleSlot
 		msgSlot
 		nSlots
 	)
@@ -32,14 +36,14 @@ func Alert(props gxscene.Props) *gxscene.Instance {
 		el("div"), attr("gx-role", "alert"),
 		attr("bg", ThemePanel), attr("border-radius", RadiusCard),
 		attr("padding", "12"), attr("flex-direction", "row"), attr("gap", "10"),
+		attr("align-items", "flex-start"),
 	}
 	if w := width(); w != "" {
 		ops = append(ops, attr("width", w))
 	}
 	ops = append(ops,
-		// 左侧色条
-		el("div"), attr("width", "4"), attr("height", "36"),
-		attr("border-radius", "2"), attr("bg", accent), closeEl(),
+		// 语义矢量图标（canvas 子树）
+		gxscene.Op{Code: gxscene.opComp, Arg: "AlertIcon", Slot: iconSlot},
 		// 文本列
 		el("div"), attr("flex-direction", "column"), attr("gap", "3"),
 		el("span"), attr("font-size", FontHeadline), attr("weight", "bold"),
@@ -50,12 +54,31 @@ func Alert(props gxscene.Props) *gxscene.Instance {
 		closeEl(),
 	)
 	return gxscene.render(gxscene.Template{Ops: ops, N: nSlots},
+		func() any { return iconNode(iconName, 20, toneName) },
 		func() any { return title() },
 		func() any { return message() },
 	)
 }
 
+// alertIconName 把语义 tone 映射到内置矢量图标名。
+func alertIconName(tone string) string {
+	switch tone {
+	case "success", "green":
+		return "check"
+	case "warning", "orange", "yellow":
+		return "warning"
+	case "danger", "red":
+		return "warning"
+	default:
+		return "info"
+	}
+}
+
 // EmptyState 空状态占位。props: icon, title, description, width。
+//
+// icon 是内置矢量图标名（如 "folder" / "doc" / "tray"，支持别名），经预制图标
+// 系统解析为 canvas 矢量节点；留空默认 "folder"。这是组件库用上自有图标系统的
+// 一部分——不再用 "◻" 之类的字体字符凑数。
 func EmptyState(props gxscene.Props) *gxscene.Instance {
 	icon := gxscene.get[string](props, "icon")
 	title := gxscene.get[string](props, "title")
@@ -63,7 +86,8 @@ func EmptyState(props gxscene.Props) *gxscene.Instance {
 	width := gxscene.get[string](props, "width")
 
 	const (
-		titleSlot = iota
+		iconSlot = iota
+		titleSlot
 		descSlot
 		nSlots
 	)
@@ -75,13 +99,9 @@ func EmptyState(props gxscene.Props) *gxscene.Instance {
 	if w := width(); w != "" {
 		ops = append(ops, attr("width", w))
 	}
-	ic := icon()
-	if ic == "" {
-		ic = "◻"
-	}
+	// 矢量图标子树（canvas 节点）；颜色走 muted 令牌，跟随明暗主题。
 	ops = append(ops,
-		el("span"), attr("font-size", "34"), attr("color", ThemeMuted),
-		gxscene.Op{Code: gxscene.opChildText, Arg: ic}, closeEl(),
+		gxscene.Op{Code: gxscene.opComp, Arg: "EmptyIcon", Slot: iconSlot},
 		el("span"), attr("font-size", FontTitle2), attr("weight", "bold"),
 		attr("color", ThemeText), dynChild(titleSlot), closeEl(),
 		el("span"), attr("font-size", FontBody), attr("color", ThemeMuted),
@@ -89,6 +109,13 @@ func EmptyState(props gxscene.Props) *gxscene.Instance {
 		closeEl(),
 	)
 	return gxscene.render(gxscene.Template{Ops: ops, N: nSlots},
+		func() any {
+			name := icon()
+			if name == "" {
+				name = "folder"
+			}
+			return iconNode(name, 40, "muted")
+		},
 		func() any { return title() },
 		func() any { return desc() },
 	)

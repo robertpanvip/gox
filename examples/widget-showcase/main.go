@@ -21,7 +21,7 @@ import (
 func init() { runtime.LockOSThread() }
 
 const W = 900
-const H = 3600
+const H = 4100
 
 func toAny(kids ...*gxscene.Instance) []any {
 	out := make([]any, len(kids))
@@ -59,13 +59,65 @@ func label(s string, size string, tone string) *gxscene.Instance {
 }
 
 func sectionTitle(s string) *gxscene.Instance {
-	return widgets.Text(gxscene.Props{
+	return sectionTitleIcon(s, "")
+}
+
+// sectionTitleIcon 分区标题：可选前置矢量图标，复用预制图标系统。
+func sectionTitleIcon(s, iconName string) *gxscene.Instance {
+	txt := widgets.Text(gxscene.Props{
 		"value": func() any { return s }, "size": widgets.FontHeadline,
 		"weight": "bold", "tone": "text",
 	})
+	if iconName == "" {
+		return txt
+	}
+	return widgets.Row(gxscene.Props{"gap": "8", "align": "center", "children": func() any {
+		return toAny(
+			widgets.Icon(gxscene.Props{"name": iconName, "size": 17, "tone": "primary"}),
+			txt,
+		)
+	}})
 }
 
 func noop() gxscene.Handler { return gxscene.Handler(func(gxscene.EventContext) {}) }
+
+// iconGallery 展示预制矢量图标系统：一批具名图标按网格排布，验证 SVG 在
+// host 层解析为 canvas 矢量指令、跨后端一致。
+func iconGallery(w string) *gxscene.Instance {
+	names := []string{
+		"house", "search", "bell", "gear", "mail", "lock", "calendar", "clock",
+		"folder", "doc", "heart", "star", "chart", "cart", "cloud", "sun",
+		"play", "camera", "location", "tag", "flag", "bookmark", "wifi", "bolt",
+	}
+	// 每行 8 个图标，图标 22px + 名称标签，间距 8。
+	const perRow = 8
+	rows := make([]*gxscene.Instance, 0, 3)
+	for start := 0; start < len(names); start += perRow {
+		end := start + perRow
+		if end > len(names) {
+			end = len(names)
+		}
+		cells := make([]*gxscene.Instance, 0, perRow)
+		for _, n := range names[start:end] {
+			cells = append(cells, widgets.Col(gxscene.Props{
+				"width": "80", "gap": "4", "align": "center",
+				"children": func() any {
+					return toAny(
+						widgets.Icon(gxscene.Props{"name": n, "size": 22, "tone": "primary"}),
+						widgets.Text(gxscene.Props{
+							"value": func() any { return n }, "size": widgets.FontFootnote, "tone": "muted",
+						}),
+					)
+				},
+			}))
+		}
+		rows = append(rows, widgets.Row(gxscene.Props{"gap": "10", "children": func() any { return toAny(cells...) }}))
+	}
+	return group("图标系统 Icon Set", w,
+		sectionTitleIcon("预制矢量图标 · SVG → canvas", "star"),
+		widgets.Col(gxscene.Props{"gap": "14", "children": func() any { return toAny(rows...) }}),
+	)
+}
 
 func buildTree() *gxscene.Instance {
 	// 受控状态（截图只需初值）
@@ -79,13 +131,14 @@ func buildTree() *gxscene.Instance {
 	sel := signal.New("")
 
 	btnRow := row("12",
-		widgets.Button(gxscene.Props{"label": "主操作", "variant": "primary", "onClick": noop()}),
-		widgets.Button(gxscene.Props{"label": "次要", "variant": "secondary", "onClick": noop()}),
-		widgets.Button(gxscene.Props{"label": "危险", "variant": "danger", "onClick": noop()}),
+		widgets.Button(gxscene.Props{"label": "主操作", "variant": "primary", "icon": "plus", "onClick": noop()}),
+		widgets.Button(gxscene.Props{"label": "次要", "variant": "secondary", "icon": "download", "onClick": noop()}),
+		widgets.Button(gxscene.Props{"label": "危险", "variant": "danger", "icon": "trash", "onClick": noop()}),
 	)
 
 	inputField := widgets.Input(gxscene.Props{
-		"value": func() any { return text() }, "placeholder": "点此输入…", "width": "360",
+		"value": func() any { return text() }, "placeholder": "搜索…", "width": "360",
+		"icon":    "search",
 		"onInput": func() any { return widgets.BindInput(func(s string) { text(s) }) },
 	})
 
@@ -216,7 +269,7 @@ func buildTree() *gxscene.Instance {
 
 	feedbackRow := col(str(W-88), "12",
 		widgets.EmptyState(gxscene.Props{
-			"icon": "◻", "title": func() any { return "暂无内容" },
+			"icon": "folder", "title": func() any { return "暂无内容" },
 			"description": func() any { return "空状态也遵循当前主题的层级与留白" },
 			"width":       str(W - 88),
 		}),
@@ -247,20 +300,21 @@ func buildTree() *gxscene.Instance {
 					widgets.Heading(gxscene.Props{"value": func() any { return "组件库 · Apple macOS" }, "level": 1}),
 					label("预制控件 · 明暗双主题 · HIG 对齐", widgets.FontBody, "muted"),
 				),
-				group(str(W-48), str(W-48), sectionTitle("按钮 Buttons"), btnRow),
-				group(str(W-48), str(W-48), sectionTitle("输入框 Text Field"), inputField),
-				group(str(W-48), str(W-48), sectionTitle("复选框 / 开关 Checkbox / Switch"), checks),
-				group(str(W-48), str(W-48), sectionTitle("单选 Radio"), radioGrp),
-				group(str(W-48), str(W-48), sectionTitle("分段 / 标签 Segmented / Tabs"), segmented, tabs),
-				group(str(W-48), str(W-48), sectionTitle("滑块 / 进度 Slider / Progress"), slider, progress),
-				group(str(W-48), str(W-48), sectionTitle("下拉 Select"), selectBox),
-				group(str(W-48), str(W-48), sectionTitle("统计 / 标签 / 头像"), statRow, tagRow, avatarRow),
-				group(str(W-48), str(W-48), sectionTitle("提示 Alert"), alert),
-				group(str(W-48), str(W-48), sectionTitle("卡片 Card"), card),
-				group(str(W-48), str(W-48), sectionTitle("表格 Table"), table),
-				group(str(W-48), str(W-48), sectionTitle("表单 Form"), form),
-				group(str(W-48), str(W-48), sectionTitle("空状态 / 骨架 / 加载"), feedbackRow),
-				group(str(W-48), str(W-48), sectionTitle("时间 / 浮层提示"), timePick, tooltip),
+				group(str(W-48), str(W-48), sectionTitleIcon("按钮 Buttons", "cursor"), btnRow),
+				group(str(W-48), str(W-48), sectionTitleIcon("输入框 Text Field", "text-field"), inputField),
+				group(str(W-48), str(W-48), sectionTitleIcon("复选框 / 开关 Checkbox / Switch", "toggle"), checks),
+				group(str(W-48), str(W-48), sectionTitleIcon("单选 Radio", "radio"), radioGrp),
+				group(str(W-48), str(W-48), sectionTitleIcon("分段 / 标签 Segmented / Tabs", "tab"), segmented, tabs),
+				group(str(W-48), str(W-48), sectionTitleIcon("滑块 / 进度 Slider / Progress", "slider"), slider, progress),
+				group(str(W-48), str(W-48), sectionTitleIcon("下拉 Select", "select"), selectBox),
+				group(str(W-48), str(W-48), sectionTitleIcon("统计 / 标签 / 头像", "chart"), statRow, tagRow, avatarRow),
+				group(str(W-48), str(W-48), sectionTitleIcon("提示 Alert", "info"), alert),
+				group(str(W-48), str(W-48), sectionTitleIcon("卡片 Card", "card"), card),
+				group(str(W-48), str(W-48), sectionTitleIcon("表格 Table", "grid"), table),
+				group(str(W-48), str(W-48), sectionTitleIcon("表单 Form", "doc"), form),
+				group(str(W-48), str(W-48), sectionTitleIcon("空状态 / 骨架 / 加载", "doc"), feedbackRow),
+				group(str(W-48), str(W-48), sectionTitleIcon("时间 / 浮层提示", "clock"), timePick, tooltip),
+				iconGallery(str(W-48)),
 			)
 		},
 	})

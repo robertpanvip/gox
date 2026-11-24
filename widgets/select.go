@@ -81,6 +81,7 @@ func selectTrigger(value func() string, options []Option, placeholder, width, to
 	const (
 		textSlot = iota
 		colorSlot
+		chevronSlot
 		nSlots
 	)
 	ops := []gxscene.Op{
@@ -92,8 +93,8 @@ func selectTrigger(value func() string, options []Option, placeholder, width, to
 		attr("justify-content", "space-between"), attr("gap", "8"), attr("opacity", "1"),
 		dynAttr("color", colorSlot),
 		el("span"), attr("font-size", FontBody), dynChild(textSlot), closeEl(),
-		el("span"), attr("font-size", "12"), attr("color", ThemeMuted),
-		gxscene.Op{Code: gxscene.OpChildText, Arg: "▾"}, closeEl(),
+		// 下拉箭头用预制矢量图标（chevron-down），替代 "▾" 字形。
+		gxscene.Op{Code: gxscene.OpComp, Arg: "SelectChevron", Slot: chevronSlot},
 		closeEl(),
 	}
 	if disabled {
@@ -121,6 +122,7 @@ func selectTrigger(value func() string, options []Option, placeholder, width, to
 			}
 			return ThemeText
 		},
+		func() any { return iconNode("chevron-down", 14, "muted") },
 	)
 }
 
@@ -170,8 +172,8 @@ func selectOptionItem(o Option, value func() string, onChange func() gxscene.Han
 		dynAttr("bg", bgSlot), dynAttr("color", colorSlot),
 		el("span"), attr("font-size", FontBody),
 		gxscene.Op{Code: gxscene.OpChildText, Arg: optionLabel(o)}, closeEl(),
-		el("span"), attr("font-size", "13"), attr("weight", "bold"),
-		dynChild(checkSlot), closeEl(),
+		// 选中勾用预制矢量图标（check），替代 "✓" 字形。
+		gxscene.Op{Code: gxscene.OpComp, Arg: "SelectCheck", Slot: checkSlot},
 		closeEl(),
 	}
 	disabled := o.Disabled
@@ -199,9 +201,9 @@ func selectOptionItem(o Option, value func() string, onChange func() gxscene.Han
 		},
 		func() any {
 			if selected() {
-				return "✓"
+				return iconNode("check", 15, "primary")
 			}
-			return ""
+			return nil
 		},
 	)
 }
