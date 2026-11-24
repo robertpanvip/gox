@@ -106,10 +106,10 @@ func Table(props gxscene.Props) *gxscene.Instance {
 			attr("gx-row-index", strconv.Itoa(index)),
 			attr("flex-direction", "row"), attr("align-items", "center"),
 			attr("height", fmt.Sprintf("%g", rowHeight)),
-			attr("border-bottom", AppleSeparator), attr("border-width", "1"),
+			attr("border-bottom", ThemeBorder), attr("border-width", "1"),
 		}
 		if striped() && index%2 == 1 {
-			ops = append(ops, attr("bg", AppleElevated)) // 斑马纹：交替行抬起一层
+			ops = append(ops, attr("bg", ThemePanel)) // 斑马纹：交替行抬起一层
 		}
 		// 行点击 → on-select（列单元格点击会冒泡到此；事件名相同按命中就近派发）。
 		ops = append(ops, gxscene.Op{Code: gxscene.OpEvent, Key: "onClick", Slot: 0})
@@ -150,8 +150,8 @@ func Table(props gxscene.Props) *gxscene.Instance {
 		el("div"), attr("gx-role", "table"),
 		attr("flex-direction", "column"),
 		// 整表作为一张卡片：细描边 + 圆角 + 柔和阴影，与页面底拉开层次。
-		attr("border", AppleSeparator), attr("border-width", "1"),
-		attr("border-radius", RadiusControl), attr("box-shadow", ShadowCard),
+		attr("border", ThemeBorder), attr("border-width", "1"),
+		attr("border-radius", RadiusCard), attr("box-shadow", ShadowCard),
 	}
 	if w := width(); w != "" {
 		ops = append(ops, attr("width", w))
@@ -161,8 +161,8 @@ func Table(props gxscene.Props) *gxscene.Instance {
 		el("div"), attr("gx-role", "table-head"),
 		attr("flex-direction", "row"), attr("align-items", "center"),
 		attr("height", fmt.Sprintf("%g", rowHeight)),
-		attr("bg", AppleFill),
-		attr("border-bottom", AppleSeparator2), attr("border-width", "1"),
+		attr("bg", ThemeFill),
+		attr("border-bottom", ThemeBorder2), attr("border-width", "1"),
 		gxscene.Op{Code: gxscene.OpFor, Slot: headSlot},
 		closeEl(),
 		gxscene.Op{Code: gxscene.OpComp, Arg: "TableBody", Slot: listSlot},
@@ -254,7 +254,7 @@ func tableHeadCell(col TableColumn, onSort gxscene.Handler) *gxscene.Instance {
 		el("div"), attr("gx-role", "table-head-cell"),
 		attr("width", w), attr("padding", "10"),
 		attr("flex-direction", "row"), attr("align-items", "center"),
-		attr("font-size", "12"), attr("weight", "bold"), attr("color", AppleLabel2),
+		attr("font-size", FontCallout), attr("weight", "bold"), attr("color", ThemeMuted),
 		attr("text-align", align),
 		gxscene.Op{Code: gxscene.OpChildText, Arg: col.Title},
 	}
@@ -292,14 +292,14 @@ func tableCell(text string, col TableColumn, colIndex int) *gxscene.Instance {
 		w = "120"
 	}
 	// 首列主文字高亮加粗，其余列次要色——建立阅读层级。
-	textColor, weight := AppleLabel2, "normal"
+	textColor, weight := ThemeMuted, "normal"
 	if colIndex == 0 {
 		textColor, weight = ThemeText, "bold"
 	}
 	ops := []gxscene.Op{
 		el("div"), attr("gx-role", "table-cell"),
 		attr("width", w), attr("padding", "10"),
-		attr("font-size", "13"), attr("weight", weight), attr("color", textColor),
+		attr("font-size", FontBody), attr("weight", weight), attr("color", textColor),
 		attr("text-align", align),
 		gxscene.Op{Code: gxscene.OpChildText, Arg: text}, closeEl(),
 	}

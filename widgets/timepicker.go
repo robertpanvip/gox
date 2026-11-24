@@ -170,8 +170,8 @@ func TimePicker(props gxscene.Props) *gxscene.Instance {
 		// 段间冒号分隔符（静态节点，不占 getter 插槽）。
 		if i < len(segments)-1 {
 			ops = append(ops,
-				el("span"), attr("color", AppleLabel2),
-				attr("font-size", "18"), attr("weight", "bold"),
+				el("span"), attr("color", ThemeMuted),
+				attr("font-size", FontTitle2), attr("weight", "bold"),
 				gxscene.Op{Code: gxscene.OpChildText, Arg: ":"}, closeEl(),
 			)
 		}
@@ -211,7 +211,7 @@ func timeSegmentTrigger(seg timeSegment, text func() string, width, tone string,
 		gxscene.Op{Code: gxscene.OpDynAttr, Key: "bg", Slot: bgSlot},
 		gxscene.Op{Code: gxscene.OpDynAttr, Key: "border", Slot: borderSlot},
 		gxscene.Op{Code: gxscene.OpEvent, Key: "onClick", Slot: clickSlot},
-		el("span"), attr("font-size", "18"), attr("weight", "bold"),
+		el("span"), attr("font-size", FontTitle2), attr("weight", "bold"),
 		gxscene.Op{Code: gxscene.OpDynChild, Slot: textSlot}, closeEl(),
 		closeEl(),
 	}
@@ -232,13 +232,13 @@ func timeSegmentTrigger(seg timeSegment, text func() string, width, tone string,
 			if isOpen() {
 				return tone
 			}
-			return AppleFill
+			return ThemeFill
 		},
 		func() any { // 打开段描边强调色，其余细描边
 			if isOpen() {
 				return tone
 			}
-			return AppleSeparator
+			return ThemeBorder
 		},
 	)
 }
@@ -275,8 +275,8 @@ func timeOptionsMenu(seg timeSegment, emit func(gxscene.EventContext, timeSegmen
 	ops := []gxscene.Op{
 		el("div"), attr("gx-role", "timepicker-menu"),
 		attr("gx-placement", "bottom-start"),
-		attr("bg", AppleMaterialReg), attr("border-radius", RadiusCard),
-		attr("border", AppleHairline), attr("border-width", "1"),
+		attr("bg", ThemeMaterial), attr("border-radius", RadiusCard),
+		attr("border", ThemeHairline), attr("border-width", "1"),
 		attr("box-shadow", ShadowFloat), attr("padding", "4"),
 		attr("flex-wrap", "wrap"), attr("width", menuWidth(width)),
 		gxscene.Op{Code: gxscene.OpFor, Slot: 0},
@@ -302,7 +302,7 @@ func timeOptionItem(seg timeSegment, n int, emit func(gxscene.EventContext, time
 		attr("width", "40"), attr("padding", "6"),
 		attr("align-items", "center"), attr("justify-content", "center"),
 		attr("border-radius", RadiusSmall), attr("color", ThemeText),
-		attr("font-size", "13"),
+		attr("font-size", FontBody),
 		gxscene.Op{Code: gxscene.OpEvent, Key: "onClick", Slot: clickSlot},
 		gxscene.Op{Code: gxscene.OpChildText, Arg: fmt.Sprintf("%02d", n)}, closeEl(),
 	}

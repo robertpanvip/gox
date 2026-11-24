@@ -92,7 +92,7 @@ func ModalHandleKey(s *ModalState, key string) bool {
 //	width          string（面板宽度，默认 "420"）
 //	closable       bool（显示右上角关闭按钮，默认 true）
 //	maskClosable   bool（点遮罩关闭，默认 false——Apple 模态通常需显式操作）
-//	scrim          string（遮罩色，默认 AppleScrim）
+//	scrim          string（遮罩色，默认 ThemeScrim）
 func Modal(props gxscene.Props) *gxscene.Instance {
 	// 唯一 id 写入根 attr：既便于外部引用，也让模板编译缓存按实例区分骨架，
 	// 避免同结构模板（如 Portal）共用 slot 骨架导致的动态插槽绑定错位。
@@ -126,7 +126,7 @@ func Modal(props gxscene.Props) *gxscene.Instance {
 	}
 	scrim := scrimColor()
 	if scrim == "" {
-		scrim = AppleScrim
+		scrim = ThemeScrim
 	}
 	closableGet := boolGet(props, "closable", true)
 	maskCloseGet := boolGet(props, "maskClosable", false)
@@ -167,9 +167,9 @@ func Modal(props gxscene.Props) *gxscene.Instance {
 				{Code: gxscene.opElem, Arg: "div"},
 				{Code: gxscene.opAttr, Key: "gx-role", Arg: "modal"},
 				{Code: gxscene.opAttr, Key: "width", Arg: w},
-				{Code: gxscene.opAttr, Key: "bg", Arg: AppleMaterialThick},
+				{Code: gxscene.opAttr, Key: "bg", Arg: ThemeMaterial},
 				{Code: gxscene.opAttr, Key: "border-radius", Arg: RadiusModal},
-				{Code: gxscene.opAttr, Key: "border", Arg: AppleHairline},
+				{Code: gxscene.opAttr, Key: "border", Arg: ThemeHairline},
 				{Code: gxscene.opAttr, Key: "border-width", Arg: "1"},
 				{Code: gxscene.opAttr, Key: "box-shadow", Arg: ShadowModal},
 				{Code: gxscene.opAttr, Key: "padding", Arg: Space6},
@@ -181,20 +181,20 @@ func Modal(props gxscene.Props) *gxscene.Instance {
 				{Code: gxscene.opAttr, Key: "align-items", Arg: "center"},
 				{Code: gxscene.opAttr, Key: "justify-content", Arg: "space-between"},
 				{Code: gxscene.opElem, Arg: "span"},
-				{Code: gxscene.opAttr, Key: "font-size", Arg: "19"},
+				{Code: gxscene.opAttr, Key: "font-size", Arg: FontTitle2},
 				{Code: gxscene.opAttr, Key: "weight", Arg: "bold"},
-				{Code: gxscene.opAttr, Key: "color", Arg: AppleLabel},
+				{Code: gxscene.opAttr, Key: "color", Arg: ThemeText},
 				{Code: gxscene.opDynChild, Slot: titleSlot},
 				{Code: gxscene.opClose},
 				// 关闭按钮（×）
 				{Code: gxscene.opElem, Arg: "button"},
 				{Code: gxscene.opAttr, Key: "gx-role", Arg: "modal-close"},
 				{Code: gxscene.opAttr, Key: "width", Arg: "26"},
-				{Code: gxscene.opAttr, Key: "height", Arg: "26"},
+				{Code: gxscene.opAttr, Key: "height", Arg: ControlHeightSmall},
 				{Code: gxscene.opAttr, Key: "border-radius", Arg: RadiusPill},
-				{Code: gxscene.opAttr, Key: "bg", Arg: AppleFill},
-				{Code: gxscene.opAttr, Key: "color", Arg: AppleLabel2},
-				{Code: gxscene.opAttr, Key: "font-size", Arg: "14"},
+				{Code: gxscene.opAttr, Key: "bg", Arg: ThemeFill},
+				{Code: gxscene.opAttr, Key: "color", Arg: ThemeMuted},
+				{Code: gxscene.opAttr, Key: "font-size", Arg: FontBody},
 				{Code: gxscene.opAttr, Key: "align-items", Arg: "center"},
 				{Code: gxscene.opAttr, Key: "justify-content", Arg: "center"},
 				{Code: gxscene.opEvent, Key: "onClick", Slot: closeClickSlot},

@@ -32,19 +32,21 @@ type Theme struct {
 	Name string // 主题名（"dark" / "light" / 自定义）
 
 	// 背景与表面
-	Bg        string // 页面底色
-	Panel     string // 卡片/面板底
+	Bg        string // 页面底色（window / content）
+	GroupedBg string // 分组底（比 Bg 更深一层）
+	Panel     string // 卡片/面板底（elevated）
 	PanelAlt  string // 次级面板/斑马纹
 	InputBg   string // 输入框底
-	Border    string // 常规描边
+	Border    string // 常规描边（opaque separator）
+	Border2   string // 更亮描边（separator）
 	Hairline  string // 高光细描边（半透明）
 	Material  string // 半透明材质（浮层）
 	Scrim     string // 遮罩
 
 	// 文字
-	Text    string
-	Muted   string
-	Faint   string
+	Text     string // label
+	Muted    string // secondaryLabel
+	Faint    string // tertiaryLabel
 	OnAccent string // 强调色背景上的文字
 
 	// 语义色
@@ -53,13 +55,37 @@ type Theme struct {
 	Warning string
 	Danger  string
 	Info    string
+	Purple  string
+	Pink    string
+	Teal    string
+	Indigo  string
+	Orange  string
 
 	// 圆角标度
-	RadiusSmall  string
+	RadiusXSmall  string
+	RadiusSmall   string
 	RadiusControl string
-	RadiusCard   string
-	RadiusPanel  string
-	RadiusPill   string
+	RadiusCard    string
+	RadiusPanel   string
+	RadiusModal   string
+	RadiusPill    string
+
+	// 控件高度
+	ControlHeight      string
+	ControlHeightSmall string
+	ControlHeightLarge string
+	RowHeight          string
+
+	// 字号阶梯
+	FontLargeTitle  string
+	FontTitle1      string
+	FontTitle2      string
+	FontTitle3      string
+	FontHeadline    string
+	FontBody        string
+	FontCallout     string
+	FontSubheadline string
+	FontFootnote    string
 
 	// 阴影标度
 	ShadowCard  string
@@ -73,34 +99,44 @@ type Theme struct {
 	Space4 string
 }
 
-// DarkTheme 是 Apple HIG 深色主题（与现有 Theme* 常量一致）。
+// DarkTheme 是 Apple macOS HIG 深色主题（系统色精确取值）。
 var DarkTheme = Theme{
 	Name: "dark",
-	Bg: AppleWindowBg, Panel: AppleElevated, PanelAlt: AppleFill,
-	InputBg: AppleInputBg, Border: AppleSeparator, Hairline: AppleHairline,
+	Bg: AppleWindowBg, GroupedBg: AppleGroupedBg, Panel: AppleElevated, PanelAlt: AppleFill,
+	InputBg: AppleInputBg, Border: AppleSeparator, Border2: AppleSeparator2, Hairline: AppleHairline,
 	Material: AppleMaterialThick, Scrim: AppleScrim,
 	Text: AppleLabel, Muted: AppleLabel2, Faint: AppleLabel3, OnAccent: "#ffffff",
-	Accent: AppleBlue, Success: AppleGreen, Warning: AppleOrange,
-	Danger: AppleRed, Info: AppleBlue,
-	RadiusSmall: RadiusSmall, RadiusControl: RadiusControl, RadiusCard: RadiusCard,
-	RadiusPanel: RadiusPanel, RadiusPill: RadiusPill,
+	Accent: AppleBlue, Success: AppleGreen, Warning: AppleOrange, Danger: AppleRed, Info: DarkCyan,
+	Purple: ApplePurple, Pink: ApplePink, Teal: DarkCyan, Indigo: AppleIndigo, Orange: AppleOrange,
+	RadiusXSmall: RadiusXSmall, RadiusSmall: RadiusSmall, RadiusControl: RadiusControl,
+	RadiusCard: RadiusCard, RadiusPanel: RadiusPanel, RadiusModal: RadiusModal, RadiusPill: RadiusPill,
+	ControlHeight: ControlHeight, ControlHeightSmall: ControlHeightSmall,
+	ControlHeightLarge: ControlHeightLarge, RowHeight: RowHeight,
+	FontLargeTitle: FontLargeTitle, FontTitle1: FontTitle1, FontTitle2: FontTitle2,
+	FontTitle3: FontTitle3, FontHeadline: FontHeadline, FontBody: FontBody,
+	FontCallout: FontCallout, FontSubheadline: FontSubheadline, FontFootnote: FontFootnote,
 	ShadowCard: ShadowCard, ShadowFloat: ShadowFloat, ShadowModal: ShadowModal,
 	Space1: Space1, Space2: Space2, Space3: Space3, Space4: Space4,
 }
 
-// LightTheme 是 Apple HIG 浅色主题。
+// LightTheme 是 Apple macOS HIG 浅色主题（系统色精确取值）。
 var LightTheme = Theme{
 	Name: "light",
-	Bg: "#f2f2f7", Panel: "#ffffff", PanelAlt: "#f9f9fb",
-	InputBg: "#ffffff", Border: "#c6c6c8", Hairline: "#00000014",
+	Bg: "#ffffff", GroupedBg: "#f2f2f7", Panel: "#ffffff", PanelAlt: "#f2f2f7",
+	InputBg: "#ffffff", Border: "#c6c6c8", Border2: "#d1d1d6", Hairline: LightHairline,
 	Material: "#ffffffeb", Scrim: "#0000004d",
-	Text: "#1c1c1e", Muted: "#6e6e73", Faint: "#8e8e93", OnAccent: "#ffffff",
-	Accent: "#007aff", Success: "#34c759", Warning: "#ff9f0a",
-	Danger: "#ff3b30", Info: "#007aff",
-	RadiusSmall: RadiusSmall, RadiusControl: RadiusControl, RadiusCard: RadiusCard,
-	RadiusPanel: RadiusPanel, RadiusPill: RadiusPill,
-	ShadowCard: "0 6px 24px 0 #0000001f", ShadowFloat: "0 12px 40px 0 #0000002e",
-	ShadowModal: "0 24px 70px 0 #00000040",
+	Text: "#1d1d1f", Muted: "#86868b", Faint: "#aeaeb2", OnAccent: "#ffffff",
+	Accent: LightBlue, Success: LightGreen, Warning: LightOrange, Danger: LightRed, Info: LightCyan,
+	Purple: LightPurple, Pink: LightPink, Teal: LightCyan, Indigo: LightIndigo, Orange: LightOrange,
+	RadiusXSmall: RadiusXSmall, RadiusSmall: RadiusSmall, RadiusControl: RadiusControl,
+	RadiusCard: RadiusCard, RadiusPanel: RadiusPanel, RadiusModal: RadiusModal, RadiusPill: RadiusPill,
+	ControlHeight: ControlHeight, ControlHeightSmall: ControlHeightSmall,
+	ControlHeightLarge: ControlHeightLarge, RowHeight: RowHeight,
+	FontLargeTitle: FontLargeTitle, FontTitle1: FontTitle1, FontTitle2: FontTitle2,
+	FontTitle3: FontTitle3, FontHeadline: FontHeadline, FontBody: FontBody,
+	FontCallout: FontCallout, FontSubheadline: FontSubheadline, FontFootnote: FontFootnote,
+	ShadowCard: "0 2px 8px 0 #0000001a", ShadowFloat: "0 8px 24px 0 #00000026",
+	ShadowModal: "0 20px 56px 0 #00000033",
 	Space1: Space1, Space2: Space2, Space3: Space3, Space4: Space4,
 }
 
@@ -119,7 +155,69 @@ func UseTheme() func() Theme { return themeCtx.Use() }
 func CurrentTheme() Theme { return themeCtx.Value() }
 
 // SetTheme 切换主题，所有 UseTheme 消费者重绘。
-func SetTheme(t Theme) { themeCtx.Set(t) }
+// 同时同步旧版 Theme*/tone 映射，让尚未改造为 dynAttr 的兼容组件
+// 在浅色主题下也不会残留深色控件；动态插槽仍由 themeCtx 驱动。
+func SetTheme(t Theme) {
+	syncLegacyThemeTokens(t)
+	themeCtx.Set(t)
+}
+
+// syncLegacyThemeTokens 把当前主题写回旧版包级令牌。
+// 这里不是丢弃旧 API：大量业务代码直接引用 ThemeBg/ThemePanel/toneColor，
+// 让它们跟随 SetTheme 变化，才能在明暗双主题下保持一致观感。
+func syncLegacyThemeTokens(t Theme) {
+	ThemeBg = t.Bg
+	ThemeGrouped = t.GroupedBg
+	ThemePanel = t.Panel
+	ThemeFill = t.PanelAlt
+	ThemeBorder = t.Border
+	ThemeBorder2 = t.Border2
+	ThemeHairline = t.Hairline
+	ThemeMaterial = t.Material
+	ThemeScrim = t.Scrim
+	ThemeText = t.Text
+	ThemeMuted = t.Muted
+	ThemeFaint = t.Faint
+	ThemeOnAccent = t.OnAccent
+	ThemeAccent = t.Accent
+	ThemeInputBg = t.InputBg
+	CursorColor = t.Accent
+	ShadowCard = t.ShadowCard
+	ShadowFloat = t.ShadowFloat
+	ShadowModal = t.ShadowModal
+
+	yellow := DarkYellow
+	mint := DarkMint
+	gray := DarkGray
+	if t.Name == "light" {
+		yellow = LightYellow
+		mint = LightMint
+		gray = LightGray
+	}
+	legacyTones := map[string]string{
+		"primary": t.Accent,
+		"blue":    t.Accent,
+		"info":    t.Accent,
+		"cyan":    t.Info,
+		"teal":    t.Teal,
+		"purple":  t.Purple,
+		"orange":  t.Warning,
+		"yellow":  yellow,
+		"green":   t.Success,
+		"pink":    t.Pink,
+		"indigo":  t.Indigo,
+		"mint":    mint,
+		"gray":    gray,
+		"danger":  t.Danger,
+		"red":     t.Danger,
+	}
+	for k, v := range legacyTones {
+		tones[k] = v
+		if _, ok := appleTones[k]; ok {
+			appleTones[k] = v
+		}
+	}
+}
 
 // ThemeProvider 以声明式组件形式确立子树主题。value 传 Theme 或 func() Theme /
 // func() any getter（getter 形式随上游 signal 响应式切换）。
@@ -144,6 +242,8 @@ func themeToken(t Theme, name string) string {
 		return t.Name
 	case "bg", "window":
 		return t.Bg
+	case "grouped", "groupedbg":
+		return t.GroupedBg
 	case "panel", "surface":
 		return t.Panel
 	case "panelalt", "zebra":
@@ -152,6 +252,8 @@ func themeToken(t Theme, name string) string {
 		return t.InputBg
 	case "border":
 		return t.Border
+	case "border2":
+		return t.Border2
 	case "hairline":
 		return t.Hairline
 	case "material":
@@ -166,7 +268,7 @@ func themeToken(t Theme, name string) string {
 		return t.Faint
 	case "onaccent":
 		return t.OnAccent
-	case "accent", "primary":
+	case "accent", "primary", "blue":
 		return t.Accent
 	case "success", "green":
 		return t.Success
@@ -174,8 +276,20 @@ func themeToken(t Theme, name string) string {
 		return t.Warning
 	case "danger", "red", "error":
 		return t.Danger
-	case "info", "blue":
+	case "info", "cyan":
 		return t.Info
+	case "purple":
+		return t.Purple
+	case "pink":
+		return t.Pink
+	case "teal":
+		return t.Teal
+	case "indigo":
+		return t.Indigo
+	case "radiolsmall":
+		return t.RadiusXSmall
+	case "radiusxsmall":
+		return t.RadiusXSmall
 	case "radiussmall":
 		return t.RadiusSmall
 	case "radiuscontrol":
@@ -184,8 +298,36 @@ func themeToken(t Theme, name string) string {
 		return t.RadiusCard
 	case "radiuspanel":
 		return t.RadiusPanel
+	case "radiusmodal":
+		return t.RadiusModal
 	case "radiuspill":
 		return t.RadiusPill
+	case "controlheight":
+		return t.ControlHeight
+	case "controlheightsmall":
+		return t.ControlHeightSmall
+	case "controlheightlarge":
+		return t.ControlHeightLarge
+	case "rowheight":
+		return t.RowHeight
+	case "fontlargetitle":
+		return t.FontLargeTitle
+	case "fonttitle1":
+		return t.FontTitle1
+	case "fonttitle2":
+		return t.FontTitle2
+	case "fonttitle3":
+		return t.FontTitle3
+	case "fontheadline":
+		return t.FontHeadline
+	case "fontbody":
+		return t.FontBody
+	case "fontcallout":
+		return t.FontCallout
+	case "fontsubheadline":
+		return t.FontSubheadline
+	case "fontfootnote":
+		return t.FontFootnote
 	case "shadowcard":
 		return t.ShadowCard
 	case "shadowfloat":
@@ -202,6 +344,52 @@ func themeToken(t Theme, name string) string {
 		return t.Space4
 	}
 	return ""
+}
+
+// toneToken 把语义 tone 名映射到 Theme 字段值（响应当前主题）。
+// 供组件的 toneColor 动态版本使用——主题切换时强调色随之变化。
+func toneToken(t Theme, name string) string {
+	switch normalizeToken(name) {
+	case "", "primary", "accent", "blue", "info":
+		return t.Accent
+	case "success", "green":
+		return t.Success
+	case "warning", "orange":
+		return t.Warning
+	case "danger", "red", "error":
+		return t.Danger
+	case "purple":
+		return t.Purple
+	case "pink":
+		return t.Pink
+	case "teal", "cyan":
+		return t.Teal
+	case "indigo":
+		return t.Indigo
+	case "mint":
+		return t.Info
+	case "muted", "secondary":
+		return t.Muted
+	case "text", "label":
+		return t.Text
+	case "panel", "surface":
+		return t.Panel
+	case "bg", "window":
+		return t.Bg
+	case "border":
+		return t.Border
+	}
+	if len(name) > 0 && name[0] == '#' {
+		return name // 已是具体颜色
+	}
+	return t.Accent
+}
+
+// UseTone 返回一个 getter，读取当前主题下 tone 对应的颜色。
+// 组件用 dynAttr 插槽接它，主题切换时强调色自动重绘。
+func UseTone(name string) func() string {
+	use := themeCtx.Use()
+	return func() string { return toneToken(use(), name) }
 }
 
 // normalizeToken 归一化令牌名：去掉连字符/下划线/空格并转小写。

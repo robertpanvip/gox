@@ -9,4 +9,5 @@ use (
 	./examples/wasm-demo
 	./examples/playground
 	./examples/icon-gallery
+	./examples/widget-showcase
 )

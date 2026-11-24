@@ -51,6 +51,42 @@ func TestUseTokenReactive(t *testing.T) {
 	SetTheme(DarkTheme) // 复位，避免影响其它测试
 }
 
+func TestLegacyThemeTokensFollowSetTheme(t *testing.T) {
+	SetTheme(DarkTheme)
+	if ThemeBg != DarkTheme.Bg || ThemeText != DarkTheme.Text || ThemeAccent != DarkTheme.Accent {
+		t.Fatalf("深色旧令牌未同步: bg=%q text=%q accent=%q", ThemeBg, ThemeText, ThemeAccent)
+	}
+	if tones["primary"] != DarkTheme.Accent || ShadowCard != DarkTheme.ShadowCard {
+		t.Fatalf("深色 tone/阴影未同步: tone=%q shadow=%q", tones["primary"], ShadowCard)
+	}
+
+	SetTheme(LightTheme)
+	defer SetTheme(DarkTheme)
+	checks := []struct{ name, got, want string }{
+		{"ThemeBg", ThemeBg, LightTheme.Bg},
+		{"ThemePanel", ThemePanel, LightTheme.Panel},
+		{"ThemeText", ThemeText, LightTheme.Text},
+		{"ThemeMuted", ThemeMuted, LightTheme.Muted},
+		{"ThemeAccent", ThemeAccent, LightTheme.Accent},
+		{"tones[primary]", tones["primary"], LightTheme.Accent},
+		{"ShadowCard", ShadowCard, LightTheme.ShadowCard},
+	}
+	for _, c := range checks {
+		if c.got != c.want {
+			t.Errorf("%s = %q, want %q", c.name, c.got, c.want)
+		}
+	}
+}
+
+func TestTextUsesCurrentThemeToken(t *testing.T) {
+	SetTheme(LightTheme)
+	defer SetTheme(DarkTheme)
+	inst := Text(gxscene.Props{"value": "浅色文字", "tone": "muted"})
+	if got := findAttrDeep(inst.Root(), "color"); got != LightTheme.Muted {
+		t.Errorf("浅色主题 muted 文本颜色 = %q, want %q", got, LightTheme.Muted)
+	}
+}
+
 func TestUseThemeDrivesComponentSlot(t *testing.T) {
 	SetTheme(DarkTheme)
 	use := UseTheme()

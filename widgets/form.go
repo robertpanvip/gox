@@ -112,32 +112,40 @@ func Checkbox(props gxscene.Props) *gxscene.Instance {
 	label := gxscene.Get[string](props, "label")
 	tone := gxscene.Get[string](props, "tone")
 	onChange := gxscene.Get[gxscene.Handler](props, "onChange")
-	box := fmtNum(propFloat(props, "size", 18))
+	box := fmtNum(propFloat(props, "size", 16))
+
+	toneOf := tkTone(tone())
+	inputOf := tkInput()
+	mutedOf := tkMuted()
+	onAccentOf := tkOnAccent()
+	textOf := tkText()
 
 	const (
 		clickSlot = iota // 0
 		boxBgSlot        // 1
 		boxBorderSlot    // 2
-		markOpacitySlot  // 3
-		labelTextSlot    // 4
-		nSlots           // 5
+		markColorSlot    // 3
+		markOpacitySlot  // 4
+		labelColorSlot   // 5
+		labelTextSlot    // 6
+		nSlots           // 7
 	)
 	ops := []gxscene.Op{
 		el("div"), attr("gx-role", "checkbox"),
-		attr("flex-direction", "row"), attr("align-items", "center"), attr("gap", "9"),
+		attr("flex-direction", "row"), attr("align-items", "center"), attr("gap", "8"),
 		event("onClick", clickSlot),
-		// 方框（relative 定位参照）
+		// 方框（relative 定位参照）；macOS checkbox 16pt、圆角 4。
 		el("div"), attr("width", box), attr("height", box),
-		attr("border-radius", "4"), attr("border-width", "2"), attr("position", "relative"),
+		attr("border-radius", "4"), attr("border-width", "1.5"), attr("position", "relative"),
 		dynAttr("bg", boxBgSlot), dynAttr("border", boxBorderSlot),
 		// 选中勾：absolute 居中 + opacity 控制显隐，不占 flex 主轴空间。
-		el("span"), attr("position", "absolute"), attr("top", "-2"), attr("left", "2"),
-		attr("font-size", "13"), attr("weight", "bold"), attr("color", "#07130f"),
-		dynAttr("opacity", markOpacitySlot),
+		el("span"), attr("position", "absolute"), attr("top", "-2"), attr("left", "1"),
+		attr("font-size", "12"), attr("weight", "bold"),
+		dynAttr("color", markColorSlot), dynAttr("opacity", markOpacitySlot),
 		gxscene.Op{Code: gxscene.OpChildText, Arg: "✓"}, closeEl(),
 		closeEl(),
 		// 标签
-		el("span"), attr("font-size", "14"), attr("color", ThemeText),
+		el("span"), attr("font-size", FontBody), dynAttr("color", labelColorSlot),
 		dynChild(labelTextSlot), closeEl(),
 		closeEl(),
 	}
@@ -149,23 +157,29 @@ func Checkbox(props gxscene.Props) *gxscene.Instance {
 		},
 		func() any { // 1 box bg
 			if checked() {
-				return toneColor(tone())
+				return toneOf()
 			}
-			return ThemeInputBg
+			return inputOf()
 		},
 		func() any { // 2 box border
 			if checked() {
-				return toneColor(tone())
+				return toneOf()
 			}
-			return ThemeMuted
+			return mutedOf()
 		},
-		func() any { // 3 勾显隐
+		func() any { // 3 勾颜色（实色底上用白）
+			return onAccentOf()
+		},
+		func() any { // 4 勾显隐
 			if checked() {
 				return "1"
 			}
 			return "0"
 		},
-		func() any { return label() }, // 4 标签
+		func() any { // 5 标签色
+			return textOf()
+		},
+		func() any { return label() }, // 6 标签
 	)
 }
 
@@ -177,18 +191,26 @@ func Switch(props gxscene.Props) *gxscene.Instance {
 	label := gxscene.Get[string](props, "label")
 	tone := gxscene.Get[string](props, "tone")
 	onChange := gxscene.Get[gxscene.Handler](props, "onChange")
-	trackW := propFloat(props, "width", 44)
+	trackW := propFloat(props, "width", 38)
 
-	const trackH, thumb = 24.0, 18.0
+	// macOS switch：轨道 38×22、滑块 18、内边距 2（绿/强调色=开）。
+	const trackH, thumb = 22.0, 18.0
 	pad := (trackH - thumb) / 2
 	travel := trackW - thumb - 2*pad
+
+	toneOf := tkTone(tone())
+	borderOf := tkBorder()
+	textOf := tkText()
+	// 滑块在明暗主题下都保持白色（macOS thumb 恒为白）。
+	thumbColor := "#ffffff"
 
 	const (
 		clickSlot = iota // 0
 		trackBgSlot      // 1
 		thumbLeftSlot    // 2
-		labelSlot        // 3
-		nSlots           // 4
+		labelColorSlot   // 3
+		labelSlot        // 4
+		nSlots           // 5
 	)
 	ops := []gxscene.Op{
 		el("div"), attr("gx-role", "switch"),
@@ -201,13 +223,13 @@ func Switch(props gxscene.Props) *gxscene.Instance {
 		// 滑块
 		el("div"), attr("position", "absolute"), attr("top", fmtNum(pad)),
 		attr("width", fmtNum(thumb)), attr("height", fmtNum(thumb)),
-		attr("border-radius", fmtNum(thumb/2)), attr("bg", "#f8fafc"),
-		attr("box-shadow", "0 1px 3px 0 rgba(0,0,0,0.4)"),
-		attr("transition", "left 180ms ease"),
+		attr("border-radius", fmtNum(thumb/2)), attr("bg", thumbColor),
+		attr("box-shadow", "0 1px 3px 0 rgba(0,0,0,0.3)"),
+		attr("transition", "left 160ms ease"),
 		dynAttr("left", thumbLeftSlot),
 		closeEl(), closeEl(),
 		// 标签
-		el("span"), attr("font-size", "14"), attr("color", ThemeText),
+		el("span"), attr("font-size", FontBody), dynAttr("color", labelColorSlot),
 		dynChild(labelSlot), closeEl(),
 		closeEl(),
 	}
@@ -219,9 +241,9 @@ func Switch(props gxscene.Props) *gxscene.Instance {
 		},
 		func() any {
 			if checked() {
-				return toneColor(tone())
+				return toneOf()
 			}
-			return ThemeBorder
+			return borderOf()
 		},
 		func() any {
 			left := pad
@@ -230,6 +252,7 @@ func Switch(props gxscene.Props) *gxscene.Instance {
 			}
 			return fmtNum(left)
 		},
+		func() any { return textOf() },
 		func() any { return label() },
 	)
 }
@@ -286,13 +309,19 @@ func RadioGroup(props gxscene.Props) *gxscene.Instance {
 
 func radioItem(o Option, value func() string, tone string, onChange gxscene.Handler) *gxscene.Instance {
 	selected := func() bool { return value() == o.Value }
+	toneOf := tkTone(tone)
+	mutedOf := tkMuted()
+	inputOf := tkInput()
+	textOf := tkText()
+	faintOf := tkFaint()
+
 	ops := []gxscene.Op{
 		el("div"), attr("gx-role", "radio"),
 		attr("flex-direction", "row"), attr("align-items", "center"), attr("gap", "8"),
 		event("onClick", 0),
-		// 外圈
-		el("div"), attr("width", "18"), attr("height", "18"),
-		attr("border-radius", "9"), attr("border-width", "2"),
+		// 外圈（macOS radio 16pt）
+		el("div"), attr("width", "16"), attr("height", "16"),
+		attr("border-radius", "8"), attr("border-width", "1.5"),
 		attr("align-items", "center"), attr("justify-content", "center"),
 		dynAttr("border", 1),
 		// 内点
@@ -300,7 +329,7 @@ func radioItem(o Option, value func() string, tone string, onChange gxscene.Hand
 		dynAttr("bg", 2), closeEl(),
 		closeEl(),
 		// 标签
-		el("span"), attr("font-size", "14"), dynAttr("color", 3),
+		el("span"), attr("font-size", FontBody), dynAttr("color", 3),
 		gxscene.Op{Code: gxscene.OpChildText, Arg: optionLabel(o)}, closeEl(),
 		closeEl(),
 	}
@@ -316,21 +345,24 @@ func radioItem(o Option, value func() string, tone string, onChange gxscene.Hand
 		},
 		func() any {
 			if selected() {
-				return toneColor(tone)
+				return toneOf()
 			}
-			return ThemeMuted
+			return mutedOf()
 		},
 		func() any {
 			if selected() {
-				return toneColor(tone)
+				return toneOf()
 			}
-			return ThemeInputBg
+			return inputOf()
 		},
 		func() any {
-			if selected() {
-				return ThemeText
+			if disabled {
+				return faintOf()
 			}
-			return ThemeMuted
+			if selected() {
+				return textOf()
+			}
+			return textOf()
 		},
 	)
 }
@@ -374,8 +406,14 @@ func Slider(props gxscene.Props) *gxscene.Instance {
 		segments = 50
 	}
 	segW := width / float64(segments)
-	thumb := 16.0
-	trackH := 8.0
+	thumb := 14.0
+	trackH := 5.0 // macOS slider 轨道更细
+
+	toneOf := tkTone(tone())
+	mutedOf := tkMuted()
+	trackOf := tkInput()
+	// 滑块恒白（macOS thumb）
+	thumbColor := "#ffffff"
 
 	pct := func() float64 { return clamp((value()-lo)/(hi-lo), 0, 1) }
 	curValue := func() float64 {
@@ -406,7 +444,9 @@ func Slider(props gxscene.Props) *gxscene.Instance {
 		valueTextSlot        // 2
 		hitForSlot           // 3
 		fillBgSlot           // 4
-		nSlots               // 5
+		trackBgSlot          // 5
+		valueColorSlot       // 6
+		nSlots               // 7
 	)
 	ops := []gxscene.Op{
 		el("div"), attr("gx-role", "slider"),
@@ -414,7 +454,7 @@ func Slider(props gxscene.Props) *gxscene.Instance {
 	}
 	if label() != "" {
 		ops = append(ops,
-			el("span"), attr("font-size", "13"), attr("color", ThemeMuted),
+			el("span"), attr("font-size", FontCallout), dynAttr("color", valueColorSlot),
 			dynChild(valueTextSlot), closeEl(),
 		)
 	}
@@ -425,16 +465,16 @@ func Slider(props gxscene.Props) *gxscene.Instance {
 		// 轨道
 		el("div"), attr("position", "absolute"), attr("top", fmtNum(8)),
 		attr("width", fmtNum(width)), attr("height", fmtNum(trackH)),
-		attr("border-radius", fmtNum(trackH/2)), attr("bg", ThemeInputBg), closeEl(),
+		attr("border-radius", fmtNum(trackH/2)), dynAttr("bg", trackBgSlot), closeEl(),
 		// 填充
 		el("div"), attr("position", "absolute"), attr("top", fmtNum(8)),
 		attr("height", fmtNum(trackH)), attr("border-radius", fmtNum(trackH/2)),
 		dynAttr("bg", fillBgSlot), dynAttr("width", fillWidthSlot), closeEl(),
 		// 滑块头
-		el("div"), attr("position", "absolute"), attr("top", fmtNum(4)),
+		el("div"), attr("position", "absolute"), attr("top", fmtNum(3)),
 		attr("width", fmtNum(thumb)), attr("height", fmtNum(thumb)),
-		attr("border-radius", fmtNum(thumb/2)), attr("bg", "#f8fafc"),
-		attr("box-shadow", "0 1px 4px 0 rgba(0,0,0,0.5)"),
+		attr("border-radius", fmtNum(thumb/2)), attr("bg", thumbColor),
+		attr("box-shadow", "0 1px 3px 0 rgba(0,0,0,0.35)"),
 		attr("transition", "left 120ms linear"),
 		dynAttr("left", thumbLeftSlot), closeEl(),
 		// 命中段
@@ -447,7 +487,9 @@ func Slider(props gxscene.Props) *gxscene.Instance {
 		func() any { return fmtNum(pct() * (width - thumb)) },   // 1 thumb left
 		func() any { return fmt.Sprintf("%s  %s", label(), fmtNum(curValue())) }, // 2 标题+值
 		func() any { return hitFor },                            // 3 hit segments
-		func() any { return toneColor(tone()) },                 // 4 fill bg
+		func() any { return toneOf() },                          // 4 fill bg
+		func() any { return trackOf() },                         // 5 track bg
+		func() any { return mutedOf() },                         // 6 标题+值颜色
 	)
 }
 

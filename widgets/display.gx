@@ -134,7 +134,7 @@ func Avatar(props gxscene.Props) *gxscene.Instance {
 		attr("align-items", "center"), attr("justify-content", "center"),
 		dynAttr("bg", bgSlot),
 		el("span"), attr("font-size", fmtNum(size*0.4)), attr("weight", "bold"),
-		attr("color", "#07130f"), dynChild(textSlot), closeEl(),
+		attr("color", ThemeOnAccent), dynChild(textSlot), closeEl(),
 		closeEl(),
 	}
 	return gxscene.render(gxscene.Template{Ops: ops, N: nSlots},
@@ -175,7 +175,7 @@ func Stat(props gxscene.Props) *gxscene.Instance {
 	hasDelta := delta() != ""
 	ops := []gxscene.Op{
 		el("div"), attr("gx-role", "stat"),
-		attr("bg", ThemePanel), attr("border", AppleSeparator), attr("border-width", "1"),
+		attr("bg", ThemePanel), attr("border", ThemeBorder), attr("border-width", "1"),
 		attr("border-radius", RadiusCard), attr("box-shadow", ShadowCard), attr("padding", "14"),
 		attr("flex-direction", "column"), attr("gap", "4"),
 	}
@@ -241,7 +241,7 @@ func Tag(props gxscene.Props) *gxscene.Instance {
 			if outline() {
 				return toneColor(tone())
 			}
-			return "#07130f"
+			return ThemeOnAccent
 		},
 		func() any {
 			if outline() {

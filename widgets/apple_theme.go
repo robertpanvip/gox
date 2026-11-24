@@ -3,71 +3,130 @@
 // gx:nocollections 声明跳过集合/裸对象字面量 desugar，保留手写 opcode 的原生 Go 语义。
 package widgets
 
-// Apple 风格设计系统（Apple HIG 深色模式）。
+// Apple macOS 设计系统（对齐 Apple Human Interface Guidelines）。
 //
-// 目标：让预制控件在观感上贴近 macOS/iOS 的深色appearance——分层中性灰背景、
-// 系统语义色、连续圆角、柔和多层阴影、半透明"材质"（vibrancy 的近似）、
-// 8pt 间距标度与清晰的字号层级。
+// 所有取值来自 Apple HIG 的 system colors / typography / layout 规范：
+//   - 系统色：Blue #007aff(亮)/#0a84ff(暗) 等 12 色明暗双套；
+//     label / secondaryLabel / tertiaryLabel；systemGroupedBackground 分层。
+//   - 排版：macOS 字号阶梯 body=13 / callout=12 / subheadline=11 / headline=13bold /
+//     title3=15 / title2=17 / title1=22 / largeTitle=26。
+//   - 布局：8pt 间距标度；连续圆角 sm=6/md=10/lg=12/panel=14；控件高 28pt。
+//   - 材质：半透明 background + hairline 描边 + 分层阴影（vibrancy 的近似）。
 //
-// 说明：
-//   - 后端没有真正的 backdrop-filter（读回背景像素做模糊），因此"毛玻璃"
-//     用带 alpha 的半透明底色 + 细描边 + 柔和阴影近似；在有真实背景内容的
-//     窗口里能呈现接近 macOS material 的层次感。Rust/TinySkia 端因不支持
-//     alpha 混合，会退化为不透明的实色（见各组件对 material 的使用）。
-//   - 所有常量都是纯字符串/数值，host 只负责透传，两个后端语义一致。
+// 说明：后端没有 backdrop-filter（读回背景像素做模糊），"毛玻璃"用带 alpha 的
+// 半透明底色 + 细描边 + 柔和阴影近似。Rust/TinySkia 端若不混合 alpha 会退化为
+// 不透明实色。所有常量是纯字符串/数值，host 只透传，两个后端语义一致。
 
-// ---- 系统灰阶（深色模式 system colors）----
+// ---- 系统色：亮色模式（Apple HIG system colors, Light Appearance）----
 const (
-	AppleWindowBg   = "#1c1c1e" // window / systemBackground
+	LightBlue   = "#007aff"
+	LightGreen  = "#34c759"
+	LightRed    = "#ff3b30"
+	LightOrange = "#ff9500"
+	LightYellow = "#ffcc00"
+	LightPurple = "#af52de"
+	LightPink   = "#ff2d55"
+	LightTeal   = "#30b0c7"
+	LightCyan   = "#32ade6"
+	LightIndigo = "#5856d6"
+	LightMint   = "#00c7be"
+	LightGray   = "#8e8e93"
+)
+
+// ---- 系统色：暗色模式（Apple HIG system colors, Dark Appearance）----
+const (
+	DarkBlue   = "#0a84ff"
+	DarkGreen  = "#30D158"
+	DarkRed    = "#FF453A"
+	DarkOrange = "#FF9F0A"
+	DarkYellow = "#FFD60A"
+	DarkPurple = "#BF5AF2"
+	DarkPink   = "#FF375F"
+	DarkTeal   = "#40CBE0"
+	DarkCyan   = "#64D2FF"
+	DarkIndigo = "#5E5CE6"
+	DarkMint   = "#63E6E2"
+	DarkGray   = "#8E8E93"
+)
+
+// ---- 背景分层（macOS grouped / window / control backgrounds）----
+// 亮：window=#fff, grouped=#f2f2f7, elevated=#fff；
+// 暗：window=#1e1e1e(窗口内容区), grouped=#000(分组底), elevated=#2c2c2e(卡片)。
+const (
+	AppleWindowBg   = "#1e1e1e" // window / content background
 	AppleGroupedBg  = "#000000" // grouped background（更深的分组底）
 	AppleElevated   = "#2c2c2e" // secondarySystemBackground / 卡片
 	AppleFill       = "#3a3a3c" // tertiarySystemBackground / 控件填充
-	AppleFill2      = "#48484a" // 更亮的填充（hover/高亮）
-	AppleSeparator  = "#38383a" // separator / 描边
-	AppleSeparator2 = "#545458" // opaque separator
-	AppleLabel      = "#ffffff" // label
-	AppleLabel2     = "#98989f" // secondaryLabel
+	AppleFill2      = "#48484a" // 更亮填充（systemGray3 暗 / hover）
+	AppleSeparator  = "#38383a" // opaque separator / 常规描边
+	AppleSeparator2 = "#545458" // separator（更亮的描边）
+	AppleLabel      = "#f5f5f7" // label（主文字）
+	AppleLabel2     = "#a1a1a6" // secondaryLabel
 	AppleLabel3     = "#6e6e73" // tertiaryLabel
-	AppleInputBg    = "#1c1c1e" // 输入框底（与 elevated 一致）
+	AppleInputBg    = "#1c1c1e" // 输入框底
 )
 
-// ---- 系统语义色（深色模式 system colors）----
+// ---- 系统强调色（暗色模式，Theme* 兼容值的默认来源）----
 const (
-	AppleBlue   = "#0a84ff" // 主强调 / 链接 / 选中
-	AppleGreen  = "#30d158"
-	AppleRed    = "#ff453a"
-	AppleOrange = "#ff9f0a"
-	AppleYellow = "#ffd60a"
-	ApplePurple = "#bf5af2"
-	ApplePink   = "#ff375f"
-	AppleTeal   = "#40c8e0"
-	AppleIndigo = "#5e5ce6"
+	AppleBlue   = DarkBlue
+	AppleGreen  = DarkGreen
+	AppleRed    = DarkRed
+	AppleOrange = DarkOrange
+	AppleYellow = DarkYellow
+	ApplePurple = DarkPurple
+	ApplePink   = DarkPink
+	AppleTeal   = DarkCyan
+	AppleIndigo = DarkIndigo
 )
 
 // ---- 半透明材质（#rrggbbaa，alpha 近似 vibrancy）----
 const (
-	AppleMaterialThin = "#2c2c2ed9" // 85% 不透明：工具栏/浮层
-	AppleMaterialReg  = "#3a3a3ce6" // 90%：卡片/弹窗
-	AppleMaterialThick = "#1c1c1ef2" // 95%：模态面板
-	AppleScrim        = "#00000099" // 60% 黑遮罩
-	AppleHairline     = "#ffffff1f" // 12% 白高光描边
+	AppleMaterialThin  = "#2c2c2ecc" // thin：工具栏/浮层（80%）
+	AppleMaterialReg   = "#3a3a3ce6" // regular：卡片/弹窗（90%）
+	AppleMaterialThick = "#1e1e1ef2" // thick：模态面板（95%）
+	AppleScrim         = "#00000099" // 60% 黑遮罩
+	AppleHairline      = "#ffffff1f" // 12% 白高光描边
+	LightHairline      = "#00000014" // 浅色模式高光描边
 )
 
-// ---- 圆角标度（continuous 观感用偏大值近似 squircle）----
+// ---- 连续圆角标度（Apple HIG radius scale）----
 const (
-	RadiusSmall  = "8"
-	RadiusControl = "10"
-	RadiusCard   = "14"
-	RadiusPanel  = "18"
-	RadiusModal  = "22"
-	RadiusPill   = "999"
+	RadiusXSmall  = "4"  // 小徽章/勾框
+	RadiusSmall   = "6"  // 控件/按钮/输入框（macOS control）
+	RadiusControl = "6"  // 与 RadiusSmall 同义，保留兼容
+	RadiusCard    = "12" // 卡片
+	RadiusPanel   = "14" // 面板/分组
+	RadiusModal   = "16" // 模态/浮层
+	RadiusPill    = "999"
+)
+
+// ---- 控件高度（macOS regular=28pt, small=24, large=32）----
+const (
+	ControlHeightSmall  = "24"
+	ControlHeight       = "28"
+	ControlHeightLarge  = "32"
+	RowHeight           = "28" // 表格/列表行高（default）
+)
+
+// ---- 字号阶梯（macOS HIG typography scale, pt）----
+const (
+	FontLargeTitle  = "26"
+	FontTitle1      = "22"
+	FontTitle2      = "17"
+	FontTitle3      = "15"
+	FontHeadline    = "13" // + bold
+	FontBody        = "13"
+	FontCallout     = "12"
+	FontSubheadline = "11"
+	FontFootnote    = "10"
 )
 
 // ---- 柔和多层阴影（Apple 阴影：大扩散、低 alpha、向下偏移）----
-const (
-	ShadowCard  = "0 6px 24px 0 #00000059"
-	ShadowFloat = "0 12px 40px 0 #00000080"
-	ShadowModal = "0 24px 70px 0 #000000b3"
+// 用 var 而不是 const：SetTheme 会按明暗主题同步成对应强度（浅色更轻）。
+var (
+	ShadowCard  = "0 4px 16px 0 #00000040"
+	ShadowFloat = "0 10px 30px 0 #00000066"
+	ShadowModal = "0 24px 64px 0 #00000099"
 )
 
 // ---- 8pt 间距标度 ----
@@ -81,8 +140,8 @@ const (
 	Space8 = "32"
 )
 
-// appleTones 把语义 tone 名映射到 Apple 系统色。toneColor 会优先查这张表。
-// 保留原 tones 里的名字（primary/cyan/...）以兼容现有业务调用。
+// appleTones 把语义 tone 名映射到暗色系统色。toneColor 会优先查这张表。
+// 保留旧名（primary/cyan/...）以兼容现有业务调用。
 var appleTones = map[string]string{
 	"primary": AppleBlue,
 	"blue":    AppleBlue,
@@ -93,6 +152,7 @@ var appleTones = map[string]string{
 	"green":   AppleGreen,
 	"yellow":  AppleYellow,
 	"pink":    ApplePink,
+	"mint":    DarkMint,
 	"indigo":  AppleIndigo,
 	"danger":  AppleRed,
 	"red":     AppleRed,

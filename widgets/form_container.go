@@ -124,7 +124,7 @@ func Form(props gxscene.Props) *gxscene.Instance {
 	if t := title(); t != "" {
 		ops = append(ops,
 			el("div"), attr("gx-role", "form-title"),
-			attr("font-size", "16"), attr("weight", "bold"), attr("color", ThemeText),
+			attr("font-size", FontTitle3), attr("weight", "bold"), attr("color", ThemeText),
 			gxscene.Op{Code: gxscene.OpChildText, Arg: t}, closeEl(),
 		)
 	}
@@ -149,7 +149,8 @@ func Form(props gxscene.Props) *gxscene.Instance {
 		ops = append(ops,
 			el("button"), attr("gx-role", "form-submit"),
 			attr("variant", "primary"), attr("bg", ThemeAccent),
-			attr("color", "#ffffff"), attr("border-radius", RadiusControl),
+			attr("color", ThemeOnAccent), attr("border-radius", RadiusControl),
+			attr("height", ControlHeight), attr("font-size", FontBody),
 			attr("padding", "10"), attr("width", "100"),
 			gxscene.Op{Code: gxscene.OpEvent, Key: "onClick", Slot: submitSlot},
 			gxscene.Op{Code: gxscene.OpChildText, Arg: sl}, closeEl(),
@@ -245,7 +246,7 @@ func FormItem(props gxscene.Props) *gxscene.Instance {
 		ops = append(ops,
 			el("div"), attr("gx-role", "form-label"),
 			attr("flex-direction", "row"), attr("gap", "4"),
-			attr("font-size", "13"), attr("color", ThemeText),
+			attr("font-size", FontBody), attr("color", ThemeText),
 			gxscene.Op{Code: gxscene.OpChildText, Arg: l},
 		)
 		if required() {
@@ -266,7 +267,7 @@ func FormItem(props gxscene.Props) *gxscene.Instance {
 	if h := hint(); h != "" {
 		ops = append(ops,
 			el("div"), attr("gx-role", "form-hint"),
-			attr("font-size", "12"), attr("color", ThemeMuted),
+			attr("font-size", FontCallout), attr("color", ThemeMuted),
 			gxscene.Op{Code: gxscene.OpChildText, Arg: h}, closeEl(),
 		)
 	}

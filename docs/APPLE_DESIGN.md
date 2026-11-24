@@ -1,66 +1,80 @@
 # Apple 风格设计系统（预制控件库视觉规范）
 
-预制控件库 `backend/skia/widgets` 的视觉语言以 **Apple Human Interface Guidelines** 为参照，目标是让深色界面在配色层次、圆角、阴影、材质与排版上接近 macOS / iOS 的原生观感。两个后端（Skia/Yoga、Rust/Taffy）语义一致——所有约定都走 `Node.Props` 全量透传，零协议格式改动。
+预制控件库 `widgets` 的视觉语言以 **Apple Human Interface Guidelines** 为参照，覆盖 macOS 桌面风格的明暗双主题。两个后端（Skia/Yoga、Rust/Taffy）共享同一套 `Node.Props` 样式协议，因此组件只描述语义与令牌，不绑定具体绘制后端。
 
 ## 1. 设计令牌（Design Tokens）
 
-常量定义在 `backend/skia/widgets/apple_theme.go`，按语义分组：
+令牌定义分布在三个文件：
 
-### 系统灰阶（深色模式）
+- `widgets/apple_theme.gx`：编译期系统色、圆角、控件高度、字号、阴影、间距标度。
+- `widgets/theme.gx`：`Theme` 结构、`DarkTheme` / `LightTheme`、`SetTheme` / `UseToken` / `UseTone` / `ThemeProvider`。
+- `widgets/tokens.gx`：给组件插槽使用的 `tk*` getter 快捷方式。
 
-| 令牌 | 取值 | 用途 |
+### 系统色（明暗双套）
+
+| 语义 | 浅色 | 深色 |
 |---|---|---|
-| `AppleWindowBg` | `#1c1c1e` | 窗口 / 页面底 |
-| `AppleGroupedBg` | `#000000` | 分组列表底 |
-| `AppleElevated` | `#2c2c2e` | 卡片 / 二级底 |
-| `AppleFill` / `AppleFill2` | `#3a3a3c` / `#48484a` | 控件填充 / 高亮 |
-| `AppleSeparator` / `AppleSeparator2` | `#38383a` / `#545458` | 描边 / 分隔线 |
-| `AppleLabel` / `AppleLabel2` / `AppleLabel3` | `#ffffff` / `#98989f` / `#6e6e73` | 主 / 次 / 三级文字 |
+| 主强调 Blue | `#007aff` | `#0a84ff` |
+| 成功 Green | `#34c759` | `#30D158` |
+| 危险 Red | `#ff3b30` | `#FF453A` |
+| 警告 Orange | `#ff9500` | `#FF9F0A` |
+| 紫 / 粉 / 靛 | `#af52de` / `#ff2d55` / `#5856d6` | `#BF5AF2` / `#FF375F` / `#5E5CE6` |
+| 窗口底 | `#ffffff` | `#1e1e1e` |
+| 分组底 | `#f2f2f7` | `#000000` |
+| 卡片 / 抬升层 | `#ffffff` | `#2c2c2e` |
+| 输入底 | `#ffffff` | `#1c1c1e` |
+| 描边 | `#c6c6c8` | `#38383a` |
+| 主文字 | `#1d1d1f` | `#f5f5f7` |
+| 次文字 | `#86868b` | `#a1a1a6` |
 
-### 系统语义色
+`tone` 名（primary/success/warning/danger/info/purple/pink/teal/indigo…）映射到当前主题的系统色；传 `#rrggbb` / `#rrggbbaa` 则原样使用。
 
-`AppleBlue` `#0a84ff`（主强调/链接）、`AppleGreen` `#30d158`、`AppleRed` `#ff453a`、`AppleOrange` `#ff9f0a`、`AppleYellow` `#ffd60a`、`ApplePurple` `#bf5af2`、`ApplePink` `#ff375f`、`AppleTeal` `#40c8e0`、`AppleIndigo` `#5e5ce6`。
+### 排版与布局
 
-`tone` 名（primary/cyan/purple/orange/green/danger/info…）映射到这些系统色；业务传 `#rrggbb` 则原样使用。
+- 字号：largeTitle 26 / title1 22 / title2 17 / title3 15 / headline 13 bold / body 13 / callout 12 / subheadline 11 / footnote 10。
+- 圆角：xsmall 4 / small 6 / control 6 / card 12 / panel 14 / modal 16 / pill 999。
+- 控件高度：small 24 / regular 28 / large 32；列表行高 28。
+- 间距：4 / 8 / 12 / 16 / 20 / 24 / 32，遵循 8pt 网格。
+- 阴影：card / float / modal 为低 alpha、大扩散的多层近似，浅色主题自动减弱。
 
-### 半透明材质（毛玻璃近似）
+> 后端没有真正的 `backdrop-filter`，材质用带 alpha 的半透明底色 + hairline 描边 + 柔和阴影近似。Skia 支持 `#rrggbbaa`；Rust/TinySkia 对 alpha 的支持有限，可能退化为接近实色的观感。
 
-| 令牌 | 取值 | 用途 |
-|---|---|---|
-| `AppleMaterialThin` | `#2c2c2ed9` | 工具栏 / 轻浮层 |
-| `AppleMaterialReg` | `#3a3a3ce6` | 卡片 / Popover / Toast |
-| `AppleMaterialThick` | `#1c1c1ef2` | Modal 面板 |
-| `AppleScrim` | `#00000099` | 遮罩（60% 黑） |
-| `AppleHairline` | `#ffffff1f` | 12% 白高光描边（材质边缘） |
+## 2. 主题切换与兼容性
 
-> **毛玻璃说明**：后端当前没有真正的 `backdrop-filter`（读回背景像素做高斯模糊）。材质用「带 alpha 的半透明底色 + 细高光描边 + 柔和阴影」近似，在有背景内容的窗口里能呈现接近 macOS material 的层次感。Rust/TinySkia 端目前对 alpha 支持有限，会退化为接近实色的观感——这是已知限制，不影响语义与布局。
+```go
+widgets.SetTheme(widgets.LightTheme)          // 全局切换
+accent := widgets.UseToken("accent")          // 响应式 getter
+inst := widgets.Button(gxscene.Props{ /* ... */ })
+```
 
-### 圆角 / 阴影 / 间距标度
-
-- 圆角：`RadiusSmall=8`、`RadiusControl=10`、`RadiusCard=14`、`RadiusPanel=18`、`RadiusModal=22`、`RadiusPill=999`（连续圆角 squircle 用偏大值近似）。
-- 阴影：`ShadowCard` / `ShadowFloat` / `ShadowModal`（大扩散、低 alpha、向下偏移的多层近似）。
-- 间距：`Space1..Space8`（4/8/12/16/20/24/32），遵循 8pt 网格。
-
-## 2. 兼容性
-
-`Theme*` 常量（`ThemeBg`/`ThemePanel`/`ThemeAccent`…）保留旧名称，取值改为对应的 Apple 系统色。因此既有业务代码与测试（用符号常量比较）无需改动即可升级到 Apple 观感；需要更细粒度控制时用 `Apple*` 令牌。
+- `UseToken(name)` / `UseTone(name)` 返回随主题变化的 getter，接到 `dynAttr` 插槽上可自动重绘。
+- `ThemeProvider` 提供子树级主题覆盖，嵌套时内层就近生效，不影响全局主题。
+- 旧版 `Theme*`（`ThemeBg` / `ThemePanel` / `ThemeAccent` …）保留同名导出符号，但已从常量改为变量；`SetTheme` 会把它们同步为当前主题令牌。这样既有业务代码与测试仍可直接比较符号，浅色主题下也不会残留深色控件。
+- `ShadowCard` / `ShadowFloat` / `ShadowModal` 同样随主题同步，浅色主题使用更轻的阴影。
 
 ## 3. 浮层三件套
 
-浮层角色由 `gx-role` 标记，脱离 flex 流、最后绘制、浮层优先命中。见 `backend/skia/overlay.go` 与 `docs/STYLE.md`。
+浮层角色由 `gx-role` 标记，脱离 flex 流、最后绘制、浮层优先命中。见 `docs/STYLE.md`。
 
-- **Popover**（`gx-role=popover`）：贴锚点定位，Dropdown/Select/Menu/Tooltip 的底座。
-- **Modal**（`gx-role=modal`）：相对画布居中（`placeCentered`，尺寸超画布时 clamp），配 scrim 遮罩与 Apple 风格面板。`Widget` 层提供 `ModalState`、`ModalHandleKey`（ESC 关闭）。
-- **Portal**（`gx-role=portal`）：传送门。布局层把整棵子树从 flex 流末尾平移到画布原点，根 box 铺满画布作为定位参考；子树用 `position:absolute` + `left`/`top` 自主定位，最后绘制在最上层。Toast / 全局提示 / 抽屉都可基于它。
+- **Popover**：贴锚点定位，Dropdown / Select / Menu 的底座。
+- **Modal**：居中面板 + scrim 遮罩，提供 `ModalState` 与 `ModalHandleKey`（ESC 关闭）。
+- **Portal / Tooltip**：Portal 用 `left`/`top` 自主定位；Tooltip 是轻量浮层，无 scrim、hover 触发。
 
-> Portal 子树请使用 **`left`/`top`** 定位（相对画布左上角的固定像素），不要用 `right`/`bottom`——后者依赖父盒尺寸，而 Portal 根在 flex 流末尾的原始高度可能异常，平移后 `right`/`bottom` 会算出画布外坐标。
+## 4. 可视化验证
 
-## 4. 截图参考
+`examples/widget-showcase/` 是完整的组件库展示程序，覆盖按钮、输入、表单控件、导航、滑块进度、下拉、统计标签头像、提示、卡片、表格、表单、空状态、骨架屏、时间选择器与浮层提示。
 
-`examples/skia-gallery/` 下：
+```bash
+go run ./examples/widget-showcase
+GX_THEME=light go run ./examples/widget-showcase
+```
 
-- `preview.png`：全组件 Gallery（Apple 深色风格）
-- `preview-modal.png`：居中模态框 + 遮罩
-- `preview-portal.png`：传送门浮层提示
+在沙箱/无头环境中用 Xvfb + scrot 截图：
 
-用 `GX_DEMO_MODAL=1` / `GX_DEMO_PORTAL=1` 环境变量运行 demo 可让对应浮层初始打开，便于 Xvfb + scrot 截图验证。
+```bash
+xvfb-run -a --server-args="-screen 0 1100x3800x24" bash -c \
+  'GX_THEME=dark GX_SHOT_MS=12000 go run ./examples/widget-showcase & \
+   sleep 5; scrot /tmp/showcase-dark.png; wait'
+```
+
+仓库内保留的最终对照图：`examples/widget-showcase/preview-dark.png`、`preview-light.png`（若以截图产物形式提交）。

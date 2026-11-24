@@ -30,7 +30,7 @@ func Alert(props gxscene.Props) *gxscene.Instance {
 	)
 	ops := []gxscene.Op{
 		el("div"), attr("gx-role", "alert"),
-		attr("bg", ThemePanel), attr("border-radius", "8"),
+		attr("bg", ThemePanel), attr("border-radius", RadiusCard),
 		attr("padding", "12"), attr("flex-direction", "row"), attr("gap", "10"),
 	}
 	if w := width(); w != "" {
@@ -42,9 +42,9 @@ func Alert(props gxscene.Props) *gxscene.Instance {
 		attr("border-radius", "2"), attr("bg", accent), closeEl(),
 		// 文本列
 		el("div"), attr("flex-direction", "column"), attr("gap", "3"),
-		el("span"), attr("font-size", "14"), attr("weight", "bold"),
+		el("span"), attr("font-size", FontHeadline), attr("weight", "bold"),
 		attr("color", accent), dynChild(titleSlot), closeEl(),
-		el("span"), attr("font-size", "13"), attr("color", ThemeMuted),
+		el("span"), attr("font-size", FontBody), attr("color", ThemeMuted),
 		dynChild(msgSlot), closeEl(),
 		closeEl(),
 		closeEl(),
@@ -82,9 +82,9 @@ func EmptyState(props gxscene.Props) *gxscene.Instance {
 	ops = append(ops,
 		el("span"), attr("font-size", "34"), attr("color", ThemeMuted),
 		gxscene.Op{Code: gxscene.OpChildText, Arg: ic}, closeEl(),
-		el("span"), attr("font-size", "16"), attr("weight", "bold"),
+		el("span"), attr("font-size", FontTitle2), attr("weight", "bold"),
 		attr("color", ThemeText), dynChild(titleSlot), closeEl(),
-		el("span"), attr("font-size", "13"), attr("color", ThemeMuted),
+		el("span"), attr("font-size", FontBody), attr("color", ThemeMuted),
 		dynChild(descSlot), closeEl(),
 		closeEl(),
 	)
@@ -115,7 +115,7 @@ func Skeleton(props gxscene.Props) *gxscene.Instance {
 	}
 	r := radius()
 	if r == "" {
-		r = "4"
+		r = RadiusXSmall
 	}
 	ops = append(ops, attr("border-radius", r), closeEl())
 	return gxscene.Render(gxscene.Template{Ops: ops, N: 0})
