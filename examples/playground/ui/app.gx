@@ -18,7 +18,8 @@ pub type sample struct {
 
 pub sig sampleIndex = 0
 
-pub func samples() []sample {
+// 示例源码是常量，缓存一份切片，避免每次切换/渲染列表都重新构造 5 个结构体。
+func buildSamples() []sample {
     return []sample{
         sample{name: "01 Hello GX", source: "// 最小 GX 程序\nsig name = \"GX\"\nfunc view() *gxscene.Instance {\n    return <div>Hello, {name}!</div>\n}"},
         sample{name: "02 Counter", source: "// signal 计数器\nsig count = 0\nfunc inc() {\n    count = count + 1\n}\nfunc view() *gxscene.Instance {\n    return <button onClick={gxscene.Handler(func(ctx gxscene.EventContext) { inc() })}>{count}</button>\n}"},
@@ -28,6 +29,10 @@ pub func samples() []sample {
     }
 }
 
+var sampleStore []sample = buildSamples()
+
+pub func samples() []sample { return sampleStore }
+
 // loadSample 切换示例：把示例源码灌进编辑器。
 pub func loadSample(i int) {
     xs := samples()
@@ -35,8 +40,7 @@ pub func loadSample(i int) {
     if i >= len(xs) { i = len(xs) - 1 }
     sampleIndex = i
     EditorSetText(xs[i].source)
-    EditorMove(-100, 0)
-    EditorMove(0, -100)
+    EditorHome()
     EditorFocus()
 }
 

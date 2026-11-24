@@ -38,21 +38,33 @@ func (r RichText) Plain() string {
 // HTML 把富文本序列化为带内联 color 样式的 HTML 片段，供 web 后端一次 innerHTML 写入。
 // 文本经过 HTML 转义，避免源码里的 < > & 破坏结构或注入。
 // Color 为空的分段不写 style，沿用父元素颜色。
+//
+// 相邻同色分段合并为单个 <span>：语法高亮里空格/标点与标识符常被拆成很多细粒度
+// segment，逐段生成 span 会让 innerHTML 膨胀数倍并拖慢浏览器解析。合并只发生在
+// 序列化层，RichText 本身仍保留细粒度分段，便于诊断与精确读取。
 func (r RichText) HTML() string {
 	var b strings.Builder
-	for _, s := range r {
+	for i := 0; i < len(r); {
+		s := r[i]
 		if s.Text == "" {
+			i++
 			continue
 		}
-		esc := html.EscapeString(s.Text)
 		if s.Color == "" {
-			b.WriteString(esc)
+			b.WriteString(html.EscapeString(s.Text))
+			i++
 			continue
 		}
 		b.WriteString(`<span style="color:`)
 		b.WriteString(html.EscapeString(s.Color))
 		b.WriteString(`">`)
-		b.WriteString(esc)
+		// 连续同色分段共用同一个 span；逐段转义写入，避免构造拼接字符串。
+		for i < len(r) && r[i].Color == s.Color {
+			if r[i].Text != "" {
+				b.WriteString(html.EscapeString(r[i].Text))
+			}
+			i++
+		}
 		b.WriteString(`</span>`)
 	}
 	return b.String()

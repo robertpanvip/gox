@@ -20,7 +20,8 @@ import (
 
  var SampleIndex = Signal.New(0)
 
- func Samples() []Sample {
+// 示例源码是常量，缓存一份切片，避免每次切换/渲染列表都重新构造 5 个结构体。
+func buildSamples() []Sample {
     return []Sample{
         Sample{Name: "01 Hello GX", Source: "// 最小 GX 程序\nsig name = \"GX\"\nfunc view() *gxscene.Instance {\n    return <div>Hello, {name}!</div>\n}"},
         Sample{Name: "02 Counter", Source: "// signal 计数器\nsig count = 0\nfunc inc() {\n    count = count + 1\n}\nfunc view() *gxscene.Instance {\n    return <button onClick={gxscene.Handler(func(ctx gxscene.EventContext) { inc() })}>{count}</button>\n}"},
@@ -30,6 +31,10 @@ import (
     }
 }
 
+var sampleStore []Sample = buildSamples()
+
+ func Samples() []Sample { return sampleStore }
+
 // loadSample 切换示例：把示例源码灌进编辑器。
  func LoadSample(i int) {
     xs := Samples()
@@ -37,8 +42,7 @@ import (
     if i >= len(xs) { i = len(xs) - 1 }
     SampleIndex(i)
     EditorSetText(xs[i].Source)
-    EditorMove(-100, 0)
-    EditorMove(0, -100)
+    EditorHome()
     EditorFocus()
 }
 

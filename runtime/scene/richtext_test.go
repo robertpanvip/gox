@@ -30,6 +30,27 @@ func TestRichTextHTMLEscapes(t *testing.T) {
 	}
 }
 
+// 细粒度分段在序列化时合并为更少 span，且拼接文本不变。
+func TestRichTextHTMLMergesAdjacentSameColor(t *testing.T) {
+	rt := RichText{
+		{Text: "  ", Color: "#d4d4d4"},
+		{Text: "foo", Color: "#d4d4d4"},
+		{Text: "(", Color: "#808080"},
+		{Text: ")", Color: "#808080"},
+		{Text: " ", Color: "#d4d4d4"},
+	}
+	h := rt.HTML()
+	if n := strings.Count(h, "<span"); n != 3 {
+		t.Fatalf("应合并为 3 个 span，实际 %d: %q", n, h)
+	}
+	if !strings.Contains(h, "  foo") {
+		t.Errorf("同色分段应写进同一个 span: %q", h)
+	}
+	if rt.Plain() != "  foo() " {
+		t.Errorf("Plain 不应受合并影响: %q", rt.Plain())
+	}
+}
+
 func TestRichTextFromProps(t *testing.T) {
 	rt := RichText{{Text: "x", Color: "#fff"}}
 	if got, ok := RichTextFromProps(map[string]any{PropRichText: rt}); !ok || got.Plain() != "x" {
