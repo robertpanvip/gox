@@ -164,7 +164,16 @@ func (b *Branch) adoptSinkDeep(s *changeSink) {
 }
 
 // adoptBind 实现 subtreeController：记录统一接线上下文，供 Resolve 构建新分支时递归接线。
-func (b *Branch) adoptBind(ctx *bindCtx) { b.bctx = ctx }
+// 同时对首帧已命中的分支子树补接（同 For：首帧独立 effect 缺 app 帧边界回调）。
+func (b *Branch) adoptBind(ctx *bindCtx) {
+	b.bctx = ctx
+	b.mu.Lock()
+	cur := b.cur
+	b.mu.Unlock()
+	if cur != nil {
+		cur.rebindWith(ctx)
+	}
+}
 
 // Dispose 销毁当前分支作用域（幂等）。级联停止子树内所有 Effect / Cleanup。
 func (b *Branch) Dispose() {

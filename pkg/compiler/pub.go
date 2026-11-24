@@ -149,6 +149,30 @@ func (s *stream) applyPubAt(k int) {
 //
 // P2：遮蔽判断改走 bindings.ResolveAt —— 解析到非包级（SkGlobal）绑定即为
 // 局部遮蔽（BkLocal/BkParam/局部 var），自动跳过；删去 collectLocalShadows。
+// isLocalValueShadow 判断 name 是否在某个函数/块作用域内被声明为局部值
+// （局部变量、形参、range 变量）。只认真正的值绑定，排除 struct 字段——
+// pub struct 字段会进裸名 names 表，若把它当遮蔽会误伤 selector 还原。
+//
+// 用途：JSX 插值由 lexExprScene 重新词法化，token 的 Pos 被重置为 JSX 根位置
+// （IsGen=true），ResolveAt 用这个假坐标查不到函数体内的局部变量。对这类 token
+// 用「名字是否为某处局部值」做遮蔽兜底，避免局部变量与 pub struct 字段同名时被
+// 误还原成大写（如局部 text → Text，恰好又有 Token.Text 字段 → 隐蔽语义错误）。
+func isLocalValueShadow(b *Bindings, name string) bool {
+	for _, bd := range b.AllBindings() {
+		if bd.Name != name || bd.Scope == nil {
+			continue
+		}
+		if bd.Scope.Kind == SkGlobal || bd.Scope.Kind == SkStruct {
+			continue
+		}
+		switch bd.Kind {
+		case BkLocal, BkVar, BkParam, BkRangeVar:
+			return true
+		}
+	}
+	return false
+}
+
 func restoreRefs(in []Token, names map[string]string, b *Bindings) []Token {
 	if len(names) == 0 {
 		return in
@@ -169,6 +193,10 @@ func restoreRefs(in []Token, names map[string]string, b *Bindings) []Token {
 		// 解析到局部绑定（非包级）→ 该名字在此处被遮蔽，不还原。
 		if b != nil {
 			if bd := b.ResolveAt(t.Text, t.Pos); bd != nil && bd.Scope != nil && bd.Scope.Kind != SkGlobal {
+				continue
+			}
+			// JSX 插值 token 的 Pos 是假坐标，上面查不到。用局部值遮蔽兜底。
+			if t.IsGen && isLocalValueShadow(b, t.Text) {
 				continue
 			}
 		}

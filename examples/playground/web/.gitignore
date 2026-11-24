@@ -1,0 +1,9 @@
+# Go wasm 产物（build.sh 生成）
+app.wasm
+wasm_exec.js
+
+# 前端严格 TS 编译产物（tsc 生成）
+dist/
+
+# Node 依赖
+node_modules/

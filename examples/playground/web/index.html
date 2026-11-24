@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>GX Playground · WebAssembly</title>
+  <style>
+    body { margin: 0; font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+           background: #020617; color: #e2e8f0; min-height: 100vh;
+           display: flex; flex-direction: column; align-items: center; padding: 24px; }
+    h1 { font-size: 18px; color: #4ec9b0; margin: 0 0 12px; }
+    #app { outline: none; }
+    /* GX 场景树用 style 属性声明 flex-direction；浏览器需显式 display:flex 才生效。
+       用属性选择器覆盖所有声明了 flex 布局的 GX 节点（含多层嵌套容器）。 */
+    #app [style*="flex-direction"] { display: flex; }
+    #app [style*="overflow"] { overflow: auto; }
+    #app div { box-sizing: border-box; }
+    #hint { margin-top: 12px; font-size: 12px; color: #64748b; }
+    #loading { position: fixed; inset: 0; display: grid; place-items: center;
+               font-size: 14px; color: #94a3b8; background: #020617; z-index: 10; }
+    #loading[data-state="error"] { color: #f87171; }
+  </style>
+</head>
+<body>
+  <h1>GX Playground —— 用 GX 写 GX（WebAssembly 后端）</h1>
+  <div id="loading">正在加载 GX Playground wasm…</div>
+  <div id="app" tabindex="0"></div>
+  <div id="hint">正在初始化…</div>
+  <!-- wasm_exec.js 由 Go 工具链生成（非本仓手写），提供全局 window.Go -->
+  <script src="wasm_exec.js"></script>
+  <!-- 前端逻辑为严格 TS 7，编译产物见 dist/main.js -->
+  <script type="module" src="dist/main.js"></script>
+</body>
+</html>

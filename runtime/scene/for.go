@@ -454,7 +454,27 @@ func (f *For) adoptSinkDeep(s *changeSink) {
 }
 
 // adoptBind 实现 subtreeController：记录统一接线上下文，供 Resolve 构建新列表项时递归接线。
-func (f *For) adoptBind(ctx *bindCtx) { f.bctx = ctx }
+// 同时对首帧已建好的列表项补接：它们建树时还没有 ctx，用的是独立 effect（无 app
+// onDirty 帧边界），不补接会导致项内叶子变化时增量后端收不到重绘请求。
+func (f *For) adoptBind(ctx *bindCtx) {
+	f.bctx = ctx
+	f.mu.Lock()
+	entries := make([]*forEntry, 0, len(f.entries))
+	for _, e := range f.entries {
+		entries = append(entries, e)
+	}
+	f.mu.Unlock()
+	for _, e := range entries {
+		if e.inst != nil {
+			// 首帧建项时 sink 已 adopt，但项内后来挂载的嵌套组件可能漏接；
+			// 补接前再深灌一次 sink，确保项内所有叶子的 Change 汇入同一缓冲。
+			if f.sink != nil {
+				adoptSinkDeep(e.inst, f.sink)
+			}
+			e.inst.rebindWith(ctx)
+		}
+	}
+}
 
 // Dispose 销毁所有元素 Owner（幂等）。
 func (f *For) Dispose() {

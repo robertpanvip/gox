@@ -1,0 +1,112 @@
+// app.gx —— 用 GX 语言编写的 playground 主界面。
+//
+// 与 editor.gx 一起构成"用 GX 写 GX playground"的自举案例：
+// 所有 UI（工具栏 / 示例列表 / 编辑器 / 状态栏）都用 GX JSX 表达，
+// 转译成标准 Go 场景树后，桌面（skia+GLFW）与网页（web+wasm）共用。
+package ui
+
+import (
+    gxscene "github.com/robertpanvip/gox/runtime/scene"
+)
+
+// ---- 示例库：每个示例就是一段 GX 源码文本 ----
+
+pub type sample struct {
+    pub name   string
+    pub source string
+}
+
+pub sig sampleIndex = 0
+
+pub func samples() []sample {
+    return []sample{
+        sample{name: "01 Hello GX", source: "// 最小 GX 程序\nsig name = \"GX\"\nfunc view() any {\n    return <div>Hello, {name}!</div>\n}"},
+        sample{name: "02 Counter", source: "// signal 计数器\nsig count = 0\nfunc inc() {\n    count = count() + 1\n}\nfunc view() any {\n    return <button onClick={inc}>{count}</button>\n}"},
+        sample{name: "03 For 列表", source: "// For 列表渲染\nsig todos = []string{\"a\", \"b\", \"c\"}\nfunc view() any {\n    return <div flex-direction=\"column\">\n        <For each={todos}>{(t string) => <span>{t()}</span>}</For>\n    </div>\n}"},
+        sample{name: "04 样式卡片", source: "// 深色卡片\nfunc view() any {\n    return <div bg=\"#0b1020\" padding=\"20\"\n        border-radius=\"12\" flex-direction=\"column\" gap=\"8\">\n        <b color=\"#7dd3fc\" font-size=\"24\">Card</b>\n        <span color=\"#94a3b8\">用 GX 写的样式</span>\n    </div>\n}"},
+        sample{name: "05 语法高亮", source: "// 关键字/字符串/注释都会着色\npub enum color { red, green, blue }\nfunc describe(v any) string {\n    if (v is int) { return \"int\" }\n    return \"other\"\n}"},
+    }
+}
+
+// loadSample 切换示例：把示例源码灌进编辑器。
+pub func loadSample(i int) {
+    xs := samples()
+    if i < 0 { i = 0 }
+    if i >= len(xs) { i = len(xs) - 1 }
+    sampleIndex = i
+    EditorSetText(xs[i].source)
+    EditorMove(-100, 0)
+    EditorMove(0, -100)
+    EditorFocus()
+}
+
+pub func nextSample() { loadSample(sampleIndex() + 1) }
+pub func prevSample() { loadSample(sampleIndex() - 1) }
+
+// ---- 主界面 ----
+
+func sampleRow(i int) *gxscene.Instance {
+    xs := samples()
+    if i >= len(xs) { return <div/> }
+    name := xs[i].name
+    active := i == sampleIndex()
+    bg := "#252526"
+    fg := "#cccccc"
+    if active { bg = "#094771"; fg = "#ffffff" }
+    return <div bg={bg} color={fg} padding="8" font-size="13" border-radius="4"
+        onClick={gxscene.Handler(func(ctx gxscene.EventContext) { loadSample(i) })}>
+        {name}
+    </div>
+}
+
+// 工具栏按钮：Next / Prev。显式写 *gxscene.Instance 注解。
+pub func nextButton() *gxscene.Instance {
+    return <div bg="#0e639c" color="#ffffff" padding="8" font-size="13" border-radius="4"
+        onClick={gxscene.Handler(func(ctx gxscene.EventContext) { nextSample() })}>
+        {"下一个 ▶"}
+    </div>
+}
+
+pub func prevButton() *gxscene.Instance {
+    return <div bg="#3a3d45" color="#ffffff" padding="8" font-size="13" border-radius="4"
+        onClick={gxscene.Handler(func(ctx gxscene.EventContext) { prevSample() })}>
+        {"◀ 上一个"}
+    </div>
+}
+
+pub func editorPanel() *gxscene.Instance {
+    return Editor()
+}
+
+pub func sampleList() *gxscene.Instance {
+    return <div flex-direction="column" gap="6">
+        <For each={Indices(len(samples()))}>{(i int) => sampleRow(i())}</For>
+    </div>
+}
+
+// Playground 返回完整界面场景树。两端装配层都调用这个函数。
+pub func Playground() *gxscene.Instance {
+    title := "GX Playground"
+    sub := "用 GX 写 GX —— 桌面与网页同源"
+    return <div bg="#1e1e1e" color="#d4d4d4" padding="20" flex-direction="column" gap="14" height="600" width="920">
+        <div flex-direction="column" gap="4">
+            <div color="#4ec9b0" font-size="24" weight="bold">{title}</div>
+            <div color="#858585" font-size="13">{sub}</div>
+        </div>
+        <div flex-direction="row" gap="14" height="420">
+            <div bg="#252526" padding="12" border-radius="8" width="200" flex-direction="column" gap="8">
+                <div color="#9cdcfe" font-size="13" weight="bold">示例</div>
+                {sampleList()}
+            </div>
+            <div flex-direction="column" gap="6" width="640">
+                <div flex-direction="row" gap="8">
+                    {prevButton()}
+                    {nextButton()}
+                    <div color="#858585" font-size="12" padding="8">{EditorStatus()}</div>
+                </div>
+                {editorPanel()}
+            </div>
+        </div>
+        <div color="#6a9955" font-size="12">提示：点击「下一个」切换示例；键盘输入由装配层转发到编辑器命令。</div>
+    </div>
+}

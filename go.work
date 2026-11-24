@@ -7,4 +7,5 @@ use (
 	./backend/web
 	./examples/desktop-demo
 	./examples/wasm-demo
+	./examples/playground
 )

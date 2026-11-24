@@ -513,6 +513,7 @@ type Instance struct {
 
 	changes *changeSink // 增量变更缓冲；根实例创建，子实例共享同一 sink
 	bctx    *bindCtx    // 统一接线上下文；动态子树构建后据此递归接线
+	rebound bool        // 是否已用统一 ctx 重接过（首帧独立 effect → app 帧边界）
 }
 
 // Computation 是响应式计算的可销毁句柄。用类型别名统一到 signal 包的定义，
@@ -1324,6 +1325,76 @@ func (i *Instance) bindLeaves(effect func(func()) Computation) {
 	}
 }
 
+// rebindWith 把"首帧 Render 期已用独立 effect 接好线的子树"改用统一 ctx 重接。
+// 背景：首帧建树早于 app.bindReactive，此时 For/Branch 的子实例只能用
+// BindReactive(Reactive().Effect) 独立接线——它能更新场景树，但没有 app 的
+// onDirty 帧边界回调，导致后端（尤其增量 FramePresenter）收不到重绘请求。
+// adoptBind 拿到 ctx 后对已存在的子树调用本方法：先停掉旧订阅，再用 ctx.effect
+// 重接叶子与结构，使其变化同样走 app 的帧边界。幂等：已用 ctx 接过则跳过。
+func (i *Instance) rebindWith(ctx *bindCtx) {
+	if i == nil || ctx == nil || ctx.effect == nil {
+		return
+	}
+	i.rebindTree(ctx)
+}
+
+// rebindTree 深度优先遍历整棵实例树（含 slotComp / slotChild 承载的子实例、
+// slotBranch / slotDynamic 的当前子树与控制器内条目），逐层停掉首帧独立 effect
+// 并用统一 ctx 重接叶子与结构。幂等由每层的 rebound 标记保证。
+func (i *Instance) rebindTree(ctx *bindCtx) {
+	if i == nil || ctx == nil || ctx.effect == nil || i.rebound {
+		return
+	}
+	i.rebound = true
+	// 先递归子层，再处理本层——子层的 bindLeaves 由其自身负责。
+	for _, sl := range i.slots {
+		if sl == nil {
+			continue
+		}
+		switch sl.kind {
+		case slotComp, slotChild, slotDynamic:
+			if sl.child != nil {
+				sl.child.rebindTree(ctx)
+			}
+		case slotBranch:
+			if sl.child != nil {
+				sl.child.rebindTree(ctx)
+			}
+			if ctrl := sl.ctrl; ctrl != nil {
+				if forCtrl, ok := ctrl.(*For); ok {
+					forCtrl.mu.Lock()
+					es := make([]*forEntry, 0, len(forCtrl.entries))
+					for _, e := range forCtrl.entries {
+						es = append(es, e)
+					}
+					forCtrl.mu.Unlock()
+					for _, e := range es {
+						if e.inst != nil {
+							e.inst.rebindTree(ctx)
+						}
+					}
+				} else if br, ok := ctrl.(*Branch); ok && br.cur != nil {
+					br.cur.rebindTree(ctx)
+				}
+			}
+		}
+	}
+	// 深灌变更缓冲：首帧建子树时嵌套组件可能落在孤立 sink，导致其 Change
+	// 汇不进 app.Changes（增量后端收不到）。统一改指到根实例树的 sink。
+	if ctx.sink != nil {
+		adoptSinkDeep(i, ctx.sink)
+	}
+	// 停掉首帧独立 effect，再用 ctx 重接本层叶子与结构。
+	for _, c := range i.comps {
+		c.Dispose()
+	}
+	i.comps = nil
+	ctx.withSilent(func() {
+		i.bindLeaves(ctx.effect)
+		i.bindRec(ctx)
+	})
+}
+
 // bindCtx 是结构插槽的统一接线上下文：effect 用于建立订阅，onDirty 在结构
 // 变化后回调（app 层据此重绘）。它沿实例树与动态子树向下传递，保证任意深度的
 // 条件分支 / 列表都用同一套接线，不会在某一层漏掉 effect 或丢失重绘回调。
@@ -1335,6 +1406,7 @@ type bindCtx struct {
 	effect  func(func()) Computation
 	onDirty func()
 	silent  bool
+	sink    *changeSink // 所属实例树的变更缓冲，供首帧子树补接时深灌
 }
 
 // withSilent 在静音状态下执行 fn，结束后恢复原状态（支持嵌套）。
@@ -1367,7 +1439,7 @@ func (i *Instance) BindStructural(effect func(func()) Computation, onDirty ...fu
 	if len(onDirty) > 0 {
 		dirty = onDirty[0]
 	}
-	ctx := &bindCtx{effect: effect, onDirty: dirty}
+	ctx := &bindCtx{effect: effect, onDirty: dirty, sink: i.changes}
 	// 接线期整体静音：各 effect 首次立即执行会读 selector 建子树并调 onDirty，
 	// 但 Render 已画首帧，这些首次回调不该各自触发重绘（N 个结构插槽 = N 帧）。
 	ctx.silent = true

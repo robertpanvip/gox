@@ -1,0 +1,13 @@
+{
+  "name": "gox-playground-frontend",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Strict TypeScript 7 frontend loader for the GX playground wasm app.",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "tsc"
+  },
+  "devDependencies": {
+    "typescript": "7.0.2"
+  }
+}
