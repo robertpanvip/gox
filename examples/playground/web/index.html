@@ -7,10 +7,10 @@
     body { margin: 0; font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
            background: #020617; color: #e2e8f0; min-height: 100vh;
            display: flex; flex-direction: column; align-items: center; padding: 16px;
-           overflow-x: auto;
-           --gx-sel: #264f78; }
-    /* Apple 浅色主题：切换按钮写 body[data-theme=light]，视口底色随之换肤。 */
-    body[data-theme="light"] { background: #f2f2f7; color: #1e1e1e; --gx-sel: #b4d5fe; }
+           overflow-x: auto; }
+    /* Apple 浅色主题：切换按钮写 body[data-theme=light]，视口底色随之换肤。
+       编辑器选区色变量 --gx-sel 由 widgets/editor.css 提供（见下方注入区）。 */
+    body[data-theme="light"] { background: #f2f2f7; color: #1e1e1e; }
     #app { outline: none; flex: none; user-select: none; -webkit-user-select: none; }
     /* 移动端软键盘代理：隐藏但必须可聚焦（display:none 无法唤起键盘）。
        关键：不能用 pointer-events:none——iOS Safari 会判定该元素不可交互，
@@ -27,28 +27,43 @@
        这里不再用 [style*="overflow"] 粗匹配覆盖——否则编辑器的
        overflow:hidden（裁掉隐藏行）会被强制成 auto 导致空行撑高。 */
     #app div { box-sizing: border-box; }
-    /* 编辑器逐 token 着色：三端统一用 GX 侧 lineCodeGradient 生成的 CSS 渐变
-       (bg=linear-gradient，按 ch 编码每个 token 的颜色与边界)。Web 端由浏览器
-       原生 background-clip:text 把渐变裁到文字上（GPU 合成，Go 侧零成本）；
-       Skia 桌面端在后端把同一条渐变解析回 RichText 分段绘制。两端同源、无平台分支。
-       文字本身是真实文本子节点（桌面测量/命中/落笔用），data-code 供列定位。 */
-    .gx-code-line { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-                    color: transparent !important; -webkit-background-clip: text !important;
-                    background-clip: text !important; white-space: pre;
-                    position: relative; z-index: 2; }
-    /* 列光标：GX 场景节点（两端共用），绝对定位在编辑器容器内随内容滚动。
-       class 三态由 wasm 的 caretClass() getter 驱动：off 隐藏 / steady 常亮 / 默认闪烁。
-       pointer-events:none 让点击穿透到下方代码行。 */
+    /* @@EDITOR-CSS-BEGIN@@ */
+    /* editor.css —— widgets.Editor 的 Web 端样式资产（唯一权威来源）。
+     *
+     * 理想情况下组件样式应全部由 GX style props 表达，无需宿主 CSS。这里只剩
+     * 三类「Web 后端表达能力缺口」无法用 props 写的规则，其余都已迁走：
+     *   - 渐变文字裁剪：曾需 background-clip:text，现已由 Web 后端识别
+     *     gradient-text="1" 语义属性原生生成（与 Skia/Rust shader 等价）。
+     *   - white-space/position/z-index：已走 GX style prop。
+     *
+     * 仍需 CSS 的三类缺口：
+     *   1) font-family：isStyleKey 白名单无此键（等宽字体对编辑器是刚需）；
+     *   2) 光标闪烁 @keyframes：框架只有命令式 rAF，无声明式动画 prop；
+     *   3) 选区色 var()/!important：无 CSS 变量透传，且需覆盖 GX 半透明值。
+     *
+     * 本文件是单一来源：sync_editor_css.py 把内容同步进 index.html 标记区块，
+     * pack.py 再从 index.html 打包单文件 playground.html。请勿手改 index.html
+     * 标记区块内的内容——改动会被下次构建覆盖，应改本文件。
+     */
+
+    /* 缺口 1：等宽字体。GX style 白名单不含 font-family，只能走 CSS。 */
+    .gx-code-line { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+
+    /* 缺口 2：光标闪烁动画。class 三态由 wasm 的 caretClass() getter 驱动。
+       pointer-events:none 让点击穿透到下方代码行（此为普通属性，也可走 prop，
+       但动画 keyframes 本身无 prop 表达，故整组暂留 CSS）。 */
     .gx-caret { pointer-events: none; }
     .gx-caret.gx-caret-off { display: none; }
     .gx-caret.gx-caret-steady { opacity: 1; }
     @keyframes caret-blink { 0%,49% { opacity: 1; } 50%,100% { opacity: 0; } }
     .gx-caret:not(.gx-caret-off):not(.gx-caret-steady) { animation: caret-blink 1.06s steps(1) infinite; }
-    /* 选区色块：GX 场景节点（selectionView）。web 端分层：色块 z-index:1 在文字
-       之下（.gx-code-line 提到 2）；背景用 !important 覆盖回不透明标准色
-       （GX 源码里的半透明值是为 skia 桌面端树序绘制保文字可读而设）。
-       拖拽起点由 JS preventDefault + 全局 user-select:none 屏蔽原生选词。 */
+
+    /* 缺口 3：选区色主题变量。Web 分层色块 z-index:1 在文字之下；用 var()
+       覆盖回不透明主题色（GX 源码里的半透明值是为 skia 树序绘制保文字可读）。 */
     .gx-sel { pointer-events: none; background-color: var(--gx-sel, #264f78) !important; }
+    body { --gx-sel: #264f78; }
+    body[data-theme="light"] { --gx-sel: #b4d5fe; }
+    /* @@EDITOR-CSS-END@@ */
     #hint { margin-top: 10px; font-size: 12px; color: #64748b; }
 
     /* ---- 内建 LSP UI（无服务端，全部由 wasm 侧 goxlsp 驱动） ---- */

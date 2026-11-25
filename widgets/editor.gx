@@ -973,8 +973,9 @@ func (s *EditorState) lineView(idx int) *gxscene.Instance {
             height="22"
             line-height="22px"
             flex-shrink="0"
+            position="relative"
+            z-index="2"
             bg={s.lineCodeGradient(idx)}
-            color={s.color("text")}
         >
             {s.lineText(idx)}
         </span>

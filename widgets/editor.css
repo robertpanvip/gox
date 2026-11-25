@@ -1,44 +1,35 @@
-/* editor.css —— widgets.Editor 公共组件的 Web 端样式资产。
+/* editor.css —— widgets.Editor 的 Web 端样式资产（唯一权威来源）。
  *
- * 三端共用组件 widgets.Editor（editor.gx）生成的场景树，Web 端需要这几条 CSS
- * 才能把 GX 侧的 linear-gradient 语法高亮裁到文字上、驱动光标闪烁与选区色块。
- * Skia/Rust 后端在渲染管线里直接解析同一份渐变数据，不依赖本文件。
+ * 理想情况下组件样式应全部由 GX style props 表达，无需宿主 CSS。这里只剩
+ * 三类「Web 后端表达能力缺口」无法用 props 写的规则，其余都已迁走：
+ *   - 渐变文字裁剪：曾需 background-clip:text，现已由 Web 后端识别
+ *     gradient-text="1" 语义属性原生生成（与 Skia/Rust shader 等价）。
+ *   - white-space/position/z-index：已走 GX style prop。
  *
- * 用法：在宿主页 <head> 里 <link rel="stylesheet" href="editor.css">，
- * 或把本文件内容内联进 <style>。主题切换写 body[data-theme="light"] 即可，
- * 选区色/光标色通过 CSS 变量随主题变化（与 widgets Theme token 对齐）。
+ * 仍需 CSS 的三类缺口：
+ *   1) font-family：isStyleKey 白名单无此键（等宽字体对编辑器是刚需）；
+ *   2) 光标闪烁 @keyframes：框架只有命令式 rAF，无声明式动画 prop；
+ *   3) 选区色 var()/!important：无 CSS 变量透传，且需覆盖 GX 半透明值。
+ *
+ * 本文件是单一来源：sync_editor_css.py 把内容同步进 index.html 标记区块，
+ * pack.py 再从 index.html 打包单文件 playground.html。请勿手改 index.html
+ * 标记区块内的内容——改动会被下次构建覆盖，应改本文件。
  */
 
-/* 编辑器逐 token 着色：bg=linear-gradient 由 GX 侧 lineCodeGradient 生成，
-   浏览器用 background-clip:text 裁到文字（GPU 合成，Go 侧零成本）。
-   文字本身是真实文本子节点，data-code 供列定位；::before 兜底老后端。 */
-.gx-code-line {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  color: transparent !important;
-  -webkit-background-clip: text !important;
-  background-clip: text !important;
-  white-space: pre;
-  position: relative;
-  z-index: 2;
-}
-.gx-code-line::before { content: attr(data-code); }
+/* 缺口 1：等宽字体。GX style 白名单不含 font-family，只能走 CSS。 */
+.gx-code-line { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 
-/* 列光标：GX 场景节点，绝对定位随内容滚动；三态由 caretClass() getter 驱动。 */
+/* 缺口 2：光标闪烁动画。class 三态由 wasm 的 caretClass() getter 驱动。
+   pointer-events:none 让点击穿透到下方代码行（此为普通属性，也可走 prop，
+   但动画 keyframes 本身无 prop 表达，故整组暂留 CSS）。 */
 .gx-caret { pointer-events: none; }
 .gx-caret.gx-caret-off { display: none; }
 .gx-caret.gx-caret-steady { opacity: 1; }
 @keyframes caret-blink { 0%,49% { opacity: 1; } 50%,100% { opacity: 0; } }
-.gx-caret:not(.gx-caret-off):not(.gx-caret-steady) {
-  animation: caret-blink 1.06s steps(1) infinite;
-}
+.gx-caret:not(.gx-caret-off):not(.gx-caret-steady) { animation: caret-blink 1.06s steps(1) infinite; }
 
-/* 选区色块：GX 场景节点 selectionView。Web 分层 z-index:1 在文字之下，
-   GX 侧半透明值是为 Skia 树序绘制保文字可读，Web 用变量覆盖回不透明主题色。 */
-.gx-sel {
-  pointer-events: none;
-  background-color: var(--gx-sel, #264f78) !important;
-}
-
-/* 主题变量：默认深色（与 DarkTheme 对齐）；浅色由宿主 body[data-theme=light] 覆盖。 */
+/* 缺口 3：选区色主题变量。Web 分层色块 z-index:1 在文字之下；用 var()
+   覆盖回不透明主题色（GX 源码里的半透明值是为 skia 树序绘制保文字可读）。 */
+.gx-sel { pointer-events: none; background-color: var(--gx-sel, #264f78) !important; }
 body { --gx-sel: #264f78; }
 body[data-theme="light"] { --gx-sel: #b4d5fe; }
