@@ -492,7 +492,8 @@ function bindKeyboard(elements: Elements, api: GoxPlaygroundAPI): void {
           dragging = true;
         }
       }
-      // 屏蔽浏览器原生文本选择：选区渲染完全由 GX 场景树的 gx-sel 色块负责。
+      // 屏蔽浏览器原生文本选择：选区统一由 GX 场景树渲染（带背景的富文本分段），
+      // ::selection 规则只负责原生拖选时的配色，不再有自绘 gx-sel 色块。
       ev.preventDefault();
     }
     settleCaret(api);

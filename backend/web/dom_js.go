@@ -24,6 +24,11 @@ type jsDriver struct {
 	win      js.Value
 	funcs    []js.Func // 保活：js.Func 被 GC 后回调失效
 
+	// selectionInjected 标记全局 ::selection 规则是否已注入（懒加载一次）。
+	selectionInjected bool
+	// animationInjected 标记全局 @keyframes 规则是否已注入（懒加载一次）。
+	animationInjected bool
+
 	// RAF 投递：同一帧内多次 Post 只登记一次 requestAnimationFrame。
 	// 浏览器在下一帧回调里统一 drain，避免事件处理期间同步重入 DOM 提交。
 	rafOnce      js.Func
@@ -170,6 +175,48 @@ func (d *jsDriver) InsertBefore(parent, child, before ElemID) {
 	}
 }
 
+// injectSelectionCSSLocked 懒注入一次全局 ::selection 规则（调用方持 d.mu）。
+// 用 id 幂等，避免宿主 HTML 已内置同名规则时重复注入。
+func (d *jsDriver) injectSelectionCSSLocked() {
+	if d.selectionInjected {
+		return
+	}
+	d.selectionInjected = true
+	if d.doc.Call("getElementById", "gx-selection-css").Truthy() {
+		return
+	}
+	style := d.doc.Call("createElement", "style")
+	style.Call("setAttribute", "id", "gx-selection-css")
+	style.Set("textContent", selectionGlobalCSS)
+	head := d.doc.Get("head")
+	if head.Truthy() {
+		head.Call("appendChild", style)
+	} else if d.doc.Get("body").Truthy() {
+		d.doc.Get("body").Call("appendChild", style)
+	}
+}
+
+// injectAnimationCSSLocked 懒注入一次内置 @keyframes（用 id 幂等），与 ::selection
+// 规则同构。所有内置动画的关键帧集中在此，宿主零 CSS 依赖。
+func (d *jsDriver) injectAnimationCSSLocked() {
+	if d.animationInjected {
+		return
+	}
+	d.animationInjected = true
+	if d.doc.Call("getElementById", "gx-animation-css").Truthy() {
+		return
+	}
+	style := d.doc.Call("createElement", "style")
+	style.Call("setAttribute", "id", "gx-animation-css")
+	style.Set("textContent", animationGlobalCSS)
+	head := d.doc.Get("head")
+	if head.Truthy() {
+		head.Call("appendChild", style)
+	} else if d.doc.Get("body").Truthy() {
+		d.doc.Get("body").Call("appendChild", style)
+	}
+}
+
 func (d *jsDriver) SetAttr(e ElemID, key, value string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -179,6 +226,25 @@ func (d *jsDriver) SetAttr(e ElemID, key, value string) {
 	}
 	if key == "canvas-ops" {
 		d.canvasOpsLocked(el, value)
+		return
+	}
+	// ::selection 伪元素子表：CSS 伪元素无法用内联 style 直接设置，改为
+	// 注入一条全局规则读取元素上的自定义属性，并把子表的 bg/color 写进
+	// 这两个变量。变量缺省时全局规则的 var() 无值，浏览器保留默认选区。
+	if isSelectionKey(key) {
+		d.injectSelectionCSSLocked()
+		bg, fg := selectionVars(value)
+		style := el.v.Get("style")
+		if bg == "" {
+			style.Call("removeProperty", selectionVarBg)
+		} else {
+			style.Call("setProperty", selectionVarBg, cssValue("bg", bg))
+		}
+		if fg == "" {
+			style.Call("removeProperty", selectionVarFg)
+		} else {
+			style.Call("setProperty", selectionVarFg, cssValue("color", fg))
+		}
 		return
 	}
 	// gradient-text 是三端统一的语义开关：Skia/Rust 把 bg 渐变裁到文字，
@@ -194,6 +260,18 @@ func (d *jsDriver) SetAttr(e ElemID, key, value string) {
 			style.Call("removeProperty", "-webkit-background-clip")
 			style.Call("removeProperty", "background-clip")
 			style.Call("removeProperty", "color")
+		}
+		return
+	}
+	// animation 是三端统一的声明式动画 prop：翻译成原生 CSS animation，并在
+	// 首次使用时注入共享 @keyframes。空/非法值移除属性，回到静态样式。
+	if strings.EqualFold(key, "animation") {
+		css := animationCSS(value)
+		if css == "" {
+			el.v.Get("style").Call("removeProperty", "animation")
+		} else {
+			d.injectAnimationCSSLocked()
+			el.v.Get("style").Call("setProperty", "animation", css)
 		}
 		return
 	}

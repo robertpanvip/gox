@@ -131,6 +131,32 @@ func (d *memDriver) SetAttr(e ElemID, key, value string) {
 	if el == nil {
 		return
 	}
+	// ::selection 伪元素子表按 Web 端等价语义记录成两个自定义属性，
+	// 让 native 测试能断言与浏览器一致的落地形态（见 js 驱动 SetAttr）。
+	if isSelectionKey(key) {
+		bg, fg := selectionVars(value)
+		if bg == "" {
+			delete(el.styles, selectionVarBg)
+		} else {
+			el.styles[selectionVarBg] = cssValue("bg", bg)
+		}
+		if fg == "" {
+			delete(el.styles, selectionVarFg)
+		} else {
+			el.styles[selectionVarFg] = cssValue("color", fg)
+		}
+		return
+	}
+	// animation 与浏览器同构：记录翻译后的原生 CSS animation 值，空/非法值删除。
+	if strings.EqualFold(key, "animation") {
+		css := animationCSS(value)
+		if css == "" {
+			delete(el.styles, "animation")
+		} else {
+			el.styles["animation"] = css
+		}
+		return
+	}
 	if isStyleKey(key) {
 		if value == "" {
 			delete(el.styles, key)

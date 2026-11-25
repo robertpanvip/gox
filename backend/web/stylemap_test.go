@@ -6,6 +6,57 @@ import (
 	"testing"
 )
 
+func TestSelectionVars(t *testing.T) {
+	bg, fg := selectionVars(`{"bg":"#b4d5fe","color":"#fff"}`)
+	if bg != "#b4d5fe" || fg != "#fff" {
+		t.Errorf("selectionVars bg/fg = %q/%q", bg, fg)
+	}
+	// background 作为 bg 别名。
+	bg, fg = selectionVars(`{"background":"#264f78"}`)
+	if bg != "#264f78" || fg != "" {
+		t.Errorf("background 别名 bg/fg = %q/%q", bg, fg)
+	}
+	// 空/非法输入不产生变量。
+	if bg, fg = selectionVars(""); bg != "" || fg != "" {
+		t.Errorf("空输入应无变量: %q/%q", bg, fg)
+	}
+	if bg, fg = selectionVars("{bad"); bg != "" || fg != "" {
+		t.Errorf("非法 JSON 应无变量: %q/%q", bg, fg)
+	}
+}
+
+func TestSelectionKeyClassification(t *testing.T) {
+	if !isSelectionKey("&::selection") || !isSelectionKey("::selection") {
+		t.Error("伪元素选区键应被识别")
+	}
+	if isSelectionKey("&:selection") {
+		t.Error("单冒号是伪状态，不应识别为伪元素")
+	}
+	if !isPseudoElementKey("&::selection") || isPseudoElementKey("&:hover") {
+		t.Error("伪元素与伪状态前缀应严格区分")
+	}
+	if isStyleKey("&::selection") {
+		t.Error("伪元素键不应被当成内联样式键")
+	}
+	if !strings.Contains(selectionGlobalCSS, "var("+selectionVarBg+")") ||
+		!strings.Contains(selectionGlobalCSS, "::selection") {
+		t.Errorf("全局规则应读取选区自定义属性: %q", selectionGlobalCSS)
+	}
+}
+
+func TestFontFamilyPassthrough(t *testing.T) {
+	if !isStyleKey("font-family") {
+		t.Fatal("font-family 应被识别为内联样式键")
+	}
+	stack := "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+	if got := cssValue("font-family", stack); got != stack {
+		t.Errorf("字体栈应原样透传（不能加 px）: got %q", got)
+	}
+	if got := cssValue("font-family", "monospace"); got != "monospace" {
+		t.Errorf("单个族名应原样透传: got %q", got)
+	}
+}
+
 func TestCSSValueBoxShorthand(t *testing.T) {
 	tests := []struct {
 		key  string
@@ -144,5 +195,36 @@ func TestStyleTargetPropGradientUsesImage(t *testing.T) {
 	}
 	if got := styleTargetProp("bg", grad); got == "background" {
 		t.Error("bg 渐变不得用 background 简写（会重置 background-clip）")
+	}
+}
+
+// TestAnimationCSS 验证声明式 animation prop 被翻译成原生 CSS animation，
+// 且非法值返回空串（调用方据此移除属性）。
+func TestAnimationCSS(t *testing.T) {
+	cases := []struct {
+		in   string
+		want string
+	}{
+		{"blink 1.06s infinite", "gx-blink 1.06s steps(1) infinite"},
+		{"blink 1060ms", "gx-blink 1.06s steps(1) infinite"},
+		{"blink 500ms 3", "gx-blink 0.5s steps(1) 3"},
+		{"", ""},
+		{"none", ""},
+		{"pulse 1s", ""},
+	}
+	for _, c := range cases {
+		if got := animationCSS(c.in); got != c.want {
+			t.Errorf("animationCSS(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+// TestAnimationIsStyleKey 守护 animation / pointer-events 进入样式白名单，
+// 确保两个新 prop 走 CSS 属性路径而非普通 DOM 属性。
+func TestAnimationIsStyleKey(t *testing.T) {
+	for _, k := range []string{"animation", "pointer-events", "ANIMATION"} {
+		if !isStyleKey(k) {
+			t.Errorf("isStyleKey(%q) 应为 true", k)
+		}
 	}
 }

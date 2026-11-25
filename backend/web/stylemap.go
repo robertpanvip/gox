@@ -1,18 +1,20 @@
 package gxweb
 
 import (
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
 
 	"github.com/robertpanvip/gox/cssbox"
+	gxscene "github.com/robertpanvip/gox/runtime/scene"
 )
 
 // isStyleKey 判断 key 是否为受限 CSS sheet 属性（与 gxscene.StylePropNames 一致，
 // 额外兼容少量常用键；伪状态子表 "&:x" 也归此列）。纯字符串判断，两驱动共享。
 func isStyleKey(key string) bool {
 	switch strings.ToLower(key) {
-	case "color", "bg", "background", "width", "height", "font-size", "weight",
+	case "color", "bg", "background", "width", "height", "font-size", "font-family", "weight",
 		"padding", "border-radius", "border", "border-width", "opacity",
 		"flex-direction", "flex-wrap", "justify-content", "align-items", "align-content",
 		"gap", "row-gap", "column-gap", "position", "top", "right", "bottom", "left",
@@ -20,8 +22,11 @@ func isStyleKey(key string) bool {
 		"flex-grow", "flex-shrink", "min-width", "max-width", "min-height", "max-height",
 		"margin", "margin-top", "margin-bottom", "margin-left", "margin-right",
 		"text-align", "line-height", "letter-spacing", "z-index", "cursor",
-		"white-space":
+		"white-space", "animation", "pointer-events":
 		return true
+	}
+	if isPseudoElementKey(key) {
+		return false // 伪元素走独立规则路径，不是内联样式键
 	}
 	return strings.HasPrefix(key, "&:") || strings.HasPrefix(key, "$:")
 }
@@ -29,6 +34,80 @@ func isStyleKey(key string) bool {
 // isGradientTextProp 判断属性是否为「渐变文字」语义开关（三端统一）。
 // Skia/Rust 后端据此把 bg 渐变裁到文字而非画成背景；Web 端在 SetAttr 里
 // 据此生成 background-clip:text + color:transparent，避免编辑器依赖宿主 CSS。
+// isPseudoElementKey 判断 key 是否为伪元素子表协议键（"&::x"）。
+// 双冒号与伪状态 "&:x" 严格区分，走独立的原生 CSS 规则路径。
+func isPseudoElementKey(key string) bool {
+	return strings.HasPrefix(key, "::") || strings.HasPrefix(key, "&::")
+}
+
+// isSelectionKey 判断是否为 ::selection 伪元素子表。
+func isSelectionKey(key string) bool {
+	return key == "&::selection" || key == "::selection"
+}
+
+// selectionVars 把 "&::selection" 子表 JSON 串解析成要写到元素上的 CSS 自定义
+// 属性值 (background, foreground)。空值表示该属性未声明。
+//
+// ::selection 无法通过内联 style 直接设置，只能靠一条全局规则读取元素上的
+// 自定义属性（见 selectionGlobalCSS）。未声明的元素不写这两个变量，全局规则的
+// var() 无值时该声明被浏览器忽略，因此不影响默认选区外观。
+func selectionVars(subJSON string) (bg, fg string) {
+	if subJSON == "" || subJSON == "{}" {
+		return "", ""
+	}
+	var sub map[string]string
+	if err := json.Unmarshal([]byte(subJSON), &sub); err != nil {
+		return "", ""
+	}
+	bg = sub["bg"]
+	if bg == "" {
+		bg = sub["background"]
+	}
+	fg = sub["color"]
+	return bg, fg
+}
+
+// selectionGlobalCSS 是 Web 端注入一次的全局 ::selection 规则。各元素通过内联
+// 自定义属性 --gx-sel-bg / --gx-sel-fg 声明自己的选区色；变量缺省时 var() 无值，
+// 浏览器保留原生选区，故不影响未使用 selection 子表的元素。
+const selectionGlobalCSS = "::selection { background-color: var(--gx-sel-bg); color: var(--gx-sel-fg); }"
+
+// animationGlobalCSS 是 Web 端注入一次的全局 @keyframes。三端统一的内置动画
+// （当前仅 blink）在此定义关键帧；元素的 animation prop 只引用 gx- 前缀的帧名，
+// 由浏览器合成器原生驱动，无需宿主 CSS 或 JS/RAF。
+//
+// blink 与 gxscene.AnimationSpec.Sample 严格对齐：相位 < 50% opacity=1，
+// 否则 opacity=0（steps(1) 让 49%/50% 处阶跃，不做线性插值）。
+const animationGlobalCSS = "@keyframes gx-blink { 0%,49% { opacity: 1; } 50%,100% { opacity: 0; } }"
+
+// animationCSS 把声明式 animation prop（如 "blink 1.06s infinite"）翻译成
+// 原生 CSS animation 值（如 "gx-blink 1.06s steps(1) infinite"）。
+// 非法/空值返回空串，让调用方移除 animation 属性。
+func animationCSS(value string) string {
+	spec := gxscene.ParseAnimation(value)
+	if !spec.Active() {
+		return ""
+	}
+	dur := float64(spec.DurationMS) / 1000
+	durStr := strconv.FormatFloat(dur, 'g', -1, 64) + "s"
+	iter := strconv.Itoa(spec.Iterations)
+	if spec.Iterations < 0 {
+		iter = "infinite"
+	}
+	// blink 用 steps(1) 实现方波；预留给未来其它内置动画的 timing 分支。
+	timing := "linear"
+	if spec.Name == gxscene.AnimationBlink {
+		timing = "steps(1)"
+	}
+	return "gx-" + spec.Name + " " + durStr + " " + timing + " " + iter
+}
+
+// 选区自定义属性名（内联写到元素 style 上）。
+const (
+	selectionVarBg = "--gx-sel-bg"
+	selectionVarFg = "--gx-sel-fg"
+)
+
 func isGradientTextProp(key string) bool {
 	return strings.EqualFold(key, "gradient-text")
 }

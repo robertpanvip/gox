@@ -52,6 +52,7 @@ const (
 	propWidth        = "width"
 	propHeight       = "height"
 	propFontSize     = "font-size"
+	propFontFamily   = "font-family"
 	propPadding      = "padding"
 	propWeight       = "weight"
 	propRadius       = "border-radius"

@@ -36,8 +36,7 @@ echo "[3/6] 拷贝 wasm_exec.js（Go 工具链运行时胶水）..."
 GOROOT="$(go env GOROOT)"
 cp "$GOROOT/lib/wasm/wasm_exec.js" ./wasm_exec.js
 
-echo "[4/6] 同步编辑器 CSS（widgets/editor.css 为单一来源 → index.html 注入区）..."
-python3 sync_editor_css.py
+echo "[4/6] 编辑器样式已全部迁入 GX prop（animation/pointer-events/selection/font-family），无需宿主 CSS 同步。"
 
 echo "[5/6] 打包单文件 playground.html（file:// 双击即开，无需服务器）..."
 python3 pack.py

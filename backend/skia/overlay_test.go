@@ -9,7 +9,7 @@ import (
 	gxscene "github.com/robertpanvip/gox/runtime/scene"
 )
 
-func fixedMeasure2(text string, fontSize int, bold bool) float32 {
+func fixedMeasure2(text string, fontSize int, bold bool, family string) float32 {
 	return float32(len([]rune(text))) * float32(fontSize) * 0.56
 }
 

@@ -44,6 +44,7 @@ type Style struct {
 	Width       StyleValue `gx:"width"`
 	Height      StyleValue `gx:"height"`
 	FontSize    StyleValue `gx:"font-size"`
+	FontFamily  StyleValue `gx:"font-family"`
 	Weight      StyleValue `gx:"weight"`
 	Padding     StyleValue `gx:"padding"`
 	BorderRadius StyleValue `gx:"border-radius"`
@@ -86,12 +87,24 @@ type Style struct {
 	LetterSpacing  StyleValue `gx:"letter-spacing"`
 	ZIndex         StyleValue `gx:"z-index"`
 	Cursor         StyleValue `gx:"cursor"`
+	// Animation 是三端统一的声明式动画（受限内置动画，如 "blink 1.06s infinite"）。
+	// 标量字符串，不是子表；各后端按 AnimationSpec 采样，无需宿主 @keyframes。
+	Animation      StyleValue `gx:"animation"`
+	// PointerEvents 让 Web 端光标等覆盖层穿透点击（"none"）；Skia/Rust 命中测试
+	// 由后端自有 HitBox 决定，此键对二者无副作用，仅作语义透传。
+	PointerEvents  StyleValue `gx:"pointer-events"`
 
 	// 伪状态字段。nil 表示未设置；子表里的嵌套伪状态在展平时忽略。
 	Hover    *Style `gx:"&:hover"`
 	Focus    *Style `gx:"&:focus"`
 	Active   *Style `gx:"&:active"`
 	Disabled *Style `gx:"&:disabled"`
+
+	// Selection 是伪元素子表（双冒号），代表「被用户选中的文本片段」这个虚拟
+	// 子元素——CSS 标准里 ::selection 是伪元素，不是 :hover 那样的状态。语义
+	// 差异体现在行为上：伪元素不参与 Flatten/applyPseudoStyle 的状态覆盖，
+	// 由后端生成原生 ::selection 规则（Web）或用于文本选区着色（Skia/Rust）。
+	Selection *Style `gx:"&::selection"`
 }
 
 // 伪状态前缀。规范形式 "&:"；"$:" 是早期约定的别名，ParseStyle/Flatten/Props
@@ -99,11 +112,13 @@ type Style struct {
 const (
 	PseudoPrefix       = "&:"
 	legacyPseudoPrefix = "$:"
+	pseudoElementPrefix = "&::" // 伪元素前缀（双冒号），与伪状态 "&:" 区分
 
-	PseudoHover    = "&:hover"
-	PseudoActive   = "&:active"
-	PseudoFocus    = "&:focus"
-	PseudoDisabled = "&:disabled"
+	PseudoHover     = "&:hover"
+	PseudoActive    = "&:active"
+	PseudoFocus     = "&:focus"
+	PseudoDisabled  = "&:disabled"
+	PseudoSelection = "&::selection" // 伪元素（双冒号），与伪状态子表区分
 )
 
 // StylePropNames 是 Style 允许的普通属性白名单（后端两解析器已支持的全部属性）。
@@ -131,6 +146,10 @@ var pseudoStates = map[string]bool{
 	"hover": true, "active": true, "focus": true, "disabled": true,
 }
 
+// pseudoElements 是支持的伪元素集合（当前只有 selection）。与 pseudoStates
+// 严格分开：伪元素走独立协议键 "&::x"，不参与状态覆盖/状态查询。
+var pseudoElements = map[string]bool{"selection": true}
+
 func isStyleScalar(v any) bool {
 	switch v.(type) {
 	case nil, string, bool, int, int64, int32, float64, float32:
@@ -143,10 +162,11 @@ func isStyleScalar(v any) bool {
 // ---------- 字段元信息（反射一次，缓存复用；热路径只读缓存） ----------
 
 type styleField struct {
-	key    string // 后端 kebab key 或 "&:hover"
-	name   string // Go 字段名
-	index  int    // struct 字段索引
-	pseudo string // 伪状态名（hover/...），空表示普通属性
+	key     string // 后端 kebab key 或 "&:hover" / "&::selection"
+	name    string // Go 字段名
+	index   int    // struct 字段索引
+	pseudo  string // 伪状态名（hover/...），空表示普通属性或伪元素
+	element bool   // 伪元素子表（当前只有 selection）；与 pseudo 状态严格互斥
 }
 
 var (
@@ -167,7 +187,10 @@ func styleMeta() ([]styleField, map[string]int) {
 				continue
 			}
 			m := styleField{key: key, name: f.Name, index: i}
-			if strings.HasPrefix(key, PseudoPrefix) {
+			if strings.HasPrefix(key, pseudoElementPrefix) {
+				// "&::selection" → element=true，pseudo 留空（不参与状态覆盖）。
+				m.element = true
+			} else if strings.HasPrefix(key, PseudoPrefix) {
 				m.pseudo = strings.TrimPrefix(key, PseudoPrefix)
 			}
 			styleMetaByKey[key] = len(styleMetaList)
@@ -226,7 +249,7 @@ func (s Style) Validate() error {
 	fields, _ := styleMeta()
 	v := reflect.ValueOf(s)
 	for _, f := range fields {
-		if f.pseudo == "" {
+		if f.pseudo == "" && !f.element {
 			continue
 		}
 		sub, _ := v.Field(f.index).Interface().(*Style)
@@ -247,7 +270,7 @@ func (s Style) forEachScalar(fn func(key, val string)) {
 	fields, _ := styleMeta()
 	v := reflect.ValueOf(s)
 	for _, f := range fields {
-		if f.pseudo != "" {
+		if f.pseudo != "" || f.element {
 			continue
 		}
 		sv, _ := v.Field(f.index).Interface().(StyleValue)
@@ -289,13 +312,13 @@ func (s Style) Props() Props {
 	v := reflect.ValueOf(s)
 	p := make(Props, len(fields))
 	for _, f := range fields {
-		if f.pseudo != "" {
+		if f.pseudo != "" || f.element {
 			sub, _ := v.Field(f.index).Interface().(*Style)
 			if sub == nil {
 				continue
 			}
 			if enc := encodeSubStyle(*sub); enc != "" {
-				p[PseudoPrefix+f.pseudo] = enc
+				p[f.key] = enc // 伪状态 "&:x" 或伪元素 "&::x" 的完整协议键
 			}
 			continue
 		}
@@ -380,12 +403,17 @@ func setStyleValue(s *Style, key string, val any) error {
 	// 第三种写法：输入只认单词 key，带 "&:" / "$:" 前缀直接拒绝——
 	// 前缀是后端 Props 输出协议，不是源码/JSON 的输入写法。
 	if isPseudoKey(key) {
-		return fmt.Errorf("style: 伪状态请用单词 key（hover/active/focus/disabled），不接受 %q", key)
+		return fmt.Errorf("style: 伪状态/伪元素请用单词 key（hover/active/focus/disabled/selection），不接受 %q", key)
 	}
 	fields, byKey := styleMeta()
+	lower := strings.ToLower(key)
+	// 伪元素单词 key（selection）映射到 "&::selection" 字段（双冒号）。
+	if pseudoElements[lower] {
+		key = pseudoElementPrefix + lower
+	}
 	// 伪状态单词 key（hover/active/focus/disabled）映射到 "&:x" 字段。
-	if _, isP := pseudoStates[strings.ToLower(key)]; isP {
-		key = PseudoPrefix + strings.ToLower(key)
+	if _, isP := pseudoStates[lower]; isP {
+		key = PseudoPrefix + lower
 	}
 	i, ok := byKey[key]
 	if !ok {
@@ -400,10 +428,10 @@ func setStyleValue(s *Style, key string, val any) error {
 	}
 	f := fields[i]
 	dst := reflect.ValueOf(s).Elem().Field(f.index)
-	if f.pseudo != "" {
+	if f.pseudo != "" || f.element {
 		sub, err := styleFromAny(val)
 		if err != nil {
-			return fmt.Errorf("style: 伪状态 %q 的值必须是样式表: %w", key, err)
+			return fmt.Errorf("style: 伪状态/伪元素 %q 的值必须是样式表: %w", key, err)
 		}
 		dst.Set(reflect.ValueOf(&sub))
 		return nil

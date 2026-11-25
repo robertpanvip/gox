@@ -564,7 +564,7 @@ func (p *painter) paintGradientTextShader(grad, text string, box layoutBox, st t
 	defer paint.Delete()
 	paint.SetAntiAlias(true)
 	paint.SetShader(shader)
-	for _, r := range splitRuns(text, st.fontSize, st.bold) {
+	for _, r := range splitRuns(text, st.fontSize, st.bold, st.family) {
 		if r.text == "" || r.font.IsNil() {
 			continue
 		}

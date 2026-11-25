@@ -238,6 +238,57 @@ fn parse_px(s: &str) -> Option<f32> {
     s.trim().trim_end_matches("px").trim().parse::<f32>().ok()
 }
 
+/// 从 CSS font-family 栈解析出 cosmic-text 可用的族名。
+/// 返回 None 表示沿用默认 SansSerif（含 system-ui/-apple-system/sans-serif 栈）。
+/// 栈里的等宽意图（monospace/ui-monospace/Menlo/Consolas/SFMono...）映射到已加载的
+/// DejaVu Sans Mono；具体族名原样交给 cosmic-text，未加载时它会回退默认。
+fn parse_font_family(props: &std::collections::HashMap<String, String>) -> Option<String> {
+    let stack = props.get("font-family")?.as_str();
+    if stack.trim().is_empty() {
+        return None;
+    }
+    let mut want_mono = false;
+    for raw in stack.split(',') {
+        let name = raw.trim().trim_matches(|c| c == '"' || c == '\'');
+        if name.is_empty() {
+            continue;
+        }
+        let lower = name.to_ascii_lowercase();
+        if matches!(lower.as_str(),
+            "monospace" | "ui-monospace" | "fixed" | "menlo" | "consolas" |
+            "sfmono-regular" | "dejavu sans mono" | "noto sans mono" | "liberation mono" | "courier new")
+        {
+            want_mono = true;
+            continue;
+        }
+        if matches!(lower.as_str(),
+            "sans-serif" | "serif" | "system-ui" | "system" | "-apple-system" | "ui-sans-serif")
+        {
+            continue;
+        }
+        // 其余具体族名原样使用（cosmic-text 未加载会自行回退）。
+        return Some(name.to_string());
+    }
+    if want_mono {
+        Some("DejaVu Sans Mono".to_string())
+    } else {
+        None
+    }
+}
+
+/// 按 rune 区间 [start,end) 计算文本的像素 x 范围，口径与 measure_text 一致
+/// （ASCII 0.56em、其余 1em）。用于选区背景矩形定位。
+fn selection_px_range(text: &str, start: usize, end: usize, size: f32) -> (f32, f32) {
+    let mut x0 = 0.0;
+    let mut x1 = 0.0;
+    for (i, ch) in text.chars().enumerate() {
+        let w = if ch.is_ascii() { 0.56 } else { 1.0 } * size;
+        if i < start { x0 += w; }
+        if i < end { x1 += w; }
+    }
+    (x0, x1)
+}
+
 // ---------- DisplayList ----------
 
 /// 裁剪矩形（画布绝对坐标）；None 表示不裁剪。
@@ -293,6 +344,12 @@ struct TextDraw {
     /// 统一 TextEffects 解析出的渐变着色分段（文本, RGB）。
     /// 空表示普通单色文字，走 default_color 快路径；非空走 glyphon 富文本 span。
     spans: Vec<(String, (u8, u8, u8))>,
+    /// 三端统一 selection 协议解析出的选区；None 表示该文本无选区。
+    selection: Option<SelectionDraw>,
+    /// font-family 解析出的族名；None 表示默认 SansSerif。
+    family: Option<String>,
+    /// opacity（含声明式动画采样后的值）用于文字 alpha，1.0 为不透明。
+    alpha: f32,
 }
 
 /// object-fit：图片如何映射进布局盒（与 Skia 端 image.go 语义一致）。
@@ -309,6 +366,35 @@ impl ObjectFit {
     }
 }
 
+/// 选区绘制指令（三端统一 selection 协议的 Rust 侧表示）。
+/// rgb 为 &::selection 的 color（覆盖选中字形前景），bg 为背景色含 alpha；
+/// range 为 selection-range 的 rune 半开区间 [start,end)。
+#[derive(Clone, Debug)]
+struct SelectionDraw {
+    start: usize,
+    end: usize,
+    bg: (u8, u8, u8, u8),
+    color: Option<(u8, u8, u8)>,
+}
+
+/// 从节点标量 props 解析 selection 协议：&::selection JSON 子表 + selection-range。
+/// 两者缺一不可；range 非法返回 None（无选区）。JSON 用 serde_json，解析失败静默回退。
+fn parse_selection(props: &std::collections::HashMap<String, String>) -> Option<SelectionDraw> {
+    let range = props.get("selection-range")?.trim();
+    let (a, b) = range.split_once(|c| c == ':' || c == ',')?;
+    let start: usize = a.trim().parse().ok()?;
+    let end: usize = b.trim().parse().ok()?;
+    if end <= start { return None; }
+    let raw = props.get("&::selection")?;
+    let v: serde_json::Value = serde_json::from_str(raw).ok()?;
+    let bg_s = v.get("bg").and_then(|x| x.as_str()).unwrap_or("");
+    let color_s = v.get("color").and_then(|x| x.as_str()).unwrap_or("");
+    let bg = crate::style::parse_color_rgba(bg_s)?;
+    let color = crate::style::parse_color_rgba(color_s)
+        .map(|(r, g, b, _)| (r, g, b));
+    Some(SelectionDraw { start, end, bg, color })
+}
+
 /// 单条文本的内容签名：字形 buffer 取决于 (内容, 字号, 着色分段)，与坐标无关。
 /// 缓存按 node_id 索引，同一 ID 签名不变即可复用其 buffer。
 /// 渐变分段纳入签名：颜色/分界变化时重排 span，但坐标滚动不影响签名。
@@ -317,11 +403,21 @@ fn text_sig(t: &TextDraw) -> String {
     s.push_str(&t.text);
     s.push('@');
     s.push_str(&format!("{:.2}", t.size));
+    // 字体族变化需重新 shape（等宽/比例字形的字形与度量不同）。
+    if let Some(f) = &t.family {
+        s.push_str(&format!("@fam{}", f));
+    }
     if !t.spans.is_empty() {
         s.push('@');
         for (seg, c) in &t.spans {
             s.push_str(seg);
             s.push_str(&format!(":{:02x}{:02x}{:02x};", c.0, c.1, c.2));
+        }
+    }
+    // 选区前景色改变字形着色，纳入签名以触发重排；背景色不影响字形可省略。
+    if let Some(sel) = &t.selection {
+        if let Some((r, g, b)) = sel.color {
+            s.push_str(&format!("@sel{}:{}:{:02x}{:02x}{:02x}", sel.start, sel.end, r, g, b));
         }
     }
     s
@@ -375,6 +471,8 @@ struct ShapeDraw {
     img: Option<(std::sync::Arc<tiny_skia::Pixmap>, ObjectFit)>,
     /// canvas 原语：命令式绘制指令；None 表示普通节点。
     canvas: Option<std::sync::Arc<Vec<crate::canvas::CanvasOp>>>,
+    /// opacity（含声明式动画采样后的值）用于背景 alpha，1.0 为不透明。
+    alpha: f32,
     /// video 原语：ffmpeg 解码的当前帧；None 表示普通节点/无帧。
     video: Option<std::sync::Arc<crate::video::VideoFrame>>,
     /// video 节点 ID（用于取帧）；普通节点为空。
@@ -678,6 +776,8 @@ impl DisplayList {
             skip_overlays: bool,
             parent_clip: ClipRect,
             inherited_gradient: Option<crate::text_effects::LinearGradient>,
+            inherited_selection: Option<SelectionDraw>,
+            inherited_family: Option<String>,
         ) -> f32 {
             // 主树遍历时跳过浮层子树（它们由后续的遮罩/浮层遍单独绘制，保证层级）。
             if skip_overlays && is_overlay(node) {
@@ -692,6 +792,11 @@ impl DisplayList {
                 crate::text_effects::TextFill::Gradient(g) => Some(g),
                 _ => inherited_gradient,
             };
+            // selection 与渐变同理：父 span 声明的 selection-range 继承给文本子节点，
+            // 子节点自身声明则覆盖（Editor 代码行 span 声明区间，文本子节点消费）。
+            let my_selection = parse_selection(&node.props).or(inherited_selection);
+            // font-family 与渐变同理：父 span 声明的字体族继承给文本子节点。
+            let my_family = parse_font_family(&node.props).or(inherited_family);
             let lay = ctx.taffy.layout(tnode).expect("taffy layout");
             // 浮层根用第二遍算出的目标坐标；其余节点沿用 Taffy 相对坐标累加。
             let (x, y) = overrides.get(&node.id).copied()
@@ -725,12 +830,22 @@ impl DisplayList {
                 if !clip_rejects(my_clip, x, y, size * 4.0, size * 1.35) {
                     // 统一渐变文字：按 ch 边界把文本切成着色分段，glyphon 逐 span 上色。
                     // 无渐变时 spans 为空 → 走 default_color 快路径，零额外分配。
-                    let spans = my_gradient.as_ref()
+                    let mut spans = my_gradient.as_ref()
                         .map(|g| crate::text_effects::gradient_spans(&node.text, g, color))
                         .unwrap_or_default();
+                    // 三端统一 selection：用本节点或父 span 继承的 selection 协议，
+                    // 选中区间前景覆盖 base 分段。
+                    let selection = my_selection.clone();
+                    if let Some(sel) = &selection {
+                        if let Some(fg) = sel.color {
+                            spans = crate::text_effects::selection_spans(
+                                &node.text, &spans, color, sel.start, sel.end, fg);
+                        }
+                    }
                     dl.texts.push(TextDraw {
                         id: node.id.clone(), text: node.text.clone(), x, y, size, color,
-                        clip: my_clip, spans,
+                        clip: my_clip, spans, selection, family: my_family.clone(),
+                        alpha: st.opacity,
                     });
                 }
                 return y + size * 1.35;
@@ -790,6 +905,7 @@ impl DisplayList {
                         shadow: st.shadow.clone(),
                         clip: my_clip,
                         img, canvas,
+                        alpha: st.opacity,
                         video: video_frame,
                         video_id: if is_video { node.id.clone() } else { String::new() },
                     });
@@ -807,7 +923,7 @@ impl DisplayList {
             let mut subtree_bottom = y + h; // 至少到自身底边
             for (i, c) in kids.iter().enumerate() {
                 let child_tnode = ctx.taffy.child_at_index(tnode, i).expect("taffy child");
-                let cb = emit(c, child_tnode, ctx, dl, color, size, child_ox, child_oy, overrides, avail_w, avail_h, skip_overlays, my_clip, my_gradient.clone());
+                let cb = emit(c, child_tnode, ctx, dl, color, size, child_ox, child_oy, overrides, avail_w, avail_h, skip_overlays, my_clip, my_gradient.clone(), my_selection.clone(), my_family.clone());
                 if cb > subtree_bottom {
                     subtree_bottom = cb;
                 }
@@ -833,17 +949,17 @@ impl DisplayList {
 
         // 第一遍：主树，跳过浮层子树。
         emit(root, root_node, &ctx, &mut dl, (226, 232, 240), 16.0, 0.0, 0.0,
-            &overrides, avail_w, avail_h, true, None, None);
+            &overrides, avail_w, avail_h, true, None, None, None, None);
         // 第二遍：遮罩（拦截外部点击）。
         for ov in overlays.iter().filter(|o| is_scrim(o.node)) {
             emit(ov.node, ov.tnode, &ctx, &mut dl, (226, 232, 240), 16.0, 0.0, 0.0,
-                &overrides, avail_w, avail_h, false, None, None);
+                &overrides, avail_w, avail_h, false, None, None, None, None);
         }
         // 第三遍：内容浮层 popover → modal → portal（最上层），按角色分层保证层级稳定。
         for role in ["popover", "modal", "portal"] {
             for ov in overlays.iter().filter(|o| gx_role(o.node) == role) {
                 emit(ov.node, ov.tnode, &ctx, &mut dl, (226, 232, 240), 16.0, 0.0, 0.0,
-                    &overrides, avail_w, avail_h, false, None, None);
+                    &overrides, avail_w, avail_h, false, None, None, None, None);
             }
         }
         dl
@@ -1054,6 +1170,10 @@ struct VSOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f };
         for path in [
             "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
             "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+            // 等宽字体：Editor 代码行 font-family 栈含 monospace 时使用，
+            // 三端统一（Web ui-monospace / Skia DejaVu Sans Mono）。
+            "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+            "/usr/share/fonts/truetype/noto/NotoSansMono-Regular.ttf",
         ] {
             if let Err(e) = font_system.db_mut().load_font_file(path) {
                 eprintln!("[rust-backend] font {} : {:?}", path, e);
@@ -1291,7 +1411,10 @@ struct VSOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f };
             if let Some(path) = round_rect_path(rx, ry, rw, rh, s.radius) {
                 if s.bg_present {
                     let mut p = Paint::default();
-                    p.set_color(Color::from_rgba8(s.bg.0, s.bg.1, s.bg.2, 255));
+                    // opacity 作用于元素整体：声明式 blink 动画采样后写进 st.opacity，
+                    // 此处按 alpha 淡入淡出（对齐 Skia paintElement / Web CSS opacity）。
+                    let a = (s.alpha.clamp(0.0, 1.0) * 255.0) as u8;
+                    p.set_color(Color::from_rgba8(s.bg.0, s.bg.1, s.bg.2, a));
                     p.anti_alias = true;
                     pm.fill_path(&path, &p, FillRule::Winding, Transform::identity(), None);
                 }
@@ -1336,6 +1459,22 @@ struct VSOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f };
                 }
             }
         }
+        // 三端统一 selection：在文字层之前画选区背景矩形（glyphon 文字随后绘制）。
+        // 区间是 rune 索引，用与 measure_text 一致的估算口径换算像素宽度。
+        for t in &dl.texts {
+            let Some(sel) = &t.selection else { continue; };
+            let (sx0, sx1) = selection_px_range(&t.text, sel.start, sel.end, t.size);
+            if sx1 <= sx0 { continue; }
+            let (rx, ry, rw, rh) = match clip_rect_xywh(t.clip, t.x + sx0, t.y, sx1 - sx0, t.size * 1.35) {
+                Some(v) => v, None => continue,
+            };
+            if rw <= 0.0 || rh <= 0.0 { continue; }
+            let path = match round_rect_path(rx, ry, rw, rh, 0.0) { Some(v) => v, None => continue };
+            let mut p = Paint::default();
+            p.set_color(Color::from_rgba8(sel.bg.0, sel.bg.1, sel.bg.2, sel.bg.3));
+            p.anti_alias = true;
+            pm.fill_path(&path, &p, FillRule::Winding, Transform::identity(), None);
+        }
         // 苹果风格滚动条画在内容之上（overlay），参与整体淡入淡出。
         if !dl.scrollbars.is_empty() {
             self.paint_scrollbars(&mut pm, &dl.scrollbars);
@@ -1359,6 +1498,11 @@ struct VSOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f };
     pub fn needs_continuous_redraw(&self) -> bool {
         // transition 动画进行中
         if self.animator.is_active() {
+            return true;
+        }
+        // 声明式周期动画（如 Editor 光标 blink）无外部事件唤醒，必须持续重绘。
+        // 直接扫描常驻场景树，不依赖 apply 的调用时序。
+        if self.scene.as_ref().map(|s| crate::style::tree_has_animation(s)).unwrap_or(false) {
             return true;
         }
         // 视频正在播放：解码线程持续产出新帧，必须保持重绘调度。
@@ -1385,7 +1529,9 @@ struct VSOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f };
         // transition：按当前时间推进动画。动画进行中必须逐帧重算（插值值在变）。
         let now_ms = self.anim_origin.elapsed().as_millis();
         self.animator.set_now(now_ms);
-        let animating = self.animator.is_active();
+        // 周期动画（blink）无外部事件唤醒：即使 transition 静止、frame_dirty=false，
+        // 也必须把 animating 置位，让本帧进入 apply/重绘路径逐帧采样 opacity。
+        let animating = self.animator.is_active() || crate::style::tree_has_animation(scene);
         // video 新帧：解码线程独立推进帧序号，变化则强制重算（重画当前帧）。
         let vseq = crate::video::frame_seq();
         if vseq != self.video_frame_seq {
@@ -1453,7 +1599,10 @@ struct VSOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f };
                 let t = &dl.texts[i];
                 let mut b = Buffer::new(&mut self.font_system, Metrics::new(t.size, t.size * 1.35));
                 b.set_size(&mut self.font_system, Some(700.0), Some(80.0));
-                let attrs = Attrs::new().family(Family::SansSerif);
+                let attrs = match &t.family {
+                    Some(f) => Attrs::new().family(Family::Name(f)),
+                    None => Attrs::new().family(Family::SansSerif),
+                };
                 if t.spans.is_empty() {
                     // 快路径：普通单色文字，颜色走 TextArea.default_color。
                     b.set_text(&mut self.font_system, &t.text, &attrs, Shaping::Advanced);
@@ -1499,7 +1648,17 @@ struct VSOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f };
                 top: t.y,
                 scale: 1.0,
                 bounds,
-                default_color: Color::rgb(t.color.0, t.color.1, t.color.2),
+                // opacity（含声明式 blink 采样）作用于文字 alpha，对齐 Skia/Web。
+                // glyphon 颜色为 pre-multiplied，按 alpha 缩放三通道。
+                default_color: {
+                    let a = t.alpha.clamp(0.0, 1.0);
+                    Color::rgba(
+                        (t.color.0 as f32 * a) as u8,
+                        (t.color.1 as f32 * a) as u8,
+                        (t.color.2 as f32 * a) as u8,
+                        (a * 255.0) as u8,
+                    )
+                },
                 custom_glyphs: &[],
             })
         }).collect();
@@ -1740,7 +1899,7 @@ mod text_sig_tests {
     fn td(id: &str, text: &str, size: f32) -> TextDraw {
         TextDraw {
             id: id.into(), text: text.into(), x: 0.0, y: 0.0, size,
-            color: (0, 0, 0), clip: None, spans: vec![],
+            color: (0, 0, 0), clip: None, spans: vec![], selection: None, family: None, alpha: 1.0,
         }
     }
 
@@ -1940,5 +2099,101 @@ mod clip_tests {
         assert!(!clip_rejects(c, 0.0, 40.0, 100.0, 30.0)); // 部分在内
         assert_eq!(clip_rect_xywh(c, 0.0, 40.0, 100.0, 30.0), Some((0.0, 40.0, 100.0, 10.0)));
         assert_eq!(clip_rect_xywh(c, 0.0, -40.0, 100.0, 30.0), None);
+    }
+
+}
+
+#[cfg(test)]
+mod selection_tests {
+    use super::*;
+
+    fn sel_props() -> std::collections::HashMap<String, String> {
+        let mut p = std::collections::HashMap::new();
+        p.insert("selection-range".into(), "2:5".into());
+        p.insert("&::selection".into(), "{\"bg\":\"#264f7880\",\"color\":\"#ffffff\"}".into());
+        p
+    }
+
+    #[test]
+    fn parse_selection_reads_range_and_colors() {
+        let sel = parse_selection(&sel_props()).expect("应解析出选区");
+        assert_eq!((sel.start, sel.end), (2, 5));
+        assert_eq!(sel.bg.3, 0x80, "半透明 alpha 应保留");
+        assert_eq!(sel.color, Some((255, 255, 255)));
+    }
+
+    #[test]
+    fn parse_selection_rejects_missing_or_bad() {
+        let empty = std::collections::HashMap::new();
+        assert!(parse_selection(&empty).is_none());
+        let mut bad = sel_props();
+        bad.insert("selection-range".into(), "5:2".into());
+        assert!(parse_selection(&bad).is_none(), "start>=end 应视为无选区");
+    }
+
+    #[test]
+    fn selection_px_range_matches_measure() {
+        let ascii = selection_px_range("abcdef", 2, 5, 10.0);
+        assert!((ascii.0 - 11.2).abs() < 0.01, "2*0.56*10=11.2, got {:?}", ascii);
+        assert!((ascii.1 - 28.0).abs() < 0.01, "5*0.56*10=28, got {:?}", ascii);
+        let cjk = selection_px_range("你ab好", 1, 3, 10.0);
+        assert!((cjk.0 - 10.0).abs() < 0.01, "CJK 首字 1em, got {:?}", cjk);
+    }
+
+    #[test]
+    fn selection_in_text_sig_forces_reshaping() {
+        let base = TextDraw {
+            id: "x".into(), text: "abcd".into(), x: 0.0, y: 0.0, size: 13.0,
+            color: (0, 0, 0), clip: None, spans: vec![], selection: None, family: None, alpha: 1.0,
+        };
+        let mut a = base.clone();
+        let mut b = base;
+        a.selection = Some(SelectionDraw {
+            start: 1, end: 3, bg: (38, 79, 120, 128), color: Some((255, 255, 255)),
+        });
+        b.selection = Some(SelectionDraw {
+            start: 2, end: 4, bg: (38, 79, 120, 128), color: Some((255, 255, 255)),
+        });
+        assert_ne!(text_sig(&a), text_sig(&b), "选区区间变化应触发重排");
+    }
+
+    fn font_props(stack: &str) -> std::collections::HashMap<String, String> {
+        let mut p = std::collections::HashMap::new();
+        p.insert("font-family".into(), stack.into());
+        p
+    }
+
+    #[test]
+    fn font_family_maps_monospace_stack() {
+        // Editor 等宽栈应映射到已加载的 DejaVu Sans Mono。
+        let f = parse_font_family(&font_props(
+            "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"));
+        assert_eq!(f.as_deref(), Some("DejaVu Sans Mono"));
+    }
+
+    #[test]
+    fn font_family_sans_stack_uses_default() {
+        let f = parse_font_family(&font_props("system-ui, -apple-system, sans-serif"));
+        assert!(f.is_none(), "纯 sans 栈应沿用默认 SansSerif");
+        assert!(parse_font_family(&font_props("")).is_none());
+    }
+
+    #[test]
+    fn font_family_concrete_name_passthrough() {
+        let f = parse_font_family(&font_props("Menlo, monospace"));
+        assert_eq!(f.as_deref(), Some("DejaVu Sans Mono"), "Menlo 属等宽候选");
+        let f2 = parse_font_family(&font_props("Fira Code, monospace"));
+        assert_eq!(f2.as_deref(), Some("Fira Code"), "未在等宽名单的具体族名原样使用");
+    }
+
+    #[test]
+    fn font_family_in_text_sig_forces_reshaping() {
+        let base = TextDraw {
+            id: "x".into(), text: "abcd".into(), x: 0.0, y: 0.0, size: 13.0,
+            color: (0, 0, 0), clip: None, spans: vec![], selection: None, family: None, alpha: 1.0,
+        };
+        let mut mono = base.clone();
+        mono.family = Some("DejaVu Sans Mono".into());
+        assert_ne!(text_sig(&base), text_sig(&mono), "字体族变化应触发重新 shape");
     }
 }

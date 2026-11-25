@@ -3,6 +3,7 @@ package skia
 import (
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	sk "github.com/robertpanvip/gox-skia/compat"
 	gxscene "github.com/robertpanvip/gox/runtime/scene"
@@ -185,6 +186,7 @@ type textStyle struct {
 	color    uint32
 	fontSize int
 	bold     bool
+	family   string // 已解析的本机字体族名（空串=系统默认）
 }
 
 // inheritedStyle 从节点自身 Props 覆盖继承样式，返回本节点有效的文本样式。
@@ -202,6 +204,9 @@ func inheritedStyle(n *gxscene.Node, parent textStyle) textStyle {
 		}
 		if v, ok := propNum(n.Props[propFontSize]); ok && v > 0 {
 			s.fontSize = int(v)
+		}
+		if v, ok := propString(n.Props[propFontFamily]); ok && v != "" {
+			s.family = pickFontFamily(v)
 		}
 		if v, ok := propString(n.Props[propWeight]); ok {
 			if strings.EqualFold(v, "bold") || v == "700" {
@@ -346,6 +351,12 @@ func (p *painter) paintElement(n *gxscene.Node, box layoutBox) {
 			paint := sk.NewPaint()
 			paint.SetColor(sk.Color(s.bg))
 			paint.SetAntiAlias(true)
+			// opacity 作用于元素整体（对齐 Web CSS opacity 与 Rust）：声明式动画
+			// （blink）和静态 opacity prop 都在 parseStyle 后汇聚到 s.opacity。
+			// caret 的方波闪烁即靠此 alpha 在 0/1 间阶跃。
+			if a := s.opacity; a >= 0 && a < 1 {
+				paint.SetAlpha(uint32(a * 255))
+			}
 			if r := radiusClamp(s.radius, box.W, h); r > 0 {
 				p.canvas.DrawRoundRect(rect, r, r, paint)
 			} else {
@@ -510,15 +521,73 @@ func (p *painter) paintText(n *gxscene.Node, box layoutBox, st textStyle) {
 		paint.SetColor(sk.Color(st.color))
 		paint.SetAntiAlias(true)
 		baseline := box.Y + float32(st.fontSize)
+
+		// selection 标量协议（三端统一）：纯文本节点可挂 selection-range="s:e"，
+		// 配合 &::selection 子表对 [s,e) rune 区间画背景、覆盖前景色。
+		selRange := gxscene.SelectionRangeFromProps(n.Props)
+		sel := gxscene.SelectionFromProps(n.Props)
+		var selBg, selFg uint32
+		hasSelBg, hasSelFg := false, false
+		if selRange.Valid() {
+			if sel.Bg != "" {
+				if c, ok := parseColor(sel.Bg); ok { selBg, hasSelBg = c, true }
+			}
+			if sel.Color != "" {
+				if c, ok := parseColor(sel.Color); ok { selFg, hasSelFg = c, true }
+			}
+		}
+
 		// 按字体分段绘制：go-skia 不做自动字体回退，中文等缺字需用 CJK fallback 字体。
-		// 每段的落笔 x = 前面各段实测宽度之和，与 skiaFontMeasurer 的宽度累加口径一致。
+		// 先量出每段的 x 范围与 rune 区间，供选区背景定位；再落笔文字。
+		type seg struct {
+			text string
+			font sk.Font
+			x0   float32
+			w    float32
+			r0   int
+			r1   int
+		}
+		var segs []seg
 		x := box.X
-		for _, r := range splitRuns(n.Text, st.fontSize, st.bold) {
+		runePos := 0
+		for _, r := range splitRuns(n.Text, st.fontSize, st.bold, st.family) {
 			if r.text == "" || r.font.IsNil() {
+				runePos += utf8.RuneCountInString(r.text)
 				continue
 			}
-			p.canvas.DrawString(r.text, x, baseline, r.font, paint)
-			x += r.font.MeasureText([]byte(r.text), uint32(len(r.text)), sk.TextEncodingUTF8, nil)
+			w := r.font.MeasureText([]byte(r.text), uint32(len(r.text)), sk.TextEncodingUTF8, nil)
+			segs = append(segs, seg{text: r.text, font: r.font, x0: x, w: w, r0: runePos, r1: runePos + utf8.RuneCountInString(r.text)})
+			x += w
+			runePos += utf8.RuneCountInString(r.text)
+		}
+		// 选区背景（先画，被文字覆盖）。
+		if hasSelBg {
+			for _, s := range segs {
+				b0, b1 := maxInt(s.r0, selRange.Start), minInt(s.r1, selRange.End)
+				if b1 <= b0 || s.w <= 0 {
+					continue
+				}
+				// 按 rune 在该段内的占比估算像素区间（等宽假设与测量口径足够接近）。
+				frac0, frac1 := float32(b0-s.r0)/float32(s.r1-s.r0), float32(b1-s.r0)/float32(s.r1-s.r0)
+				rx, rw := s.x0+s.w*frac0, s.w*(frac1-frac0)
+				bgPaint := sk.NewPaint()
+				bgPaint.SetColor(sk.Color(selBg))
+				bgPaint.SetAntiAlias(true)
+				p.canvas.DrawRect(sk.RectMakeXYWH(rx, box.Y, rw, float32(st.fontSize)*1.35), bgPaint)
+				bgPaint.Delete()
+				*p.log = append(*p.log, DrawOp{Kind: "selection", Name: n.Text[b0Bytes(n.Text, b0):b0Bytes(n.Text, b1)], X: rx, Y: box.Y, W: rw, H: float32(st.fontSize) * 1.35, ARGB: selBg})
+			}
+		}
+		// 文字：与选区区间相交的 run 用选区前景色，其余用继承色。
+		// 字符级精细前景由富文本 Selected 路径处理；这里是标量协议的 run 级近似。
+		for _, s := range segs {
+			inSel := hasSelFg && s.r1 > selRange.Start && s.r0 < selRange.End
+			if inSel {
+				paint.SetColor(sk.Color(selFg))
+			} else {
+				paint.SetColor(sk.Color(st.color))
+			}
+			p.canvas.DrawString(s.text, s.x0, baseline, s.font, paint)
 		}
 		paint.Delete()
 	}
@@ -535,34 +604,116 @@ func (p *painter) paintText(n *gxscene.Node, box layoutBox, st textStyle) {
 	}
 }
 
+func maxInt(a, b int) int { if a > b { return a }; return b }
+func minInt(a, b int) int { if a < b { return a }; return b }
+
+// b0Bytes 把 rune 索引换算成字节索引，用于切片与日志文本。
+func b0Bytes(s string, runeIdx int) int {
+	if runeIdx <= 0 { return 0 }
+	i := 0
+	for pos := range s {
+		if i == runeIdx { return pos }
+		i++
+	}
+	return len(s)
+}
+
+type richSeg struct {
+	text  string
+	col   uint32
+	sel   bool
+	x0    float32
+	width float32
+	runs  []run
+}
+
 // paintRichText 逐段绘制富文本：每个 RichSpan 用其自身颜色，段内按字体回退切 run。
 // 颜色为空的段沿用继承色 st.color。落笔 x 全程累加，与 skiaMeasureFunc(纯文本) 一致。
+//
+// selection 协议（三端统一）：节点 Props 里的 &::selection 子表给出选区配色，
+// 带 Selected 标记的段画一层选区背景矩形，前景改用选区 color（缺省沿用语法色）。
+// 分两遍绘制：先量出所有段的 x 范围并画选区背景，再逐段画文字，保证文字压在背景之上。
 func (p *painter) paintRichText(n *gxscene.Node, rt gxscene.RichText, box layoutBox, st textStyle) {
 	if !p.shouldDraw(box) {
 		return
 	}
+	sel := gxscene.SelectionFromProps(n.Props)
+	selRange := gxscene.SelectionRangeFromProps(n.Props)
+	var selBg, selFg uint32
+	hasSelBg, hasSelFg := false, false
+	if sel.Bg != "" {
+		if c, ok := parseColor(sel.Bg); ok {
+			selBg, hasSelBg = c, true
+		}
+	}
+	if sel.Color != "" {
+		if c, ok := parseColor(sel.Color); ok {
+			selFg, hasSelFg = c, true
+		}
+	}
 	baseline := box.Y + float32(st.fontSize)
+	lineH := float32(st.fontSize) * 1.35
+
+	// 第一遍：切 run、量宽、定段色与 x 范围。
+	// 段的选中态来源有二：RichSpan.Selected，或标量 selection-range 与 rune 区间相交。
+	segs := make([]richSeg, 0, len(rt))
 	x := box.X
-	paint := sk.NewPaint()
-	defer paint.Delete()
-	paint.SetAntiAlias(true)
+	runePos := 0
 	for _, span := range rt {
 		if span.Text == "" {
 			continue
 		}
+		spanRunes := utf8.RuneCountInString(span.Text)
+		isSel := span.Selected || (selRange.Valid() && runePos < selRange.End && runePos+spanRunes > selRange.Start)
 		col := st.color
 		if span.Color != "" {
 			if c, ok := parseColor(span.Color); ok {
 				col = c
 			}
 		}
-		paint.SetColor(sk.Color(col))
-		for _, r := range splitRuns(span.Text, st.fontSize, st.bold) {
+		if isSel && hasSelFg {
+			col = selFg
+		}
+		runs := splitRuns(span.Text, st.fontSize, st.bold, st.family)
+		segStart := x
+		for _, r := range runs {
 			if r.text == "" || r.font.IsNil() {
 				continue
 			}
-			p.canvas.DrawString(r.text, x, baseline, r.font, paint)
 			x += r.font.MeasureText([]byte(r.text), uint32(len(r.text)), sk.TextEncodingUTF8, nil)
+		}
+		segs = append(segs, richSeg{text: span.Text, col: col, sel: isSel, x0: segStart, width: x - segStart, runs: runs})
+		runePos += spanRunes
+	}
+
+	// 选区背景：先画所有选中段，保证被后续文字覆盖。
+	if hasSelBg {
+		for _, seg := range segs {
+			if !seg.sel || seg.width <= 0 {
+				continue
+			}
+			bgPaint := sk.NewPaint()
+			bgPaint.SetColor(sk.Color(selBg))
+			bgPaint.SetAntiAlias(true)
+			p.canvas.DrawRect(sk.RectMakeXYWH(seg.x0, box.Y, seg.width, lineH), bgPaint)
+			bgPaint.Delete()
+			*p.log = append(*p.log, DrawOp{Kind: "selection", Name: seg.text, X: seg.x0, Y: box.Y, W: seg.width, H: lineH, ARGB: selBg})
+		}
+	}
+
+	// 第二遍：逐段落笔文字（x 从段起点重新累加）。
+	paint := sk.NewPaint()
+	defer paint.Delete()
+	paint.SetAntiAlias(true)
+	for _, seg := range segs {
+		segX := seg.x0
+		for _, r := range seg.runs {
+			if r.text == "" || r.font.IsNil() {
+				continue
+			}
+			paint.SetColor(sk.Color(seg.col))
+			p.canvas.DrawString(r.text, segX, baseline, r.font, paint)
+			segX += r.font.MeasureText([]byte(r.text), uint32(len(r.text)), sk.TextEncodingUTF8, nil)
 		}
 	}
 }

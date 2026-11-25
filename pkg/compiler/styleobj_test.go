@@ -75,6 +75,23 @@ func TestStyleObjPseudoNested(t *testing.T) {
 	}
 }
 
+func TestStyleObjSelectionPseudoElement(t *testing.T) {
+	// selection 是伪元素子表（::selection），单词 key 映射到 Selection 字段，
+	// 与 hover 伪状态一样递归成 &gxscene.Style{...}，但协议键走双冒号。
+	res := compileStyleJSX(t, `style={{selection: {bg: "#b4d5fe", color: "#fff"}, bg: "#fff"}}`)
+	assertNoDiag(t, res)
+	for _, want := range []string{
+		`Selection:&gxscene.Style{`,
+		`Bg:"#b4d5fe"`,
+		`Color:"#fff"`,
+		`Bg:"#fff"`,
+	} {
+		if !strings.Contains(res.GoSource, want) {
+			t.Errorf("产物缺少 %q\n%s", want, res.GoSource)
+		}
+	}
+}
+
 func TestStyleObjEmpty(t *testing.T) {
 	res := compileStyleJSX(t, `style={{}}`)
 	assertNoDiag(t, res)

@@ -14,7 +14,7 @@ func skCanvas(w, h int) sk.Canvas {
 
 // benchMeasure 与 Rust 后端文本估算同口径：ASCII 0.56em，CJK 1em（这里统一按 ASCII 近似），
 // 排除真实字体 shaping 差异，专注对比布局引擎（Yoga vs Taffy）的纯布局成本。
-func benchMeasure(text string, fontSize int, bold bool) float32 {
+func benchMeasure(text string, fontSize int, bold bool, family string) float32 {
 	return float32(len([]rune(text))) * float32(fontSize) * 0.56
 }
 

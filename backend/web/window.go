@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"unicode/utf8"
 
 	gxapp "github.com/robertpanvip/gox/runtime/app"
 	gxscene "github.com/robertpanvip/gox/runtime/scene"
@@ -40,7 +41,30 @@ type mirrorNode struct {
 	firstElem ElemID                       // 透明节点(#frag)第一个真实 DOM 子元素；作为 before 锚点时用
 	attrs     map[string]string           // 最近一次下传的普通属性/样式（含空串=已移除）
 	richHTML  string                      // 最近一次下传的富文本 HTML（rich-text 属性）
-	handlers  map[string]func(FiredEvent) // 已注册的事件监听（key=规范化事件名）
+	selection      gxscene.SelectionStyle      // 最近一次下传的 &::selection 子表（富文本选区配色）
+	selectionRange gxscene.SelectionRange      // 最近一次下传的 selection-range（rune 区间）
+	handlers       map[string]func(FiredEvent) // 已注册的事件监听（key=规范化事件名）
+}
+
+// richHTML 序列化富文本：按 selection-range 给落在 [start,end) rune 区间的分段
+// 打上 Selected，再用 &::selection 配色序列化。这样键盘程序化选区与鼠标拖选
+// （原生 ::selection）在 Web 端都呈现统一的主题选区色。
+func richHTML(rt gxscene.RichText, sel gxscene.SelectionStyle, selRange gxscene.SelectionRange) string {
+	if !selRange.Valid() {
+		return rt.HTMLWithSelection(sel)
+	}
+	marked := make(gxscene.RichText, 0, len(rt))
+	pos := 0
+	for _, span := range rt {
+		n := utf8.RuneCountInString(span.Text)
+		if n == 0 {
+			continue
+		}
+		span.Selected = span.Selected || (pos < selRange.End && pos+n > selRange.Start)
+		marked = append(marked, span)
+		pos += n
+	}
+	return marked.HTMLWithSelection(sel)
 }
 
 func newMirrorNode(id gxscene.NodeID, elem ElemID, kind string) *mirrorNode {
@@ -338,13 +362,24 @@ func (w *Window) buildLocked(n *gxscene.Node, parent ElemID, before ElemID) Elem
 
 	// 属性/样式：展平后的标量写属性，事件名单独注册监听。
 	// rich-text 是结构化分段值，走 innerHTML 一次写入（不进标量属性循环）。
+	// 富文本节点的选区配色来自节点 &::selection 子表，选中区间由 selection-range
+	// 标量给出（rune 索引），后端据此给分段打 Selected 再叠加配色。
 	if rt, ok := gxscene.RichTextFromProps(n.Props); ok {
-		h := rt.HTML()
+		sel := gxscene.SelectionFromProps(n.Props)
+		selRange := gxscene.SelectionRangeFromProps(n.Props)
+		m.selection = sel
+		m.selectionRange = selRange
+		h := richHTML(rt, sel, selRange)
 		w.driver.SetRichText(e, h)
 		m.richHTML = h
 	}
 	for k, v := range n.Props {
 		if k == gxscene.PropRichText {
+			continue
+		}
+		// 富文本节点的文字颜色已由 innerHTML 分段承载；跳过 gradient-text 与渐变 bg，
+		// 否则 background-clip:text + color:transparent 会把 innerHTML 的字全部透明化。
+		if isRich && (k == "gradient-text" || (k == "bg" && strings.HasPrefix(strings.TrimSpace(scalarString(v)), "linear-gradient("))) {
 			continue
 		}
 		s := scalarString(v)
@@ -443,15 +478,42 @@ func (w *Window) applyChangesLocked(changes []gxscene.Change, root *gxscene.Node
 				continue
 			}
 			if c.Key == gxscene.PropRichText {
-				// 富文本：一次 innerHTML 写入所有着色分段。
+				// 富文本：一次 innerHTML 写入所有着色分段（含选区配色叠加）。
 				var h string
 				if rt, ok := c.Value.(gxscene.RichText); ok {
-					h = rt.HTML()
+					h = richHTML(rt, m.selection, m.selectionRange)
 				}
 				if h != m.richHTML {
 					w.driver.SetRichText(m.elem, h)
 					m.richHTML = h
 				}
+				continue
+			}
+			// selection 子表 / selection-range 变化：更新镜像并重新序列化富文本，
+			// 使键盘选区移动与主题切换都即时反映到选区色块。
+			if (c.Key == gxscene.PropSelection || c.Key == gxscene.PropSelectionRange) && m.richHTML != "" {
+				if c.Key == gxscene.PropSelection {
+					m.selection = gxscene.SelectionFromProps(map[string]any{c.Key: c.Value})
+				} else {
+					m.selectionRange = gxscene.SelectionRangeFromProps(map[string]any{c.Key: c.Value})
+				}
+				if m.node != nil {
+					if rt, ok := gxscene.RichTextFromProps(m.node.Props); ok {
+						h := richHTML(rt, m.selection, m.selectionRange)
+						if h != m.richHTML {
+							w.driver.SetRichText(m.elem, h)
+							m.richHTML = h
+						}
+					}
+				}
+				// 标量属性仍需下传给驱动（如 &::selection 写 CSS 变量供鼠标拖选用）。
+				s := scalarString(c.Value)
+				w.driver.SetAttr(m.elem, c.Key, s)
+				m.attrs[c.Key] = s
+				continue
+			}
+			// 富文本节点忽略 gradient-text 与渐变 bg（颜色由 innerHTML 承载）。
+			if m.richHTML != "" && (c.Key == "gradient-text" || (c.Key == "bg" && strings.HasPrefix(strings.TrimSpace(scalarString(c.Value)), "linear-gradient("))) {
 				continue
 			}
 			s := scalarString(c.Value)

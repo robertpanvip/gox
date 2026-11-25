@@ -49,6 +49,56 @@ func TestStylePropsCanonicalizesPseudo(t *testing.T) {
 	}
 }
 
+func TestStyleSelectionPseudoElement(t *testing.T) {
+	s := Style{
+		Bg:        "#fff",
+		Selection: &Style{Bg: "#b4d5fe", Color: "#fff"},
+	}
+	if err := s.Validate(); err != nil {
+		t.Fatalf("selection 伪元素子表应通过校验: %v", err)
+	}
+	p := s.Props()
+	// 伪元素用双冒号独立协议键，不占用 &:selection 伪状态。
+	sel, ok := p[PseudoSelection]
+	if !ok || !strings.Contains(sel.(string), `"bg":"#b4d5fe"`) {
+		t.Fatalf("selection 子表未按 &::selection 编码: %v", p)
+	}
+	if _, wrong := p["&:selection"]; wrong {
+		t.Error("selection 不应编码成伪状态 &:selection")
+	}
+	// 伪元素不参与 Flatten 状态覆盖：传 "selection" 也不改变基础样式。
+	flat := s.Flatten("selection")
+	if flat["bg"] != "#fff" {
+		t.Errorf("伪元素不应被当状态覆盖: got %v", flat["bg"])
+	}
+	// 动态构造路径接受单词 key。
+	parsed, err := ParseStyle(`{"selection":{"bg":"#264f78","color":"#fff"}}`)
+	if err != nil || parsed.Selection == nil || parsed.Selection.Bg != "#264f78" {
+		t.Errorf("ParseStyle selection 失败: %+v %v", parsed, err)
+	}
+}
+
+func TestStyleFontFamily(t *testing.T) {
+	// font-family 是标量属性（含逗号的字体栈），反射编码应原样写入后端 key。
+	stack := "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+	s := Style{FontFamily: stack, FontSize: "13"}
+	if err := s.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	p := s.Props()
+	if p["font-family"] != stack {
+		t.Errorf("font-family 编码错误: got %v", p["font-family"])
+	}
+	if p["font-size"] != "13" {
+		t.Errorf("font-size 编码错误: got %v", p["font-size"])
+	}
+	// 动态构造路径（ParseStyle）也接受该键。
+	parsed, err := ParseStyle(`{"font-family":"monospace"}`)
+	if err != nil || parsed.FontFamily != "monospace" {
+		t.Errorf("ParseStyle font-family 失败: %+v %v", parsed, err)
+	}
+}
+
 func TestStyleFlatten(t *testing.T) {
 	s := Style{
 		Bg:     "#fff",

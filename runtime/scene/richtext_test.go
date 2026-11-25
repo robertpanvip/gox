@@ -51,6 +51,49 @@ func TestRichTextHTMLMergesAdjacentSameColor(t *testing.T) {
 	}
 }
 
+func TestRichTextSelectionHTML(t *testing.T) {
+	rt := RichText{
+		{Text: "ab", Color: "#c586c0"},
+		{Text: "cd", Color: "#d4d4d4", Selected: true},
+		{Text: "ef", Color: "#ce9178"},
+	}
+	sel := SelectionStyle{Bg: "#b4d5fe", Color: "#ffffff"}
+	h := rt.HTMLWithSelection(sel)
+	// 未选中段保留语法色，不写背景。
+	if !strings.Contains(h, `color:#c586c0`) || strings.Contains(h, `background-color:#b4d5fe;color:#c586c0`) {
+		t.Errorf("未选中段不应叠加选区背景: %q", h)
+	}
+	// 选中段背景用 sel.Bg、前景用 sel.Color（覆盖语法色）。
+	if !strings.Contains(h, `background-color:#b4d5fe;color:#ffffff`) {
+		t.Errorf("选中段应叠加选区配色: %q", h)
+	}
+	// 选中段不应残留原语法色。
+	idx := strings.Index(h, "cd")
+	if idx >= 0 && strings.Contains(h[max(0, idx-60):idx], "#d4d4d4") {
+		t.Errorf("选中段前景应被选区色覆盖: %q", h)
+	}
+	// 无选区配色时退化为普通 HTML。
+	plain := rt.HTML()
+	if strings.Contains(plain, "background-color") {
+		t.Errorf("无选区配色不应产出背景: %q", plain)
+	}
+}
+
+func TestSelectionFromProps(t *testing.T) {
+	sel := SelectionFromProps(map[string]any{
+		PropSelection: `{"bg":"#264f78","color":"#fff"}`,
+	})
+	if sel.Bg != "#264f78" || sel.Color != "#fff" {
+		t.Errorf("SelectionFromProps = %+v", sel)
+	}
+	if sel := SelectionFromProps(nil); sel != (SelectionStyle{}) {
+		t.Errorf("空 props 应返回空配色: %+v", sel)
+	}
+	if sel := SelectionFromProps(map[string]any{PropSelection: "bad"}); sel != (SelectionStyle{}) {
+		t.Errorf("非法 JSON 应返回空配色: %+v", sel)
+	}
+}
+
 func TestRichTextFromProps(t *testing.T) {
 	rt := RichText{{Text: "x", Color: "#fff"}}
 	if got, ok := RichTextFromProps(map[string]any{PropRichText: rt}); !ok || got.Plain() != "x" {

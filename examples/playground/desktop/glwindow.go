@@ -411,7 +411,12 @@ func (g *glWindow) paintNow() {
 	g.win.SwapBuffers()
 	g.frames++
 	g.painted = true
-	g.dirty = false
+	// 声明式动画（如 Editor 光标的 blink）是"不写 signal、直接改 props 的旁路动画"：
+	// 它不产生 frame.Changes，会被 Present 的"无 Change 即短路"跳过。因此这里在绘制后
+	// 检测场景是否仍有活跃动画，有则保持 dirty，让 Run 的 20ms 事件循环持续重绘下一帧
+	// （等价于每帧调用 ForceRedraw）。动画消失后自动停帧，不产生空转开销。
+	// 与 FramePresenter 的像素级脏矩形叠加：动画帧进来后仍只重画光标那一小条。
+	g.dirty = skia.HasActiveAnimation(g.root)
 }
 
 // onMouseButton 把鼠标点击映射到场景节点：命中矩形（面积最小优先）→ 焦点处理 → 冒泡派发 onClick。

@@ -28,7 +28,7 @@ func TestWidgetsGxUsesLowercaseExternalCalls(t *testing.T) {
 		"gxscene.Op": true, "gxscene.Instance": true, "gxscene.Props": true,
 		"gxscene.Handler": true, "gxscene.Template": true, "gxscene.EventContext": true,
 		"gxscene.Node": true, "gxscene.NodeID": true, "gxscene.Branch": true,
-		"gxscene.SyntheticEvent": true,
+		"gxscene.SyntheticEvent": true, "gxscene.RichText": true, "gxscene.RichSpan": true,
 		"signal.Signal": true, "signal.Owner": true,
 		"atomic.Uint64": true, "strings.Builder": true,
 	}

@@ -61,6 +61,65 @@ impl Default for Style {
     }
 }
 
+/// 声明式动画解析结果，语义与 Go 端 gxscene.AnimationSpec 严格对齐。
+#[derive(Clone, Copy, Debug)]
+pub struct AnimationSpec {
+    pub duration_ms: i64,
+    pub iterations: i64, // -1 = infinite
+}
+
+impl AnimationSpec {
+    /// 按绝对时钟 now_ms 采样 blink 的 opacity。返回 None 表示不覆盖基础 opacity。
+    /// 相位 < 50% → 1.0，否则 0.0；有限次数结束后不覆盖（fill-mode:none）。
+    pub fn sample_blink(&self, now_ms: i64) -> Option<f32> {
+        if self.duration_ms <= 0 { return None; }
+        if self.iterations > 0 && now_ms >= self.duration_ms * self.iterations { return None; }
+        let phase = now_ms % self.duration_ms;
+        Some(if phase * 2 < self.duration_ms { 1.0 } else { 0.0 })
+    }
+}
+
+/// 解析 animation 标量（如 "blink 1.06s infinite"），只接受内置 blink 动画。
+fn parse_duration_ms(s: &str) -> Option<i64> {
+    let s = s.trim();
+    if let Some(v) = s.strip_suffix("ms") {
+        return v.trim().parse::<f64>().ok().map(|x| x as i64);
+    }
+    if let Some(v) = s.strip_suffix('s') {
+        return v.trim().parse::<f64>().ok().map(|x| (x * 1000.0) as i64);
+    }
+    s.parse::<f64>().ok().map(|x| (x * 1000.0) as i64)
+}
+
+pub fn parse_animation(s: &str) -> Option<AnimationSpec> {
+    let lowered = s.trim().to_ascii_lowercase();
+    let toks: Vec<&str> = lowered.split_whitespace().collect();
+    if toks.is_empty() || toks[0] != "blink" { return None; }
+    let mut spec = AnimationSpec { duration_ms: 0, iterations: -1 };
+    for t in &toks[1..] {
+        if *t == "infinite" { spec.iterations = -1; continue; }
+        if let Ok(n) = t.parse::<i64>() {
+            if n > 0 { spec.iterations = n; continue; }
+        }
+        if let Some(d) = parse_duration_ms(t) {
+            if d > 0 { spec.duration_ms = d; }
+        }
+    }
+    if spec.duration_ms > 0 { Some(spec) } else { None }
+}
+
+/// 从节点 props 读取 animation 并解析。
+pub fn animation_from_props(n: &SceneNode) -> Option<AnimationSpec> {
+    n.props.get("animation").and_then(|s| parse_animation(s))
+}
+
+/// 扫描整棵树是否存在活跃的声明式动画。用于渲染前置判断：周期动画无外部事件
+/// 唤醒，即使 transition 静止也必须进入全量重建路径逐帧采样。
+pub fn tree_has_animation(n: &SceneNode) -> bool {
+    if animation_from_props(n).is_some() { return true; }
+    n.children.iter().any(tree_has_animation)
+}
+
 pub fn parse_px(s: &str) -> Option<f32> {
     s.trim().trim_end_matches("px").trim().parse::<f32>().ok()
 }
@@ -354,17 +413,22 @@ pub struct Animator {
     anims: AnimMap,
     targets: HashMap<(String, String), f32>,
     now_ms: u128,
+    /// 本帧 apply 看到的活跃声明式动画（周期动画无外部事件唤醒，据此维持重绘）。
+    has_animation: bool,
 }
 
 impl Animator {
     pub fn new() -> Self {
-        Self { anims: AnimMap::new(), targets: HashMap::new(), now_ms: 0 }
+        Self { anims: AnimMap::new(), targets: HashMap::new(), now_ms: 0, has_animation: false }
     }
 
     pub fn set_now(&mut self, now_ms: u128) { self.now_ms = now_ms; }
 
     /// 是否仍有进行中的动画。无变化帧可据此决定是否需要继续重绘。
     pub fn is_active(&self) -> bool { !self.anims.is_empty() }
+
+    /// 本帧是否采样到活跃的声明式动画（如 blink），供宿主持续重绘。
+    pub fn has_active_animation(&self) -> bool { self.has_animation }
 
     /// 返回当前插值值（若动画已结束则返回 to 并移除动画）。
     fn sample(&mut self, key: &(String, String)) -> Option<f32> {
@@ -383,12 +447,22 @@ impl Animator {
 
     /// 对整棵树应用动画覆盖，返回本帧要用的树副本。
     pub fn apply(&mut self, root: &SceneNode) -> SceneNode {
+        self.has_animation = false; // 每帧重置，记录本帧看到的周期动画
         let mut out = root.clone();
         self.apply_node(root, &mut out);
         out
     }
 
     fn apply_node(&mut self, src: &SceneNode, dst: &mut SceneNode) {
+        // 声明式 animation（周期动画）：按绝对时钟采样 opacity 写进临时树，优先级
+        // 高于 transition（对齐 CSS animation > transition）。覆盖值随时间变化，
+        // needs_continuous_redraw 据此维持重绘。
+        if let Some(spec) = animation_from_props(src) {
+            self.has_animation = true;
+            if let Some(op) = spec.sample_blink(self.now_ms as i64) {
+                dst.props.insert("opacity".into(), format!("{:.3}", op));
+            }
+        }
         // 收集该节点的 transition 声明（属性名 -> duration/easing）。
         let trs = parse_transition(src.props.get("transition").map(|s| s.as_str()).unwrap_or(""));
         if !trs.is_empty() {
@@ -604,5 +678,45 @@ mod tests {
         let out = a.apply(&n);
         let v: f32 = out.props["width"].parse().unwrap();
         assert!((v - 50.0).abs() < 3.0, "retarget 起点应≈50, got {}", v);
+    }
+
+    #[test]
+    fn parse_animation_blink() {
+        let s = parse_animation("blink 1.06s infinite").expect("应解析 blink");
+        assert_eq!(s.duration_ms, 1060);
+        assert_eq!(s.iterations, -1);
+        assert!(parse_animation("blink 500ms 3").is_some());
+        assert!(parse_animation("pulse 1s").is_none(), "未内置动画名应忽略");
+        assert!(parse_animation("blink").is_none(), "缺时长应忽略");
+    }
+
+    #[test]
+    fn animation_blink_sample_square_wave() {
+        let s = parse_animation("blink 1000ms infinite").unwrap();
+        assert_eq!(s.sample_blink(0), Some(1.0));
+        assert_eq!(s.sample_blink(499), Some(1.0));
+        assert_eq!(s.sample_blink(500), Some(0.0));
+        assert_eq!(s.sample_blink(999), Some(0.0));
+        assert_eq!(s.sample_blink(1000), Some(1.0));
+        let finite = parse_animation("blink 1000ms 2").unwrap();
+        assert!(finite.sample_blink(1999).is_some());
+        assert!(finite.sample_blink(2000).is_none(), "有限次数结束后不覆盖");
+    }
+
+    #[test]
+    fn animator_applies_animation_opacity() {
+        let mut a = Animator::new();
+        a.set_now(0);
+        let mut n = node(&[("animation", "blink 1000ms infinite")]);
+        n.id = "caret".into();
+        let out0 = a.apply(&n);
+        assert_eq!(out0.props["opacity"], "1.000");
+        assert!(a.has_active_animation());
+
+        a.set_now(600);
+        let out1 = a.apply(&n);
+        assert_eq!(out1.props["opacity"], "0.000");
+        // 常驻树不被污染
+        assert!(!n.props.contains_key("opacity"));
     }
 }

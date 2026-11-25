@@ -1,6 +1,7 @@
 package skia
 
 import (
+	"strings"
 	"sync"
 
 	sk "github.com/robertpanvip/gox-skia/compat"
@@ -23,6 +24,54 @@ var cjkFamilies = []string{
 	"Microsoft YaHei", "SimHei", "SimSun", "Microsoft JhengHei",
 	// 通用衬线兜底
 	"Noto Serif CJK SC", "AR PL UKai CN",
+}
+
+// monoFamilies 是跨平台等宽字体候选，按优先级排列。当 font-family 栈里
+// 声明 monospace 通用名时，Skia 不能像浏览器那样自动选等宽字体（compat 把
+// monospace 映射成默认族），因此显式挑一个本机存在的等宽族名。
+var monoFamilies = []string{
+	"Menlo", "SFMono-Regular", "Consolas", "DejaVu Sans Mono",
+	"Noto Sans Mono", "Liberation Mono", "Courier New", "monospace",
+}
+
+// pickFontFamily 从 CSS font-family 栈里挑出本机实际可用的族名，作为绘制主字体。
+// 规则与浏览器一致：按优先级取第一个命中项；具体族名精确匹配，通用族名
+// monospace 走等宽候选列表，其余通用名（sans-serif/serif/system-ui）返回空串
+// 表示系统默认。全不匹配返回空串。
+func pickFontFamily(stack string) string {
+	if stack == "" {
+		return ""
+	}
+	mgr := sk.FontMgrDefault()
+	wantMono := false
+	for _, raw := range strings.Split(stack, ",") {
+		name := strings.TrimSpace(strings.Trim(raw, `"'`))
+		if name == "" {
+			continue
+		}
+		lower := strings.ToLower(name)
+		switch lower {
+		case "monospace", "ui-monospace", "monospace ui", "fixed":
+			wantMono = true
+			continue
+		case "sans-serif", "serif", "system-ui", "system", "ui-sans-serif":
+			continue
+		}
+		if mgr.FamilyExists(name) {
+			return name
+		}
+	}
+	if wantMono {
+		for _, name := range monoFamilies {
+			if name == "monospace" {
+				continue // 通用名在 compat 里映射成默认，不作具体匹配
+			}
+			if mgr.FamilyExists(name) {
+				return name
+			}
+		}
+	}
+	return ""
 }
 
 // fontKey 唯一标识一个字体实例：族名 + 字号 + 字重。
@@ -74,8 +123,9 @@ func covers(f sk.Font, r rune) bool {
 
 // resolveFont 为字符 r 挑选可渲染的字体：主字体优先，缺字则按 cjkFamilies
 // 顺序找第一个覆盖 r 的候选；全部缺失时返回主字体（届时显示为 tofu，属环境缺字体）。
-func resolveFont(r rune, size int, bold bool) sk.Font {
-	primary := getFont("", size, bold)
+// family 是节点 font-family 栈的首个可用族名；空串表示默认 sans-serif。
+func resolveFont(r rune, size int, bold bool, family string) sk.Font {
+	primary := getFont(family, size, bold)
 	if covers(primary, r) {
 		return primary
 	}
@@ -83,6 +133,13 @@ func resolveFont(r rune, size int, bold bool) sk.Font {
 		f := getFont(fam, size, bold)
 		if covers(f, r) {
 			return f
+		}
+	}
+	// 主字体族名若来自字体栈，尝试后续候选前先退回 sans-serif，
+	// 避免未知族名（MatchFamilyStyle 返回空）导致 tofu。
+	if family != "" {
+		if fallback := getFont("", size, bold); !fallback.IsNil() && covers(fallback, r) {
+			return fallback
 		}
 	}
 	return primary
@@ -96,7 +153,8 @@ type run struct {
 
 // splitRuns 把文本按"字体选择"切成若干 run：连续使用同一字体的字符合并为一段，
 // 以减少 DrawString 调用次数。绘制与测量共用本函数，保证宽度计算与落笔完全一致。
-func splitRuns(text string, size int, bold bool) []run {
+// family 是节点 font-family 的首个可用族名，空串为默认 sans-serif。
+func splitRuns(text string, size int, bold bool, family string) []run {
 	if text == "" {
 		return nil
 	}
@@ -105,7 +163,7 @@ func splitRuns(text string, size int, bold bool) []run {
 	curStart := 0
 	first := true
 	for i, r := range text {
-		f := resolveFont(r, size, bold)
+		f := resolveFont(r, size, bold, family)
 		if first {
 			curFont = f
 			curStart = 0

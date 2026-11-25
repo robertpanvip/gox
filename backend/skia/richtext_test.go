@@ -42,6 +42,43 @@ func TestRichTextOnDivSkipsPlainTextChild(t *testing.T) {
 	}
 }
 
+func TestRichTextSelectionDrawsBackground(t *testing.T) {
+	// 三端统一 selection：富文本里带 Selected 的段应产出 selection 绘制记录，
+	// 前景改用 &::selection 子表的 color；未选中段不产出记录。
+	rt := gxscene.RichText{
+		{Text: "ab", Color: "#c586c0"},
+		{Text: "cd", Color: "#d4d4d4", Selected: true},
+		{Text: "ef", Color: "#ce9178"},
+	}
+	sel := `{"bg":"#b4d5fe","color":"#ffffff"}`
+	inst := gxscene.Render(gxscene.Template{Ops: []gxscene.Op{
+		{Code: gxscene.OpElem, Arg: "span"},
+		{Code: gxscene.OpDynAttr, Key: gxscene.PropRichText, Slot: 0},
+		{Code: gxscene.OpAttr, Key: gxscene.PropSelection, Arg: sel},
+		{Code: gxscene.OpAttr, Key: "font-size", Arg: "13"},
+		{Code: gxscene.OpChildText, Arg: rt.Plain()},
+		{Code: gxscene.OpClose},
+	}, N: 1}, func() any { return rt })
+	defer inst.Dispose()
+
+	w := NewWindow()
+	if err := w.Open(gxapp.WindowConfig{Width: 200, Height: 40}); err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+	if err := w.Draw(inst.Root()); err != nil {
+		t.Fatalf("Draw: %v", err)
+	}
+	log := w.DrawLog()
+	if got := log.Find("selection", "cd"); got != 1 {
+		t.Fatalf("选中段 cd 应有 1 条 selection 背景记录, got=%d log=%v", got, log)
+	}
+	// 只有选中段画背景；未选中段不画。
+	if got := log.Find("selection", "ab"); got != 0 || log.Find("selection", "ef") != 0 {
+		t.Errorf("未选中段不应画选区背景, log=%v", log)
+	}
+}
+
 func TestRichTextEmptyDoesNotSkipChild(t *testing.T) {
 	// 富文本为空时不应跳过文本子节点，否则普通文本行会消失。
 	inst := gxscene.Render(gxscene.Template{Ops: []gxscene.Op{

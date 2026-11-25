@@ -1,6 +1,8 @@
 package compat
 
 import (
+	"strings"
+
 	cfont "github.com/richardwilkes/canvas/font"
 	"github.com/richardwilkes/canvas/fontmgr"
 )
@@ -34,6 +36,20 @@ func (m FontMgr) MatchFamilyStyle(family string, style FontStyle) Typeface {
 	return Typeface{p: m.p.MatchFamilyStyle(family, fs)}
 }
 func (m FontMgr) IsNil() bool { return m.p == nil }
+
+// FamilyExists 报告字体管理器是否含有指定族名（精确按规范化名匹配，
+// 不使用 lookupOrDefault 的默认兜底）。供字体栈解析挑出本机可用族名。
+func (m FontMgr) FamilyExists(family string) bool {
+	if m.p == nil || family == "" {
+		return false
+	}
+	for i := 0; i < m.p.CountFamilies(); i++ {
+		if strings.EqualFold(m.p.FamilyName(i), family) {
+			return true
+		}
+	}
+	return false
+}
 
 // Font 是值类型、可比较（业务代码把它作为 sync.Map 值并与零值比较）。
 type Font struct{ p *cfont.Font }

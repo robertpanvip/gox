@@ -9,7 +9,7 @@ import (
 )
 
 // fixedMeasure 是测试用的确定性文本测宽：每个字符 10px，行高固定 20px。
-func fixedMeasure(text string, fontSize int, bold bool) float32 {
+func fixedMeasure(text string, fontSize int, bold bool, family string) float32 {
 	return float32(len([]rune(text))) * 10
 }
 

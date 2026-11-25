@@ -108,15 +108,21 @@ func (w *Window) Draw(root *gxscene.Node) error {
 		return nil
 	}
 
-	// transition：应用本帧动画覆盖（临时写 props），绘制后恢复，避免污染 host 树。
-	// 快照在 apply 之后拍——动画值随时间变化会自然触发重绘，不会误命中缓存。
+	// transition + animation：应用本帧动画覆盖（临时写 props），绘制后恢复，避免
+	// 污染 host 树。快照在 apply 之后拍——动画值随时间变化会自然触发重绘，不会
+	// 误命中缓存。animation 后于 transition 应用、先于其恢复：周期动画（blink）
+	// 对 opacity 的覆盖优先于过渡插值，与 CSS 中 animation 优先于 transition 一致。
+	now := time.Now()
+	restoreAnim := applyAnimations(root, now)
+	var restoreTrans func()
 	if w.anim != nil {
-		restore := w.anim.apply(root, time.Now())
-		w.log, w.hits = renderCached(&w.cache, w.canvas, root, float32(w.width), float32(w.height), w.fonts)
-		restore()
-	} else {
-		w.log, w.hits = renderCached(&w.cache, w.canvas, root, float32(w.width), float32(w.height), w.fonts)
+		restoreTrans = w.anim.apply(root, now)
 	}
+	w.log, w.hits = renderCached(&w.cache, w.canvas, root, float32(w.width), float32(w.height), w.fonts)
+	if restoreTrans != nil {
+		restoreTrans()
+	}
+	restoreAnim()
 	w.frames++
 	// 快照回流数据，锁外投递：PublishMeasured 的回调会写 signal → 触发重绘，
 	// 若在锁内执行会重入 Draw 自锁（InlineDispatcher 同步执行）。
@@ -235,8 +241,10 @@ func PaintTo(canvas sk.Canvas, width, height float32, root *gxscene.Node, fonts 
 		return log, hits
 	}
 	p := &painter{canvas: canvas, width: width, height: height, fonts: fonts, log: &log, hits: &hits}
+	restore := applyAnimations(root, time.Now())
 	canvas.Clear(sk.ColorSetARGB(255, 255, 255, 255))
 	p.paintFrame(root, width, height)
+	restore()
 	// 回流实测尺寸（无窗口锁，可同步投递）。
 	gxscene.PublishMeasured(measuredFromLayout(p.layout))
 	return log, hits
@@ -267,12 +275,14 @@ func PaintToScaled(canvas sk.Canvas, physW, physH, dpr float32, root *gxscene.No
 	var log DrawLog
 	var hits []HitBox
 	p := &painter{canvas: canvas, width: logicalW, height: logicalH, fonts: fonts, log: &log, hits: &hits}
+	restore := applyAnimations(root, time.Now())
 	// Clear 作用于整块 framebuffer，不受 canvas 变换影响，先清再缩放。
 	canvas.Clear(sk.ColorSetARGB(255, 255, 255, 255))
 	canvas.Save()
 	canvas.Scale(dpr, dpr)
 	p.paintFrame(root, logicalW, logicalH)
 	canvas.Restore()
+	restore()
 	gxscene.PublishMeasured(measuredFromLayout(p.layout))
 	return log, hits
 }
@@ -287,7 +297,11 @@ func PaintToCached(cache *FrameCache, canvas sk.Canvas, width, height float32, r
 	if cache == nil {
 		return PaintTo(canvas, width, height, root, fonts)
 	}
+	// 动画覆盖在 renderCached 之前拍快照，保证 blink 的 opacity 变化进入 props 签名，
+	// 不被整帧复用误判为「无变化」；绘制后恢复，不污染常驻树。
+	restore := applyAnimations(root, time.Now())
 	log, hits := renderCached(cache, canvas, root, width, height, fonts)
+	restore()
 	// 回流实测尺寸（无窗口锁，可同步投递）。
 	gxscene.PublishMeasured(cache.lastMeasured)
 	return log, hits
@@ -324,10 +338,15 @@ func PaintToCachedScaled(cache *FrameCache, canvas sk.Canvas, physW, physH, dpr 
 		return PaintToScaled(canvas, physW, physH, dpr, root, fonts)
 	}
 	logicalW, logicalH := physW/dpr, physH/dpr
+	// 声明式动画（blink）按本帧时钟采样 opacity：本入口由 Present 判有 Change 后调用，
+	// 内部跳过快照比对（knownChange），故动画值无需进签名，只在绘制期临时覆盖、
+	// 绘制后恢复。桌面光标的持续重绘由 glWindow 依据 HasActiveAnimation 维持。
+	restore := applyAnimations(root, time.Now())
 	canvas.Save()
 	canvas.Scale(dpr, dpr)
 	log, hits := renderCachedKnownChange(cache, canvas, root, logicalW, logicalH, fonts)
 	canvas.Restore()
+	restore()
 	// 回流实测尺寸（逻辑坐标，与 PaintToScaled 一致）。
 	gxscene.PublishMeasured(cache.lastMeasured)
 	return log, hits

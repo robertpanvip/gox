@@ -36,16 +36,19 @@ import (
 //   - 数字字面量加引号成 StyleValue 字符串（与 CSS 值语义一致）。
 //   - 带引号 key 的 JSON 写法同样支持，但伪状态 key 必须是单词（hover，不是 &:hover）。
 
-// stylePseudoFields 把伪状态单词 key 映射到 struct 字段名。
+// stylePseudoFields 把伪状态/伪元素单词 key 映射到 struct 字段名。
+// selection 是伪元素（::selection），与 hover 等伪状态并列为独立子表。
 var stylePseudoFields = map[string]string{
 	"hover": "Hover", "active": "Active", "focus": "Focus", "disabled": "Disabled",
+	"selection": "Selection",
 }
 
 // stylePropFields 是普通属性 kebab key → struct 字段名，与 runtime/scene/style.go
 // 的 gx tag / PascalCase 一一对应。是字段名的唯一真相表。
 var stylePropFields = map[string]string{
 	"color": "Color", "bg": "Bg", "background": "Background",
-	"width": "Width", "height": "Height", "font-size": "FontSize", "weight": "Weight",
+	"width": "Width", "height": "Height", "font-size": "FontSize",
+	"font-family": "FontFamily", "weight": "Weight",
 	"padding": "Padding", "border-radius": "BorderRadius", "border": "Border",
 	"border-width": "BorderWidth", "opacity": "Opacity",
 	"flex-direction": "FlexDirection", "flex-wrap": "FlexWrap",
@@ -62,6 +65,7 @@ var stylePropFields = map[string]string{
 	"margin-left": "MarginLeft", "margin-right": "MarginRight",
 	"text-align": "TextAlign", "line-height": "LineHeight",
 	"letter-spacing": "LetterSpacing", "z-index": "ZIndex", "cursor": "Cursor",
+	"animation": "Animation", "pointer-events": "PointerEvents",
 }
 
 // styleKeyToField 把源码 key 解析成 (字段名, 是否伪状态)。
@@ -189,7 +193,7 @@ func styleObjToTokens(raw string, pos Pos, ctx *jsxSceneCtx) ([]Token, bool) {
 		if !ok {
 			// 未知属性：报明确诊断（列出正确写法提示），整体放弃。
 			ctx.report("style-unknown-prop", toks[keyIdx].Pos,
-				"style 未知属性 "+keyRaw+"：请用固定字段的驼峰名（如 fontSize / backgroundColor）或伪状态单词（hover/active/focus/disabled）")
+				"style 未知属性 "+keyRaw+"：请用固定字段的驼峰名（如 fontSize / backgroundColor）或伪状态/伪元素单词（hover/active/focus/disabled/selection）")
 			allOK = false
 			break
 		}

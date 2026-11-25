@@ -352,6 +352,73 @@ pub fn gradient_spans(text: &str, grad: &LinearGradient, fallback: (u8, u8, u8))
     out
 }
 
+/// 在已有着色分段（渐变）基础上按 rune 区间覆盖选区前景色。
+/// base 为空时所有字符用 fallback 色；[start,end) 内的 rune 用 sel_color。
+/// 合并相邻同色字符为段，供 glyphon 逐 span 上色。
+pub fn selection_spans(
+    text: &str,
+    base: &[(String, (u8, u8, u8))],
+    fallback: (u8, u8, u8),
+    start: usize,
+    end: usize,
+    sel_color: (u8, u8, u8),
+) -> Vec<(String, (u8, u8, u8))> {
+    // 先把 base 展开成逐 char 颜色表（rune 顺序）。
+    let mut base_colors: Vec<(u8, u8, u8)> = Vec::new();
+    if base.is_empty() {
+        for _ in text.chars() { base_colors.push(fallback); }
+    } else {
+        for seg in base {
+            for _ in seg.0.chars() { base_colors.push(seg.1); }
+        }
+        // 长度不匹配（理论上不会）时用 fallback 补齐。
+        let need = text.chars().count();
+        while base_colors.len() < need { base_colors.push(fallback); }
+    }
+    let mut out: Vec<(String, (u8, u8, u8))> = Vec::new();
+    for (i, r) in text.chars().enumerate() {
+        let color = if i >= start && i < end { sel_color } else { base_colors[i] };
+        if let Some(last) = out.last_mut() {
+            if last.1 == color {
+                last.0.push(r);
+                continue;
+            }
+        }
+        out.push((r.to_string(), color));
+    }
+    out
+}
+
+#[cfg(test)]
+mod selection_tests {
+    use super::*;
+
+    #[test]
+    fn selection_spans_overrides_range() {
+        let base = vec![
+            ("ab".into(), (1, 1, 1)),
+            ("cd".into(), (2, 2, 2)),
+            ("ef".into(), (3, 3, 3)),
+        ];
+        let out = selection_spans("abcdef", &base, (9, 9, 9), 2, 4, (255, 255, 255));
+        assert_eq!(out, vec![
+            ("ab".into(), (1, 1, 1)),
+            ("cd".into(), (255, 255, 255)),
+            ("ef".into(), (3, 3, 3)),
+        ]);
+    }
+
+    #[test]
+    fn selection_spans_without_base_uses_fallback() {
+        let out = selection_spans("abcd", &[], (7, 7, 7), 1, 2, (255, 0, 0));
+        assert_eq!(out, vec![
+            ("a".into(), (7, 7, 7)),
+            ("b".into(), (255, 0, 0)),
+            ("cd".into(), (7, 7, 7)),
+        ]);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

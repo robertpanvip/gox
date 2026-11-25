@@ -59,12 +59,13 @@ func (b layoutBox) visibleContains(px, py float32) bool {
 }
 
 // fontMeasurer 抽象文本测宽，便于测试注入；生产实现走 Skia Font.MeasureText。
-type fontMeasurer func(text string, fontSize int, bold bool) (width float32)
+// family 是已解析的本机字体族名（空串=默认），与绘制端同口径。
+type fontMeasurer func(text string, fontSize int, bold bool, family string) (width float32)
 
 // skiaMeasureFunc 返回绑定到指定文本/字体的 Yoga measure 回调。
 // Yoga 在 measure 时可能传入可用宽度（AtMost/Exactly），这里文本不换行，直接返回固有尺寸。
-func skiaMeasureFunc(text string, fontSize int, bold bool, measure fontMeasurer) yoga.MeasureFunc {
-	w := measure(text, fontSize, bold)
+func skiaMeasureFunc(text string, fontSize int, bold bool, family string, measure fontMeasurer) yoga.MeasureFunc {
+	w := measure(text, fontSize, bold, family)
 	h := float32(fontSize) * 1.3
 	return func(node *yoga.Node, width float32, widthMode yoga.MeasureMode,
 		height float32, heightMode yoga.MeasureMode) yoga.Size {
@@ -186,7 +187,7 @@ func buildYogaTree(n *gxscene.Node, measure fontMeasurer, inherited textStyle) (
 
 	switch n.Type {
 	case gxscene.NodeText:
-		yn.SetMeasureFunc(skiaMeasureFunc(n.Text, eff.fontSize, eff.bold, measure))
+		yn.SetMeasureFunc(skiaMeasureFunc(n.Text, eff.fontSize, eff.bold, eff.family, measure))
 		return yn, pairs
 	case gxscene.NodeFragment:
 		// 透明包装（#root/#frag/组件槽）：用 CSS display:contents 语义——自身不产生
@@ -417,14 +418,14 @@ func propStr(props map[string]any, key string) string {
 // 字体由 font.go 的 resolveFont/splitRuns 按字符解析（含 CJK fallback），
 // 与绘制端共用同一字体决策，避免测量宽度与落笔宽度不一致。
 func skiaFontMeasurer() fontMeasurer {
-	return func(text string, fontSize int, bold bool) float32 {
+	return func(text string, fontSize int, bold bool, family string) float32 {
 		if text == "" {
 			return 0
 		}
 		// 与绘制端同口径：按字体分段累加宽度。中文走 CJK fallback 字体，
 		// 其字宽与主字体不同，若这里仍用主字体测量，Yoga 给的文本框会偏窄、文字溢出。
 		var total float32
-		for _, r := range splitRuns(text, fontSize, bold) {
+		for _, r := range splitRuns(text, fontSize, bold, family) {
 			if r.text == "" || r.font.IsNil() {
 				continue
 			}
