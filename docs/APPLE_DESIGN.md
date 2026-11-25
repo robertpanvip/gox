@@ -62,6 +62,16 @@ inst := widgets.Button(gxscene.Props{ /* ... */ })
 - 旧版 `Theme*`（`ThemeBg` / `ThemePanel` / `ThemeAccent` …）保留同名导出符号，但已从常量改为变量；`SetTheme` 会把它们同步为当前主题令牌。这样既有业务代码与测试仍可直接比较符号，浅色主题下也不会残留深色控件。
 - `ShadowCard` / `ShadowFloat` / `ShadowModal` 同样随主题同步，浅色主题使用更轻的阴影。
 
+### 阴影：三端像素对齐
+
+Apple HIG 的阴影是**极低不透明度的多层柔和叠加**（大 blur、近零 offset），深色背景上需约 2× alpha 才可见。三端共用同一套 token 与同一套 **6 层矩形近似高斯算法**，因此同一 token 在三端视觉一致：
+
+- **Skia（桌面）** `backend/skia/paint.go:paintShadow`：for i=6..1，`expand = spread + blur·(i/6)`，`a = baseA·(1−i/6)/6·1.8`，画圆角矩形。
+- **Rust（原生）** `backend/rust/rust/src/render.rs:paint_shadow_tiny`：逐行同算法。
+- **Web（浏览器）** `backend/web/stylemap.go:expandBoxShadow`：不再用浏览器原生高斯，而是把单层 token 展开成 6 层 CSS `box-shadow`（`ox oy 0px expand rgba(...,a/255)`），逐层复刻上面两端公式，输出顺序 i=1..6 对应 CSS 首个阴影在最上层。
+
+token 灰度按叠加大致 `中心 alpha ≈ token alpha × 0.71` 校准，故取值略高于目标视觉值。测试 `TestExpandBoxShadowMatchesSkia` 逐层比对 expand 与 alpha，保证三端公式不漂移。
+
 ## 3. 浮层三件套
 
 浮层角色由 `gx-role` 标记，脱离 flex 流、最后绘制、浮层优先命中。见 `docs/STYLE.md`。

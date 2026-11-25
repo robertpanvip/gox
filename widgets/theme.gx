@@ -146,8 +146,9 @@ var LightTheme = Theme{
 	FontLargeTitle: FontLargeTitle, FontTitle1: FontTitle1, FontTitle2: FontTitle2,
 	FontTitle3: FontTitle3, FontHeadline: FontHeadline, FontBody: FontBody,
 	FontCallout: FontCallout, FontSubheadline: FontSubheadline, FontFootnote: FontFootnote,
-	ShadowCard: "0 2px 8px 0 #0000001a", ShadowFloat: "0 8px 24px 0 #00000026",
-	ShadowModal: "0 20px 56px 0 #00000033",
+	// Apple HIG 阴影（本轮重定）：低 alpha、大 blur、近零 offset；配合 6 层算法三端一致。
+	ShadowCard: "0 1px 4px 0 #0000001a", ShadowFloat: "0 6px 18px 0 #00000026",
+	ShadowModal: "0 16px 44px 0 #0000003d",
 	Space1:      Space1, Space2: Space2, Space3: Space3, Space4: Space4,
 	Space5: Space5, Space6: Space6, Space8: Space8,
 }

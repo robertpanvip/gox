@@ -26,10 +26,16 @@ func main() {
 			}
 		}
 	}
+	applyTheme := func(t widgets.Theme, name string) {
+		widgets.SetTheme(t)
+		// 同步页面底色：canvas 固定 900pt 宽，视口更宽处露出 body 背景，
+		// 需与主题一致，否则深色模式右侧露出浅灰，破坏与桌面端的对齐观感。
+		js.Global().Get("document").Get("body").Call("setAttribute", "data-theme", name)
+	}
 	if theme == "light" {
-		widgets.SetTheme(widgets.LightTheme)
+		applyTheme(widgets.LightTheme, "light")
 	} else {
-		widgets.SetTheme(widgets.DarkTheme)
+		applyTheme(widgets.DarkTheme, "dark")
 	}
 
 	win := gxweb.MustOpen("#app")
@@ -66,7 +72,12 @@ func registerThemeToggle(app *gxapp.App) {
 			"height:28px;padding:0 12px;border-radius:6px;border:1px solid #ffffff22;background:#ffffff18;color:inherit;cursor:pointer;font:13px -apple-system,system-ui,sans-serif;")
 		b.Set("textContent", text)
 		b.Call("addEventListener", "click", js.FuncOf(func(this js.Value, args []js.Value) any {
+			name := "dark"
+			if t.Name == "light" {
+				name = "light"
+			}
 			widgets.SetTheme(t)
+			js.Global().Get("document").Get("body").Call("setAttribute", "data-theme", name)
 			_ = app.Render(func() any { return showcase.Build(showcase.DefaultWidth, 1500) })
 			_ = app.Draw()
 			return nil

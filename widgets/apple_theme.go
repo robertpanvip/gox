@@ -121,12 +121,15 @@ const (
 	FontFootnote    = "10"
 )
 
-// ---- 柔和多层阴影（Apple 阴影：大扩散、低 alpha、向下偏移）----
+// ---- 柔和多层阴影（Apple HIG：低 alpha、大 blur、近零 offset）----
+// Apple 阴影是「极低不透明度的多层柔和叠加」，深色背景上需约 2× 才可见。
+// 后端用 6 层矩形近似模拟高斯，叠加后中心 alpha ≈ token alpha × 0.71，
+// 故 token 取值略高于目标视觉值。三端共用同一套 token + 同一套 6 层算法。
 // 用 var 而不是 const：SetTheme 会按明暗主题同步成对应强度（浅色更轻）。
 var (
-	ShadowCard  = "0 4px 16px 0 #00000040"
-	ShadowFloat = "0 10px 30px 0 #00000066"
-	ShadowModal = "0 24px 64px 0 #00000099"
+	ShadowCard  = "0 2px 8px 0 #00000033"
+	ShadowFloat = "0 8px 24px 0 #0000004d"
+	ShadowModal = "0 20px 56px 0 #00000066"
 )
 
 // ---- 8pt 间距标度 ----
