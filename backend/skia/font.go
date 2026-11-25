@@ -3,7 +3,7 @@ package skia
 import (
 	"sync"
 
-	sk "github.com/pekim/go-skia"
+	sk "github.com/robertpanvip/gox-skia/compat"
 )
 
 // cjkFamilies 是跨平台的中日韩（CJK）无衬线字体族候选，按优先级排列。

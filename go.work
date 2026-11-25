@@ -1,10 +1,11 @@
-go 1.27
+go 1.27.2
 
 use (
 	.
 	./backend/rust/go
 	./backend/skia
 	./backend/web
+	./third_party/skia
 	./examples/desktop-demo
 	./examples/wasm-demo
 	./examples/playground

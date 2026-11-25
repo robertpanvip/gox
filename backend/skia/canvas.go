@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"strings"
 
-	sk "github.com/pekim/go-skia"
+	sk "github.com/robertpanvip/gox-skia/compat"
 	"github.com/robertpanvip/gox/runtime/canvas"
 	gxscene "github.com/robertpanvip/gox/runtime/scene"
 )

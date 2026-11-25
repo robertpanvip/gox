@@ -12,7 +12,7 @@ import (
 	"strings"
 	"sync"
 
-	sk "github.com/pekim/go-skia"
+	sk "github.com/robertpanvip/gox-skia/compat"
 	"github.com/robertpanvip/gox/runtime/imgutil"
 	gxscene "github.com/robertpanvip/gox/runtime/scene"
 )

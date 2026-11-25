@@ -3,7 +3,7 @@ package skia
 import (
 	"testing"
 
-	sk "github.com/pekim/go-skia"
+	sk "github.com/robertpanvip/gox-skia/compat"
 )
 
 // TestResolveFontCJK：主字体 sans-serif 缺中文/日文字形，resolveFont 必须

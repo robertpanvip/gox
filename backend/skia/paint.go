@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	sk "github.com/pekim/go-skia"
+	sk "github.com/robertpanvip/gox-skia/compat"
 	gxscene "github.com/robertpanvip/gox/runtime/scene"
 )
 
@@ -358,7 +358,10 @@ func (p *painter) paintElement(n *gxscene.Node, box layoutBox) {
 		// 不在背景绘制，交由下方着色逻辑处理。
 		if grad := gradientBg(n); grad != "" && !isGradientText(n) {
 			if lg := parseLinearGradient(grad); lg != nil {
-				p.paintGradientBackground(lg, box, s.radius)
+				// 原生 shader 优先（一次构造、一次绘制）；构造失败回退 CPU 条带近似。
+				if !p.paintGradientBackgroundShader(lg, box, s.radius) {
+					p.paintGradientBackground(lg, box, s.radius)
+				}
 				*p.log = append(*p.log, DrawOp{Kind: "gradient-bg", Name: n.Kind, X: box.X, Y: box.Y, W: box.W, H: box.H, ARGB: s.bg})
 			}
 		}
@@ -392,10 +395,17 @@ func (p *painter) paintElement(n *gxscene.Node, box layoutBox) {
 		} else if grad := gradientBg(n); grad != "" && isGradientText(n) {
 			// 仅编辑器代码行（gradient-text 标记）把渐变映射到文字；
 			// 普通 div 的渐变已在上方画成背景，此处不处理。
-			if rt := cachedGradientRich(grad, nodeText(n)); len(rt) > 0 {
-				st := textStyle{color: s.color, fontSize: s.fontSize, bold: s.bold}
-				p.paintRichText(n, rt, box, st)
-				coloredText = rt.Plain()
+			st := textStyle{color: s.color, fontSize: s.fontSize, bold: s.bold}
+			txt := nodeText(n)
+			// 原生 shader 优先：整段文字共享一份渐变 shader，按字形 canvas 坐标取色，
+			// 零 Go 侧拆色分配；构造失败回退到 RichText 分段路径。
+			if !p.paintGradientTextShader(grad, txt, box, st) {
+				if rt := cachedGradientRich(grad, txt); len(rt) > 0 {
+					p.paintRichText(n, rt, box, st)
+					coloredText = rt.Plain()
+				}
+			} else {
+				coloredText = txt
 			}
 		}
 		if coloredText != "" {

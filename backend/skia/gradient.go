@@ -7,7 +7,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	sk "github.com/pekim/go-skia"
+	sk "github.com/robertpanvip/gox-skia/compat"
 	gxscene "github.com/robertpanvip/gox/runtime/scene"
 )
 
@@ -414,6 +414,164 @@ func gradientStrip(t float64, angle float64, box layoutBox) (x, y, w, h float32)
 		x, w = box.X, box.W
 	}
 	return
+}
+
+// ---- 原生 Skia Shader 渐变路径 ----
+//
+// 迁移到完整 Skia 绑定后，渐变改走原生 shader：一次构造 shader、一次绘制，
+// 不再逐条带画矩形。色标位置单调递增∈[0,1]，双位置硬段靠"同色两点 + 相邻段
+// 边界异色"形成硬边（Skia 对相同位置的色标做瞬时跳变）。
+
+// gradientShaderColors 把色标展开为 Skia shader 需要的 (colors, positions)。
+// chTotal>0 时（文字渐变，ch 是字符格）用 chTotal 归一化；否则用 axisLen（背景，
+// 遵循 CSS 渐变轴长度）归一化。双位置段展开成起止两个同色锚点，形成纯色块。
+func gradientShaderColors(g *linearGradient, axisLen float64, chTotal int) ([]sk.Color, []float32) {
+	norm := func(p gradPos) float64 {
+		if chTotal > 0 {
+			if p.unit == "ch" {
+				return p.value / float64(chTotal)
+			}
+		}
+		return posFraction(p, axisLen)
+	}
+	type anchor struct {
+		pos float64
+		col sk.Color
+	}
+	var anchors []anchor
+	for _, cs := range g.stops {
+		c, ok := parseColor(cs.color)
+		if !ok {
+			continue
+		}
+		col := sk.Color(c)
+		if cs.hasStart && cs.hasEnd {
+			anchors = append(anchors, anchor{norm(cs.start), col}, anchor{norm(cs.end), col})
+		} else if cs.hasStart {
+			anchors = append(anchors, anchor{norm(cs.start), col})
+		} else {
+			anchors = append(anchors, anchor{0, col})
+		}
+	}
+	if len(anchors) == 0 {
+		return nil, nil
+	}
+	// 位置钳制到 [0,1] 并强制单调不减（Skia 要求；重复位置=硬边）。
+	colors := make([]sk.Color, 0, len(anchors)+2)
+	positions := make([]float32, 0, len(anchors)+2)
+	last := -1.0
+	for _, a := range anchors {
+		t := a.pos
+		if t < 0 {
+			t = 0
+		}
+		if t > 1 {
+			t = 1
+		}
+		if t < last {
+			t = last
+		}
+		if len(positions) > 0 && t == last && colors[len(colors)-1] == a.col {
+			// 同位置且同色：合并（Skia 不接受多余重复，且视觉无差异）。
+			// 注意同位置不同色必须保留两个——这正是硬色块边界的跳变。
+			continue
+		}
+		colors = append(colors, a.col)
+		positions = append(positions, float32(t))
+		last = t
+	}
+	// Skia 要求首尾锚定 0 和 1。
+	if positions[0] > 0 {
+		colors = append([]sk.Color{colors[0]}, colors...)
+		positions = append([]float32{0}, positions...)
+	}
+	if positions[len(positions)-1] < 1 {
+		colors = append(colors, colors[len(colors)-1])
+		positions = append(positions, 1)
+	}
+	return colors, positions
+}
+
+// gradientLine 按 CSS 角度求穿过盒子中心、长度为 axisLen 的渐变起止点（canvas 坐标）。
+func gradientLine(g *linearGradient, box layoutBox) (sk.Point, sk.Point) {
+	rad := g.angle * math.Pi / 180
+	dx, dy := math.Sin(rad), -math.Cos(rad) // CSS：0°=上(-y)、90°=右(+x)
+	L := float32(gradientAxisLen(g.angle, box.W, box.H))
+	cx, cy := box.X+box.W/2, box.Y+box.H/2
+	hx, hy := float32(dx)*L/2, float32(dy)*L/2
+	return sk.Point{X: cx - hx, Y: cy - hy}, sk.Point{X: cx + hx, Y: cy + hy}
+}
+
+// paintGradientBackgroundShader 用原生 shader 绘制渐变背景（一次构造、一次绘制）。
+func (p *painter) paintGradientBackgroundShader(g *linearGradient, box layoutBox, radius float32) bool {
+	axisLen := gradientAxisLen(g.angle, box.W, box.H)
+	colors, positions := gradientShaderColors(g, axisLen, 0)
+	if len(colors) < 2 {
+		return false
+	}
+	start, end := gradientLine(g, box)
+	shader := sk.NewLinearGradientShader(start, end, colors, positions)
+	if shader.IsNil() {
+		return false
+	}
+	defer shader.Delete()
+	paint := sk.NewPaint()
+	defer paint.Delete()
+	paint.SetAntiAlias(true)
+	paint.SetShader(shader)
+	h := maxF(box.H, 1)
+	rect := sk.RectMakeXYWH(box.X, box.Y, box.W, h)
+	if r := radiusClamp(radius, box.W, h); r > 0 {
+		p.canvas.DrawRoundRect(rect, r, r, paint)
+	} else {
+		p.canvas.DrawRect(rect, paint)
+	}
+	return true
+}
+
+// paintGradientTextShader 用原生 shader 给文字上色（替代逐字符 RichText 拆色）。
+// grad 是形如 linear-gradient(90deg, #c 0ch 7ch, ...) 的分段纯色编码；text 为行文本。
+// 色段位置按字符格(ch)归一化到 [0,1]，shader 沿文本水平跨度铺开；文字按字体回退
+// 切 run 绘制，shader 基于 canvas 坐标为每个字形取色——一次构造、零 Go 侧拆色分配。
+func (p *painter) paintGradientTextShader(grad, text string, box layoutBox, st textStyle) bool {
+	g := parseLinearGradient(grad)
+	if g == nil || text == "" {
+		return false
+	}
+	chTotal := 0
+	for _, r := range text {
+		chTotal += gradientCells(r)
+	}
+	if chTotal <= 0 {
+		return false
+	}
+	colors, positions := gradientShaderColors(g, 0, chTotal)
+	if len(colors) < 2 {
+		return false
+	}
+	shader := sk.NewLinearGradientShader(
+		sk.Point{X: box.X, Y: box.Y},
+		sk.Point{X: box.X + maxF(box.W, 1), Y: box.Y},
+		colors, positions,
+	)
+	if shader.IsNil() {
+		return false
+	}
+	defer shader.Delete()
+	baseline := box.Y + float32(st.fontSize)
+	x := box.X
+	paint := sk.NewPaint()
+	defer paint.Delete()
+	paint.SetAntiAlias(true)
+	paint.SetShader(shader)
+	for _, r := range splitRuns(text, st.fontSize, st.bold) {
+		if r.text == "" || r.font.IsNil() {
+			continue
+		}
+		p.canvas.DrawString(r.text, x, baseline, r.font, paint)
+		x += r.font.MeasureText([]byte(r.text), uint32(len(r.text)), sk.TextEncodingUTF8, nil)
+	}
+	return true
 }
 
 // paintGradientBackground 用条带近似绘制 CSS 线性渐变背景。

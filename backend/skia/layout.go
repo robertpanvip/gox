@@ -2,7 +2,7 @@ package skia
 
 import (
 	yoga "github.com/ahati/yoga-go-binding"
-	sk "github.com/pekim/go-skia"
+	sk "github.com/robertpanvip/gox-skia/compat"
 	gxscene "github.com/robertpanvip/gox/runtime/scene"
 )
 

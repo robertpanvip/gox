@@ -175,3 +175,51 @@ func TestParseLinearGradientGeneral(t *testing.T) {
 		t.Errorf("to right 应解析为 90deg, got %+v", g2)
 	}
 }
+
+func TestGradientShaderColorsHardStops(t *testing.T) {
+	// 双位置硬色块：red[0,6ch) + blue[6ch,12ch)，chTotal=12。
+	// 期望展开成 [red@0, red@0.5, blue@0.5, blue@1]，边界 0.5 处硬跳变。
+	g := parseLinearGradient("linear-gradient(90deg, #ff0000 0ch 6ch, #0000ff 6ch 12ch)")
+	if g == nil {
+		t.Fatal("parseLinearGradient 返回 nil")
+	}
+	colors, positions := gradientShaderColors(g, 0, 12)
+	if len(colors) != 4 || len(positions) != 4 {
+		t.Fatalf("期望 4 个色标, got colors=%d positions=%d", len(colors), len(positions))
+	}
+	wantPos := []float32{0, 0.5, 0.5, 1}
+	for i := range wantPos {
+		if positions[i] != wantPos[i] {
+			t.Errorf("positions[%d]=%v want %v", i, positions[i], wantPos[i])
+		}
+	}
+	// 前两个红色（R 高 B 低），后两个蓝色（B 高 R 低）。
+	argbBytes := func(c uint32) (r, b uint32) { return c >> 16 & 0xff, c & 0xff }
+	for i := 0; i < 2; i++ {
+		r, b := argbBytes(uint32(colors[i]))
+		if r < 200 || b > 50 {
+			t.Errorf("colors[%d] 应为红色, got R=%d B=%d", i, r, b)
+		}
+	}
+	for i := 2; i < 4; i++ {
+		r, b := argbBytes(uint32(colors[i]))
+		if b < 200 || r > 50 {
+			t.Errorf("colors[%d] 应为蓝色, got R=%d B=%d", i, r, b)
+		}
+	}
+}
+
+func TestGradientShaderColorsSmoothStops(t *testing.T) {
+	// 单位置色标：red@0% + blue@100%，平滑渐变，锚定首尾。
+	g := parseLinearGradient("linear-gradient(90deg, #ff0000 0%, #0000ff 100%)")
+	if g == nil {
+		t.Fatal("parseLinearGradient 返回 nil")
+	}
+	colors, positions := gradientShaderColors(g, 100, 0)
+	if len(colors) != 2 || len(positions) != 2 {
+		t.Fatalf("期望 2 个色标, got %d/%d", len(colors), len(positions))
+	}
+	if positions[0] != 0 || positions[1] != 1 {
+		t.Errorf("positions=%v want [0 1]", positions)
+	}
+}
