@@ -40,6 +40,7 @@ const (
 type EditorState struct {
     sourceCode Signal.Signal[string]
     doc           *Rope.Rope        // 文本权威：持久 Rope 根，编辑走 O(log N)；sourceCode 是它的字符串派生
+    textDirty     bool              // sourceCode 落后于 doc：Text() 首次读取时惰性 O(N) 序列化一次
     cursorLine Signal.Signal[int]
     cursorCol Signal.Signal[int]
     selAnchorLine Signal.Signal[int]
@@ -68,18 +69,19 @@ type EditorState struct {
 func NewEditorState(source string) *EditorState {
     if source == "" { source = editorDefaultSource }
     vers := make([]int, 24)
-    lc := Rope.Of(source).LineCount()
+    doc := Rope.Of(source) // 只构造一次：LineCount 与文本权威共用同一棵根
+    lc := doc.LineCount()
     st := &EditorState{
-        sourceCode:    Signal.LockedGetterShared("sf:source:3030",func() string { return source },
+        sourceCode:    Signal.LockedGetterShared("sf:source:3146",func() string { return source },
 func(__v string) { source = __v },
 ),
-        doc:           Rope.Of(source),
+        doc:           doc, // 单次构造：LineCount 与文本权威共用同一棵根
         cursorLine:    Signal.New(0),
         cursorCol:     Signal.New(0),
         selAnchorLine: Signal.New(0),
         selAnchorCol:  Signal.New(0),
         focused:       Signal.New(false),
-        lineCount:     Signal.LockedGetterShared("sf:lc:3145",func() int { return lc },
+        lineCount:     Signal.LockedGetterShared("sf:lc:3353",func() int { return lc },
 func(__v int) { lc = __v },
 ),
         scrollTop:     Signal.New(0.0),
@@ -236,6 +238,13 @@ func (s *EditorState) PickColumn(idx int, x float64) int {
 func splitLines(v string) []string { return strings.Split(v, "\n") }
 func joinLines(ls []string) string { return strings.Join(ls, "\n") }
 func runeLen(v string) int { return len([]rune(v)) }
+
+// countRune 统计 v 中目标 rune 的出现次数（用于多行插入估算受影响行数）。
+func countRune(v string, target rune) int {
+    n := 0
+    for _, r := range v { if r == target { n = n + 1 } }
+    return n
+}
 func indices(n int) []int {
     out := []int{}
     for i := 0; i < n; i = i + 1 { out = append(out, i) }
@@ -412,16 +421,18 @@ func (s *EditorState) deleteSelectionInner() {
     tl, tc := s.selTo()
     nr := ropeDeleteRange(s.doc, fl, fc, tl, tc)
     Signal.Batch(func() {
-        s.applyRope(nr)
+        s.applyRopeDelta(nr, dirtyLinesFromDelete(fl, tl))
         s.cursorLine(fl); s.cursorCol(fc); s.selAnchorLine(fl); s.selAnchorCol(fc)
     })
 }
 
 // ---- 撤销 / 重做 ----
 
-// snapshot 捕获当前编辑前状态：持久 Rope 根 O(1) 共享，Text 仍写供兼容读取。
+// snapshot 捕获编辑前状态：持久 Rope 根 O(1) 指针赋值即可，不读全文字符串
+// （Text 留空；restore 优先用 Doc，老快照无 Doc 时才回退 Text）。这让 pushUndo
+// 保持 O(1)，高频输入不会因撤销栈触发 O(N) 序列化。
 func (s *EditorState) snapshot() editSnapshot {
-    return editSnapshot{Doc: s.doc, Text: s.sourceCode(), Ln: s.cursorLine(), Col: s.cursorCol()}
+    return editSnapshot{Doc: s.doc, Ln: s.cursorLine(), Col: s.cursorCol()}
 }
 
 func (s *EditorState) pushUndo() {
@@ -458,16 +469,35 @@ func (s *EditorState) Redo() {
 
 // ---- 包级编辑命令（装配层收到键盘事件后调用）----
 
+// dirtyLinesFromInsert 返回在 ln 行插入 v 后受影响的行（含插出的多行）。
+// 给宽不漏：把整段插入覆盖的行号都标脏即可，多余几行只是多失效缓存。
+func dirtyLinesFromInsert(ln int, v string) []int {
+    n := countRune(v, '\n') + 1
+    out := make([]int, 0, n)
+    for i := 0; i < n; i = i + 1 { out = append(out, ln+i) }
+    return out
+}
+
+// dirtyLinesFromDelete 返回 [fl..tl] 区间删除后受影响的合并行。跨行删除会把
+// tl 的内容并入 fl，受影响行是 fl 到 tl 的原范围（新文档中 fl 起重新编号）。
+func dirtyLinesFromDelete(fl int, tl int) []int {
+    out := make([]int, 0, tl-fl+1)
+    for i := fl; i <= tl; i = i + 1 { out = append(out, i) }
+    return out
+}
+
 func (s *EditorState) Insert(v string) {
     s.pushUndo()
     r := s.doc; ln := s.cursorLine(); col := s.cursorCol()
+    dirty := dirtyLinesFromInsert(ln, v)
     if s.HasSelection() {
         fl, fc := s.selFrom(); tl, tc := s.selTo()
         r = ropeDeleteRange(r, fl, fc, tl, tc); ln = fl; col = fc
+        dirty = dirtyLinesFromInsert(ln, v)
     }
     nr, c := ropeInsertText(r, ln, col, v)
     Signal.Batch(func() {
-        s.applyRope(nr)
+        s.applyRopeDelta(nr, dirty)
         s.cursorLine(ln); s.cursorCol(c); s.selAnchorLine(ln); s.selAnchorCol(c); s.focused(true)
     })
 }
@@ -476,8 +506,9 @@ func (s *EditorState) Backspace() {
     s.pushUndo()
     if s.HasSelection() { s.deleteSelectionInner(); return }
     nr, ln, c := ropeBackspaceAt(s.doc, s.cursorLine(), s.cursorCol())
+    dirty := []int{ln}
     Signal.Batch(func() {
-        s.applyRope(nr)
+        s.applyRopeDelta(nr, dirty)
         s.cursorLine(ln); s.cursorCol(c); s.selAnchorLine(ln); s.selAnchorCol(c)
     })
 }
@@ -491,7 +522,7 @@ func (s *EditorState) Newline() {
     }
     nr, nl, c := ropeNewlineAt(r, ln, col)
     Signal.Batch(func() {
-        s.applyRope(nr)
+        s.applyRopeDelta(nr, []int{ln, nl})
         s.cursorLine(nl); s.cursorCol(c); s.selAnchorLine(nl); s.selAnchorCol(c)
     })
 }
@@ -671,7 +702,7 @@ func (s *EditorState) DeleteForward() {
     ln := s.cursorLine(); col := s.cursorCol()
     nr, c := ropeDeleteForward(s.doc, ln, col)
     Signal.Batch(func() {
-        s.applyRope(nr)
+        s.applyRopeDelta(nr, []int{ln})
         s.cursorLine(ln); s.cursorCol(c); s.selAnchorLine(ln); s.selAnchorCol(c)
     })
 }
@@ -744,8 +775,9 @@ func (s *EditorState) Paste(v string) {
     off := r.LineColToOffset(ln, col)
     nr := r.Insert(off, v)
     nl, nc := nr.OffsetToLineCol(off + runeLen(v))
+    dirty := dirtyLinesFromInsert(ln, v)
     Signal.Batch(func() {
-        s.applyRope(nr)
+        s.applyRopeDelta(nr, dirty)
         s.cursorLine(nl); s.cursorCol(nc); s.selAnchorLine(nl); s.selAnchorCol(nc); s.focused(true)
     })
 }
@@ -761,9 +793,19 @@ func (s *EditorState) SetCharWidth(w float64)  { Signal.Batch(func() { s.charWid
 func (s *EditorState) SetWideWidth(w float64) { Signal.Batch(func() { s.wideWidth(w) }) }
 
 // Line / Col / Text 读取当前光标与源码（非响应式，供 handler 一次性读取）。
-func (s *EditorState) Line() int    { return s.cursorLine() }
-func (s *EditorState) Col() int     { return s.cursorCol() }
-func (s *EditorState) Text() string { return s.sourceCode() }
+func (s *EditorState) Line() int { return s.cursorLine() }
+func (s *EditorState) Col() int  { return s.cursorCol() }
+
+// Text 返回整篇文本。sourceCode 是 doc 的惰性字符串投影：编辑只写 doc（O(log N)），
+// 标 textDirty；只有真正有人读全文时（导出/诊断/测试）才 O(N) 序列化一次，
+// 并在连续读取间复用。视图渲染从不走这里——它按行读 lineTextCache。
+func (s *EditorState) Text() string {
+    if s.textDirty {
+        Signal.Batch(func() { s.sourceCode(s.doc.String()) })
+        s.textDirty = false
+    }
+    return s.sourceCode()
+}
 
 // ---- caret / 选区几何（与行版本 getter 共用同一套坐标公式）----
 
@@ -1081,25 +1123,44 @@ func (s *EditorState) setSource(text string) {
     s.setSourceFromRope(s.doc, text)
 }
 
-// setSourceFromRope 以已构造好的 Rope 根 + 其字符串写状态，避免编辑命令里
-// 先从 Rope.String() 拿到 text 后再次 Rope.Of(text) 的重复构造。
+// setSourceFromRope 全文替换路径：SetSource / Undo / Redo 用（低频）。
+// 它拿到完整的 text，做一次 splitLines 定位变化行——O(N) 但无 tokenize，
+// 且只在整篇替换时发生。sourceCode 标脏，全文字符串推迟到 Text() 首次读取。
 func (s *EditorState) setSourceFromRope(r *Rope.Rope, text string) {
     s.doc = r
-    newLines := splitLines(text) // 仅为定位变化行；O(N) 但无 tokenize，行级 highlight 已惰性化
+    s.textDirty = true
+    newLines := splitLines(text)
     changed := s.rebuildTokenCache(newLines)
     Signal.Batch(func() {
         // 先扩容 Vec（>64 自动切 pvector 大后端），再 bump——否则新增行的 bumpRow 越界被跳过。
         s.rowVers.SetLen(len(newLines))
         for _, i := range changed { s.bumpRow(i) }
         s.lineCount(len(newLines))
-        s.sourceCode(text)
+        if !s.textDirty { s.sourceCode(text) } // 已缓存最新全文时同步写回
     })
 }
 
-// applyRope 把一次 Rope 编辑的结果（新根 + 光标）落地到状态：由新根取字符串，
-// 复用同一份根做 token/行版本更新（不重复构造 Rope）。
-func (s *EditorState) applyRope(r *Rope.Rope) {
-    s.setSourceFromRope(r, r.String())
+// applyRopeDelta 增量落地路径：高频编辑用。只传入新根与受影响行索引，
+// 不序列化全文、不 splitLines、不遍历所有行——每行 highlight 仍是惰性的。
+// dirty 行可能是 1 行（行内插入）到多行（多行粘贴/跨行删除合并）；即使给宽了
+// 也只是多失效几行，不影响正确性。行号以【编辑后的新文档】为准。
+func (s *EditorState) applyRopeDelta(r *Rope.Rope, dirty []int) {
+    s.doc = r
+    s.textDirty = true
+    newCount := r.LineCount()
+    // 只刷新受影响行的文本快照 + 失效其 token 缓存；新增行的缓存槽惰性创建。
+    for _, i := range dirty {
+        if i < 0 || i >= newCount { continue }
+        s.ensureCacheLen(newCount)
+        s.lineTextCache[i] = r.Line(i)
+        s.tokenCache[i] = nil
+        s.textCache[i] = ""
+    }
+    Signal.Batch(func() {
+        s.rowVers.SetLen(newCount)
+        for _, i := range dirty { s.bumpRow(i) }
+        s.lineCount(newCount)
+    })
 }
 
 func (s *EditorState) lineText(idx int) string {
