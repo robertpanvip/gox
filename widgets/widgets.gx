@@ -89,15 +89,25 @@ var (
 sig focusToken = ""   // 当前聚焦输入框的 token；空串表示无焦点
 sig blinkOn    = true // 光标是否可见
 
+// toggleBlink 经 UI Runtime 投递翻转光标状态。
+//
+// 它是 blinkOn 唯一的写入点。后台 ticker 只负责定时调用它，绝不直接读写
+// 响应式 signal——读写会重建依赖图（clearDeps/track 改 map），与 UI 线程
+// 并发写会触发 fatal error: concurrent map writes。UI 未就绪/已关闭时
+// Signal.safe 安全跳过，不静默在后台线程执行。
+func toggleBlink() {
+	Signal.safe(() => { blinkOn = !blinkOn })
+}
+
 func init() {
 	// 光标闪烁：每 530ms 翻转一次。写 signal 会触发订阅了光标 getter 的 app
 	// 聚合 effect 重跑 → Update → Draw。窗口关闭后 effect 被 Dispose，写 signal
-	// 不再触发任何重绘，goroutine 本身无副作用。
+	// 不再触发任何重绘。
 	go func() {
 		t := time.newTicker(530 * time.millisecond)
 		defer t.Stop()
 		for range t.C {
-			blinkOn = !blinkOn
+			toggleBlink()
 		}
 	}()
 }
