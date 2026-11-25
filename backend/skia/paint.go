@@ -262,9 +262,9 @@ func (p *painter) paintChildrenClipped(n *gxscene.Node, box layoutBox, eff textS
 		p.canvas.ClipRect(clip, sk.ClipOpIntersect, false)
 	}
 	for _, c := range n.Children {
-		// 父节点带 rich-text 时，其分段着色已由 paintElement 一次绘制；
+		// 父节点带 rich-text 或 CSS 渐变背景时，其分段着色已由 paintElement 一次绘制；
 		// 跳过纯文本子节点，避免普通单色文字覆盖在上面（同时抵消正确着色）。
-		if isRichText(n) && (c.Kind == "#text" || c.Type == gxscene.NodeText) {
+		if (isRichText(n) || gradientBg(n) != "") && (c.Kind == "#text" || c.Type == gxscene.NodeText) {
 			continue
 		}
 		if overlay {
@@ -285,6 +285,34 @@ func isRichText(n *gxscene.Node) bool {
 	}
 	rt, ok := gxscene.RichTextFromProps(n.Props)
 	return ok && len(rt) > 0
+}
+
+// gradientBg 返回节点 bg/background 属性里的 CSS 渐变字符串（若存在）。
+// 编辑器的语法高亮以此作为统一着色来源：Web 端 CSS background-clip:text 消费，
+// Skia 端在此解析回 RichText 分段绘制。非渐变值返回空串。
+func gradientBg(n *gxscene.Node) string {
+	if n == nil {
+		return ""
+	}
+	for _, k := range []string{propBg, propBgAlt} {
+		if v, ok := n.Props[k].(string); ok && strings.HasPrefix(v, "linear-gradient(") {
+			return v
+		}
+	}
+	return ""
+}
+
+// nodeText 返回节点下第一个非空文本子节点的文本，作为渐变着色的落笔内容。
+func nodeText(n *gxscene.Node) string {
+	if n == nil {
+		return ""
+	}
+	for _, c := range n.Children {
+		if c.Text != "" {
+			return c.Text
+		}
+	}
+	return ""
 }
 
 // paintElement 按 Yoga 给出的矩形画元素背景，并记录命中矩形。
@@ -326,13 +354,25 @@ func (p *painter) paintElement(n *gxscene.Node, box layoutBox) {
 		if n.Kind == "video" {
 			paintVideo(p, n, box, s)
 		}
-		// 富文本（语法高亮）：div 上的 rich-text 分段在此一次绘制（web 后端对称：
-		// 对 div 也写 innerHTML）。其纯文本子节点会在 paintChildrenClipped 跳过，
-		// 避免单色文字覆盖正确着色。
+		// 语法高亮着色来源（两端统一为 CSS linear-gradient）：
+		//   - Web 端由 background-clip:text 原生消费渐变；
+		//   - Skia 端在此把渐变解析回 RichText 分段绘制。
+		// 兼容仍用 rich-text 属性的旧节点（其它示例可能使用）。
+		// 其纯文本子节点会在 paintChildrenClipped 跳过，避免单色文字覆盖正确着色。
+		var coloredText string
 		if rt, ok := gxscene.RichTextFromProps(n.Props); ok && len(rt) > 0 {
 			st := textStyle{color: s.color, fontSize: s.fontSize, bold: s.bold}
 			p.paintRichText(n, rt, box, st)
-			*p.log = append(*p.log, DrawOp{Kind: "rich-text", Name: rt.Plain(), X: box.X, Y: box.Y, W: box.W, H: box.H, ARGB: s.color})
+			coloredText = rt.Plain()
+		} else if grad := gradientBg(n); grad != "" {
+			if rt := cachedGradientRich(grad, nodeText(n)); len(rt) > 0 {
+				st := textStyle{color: s.color, fontSize: s.fontSize, bold: s.bold}
+				p.paintRichText(n, rt, box, st)
+				coloredText = rt.Plain()
+			}
+		}
+		if coloredText != "" {
+			*p.log = append(*p.log, DrawOp{Kind: "rich-text", Name: coloredText, X: box.X, Y: box.Y, W: box.W, H: box.H, ARGB: s.color})
 		}
 		// 描边：用 stroke 样式沿矩形（或圆角矩形）边缘绘制。
 		if s.hasBorder && s.borderWidth > 0 {

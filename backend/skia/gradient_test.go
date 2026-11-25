@@ -1,0 +1,125 @@
+package skia
+
+// Skia 端 CSS 渐变语法高亮回归：编辑器用 linear-gradient 编码逐 token 颜色，
+// Skia 把同一条渐变解析回 RichText 分段绘制，与 Web 的 background-clip:text 同源。
+
+import (
+	"testing"
+
+	gxapp "github.com/robertpanvip/gox/runtime/app"
+	gxscene "github.com/robertpanvip/gox/runtime/scene"
+)
+
+func TestParseGradientCh(t *testing.T) {
+	cases := []struct {
+		in   string
+		want int
+		ok   bool
+	}{
+		{"0ch", 0, true},
+		{"7ch", 7, true},
+		{" 12ch ", 12, true},
+		{"abc", 0, false},
+		{"", 0, false},
+	}
+	for _, c := range cases {
+		got, ok := parseCh(c.in)
+		if got != c.want || ok != c.ok {
+			t.Errorf("parseCh(%q) = (%d,%v), want (%d,%v)", c.in, got, ok, c.want, c.ok)
+		}
+	}
+}
+
+func TestParseGradientStops(t *testing.T) {
+	s := "linear-gradient(90deg, #c586c0 0ch 7ch, #d4d4d4 7ch 8ch, #ce9178 8ch 12ch)"
+	stops := parseGradient(s)
+	if len(stops) != 3 {
+		t.Fatalf("want 3 stops, got %d: %v", len(stops), stops)
+	}
+	if stops[0].color != "#c586c0" || stops[0].startCh != 0 || stops[0].endCh != 7 {
+		t.Errorf("stop0 = %+v", stops[0])
+	}
+	if stops[2].color != "#ce9178" || stops[2].startCh != 8 || stops[2].endCh != 12 {
+		t.Errorf("stop2 = %+v", stops[2])
+	}
+	// 非渐变串 / 空串应返回 nil。
+	if parseGradient("#d4d4d4") != nil || parseGradient("") != nil {
+		t.Error("非渐变串应返回 nil")
+	}
+}
+
+func TestGradientToRichASCII(t *testing.T) {
+	// "func main" = func(4) + space(1) + main(4) → 三段色，ch 边界 0/4/5/9。
+	grad := "linear-gradient(90deg, #c586c0 0ch 4ch, #d4d4d4 4ch 5ch, #dcdcaa 5ch 9ch)"
+	rt := gradientToRich(grad, "func main")
+	if len(rt) != 3 {
+		t.Fatalf("want 3 segments, got %d: %v", len(rt), rt)
+	}
+	if rt[0].Text != "func" || rt[0].Color != "#c586c0" {
+		t.Errorf("seg0 = %+v", rt[0])
+	}
+	if rt[1].Text != " " || rt[1].Color != "#d4d4d4" {
+		t.Errorf("seg1 = %+v", rt[1])
+	}
+	if rt[2].Text != "main" || rt[2].Color != "#dcdcaa" {
+		t.Errorf("seg2 = %+v", rt[2])
+	}
+	if rt.Plain() != "func main" {
+		t.Errorf("Plain() = %q", rt.Plain())
+	}
+}
+
+func TestGradientToRichCJK(t *testing.T) {
+	// CJK 字符占 2 格（与 buildGradient 的 runeWidth 一致）：
+	// "中a" = 中(2ch) + a(1ch)，色段 0-2 与 2-3。
+	grad := "linear-gradient(90deg, #569cd6 0ch 2ch, #d4d4d4 2ch 3ch)"
+	rt := gradientToRich(grad, "中a")
+	if len(rt) != 2 {
+		t.Fatalf("want 2 segments, got %d: %v", len(rt), rt)
+	}
+	if rt[0].Text != "中" || rt[0].Color != "#569cd6" {
+		t.Errorf("CJK seg0 = %+v", rt[0])
+	}
+	if rt[1].Text != "a" || rt[1].Color != "#d4d4d4" {
+		t.Errorf("CJK seg1 = %+v", rt[1])
+	}
+}
+
+func TestGradientCacheConsistency(t *testing.T) {
+	grad := "linear-gradient(90deg, #c586c0 0ch 4ch, #d4d4d4 4ch 5ch)"
+	a := cachedGradientRich(grad, "func ")
+	b := cachedGradientRich(grad, "func ")
+	if a.Plain() != b.Plain() || len(a) != len(b) {
+		t.Fatalf("缓存结果不一致: %v vs %v", a, b)
+	}
+}
+
+func TestGradientBgSkipsPlainTextChild(t *testing.T) {
+	// 集成：div 的 bg 为渐变 + 纯文本子节点 → 应走 rich-text 彩色绘制，纯文本子节点被跳过。
+	grad := "linear-gradient(90deg, #c586c0 0ch 4ch, #dcdcaa 4ch 8ch)"
+	inst := gxscene.Render(gxscene.Template{Ops: []gxscene.Op{
+		{Code: gxscene.OpElem, Arg: "span"},
+		{Code: gxscene.OpDynAttr, Key: "bg", Slot: 0},
+		{Code: gxscene.OpAttr, Key: "font-size", Arg: "13"},
+		{Code: gxscene.OpAttr, Key: "color", Arg: "#d4d4d4"},
+		{Code: gxscene.OpChildText, Arg: "func main"}, // 纯文本子节点：应被跳过
+		{Code: gxscene.OpClose},
+	}, N: 1}, func() any { return grad })
+	defer inst.Dispose()
+
+	w := NewWindow()
+	if err := w.Open(gxapp.WindowConfig{Width: 200, Height: 40}); err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+	if err := w.Draw(inst.Root()); err != nil {
+		t.Fatalf("Draw: %v", err)
+	}
+	log := w.DrawLog()
+	if got := log.Find("rich-text", "func main"); got != 1 {
+		t.Fatalf("应有 1 条渐变着色的 rich-text 记录, log=%v", log)
+	}
+	if got := log.Find("text", "func main"); got != 0 {
+		t.Fatalf("纯文本子节点应被跳过, got=%d log=%v", got, log)
+	}
+}
