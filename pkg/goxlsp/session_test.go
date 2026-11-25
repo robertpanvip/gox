@@ -1,6 +1,8 @@
 package goxlsp
 
 import (
+	"github.com/robertpanvip/gox/internal/typecheck/embedstd"
+
 	"strings"
 	"testing"
 )
@@ -137,5 +139,29 @@ func TestSessionTypeLayerDiagnostic(t *testing.T) {
 	}
 	if hit.Range.Start.Line < 4 || hit.Range.Start.Line > 6 {
 		t.Fatalf("type 诊断坐标应回投 .gx 第 6 行附近: %+v", *hit)
+	}
+}
+
+// TestCompleteTypeMember 类型感知补全：`b.`（*strings.Replacer）应给出 Replace。
+// embedstd 未生成时跳过——该守卫同时是「类型层缺席 = 行为零变化」的证据。
+func TestCompleteTypeMember(t *testing.T) {
+	if embedstd.Lookup() == nil {
+		t.Skip("embedstd 未生成，类型层缺席（预期行为）")
+	}
+	s := New()
+	s.SetSource("package main\n\nimport \"strings\"\n\nfunc f() {\n\tb := strings.NewReplacer()\n\tb.\n\t_ = b\n}\n")
+	list := s.CompleteAt(6, 3)
+	var labels []string
+	for _, it := range list.Items {
+		labels = append(labels, it.Label)
+	}
+	found := false
+	for _, l := range labels {
+		if l == "Replace" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("b. 类型补全应含 Replace: %v", labels)
 	}
 }

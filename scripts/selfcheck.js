@@ -1,4 +1,4 @@
-// 自测探针：headless Chrome + CDP。两种模式：
+// 自测探针：headless Chrome + CDP。模式：
 //   node scripts/selfcheck.js stacking <playground.html 绝对路径>
 //   node scripts/selfcheck.js provider <dir 绝对路径>
 // 只读断言，不改任何状态。退出码：0=断言通过，1=断言失败(发现 bug)，2=环境错误。
@@ -42,16 +42,28 @@ const STACKING_EXPR = `
   }
   span.dispatchEvent(new MouseEvent('dblclick', { ...base, detail: 2 }));
   await wait(600);
-  const sel = [...document.querySelectorAll('.gx-sel')].map(s => s.getBoundingClientRect()).find(b => b.width > 0);
-  if (!sel) return JSON.stringify({ err: "无选区色块" });
-  const topEl = document.elementFromPoint(sel.left + sel.width / 2, sel.top + sel.height / 2);
+  // 新契约（d499781 重构后）：选区用 span 的 selection-range 属性 + 原生 paint
+  // （色块层 gx-sel 已退役）。断言不弱化：范围必须精确等于首词 package 的 0:7，
+  // 且文本层仍在顶层可读（elementFromPoint 命中代码行本身）。
+  const selSpan = [...document.querySelectorAll('.gx-code-line')].find(e => e.getAttribute('selection-range'));
+  if (!selSpan) return JSON.stringify({ err: "双击后无 selection-range" });
+  const range = selSpan.getAttribute('selection-range');
+  if (range !== selSpan2Range(selSpan)) return JSON.stringify({ err: "选区范围与词不符", range });
+  const rb = selSpan.getBoundingClientRect();
+  const topEl = document.elementFromPoint(rb.left + 4, rb.top + rb.height / 2);
   return JSON.stringify({
-    selW: sel.width,
-    codeZ: getComputedStyle(span).zIndex,
-    codePos: getComputedStyle(span).position,
-    topIsCodeLine: topEl ? (topEl === span || topEl.closest('.gx-code-line') !== null) : false,
+    selW: rb.width > 0 ? 1 : 0,
+    selRange: range,
+    codeZ: getComputedStyle(selSpan).zIndex,
+    codePos: getComputedStyle(selSpan).position,
+    topIsCodeLine: topEl ? (topEl === selSpan || topEl.closest('.gx-code-line') !== null) : false,
     topClass: topEl ? String(topEl.className) : null,
   });
+  function selSpan2Range(e) {
+    const t = e.getAttribute('data-code') || "";
+    const m = /^[A-Za-z_]*/.exec(t);
+    return "0:" + (m ? m[0].length : 0);
+  }
 })()`;
 
 // 探针 C：wasm 内嵌类型层端到端——真实浏览器里注入类型错误源码，
@@ -82,6 +94,29 @@ const GSYNTAX_EXPR = `
     leaked: diags.some(d => String(d.message).includes("check.go")) });
 })()`;
 
+// 探针 D：浏览器端类型感知补全——setSource 后在 b.（*strings.Replacer）处
+// 调 lspComplete，断言 Replace 候选、kind=2(method)、detail 带签名；
+// 同时验证非点号路径（fallbackItems>0）未被接线破坏。
+const COMP_EXPR = `
+(async () => {
+  const wait = ms => new Promise(r => setTimeout(r, ms));
+  const deadline = Date.now() + 40000;
+  while (!(window.Gox && window.Gox.lspComplete && window.Gox.setSource)) {
+    if (Date.now() > deadline) return JSON.stringify({ err: "Gox 超时未就绪" });
+    await wait(250);
+  }
+  await wait(600);
+  const src = 'package main\\n\\nimport "strings"\\n\\nfunc f() {\\n\\tb := strings.NewReplacer()\\n\\tb.\\n\\t_ = b\\n}\\n';
+  Gox.setSource(src);
+  await wait(900);
+  const list = JSON.parse(Gox.lspComplete(6, 3));
+  const hit = (list.items || []).find(i => i.label === "Replace");
+  const fb = JSON.parse(Gox.lspComplete(2, 8));
+  return JSON.stringify({ typeHit: !!hit, kind: hit ? hit.kind : 0,
+    detail: hit ? String(hit.detail).slice(0, 46) : "",
+    fallbackItems: (fb.items || []).length });
+})()`;
+
 const PROVIDER_EXPR = `
 (async () => {
   const wait = ms => new Promise(r => setTimeout(r, ms));
@@ -105,9 +140,9 @@ const PROVIDER_EXPR = `
 })()`;
 
 (async () => {
-  const expr = mode === "stacking" ? STACKING_EXPR : (mode === "gsyntax" ? GSYNTAX_EXPR : PROVIDER_EXPR);
+  const expr = mode === "stacking" ? STACKING_EXPR : (mode === "gsyntax" ? GSYNTAX_EXPR : (mode === "comp" ? COMP_EXPR : PROVIDER_EXPR));
   let url;
-  if (mode === "stacking" || mode === "gsyntax") {
+  if (mode === "stacking" || mode === "gsyntax" || mode === "comp") {
     url = "file://" + target;
   } else {
     server = http.createServer((q, s) => {
@@ -163,7 +198,9 @@ const PROVIDER_EXPR = `
   if (pageErrs.length) console.log("PAGE_ERRORS", JSON.stringify(pageErrs.slice(0, 3)));
   let v = {};
   try { v = JSON.parse(String(out)); } catch {}
-  const pass = mode === "stacking"
+  const pass = mode === "comp"
+    ? !v.err && v.typeHit === true && v.kind === 2 && v.fallbackItems > 0
+    : mode === "stacking"
     ? !v.err && v.selW > 0 && v.topIsCodeLine === true
     : mode === "gsyntax"
       ? v.typeHit === true && v.leaked === false && v.sample && v.sample[0] && v.sample[0][0] === 4

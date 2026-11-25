@@ -30,6 +30,8 @@ node_modules/.bin/tsc --noEmit   # strict 全套；失败即中止
 node_modules/.bin/tsc            # 产出 dist/main.js
 
 echo "[2/6] 编译 Go wasm（js/wasm，含内建 LSP）..."
+# 内嵌类型层数据（goxlsp 类型诊断/类型感知补全），与 wasm 同工具链生成
+(cd ../../.. && go run ./cmd/gox-stdlib-gen)
 GOOS=js GOARCH=wasm go build -o app.wasm .
 
 echo "[3/6] 拷贝 wasm_exec.js（Go 工具链运行时胶水）..."

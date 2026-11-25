@@ -63,14 +63,14 @@ type InitializeResult struct {
 }
 
 type ServerCapabilities struct {
-	TextDocumentSync       int                    `json:"textDocumentSync"` // 2 = incremental, 1 = full
-	DefinitionProvider     bool                   `json:"definitionProvider"`
-	HoverProvider          bool                   `json:"hoverProvider"`
-	CompletionProvider     *CompletionOptions     `json:"completionProvider,omitempty"`
-	DocumentSymbolProvider      bool                   `json:"documentSymbolProvider"`
-	RenameProvider              bool                   `json:"renameProvider"`
-	DocumentFormattingProvider  bool                   `json:"documentFormattingProvider"`
-	SemanticTokensProvider      *SemanticTokensOptions `json:"semanticTokensProvider,omitempty"`
+	TextDocumentSync           int                    `json:"textDocumentSync"` // 2 = incremental, 1 = full
+	DefinitionProvider         bool                   `json:"definitionProvider"`
+	HoverProvider              bool                   `json:"hoverProvider"`
+	CompletionProvider         *CompletionOptions     `json:"completionProvider,omitempty"`
+	DocumentSymbolProvider     bool                   `json:"documentSymbolProvider"`
+	RenameProvider             bool                   `json:"renameProvider"`
+	DocumentFormattingProvider bool                   `json:"documentFormattingProvider"`
+	SemanticTokensProvider     *SemanticTokensOptions `json:"semanticTokensProvider,omitempty"`
 }
 
 type CompletionOptions struct {

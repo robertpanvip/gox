@@ -16,6 +16,7 @@ import (
 	"github.com/robertpanvip/gox/internal/typecheck"
 	"github.com/robertpanvip/gox/internal/typecheck/embedstd"
 	"github.com/robertpanvip/gox/pkg/compiler"
+	"github.com/robertpanvip/gox/pkg/sourcemap"
 )
 
 // Session 持有单份源码的 LSP 状态。非并发安全，始终在 UI 线程（wasm 主线程）访问。
@@ -25,6 +26,9 @@ type Session struct {
 	diags []Diagnostic
 	// timp 持久类型检查会话（embedstd 就绪时惰性创建，std 依赖图只建一次）
 	timp *typecheck.Importer
+	// 最近一次编译的 Go 产物与映射，供类型感知补全做 gx→go 坐标换算
+	goSrc string
+	smap  *sourcemap.SourceMap
 }
 
 // New 创建空会话。
@@ -61,6 +65,7 @@ func (s *Session) diagnostics() {
 		return
 	}
 	res, err := compiler.Compile("input.gx", s.src)
+	s.goSrc, s.smap = "", nil
 	if err != nil {
 		s.diags = append(s.diags, Diagnostic{
 			Range:    Range{Start: Position{}, End: Position{}},
@@ -92,6 +97,7 @@ func (s *Session) diagnostics() {
 	// 类型层（embedstd 就绪时）：go/types 完整检查生成代码，坐标经 sourcemap
 	// 回投 .gx。未生成 embed 数据时整段跳过，行为与接入前逐字节一致。
 	if res.GoSource != "" && !res.InvalidGo {
+		s.goSrc, s.smap = res.GoSource, res.SourceMap
 		if lk := embedstd.Lookup(); lk != nil {
 			if s.timp == nil {
 				s.timp = typecheck.NewImporter(lk) // std 类型图跨编辑持久，见 typecheck.Importer
@@ -164,6 +170,10 @@ func (s *Session) CompleteAt(line, col int) CompletionList {
 	sm := s.symbolMap()
 	items := make([]CompletionItem, 0)
 	seen := map[string]bool{}
+	// 类型感知分支：光标紧跟点号 → 只列成员（不掺全局符号/关键字，避免噪音）
+	if list, ok := s.typedCompletion(line, col); ok {
+		return list
+	}
 	add := func(sym Symbol) {
 		if seen[sym.Name] {
 			return
@@ -189,6 +199,69 @@ func (s *Session) CompleteAt(line, col int) CompletionList {
 		items = append(items, CompletionItem{Label: kw, Kind: 14, Detail: "keyword"})
 	}
 	return CompletionList{IsIncomplete: false, Items: items}
+}
+
+// typedCompletion 在 (line,col) 处于点号上下文且类型层就绪时返回成员补全。
+// ok=false 表示不适用（非点号 / 无类型层 / 坐标映射失败），调用方回退符号表。
+func (s *Session) typedCompletion(line, col int) (CompletionList, bool) {
+	if s.timp == nil || s.goSrc == "" || s.smap == nil {
+		return CompletionList{}, false
+	}
+	ls := s.lines()
+	if line < 0 || line >= len(ls) || col <= 0 || col > len(ls[line]) || ls[line][col-1] != '.' {
+		return CompletionList{}, false
+	}
+	gp, ok := s.smap.GxToGo(line+1, col) // 点号位置（1 基）
+	if !ok {
+		return CompletionList{}, false
+	}
+	off := goByteOffset(s.goSrc, gp.Line, gp.Column)
+	if off < 0 || off >= len(s.goSrc) || s.goSrc[off] != '.' {
+		return CompletionList{}, false
+	}
+	cands := s.timp.Complete(s.goSrc, off+1)
+	list := CompletionList{IsIncomplete: false, Items: make([]CompletionItem, 0, len(cands))}
+	for _, c := range cands {
+		list.Items = append(list.Items, CompletionItem{Label: c.Name, Kind: lspKind(c.Kind), Detail: c.Signature})
+	}
+	return list, true
+}
+
+// goByteOffset 把生成源码的 1 基行列换成字节偏移。
+func goByteOffset(src string, line, col int) int {
+	if line < 1 || col < 1 {
+		return -1
+	}
+	off := 0
+	for i := 0; i < line-1; i++ {
+		j := strings.IndexByte(src[off:], '\n')
+		if j < 0 {
+			return -1
+		}
+		off += j + 1
+	}
+	return off + col - 1
+}
+
+// lspKind 内部 Kind → LSP CompletionItemKind。
+func lspKind(k string) int {
+	switch k {
+	case "method":
+		return 2
+	case "function":
+		return 3
+	case "field":
+		return 5
+	case "variable":
+		return 6
+	case "package":
+		return 9
+	case "constant":
+		return 21
+	case "type":
+		return 22
+	}
+	return 6
 }
 
 // DocumentSymbols 返回全部符号（供大纲/跳转列表使用）。

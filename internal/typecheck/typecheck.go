@@ -64,9 +64,24 @@ func NewImporter(lookup Lookup) *Importer {
 // 首错同时也在回调里（重复收集会把每条错误翻倍，RED 测试 TestCheckNoDuplicateError
 // 正是钉这个行为）。
 func (in *Importer) Check(src string) ([]Diagnostic, error) {
+	diags, _, _, _ := in.checkWithInfo(src)
+	return diags, nil
+}
+
+// checkWithInfo 执行类型检查并保留类型图与 AST（补全路径复用）。
+func (in *Importer) checkWithInfo(src string) ([]Diagnostic, *types.Info, *ast.File, bool) {
 	f, err := parser.ParseFile(in.fset, "input.go", src, parser.SkipObjectResolution)
 	if err != nil {
-		return nil, err
+		return nil, nil, nil, false
+	}
+	info := &types.Info{
+		Types:        make(map[ast.Expr]types.TypeAndValue),
+		Defs:         make(map[*ast.Ident]types.Object),
+		Uses:         make(map[*ast.Ident]types.Object),
+		Implicits:    make(map[ast.Node]types.Object),
+		Selections:   make(map[*ast.SelectorExpr]*types.Selection),
+		Scopes:       make(map[ast.Node]*types.Scope),
+		FileVersions: make(map[*ast.File]string),
 	}
 	diags := []Diagnostic{}
 	collect := func(e error) {
@@ -79,14 +94,14 @@ func (in *Importer) Check(src string) ([]Diagnostic, error) {
 		}
 	}
 	conf := types.Config{Importer: in.im, Error: collect}
-	_, _ = conf.Check("input", in.fset, []*ast.File{f}, nil)
+	_, _ = conf.Check("input", in.fset, []*ast.File{f}, info)
 	sort.SliceStable(diags, func(i, j int) bool {
 		if diags[i].Line != diags[j].Line {
 			return diags[i].Line < diags[j].Line
 		}
 		return diags[i].Col < diags[j].Col
 	})
-	return diags, nil
+	return diags, info, f, true
 }
 
 // Check 是一次性便捷入口（内部即用 NewImporter）。

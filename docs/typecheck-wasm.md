@@ -31,3 +31,23 @@ node scripts/selfcheck.js gsyntax <playground.html 绝对路径>   # 类型层�
 类型层覆盖白名单闭包（gox runtime/widgets/pkg + std 197 包）；用户 import 白名单外
 包时产生一条 could-not-import 提示后继续（优雅降级）。完整 go build 级兜底仍在桌面
 gox-lsp / CLI `gox check -check`。
+
+## 类型感知成员补全（P1+）
+
+点号上下文（`b.`、`strings.`）的补全从正则符号表升级为 go/types 真实类型查询，
+浏览器与桌面同源：
+
+- 核心：`internal/typecheck.Complete(src, byteOffset, lookup)` —— 光标前插
+  占位标识符补全语法 → 定位点号左侧表达式 → 持久 Importer 求类型 →
+  枚举包级导出成员 + 方法集；跨包未导出成员过滤；无新依赖（未引入 x/tools）。
+- 浏览器（pkg/goxlsp → Gox.lspComplete）：数据源 `embedstd.Lookup()`。
+- 桌面（internal/lsp）：数据源 `typecheck.DiskLookup(GOROOT/src, GOOS, GOARCH)`，
+  惰性建会话；诊断仍走原有 go build 管线，类型层零干扰。
+- 零回归契约：非点号上下文原样返回旧符号表；无模块根/数据未生成时整体回退。
+- 坐标链：`.gx (line,col)` → GxToGo → Go 字节偏移（1 基）→ 候选按 Go 字节
+  偏移回投 `.gx`（UTF-16 安全）；构建脚本先跑 `cmd/gox-stdlib-gen` 保证
+  embed 数据与 wasm 同工具链。
+
+实测（headless Chrome 158，`node scripts/selfcheck.js comp playground.html`）：
+`{"typeHit":true,"kind":2,"detail":"func(s string) string","fallbackItems":17}`
+——*strings.Replacer 上补出 Replace 方法带真实签名，非点号路径 17 项候选不丢。

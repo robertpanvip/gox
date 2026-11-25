@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/robertpanvip/gox/internal/buildcheck"
+	"github.com/robertpanvip/gox/internal/typecheck"
 	"github.com/robertpanvip/gox/pkg/compiler"
 )
 
@@ -18,6 +19,8 @@ type Server struct {
 	out     io.Writer
 	docs    map[string]*document // uri -> 文档状态
 	checker *buildcheck.Checker
+	// timp 类型感知补全会话（点号上下文惰性创建，std 依赖图只建一次）
+	timp *typecheck.Importer
 }
 
 type document struct {
@@ -89,10 +92,10 @@ func (s *Server) handleRequest(req *RequestMessage, body []byte) (any, *RPCError
 	case "initialize":
 		return InitializeResult{
 			Capabilities: ServerCapabilities{
-				TextDocumentSync:       1, // full
-				DefinitionProvider:     true,
-				HoverProvider:          true,
-				CompletionProvider:     &CompletionOptions{TriggerCharacters: []string{"."}},
+				TextDocumentSync:           1, // full
+				DefinitionProvider:         true,
+				HoverProvider:              true,
+				CompletionProvider:         &CompletionOptions{TriggerCharacters: []string{"."}},
 				DocumentSymbolProvider:     true,
 				RenameProvider:             true,
 				DocumentFormattingProvider: true,
@@ -236,6 +239,11 @@ func (s *Server) completion(body []byte) (any, *RPCError) {
 	d, ok := s.docForURI(p.TextDocument.URI)
 	if !ok {
 		return CompletionList{}, nil
+	}
+	// 类型感知优先：点号上下文命中成员则直接返回（非点号/无类型层/映射失败
+	// 时 typedCompletion 自返回 ok=false，行为回退到符号表，零回归）
+	if items, ok := s.typedCompletion(d.Text, p.Position.Line, p.Position.Character); ok {
+		return CompletionList{IsIncomplete: false, Items: items}, nil
 	}
 	sm := s.symbolMap(d)
 
