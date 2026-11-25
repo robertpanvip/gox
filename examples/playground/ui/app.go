@@ -256,6 +256,7 @@ func toolbar() *gxscene.Instance {
  func EditorPaste(s string)               { editorState.Paste(s) }
  func EditorUndo()                        { editorState.Undo() }
  func EditorRedo()                        { editorState.Redo() }
+ func EditorScrollLines(lines float64)    { editorState.ScrollLines(lines) }
  func EditorFocus()                       { editorState.Focus() }
  func EditorBlur()                        { editorState.Blur() }
  func EditorSettle()                      { editorState.Settle() }

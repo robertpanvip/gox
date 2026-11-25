@@ -27,6 +27,8 @@ export interface GoxPlaygroundAPI {
   undo(): void;
   /** 重做一步编辑（Ctrl+Shift+Z / Ctrl+Y）。 */
   redo(): void;
+  /** 虚拟滚动：按行数移动可见窗口（deltaY 换算，向下为正）。 */
+  scrollLines(lines: number): void;
   focus(): void;
   sample(source: string): void;
   cursor(): GoxCursor;

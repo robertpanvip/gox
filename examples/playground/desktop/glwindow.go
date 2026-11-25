@@ -253,6 +253,12 @@ func (g *glWindow) Open(cfg gxapp.WindowConfig) error {
 		ui.EditorInsert(string(ch))
 	})
 	win.SetMouseButtonCallback(g.onMouseButton)
+	// 滚轮 → 虚拟滚动窗口移动。GLFW yoff 正为向上滚，因此取负号转成"向下为正行数"。
+	// 编辑器的受控 scrollTop 由 ui.EditorScrollLines 写入，光标跟随 effect 不参与。
+	win.SetScrollCallback(func(w *glfw.Window, xoff, yoff float64) {
+		ui.EditorScrollLines(-yoff * 3)
+		g.markDirty()
+	})
 	// 拖动选择：左键按住移动时持续扩展选区（与 web 端 pointermove 同语义）。
 	win.SetCursorPosCallback(func(w *glfw.Window, x, y float64) {
 		if !g.dragging || w.GetMouseButton(glfw.MouseButtonLeft) != glfw.Press {

@@ -126,6 +126,12 @@ func (v *Vec[T]) LenSig() Signal[int] {
 	return v.lenSig
 }
 
+// IsBig 报告 Vec 当前是否处于 pvector 大后端（元素数超过 VecAdaptiveThreshold
+// 后自动迁移）。诊断/验证用：调用方据此确认自适应策略确实生效。
+func (v *Vec[T]) IsBig() bool {
+	return v != nil && v.big
+}
+
 // Len 返回当前长度（读长度信号，若在 effect 内调用会订阅长度变化）。
 func (v *Vec[T]) Len() int {
 	return v.lenSig()

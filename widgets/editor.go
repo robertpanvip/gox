@@ -14,6 +14,7 @@ package widgets
 import (
     "strings"
     "strconv"
+    Rope "github.com/robertpanvip/gox/runtime/rope"
     Signal "github.com/robertpanvip/gox/runtime/signal"
     gxscene "github.com/robertpanvip/gox/runtime/scene"
 )
@@ -25,18 +26,29 @@ const editorDefaultSource = "// 用 GX 写的编辑器，试着输入 GX 代码\
 // 与原先 editor.css 的 .gx-code-line 规则完全一致，使该 CSS 可整块移除。
 const editorCodeFont = "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
 
+// 虚拟滚动的几何常量：行高固定（等宽代码），视口与外层容器高度。
+// 行高固定让 VirtualList 走显式 height 模式——零回流、纯窗口计算。
+const (
+    editorRowHeight      = 22
+    editorViewportHeight = 470
+    editorOverscan       = 3
+)
+
 // ---- 编辑器实例状态 ----
 
 // EditorState 是一个编辑器实例的全部可变状态。每个实例互不共享，
 // 可在同一 App 内并存多个，或被不同 App 分别持有（多 App 隔离）。
 type EditorState struct {
     sourceCode    Signal.Signal[string]
+    doc           *Rope.Rope        // 文本权威：持久 Rope 根，编辑走 O(log N)；sourceCode 是它的字符串派生
     cursorLine    Signal.Signal[int]
     cursorCol     Signal.Signal[int]
     selAnchorLine Signal.Signal[int]
     selAnchorCol  Signal.Signal[int]
     focused       Signal.Signal[bool]
     lineCount     Signal.Signal[int]
+    scrollTop     Signal.Signal[float64] // 受控滚动偏移（虚拟滚动的窗口起点）
+    scrollTopVal  float64                // scrollTop 的非响应式镜像：供 effect 读而不订阅（避免跟随回环）
     charWidth     Signal.Signal[float64]
     wideWidth     Signal.Signal[float64]
     caretSettled  Signal.Signal[bool]
@@ -57,25 +69,55 @@ type EditorState struct {
 func NewEditorState(source string) *EditorState {
     if source == "" { source = editorDefaultSource }
     vers := make([]int, 24)
+    lc := Rope.Of(source).LineCount()
     st := &EditorState{
         sourceCode:    Signal.New(source),
+        doc:           Rope.Of(source),
         cursorLine:    Signal.New(0),
         cursorCol:     Signal.New(0),
         selAnchorLine: Signal.New(0),
         selAnchorCol:  Signal.New(0),
         focused:       Signal.New(false),
-        lineCount:     Signal.New(len(splitLines(source))),
+        lineCount:     Signal.New(lc),
+        scrollTop:     Signal.New(0.0),
         charWidth:     Signal.New(7.83),
         wideWidth:     Signal.New(13.02),
         caretSettled:  Signal.New(true),
         rowVers:       Signal.NewVec(vers),
     }
-    st.rebuildTokenCache(splitLines(source))
+    // 惰性解析：不再全文 tokenize。缓存切片按行数预留（nil 元素 = 该行未解析），
+    // 首屏 O(1)；行进入可见窗口时由 lineText/lineCodeGradient 现场解析并缓存。
+    st.ensureCacheLen(lc)
+    st.rowVers.SetLen(lc) // 行数 >64 时 Vec 自动迁移到 pvector 大后端
     return st
 }
 
+// ensureCacheLen 把三个按行缓存的长度对齐到 n。新增行为 nil（惰性占位），
+// 不触发任何 tokenize；缩容直接截断。
+func (s *EditorState) ensureCacheLen(n int) {
+    if n < 0 { n = 0 }
+    s.lineTextCache = resizeStr(s.lineTextCache, n)
+    s.textCache = resizeStr(s.textCache, n)
+    s.tokenCache = resizeTokens(s.tokenCache, n)
+}
+
+func resizeStr(in []string, n int) []string {
+    if len(in) == n { return in }
+    out := make([]string, n)
+    copy(out, in)
+    return out
+}
+func resizeTokens(in [][]token, n int) [][]token {
+    if len(in) == n { return in }
+    out := make([][]token, n)
+    copy(out, in)
+    return out
+}
+
 // editSnapshot / token 是实例内部数据类型（值类型，不参与响应式）。
-type editSnapshot struct { Text string; Ln int; Col int }
+// Doc 保存编辑前的 Rope 根指针：持久结构共享让快照成本从 O(N) 全文拷贝
+// 降为 O(1) 指针赋值；Text 保留兼容（供尚走 string 路径的调用方读取）。
+type editSnapshot struct { Doc *Rope.Rope; Text string; Ln int; Col int }
 type token struct { Text string; Color string } // Color 存语义 token 名，渲染时按主题解析
 
 // ---- 语法色 token 解析 ----
@@ -260,6 +302,87 @@ func removeRange(v string, fl int, fc int, tl int, tc int) string {
     return joinLines(out)
 }
 
+// ---- Rope 编辑核心（O(log N)，与上方 string 版逐字节等价）----
+//
+// 上面的 string 版保留为公共 API / 测试 oracle（见 editor_export.go）。
+// editor 实例命令改走下面这套 rope 实现：行列经 LineColToOffset 单次树下降
+// 换算成 rune 偏移，插入/删除走持久结构的 split+join，避免每个按键 O(N)
+// 的 splitLines + joinLines 全量重建。持久根同时用于 O(1) 撤销快照。
+
+// ropeInsertText 在 (ln,col) 插入 ins，返回新根与新列。
+func ropeInsertText(r *Rope.Rope, ln int, col int, ins string) (*Rope.Rope, int) {
+    if r == nil { r = Rope.Of("") }
+    if ln < 0 { ln = 0 }
+    if ln >= r.LineCount() { return r, col }
+    lineRunes := runeLen(r.Line(ln))
+    if col < 0 { col = 0 }
+    if col > lineRunes { col = lineRunes }
+    off := r.LineColToOffset(ln, col)
+    return r.Insert(off, ins), col + runeLen(ins)
+}
+
+// ropeDeleteRange 删除 [ (fl,fc), (tl,tc) ) 区间，返回新根。
+func ropeDeleteRange(r *Rope.Rope, fl int, fc int, tl int, tc int) *Rope.Rope {
+    if r == nil { return r }
+    lc := r.LineCount()
+    if fl < 0 || fl >= lc || tl >= lc || fl > tl { return r }
+    start := r.LineColToOffset(fl, fc)
+    end := r.LineColToOffset(tl, tc)
+    if end < start { end = start }
+    return r.Delete(start, end-start)
+}
+
+// ropeBackspaceAt 在 (ln,col) 退格：行内删一个 rune；行首则并入上一行。
+// 返回新根、新行、新列。
+func ropeBackspaceAt(r *Rope.Rope, ln int, col int) (*Rope.Rope, int, int) {
+    if r == nil { r = Rope.Of("") }
+    lc := r.LineCount()
+    if ln < 0 || ln >= lc { return r, ln, col }
+    lineRunes := runeLen(r.Line(ln))
+    if col > lineRunes { col = lineRunes }
+    if col > 0 {
+        off := r.LineColToOffset(ln, col-1)
+        return r.Delete(off, 1), ln, col - 1
+    }
+    if ln > 0 {
+        // 行首退格 = 删除上一行末尾的 '\n'（其 rune 偏移 = 本行起点 - 1）。
+        prevRunes := runeLen(r.Line(ln-1))
+        off := r.LineStart(ln) - 1
+        return r.Delete(off, 1), ln - 1, prevRunes
+    }
+    return r, ln, col
+}
+
+// ropeNewlineAt 在 (ln,col) 断行，返回新根、新行(=ln+1)、新列(0)。
+func ropeNewlineAt(r *Rope.Rope, ln int, col int) (*Rope.Rope, int, int) {
+    if r == nil { r = Rope.Of("") }
+    lc := r.LineCount()
+    if ln < 0 || ln >= lc { return r, ln, col }
+    lineRunes := runeLen(r.Line(ln))
+    if col > lineRunes { col = lineRunes }
+    off := r.LineColToOffset(ln, col)
+    return r.Insert(off, "\n"), ln + 1, 0
+}
+
+// ropeDeleteForward 删除光标后一个 rune：行尾则并入下一行。返回新根与新列。
+func ropeDeleteForward(r *Rope.Rope, ln int, col int) (*Rope.Rope, int) {
+    if r == nil { r = Rope.Of("") }
+    lc := r.LineCount()
+    if ln < 0 || ln >= lc { return r, col }
+    lineRunes := runeLen(r.Line(ln))
+    if col > lineRunes { col = lineRunes }
+    if col < lineRunes {
+        off := r.LineColToOffset(ln, col)
+        return r.Delete(off, 1), col
+    }
+    // 行尾 Delete = 删除本行末尾 '\n'（= 下一行起点 - 1）。
+    if ln < lc-1 {
+        off := r.LineStart(ln+1) - 1
+        return r.Delete(off, 1), col
+    }
+    return r, col
+}
+
 // ---- 选区引擎（Selection engine）----
 // 选区 = anchor 到 head（光标）的闭左开右区间；锚点与光标重合即无选区。
 
@@ -284,56 +407,64 @@ func (s *EditorState) selTo() (int, int) {
 func (s *EditorState) deleteSelectionInner() {
     fl, fc := s.selFrom()
     tl, tc := s.selTo()
-    text := removeRange(s.sourceCode(), fl, fc, tl, tc)
+    nr := ropeDeleteRange(s.doc, fl, fc, tl, tc)
     Signal.Batch(func() {
-        s.setSource(text)
+        s.applyRope(nr)
         s.cursorLine(fl); s.cursorCol(fc); s.selAnchorLine(fl); s.selAnchorCol(fc)
     })
 }
 
 // ---- 撤销 / 重做 ----
 
+// snapshot 捕获当前编辑前状态：持久 Rope 根 O(1) 共享，Text 仍写供兼容读取。
+func (s *EditorState) snapshot() editSnapshot {
+    return editSnapshot{Doc: s.doc, Text: s.sourceCode(), Ln: s.cursorLine(), Col: s.cursorCol()}
+}
+
 func (s *EditorState) pushUndo() {
-    s.undoStack = append(s.undoStack, editSnapshot{Text: s.sourceCode(), Ln: s.cursorLine(), Col: s.cursorCol()})
+    s.undoStack = append(s.undoStack, s.snapshot())
     s.redoStack = []editSnapshot{}
+}
+
+// restore 从快照恢复：优先用持久 Doc 根（免 Rope.Of 重建），兼容无 Doc 的老快照。
+func (s *EditorState) restore(st editSnapshot) {
+    if st.Doc != nil {
+        s.setSourceFromRope(st.Doc, st.Doc.String())
+    } else {
+        s.setSource(st.Text)
+    }
+    s.cursorLine(st.Ln); s.cursorCol(st.Col); s.selAnchorLine(st.Ln); s.selAnchorCol(st.Col)
+    s.focused(true)
 }
 
 // Undo 撤销上一步编辑；无历史时什么也不做。
 func (s *EditorState) Undo() {
     if len(s.undoStack) == 0 { return }
     n := len(s.undoStack); st := s.undoStack[n-1]; s.undoStack = s.undoStack[:n-1]
-    s.redoStack = append(s.redoStack, editSnapshot{Text: s.sourceCode(), Ln: s.cursorLine(), Col: s.cursorCol()})
-    Signal.Batch(func() {
-        s.setSource(st.Text)
-        s.cursorLine(st.Ln); s.cursorCol(st.Col); s.selAnchorLine(st.Ln); s.selAnchorCol(st.Col)
-        s.focused(true)
-    })
+    s.redoStack = append(s.redoStack, s.snapshot())
+    Signal.Batch(func() { s.restore(st) })
 }
 
 // Redo 重做一步；无重做历史时什么也不做。
 func (s *EditorState) Redo() {
     if len(s.redoStack) == 0 { return }
     n := len(s.redoStack); st := s.redoStack[n-1]; s.redoStack = s.redoStack[:n-1]
-    s.undoStack = append(s.undoStack, editSnapshot{Text: s.sourceCode(), Ln: s.cursorLine(), Col: s.cursorCol()})
-    Signal.Batch(func() {
-        s.setSource(st.Text)
-        s.cursorLine(st.Ln); s.cursorCol(st.Col); s.selAnchorLine(st.Ln); s.selAnchorCol(st.Col)
-        s.focused(true)
-    })
+    s.undoStack = append(s.undoStack, s.snapshot())
+    Signal.Batch(func() { s.restore(st) })
 }
 
 // ---- 包级编辑命令（装配层收到键盘事件后调用）----
 
 func (s *EditorState) Insert(v string) {
     s.pushUndo()
-    text := s.sourceCode(); ln := s.cursorLine(); col := s.cursorCol()
+    r := s.doc; ln := s.cursorLine(); col := s.cursorCol()
     if s.HasSelection() {
         fl, fc := s.selFrom(); tl, tc := s.selTo()
-        text = removeRange(text, fl, fc, tl, tc); ln = fl; col = fc
+        r = ropeDeleteRange(r, fl, fc, tl, tc); ln = fl; col = fc
     }
-    next, c := insertText(text, ln, col, v)
+    nr, c := ropeInsertText(r, ln, col, v)
     Signal.Batch(func() {
-        s.setSource(next)
+        s.applyRope(nr)
         s.cursorLine(ln); s.cursorCol(c); s.selAnchorLine(ln); s.selAnchorCol(c); s.focused(true)
     })
 }
@@ -341,36 +472,36 @@ func (s *EditorState) Insert(v string) {
 func (s *EditorState) Backspace() {
     s.pushUndo()
     if s.HasSelection() { s.deleteSelectionInner(); return }
-    text, ln, c := backspaceAt(s.sourceCode(), s.cursorLine(), s.cursorCol())
+    nr, ln, c := ropeBackspaceAt(s.doc, s.cursorLine(), s.cursorCol())
     Signal.Batch(func() {
-        s.setSource(text)
+        s.applyRope(nr)
         s.cursorLine(ln); s.cursorCol(c); s.selAnchorLine(ln); s.selAnchorCol(c)
     })
 }
 
 func (s *EditorState) Newline() {
     s.pushUndo()
-    text := s.sourceCode(); ln := s.cursorLine(); col := s.cursorCol()
+    r := s.doc; ln := s.cursorLine(); col := s.cursorCol()
     if s.HasSelection() {
         fl, fc := s.selFrom(); tl, tc := s.selTo()
-        text = removeRange(text, fl, fc, tl, tc); ln = fl; col = fc
+        r = ropeDeleteRange(r, fl, fc, tl, tc); ln = fl; col = fc
     }
-    next, nl, c := newlineAt(text, ln, col)
+    nr, nl, c := ropeNewlineAt(r, ln, col)
     Signal.Batch(func() {
-        s.setSource(next)
+        s.applyRope(nr)
         s.cursorLine(nl); s.cursorCol(c); s.selAnchorLine(nl); s.selAnchorCol(c)
     })
 }
 
 func (s *EditorState) moveCursorRel(dln int, dcol int) {
-    lines := splitLines(s.sourceCode())
+    lc := s.doc.LineCount()
     ln := s.cursorLine() + dln
     if ln < 0 { ln = 0 }
-    if ln >= len(lines) { ln = len(lines) - 1 }
-    rs := []rune(lines[ln])
+    if ln >= lc { ln = lc - 1 }
+    lineRunes := runeLen(s.doc.Line(ln)) // O(log N + 行长度)，非全文 split
     c := s.cursorCol() + dcol
     if c < 0 { c = 0 }
-    if c > len(rs) { c = len(rs) }
+    if c > lineRunes { c = lineRunes }
     s.cursorLine(ln); s.cursorCol(c)
 }
 
@@ -414,12 +545,12 @@ func (s *EditorState) Home() {
 }
 
 func (s *EditorState) clampLineCol(ln int, col int) (int, int) {
-    lines := splitLines(s.sourceCode())
+    lc := s.doc.LineCount()
     if ln < 0 { ln = 0 }
-    if ln >= len(lines) { ln = len(lines) - 1 }
-    rs := []rune(lines[ln])
+    if ln >= lc { ln = lc - 1 }
+    lineRunes := runeLen(s.doc.Line(ln)) // O(log N + 行长度)
     if col < 0 { col = 0 }
-    if col > len(rs) { col = len(rs) }
+    if col > lineRunes { col = lineRunes }
     return ln, col
 }
 
@@ -490,10 +621,10 @@ func (s *EditorState) MoveWord(dir int, shift bool) {
         } else if !s.HasSelection() {
             s.selAnchorLine(s.cursorLine()); s.selAnchorCol(s.cursorCol())
         }
-        lines := splitLines(s.sourceCode())
+        lc := s.doc.LineCount()
         ln := s.cursorLine()
-        if ln >= len(lines) { ln = len(lines) - 1 }
-        rs := []rune(lines[ln])
+        if ln >= lc { ln = lc - 1 }
+        rs := []rune(s.doc.Line(ln))
         c := s.cursorCol()
         if c > len(rs) { c = len(rs) }
         if dir > 0 {
@@ -534,37 +665,21 @@ func (s *EditorState) KeyEnd(shift bool) {
 func (s *EditorState) DeleteForward() {
     s.pushUndo()
     if s.HasSelection() { s.deleteSelectionInner(); return }
-    lines := splitLines(s.sourceCode())
     ln := s.cursorLine(); col := s.cursorCol()
-    if ln < 0 || ln >= len(lines) { return }
-    rs := []rune(lines[ln])
-    if col >= len(rs) {
-        if ln >= len(lines)-1 { return }
-        merged := lines[ln] + string([]rune(lines[ln+1]))
-        outLines := []string{}
-        for i, l := range lines {
-            if i == ln { outLines = append(outLines, merged) } else if i != ln+1 { outLines = append(outLines, l) }
-        }
-        Signal.Batch(func() {
-            s.setSource(joinLines(outLines))
-            s.cursorLine(ln); s.cursorCol(len(rs)); s.selAnchorLine(ln); s.selAnchorCol(len(rs))
-        })
-        return
-    }
-    next := string(rs[:col]) + string(rs[col+1:])
-    lines[ln] = next
+    nr, c := ropeDeleteForward(s.doc, ln, col)
     Signal.Batch(func() {
-        s.setSource(joinLines(lines))
-        s.selAnchorLine(ln); s.selAnchorCol(col)
+        s.applyRope(nr)
+        s.cursorLine(ln); s.cursorCol(c); s.selAnchorLine(ln); s.selAnchorCol(c)
     })
 }
 
 // SelectAll 全选。
 func (s *EditorState) SelectAll() {
     Signal.Batch(func() {
-        lines := splitLines(s.sourceCode())
+        lc := s.doc.LineCount()
+        last := lc - 1
         s.selAnchorLine(0); s.selAnchorCol(0)
-        s.cursorLine(len(lines) - 1); s.cursorCol(runeLen(lines[len(lines)-1]))
+        s.cursorLine(last); s.cursorCol(runeLen(s.doc.Line(last)))
         s.focused(true)
     })
 }
@@ -583,34 +698,27 @@ func (s *EditorState) SelectWord(ln int, col int) {
 // SelectLine 三击选行：选中本行含行尾换行符（末行只选行内容）。
 func (s *EditorState) SelectLine(ln int) {
     Signal.Batch(func() {
-        lines := splitLines(s.sourceCode())
+        lc := s.doc.LineCount()
         l := ln
         if l < 0 { l = 0 }
-        if l >= len(lines) { l = len(lines) - 1 }
+        if l >= lc { l = lc - 1 }
         s.selAnchorLine(l); s.selAnchorCol(0)
-        if l < len(lines)-1 { s.cursorLine(l + 1); s.cursorCol(0) } else { s.cursorLine(l); s.cursorCol(runeLen(lines[l])) }
+        if l < lc-1 { s.cursorLine(l + 1); s.cursorCol(0) } else { s.cursorLine(l); s.cursorCol(runeLen(s.doc.Line(l))) }
         s.focused(true)
     })
 }
 
 // SelectedText 返回选中文本（Ctrl+C / Ctrl+X 用）；无选区返回空串。
+// 直接用 Rope 的 rune 偏移切片，避免按下标 splitLines 全文（O(log N + 选中长度)）。
 func (s *EditorState) SelectedText() string {
     if !s.HasSelection() { return "" }
     fl, fc := s.selFrom(); tl, tc := s.selTo()
-    lines := splitLines(s.sourceCode())
-    if fl >= len(lines) || tl >= len(lines) { return "" }
-    if fl == tl {
-        fr := []rune(lines[fl])
-        if fc > len(fr) || tc > len(fr) { return "" }
-        return string(fr[fc:tc])
-    }
-    fr := []rune(lines[fl]); tr := []rune(lines[tl])
-    if fc > len(fr) { fc = len(fr) }
-    if tc > len(tr) { tc = len(tr) }
-    out := string(fr[fc:])
-    for i := fl + 1; i < tl; i = i + 1 { out = out + "\n" + lines[i] }
-    out = out + "\n" + string(tr[:tc])
-    return out
+    lc := s.doc.LineCount()
+    if fl >= lc || tl >= lc { return "" }
+    start := s.doc.LineColToOffset(fl, fc)
+    end := s.doc.LineColToOffset(tl, tc)
+    if end < start { end = start }
+    return s.doc.Slice(start, end)
 }
 
 // DeleteSelection 删除当前选区（Ctrl+X 的"剪"半边）。
@@ -620,37 +728,21 @@ func (s *EditorState) DeleteSelection() {
 }
 
 // Paste 粘贴（可含 \n 的多行文本）：有选区先删，再整体插入。
+// Rope 的 Insert 原生接受含 '\n' 的文本，新光标 = 插入起点偏移 + 插入 rune 数，
+// 经 OffsetToLineCol 换算成 (行,列)——与原 string 版逐字节等价，且 O(log N)。
 func (s *EditorState) Paste(v string) {
     if v == "" { return }
     s.pushUndo()
-    text := s.sourceCode(); ln := s.cursorLine(); col := s.cursorCol()
+    r := s.doc; ln := s.cursorLine(); col := s.cursorCol()
     if s.HasSelection() {
         fl, fc := s.selFrom(); tl, tc := s.selTo()
-        text = removeRange(text, fl, fc, tl, tc); ln = fl; col = fc
+        r = ropeDeleteRange(r, fl, fc, tl, tc); ln = fl; col = fc
     }
-    out := ""; nl := ln; nc := col
-    if !strings.Contains(v, "\n") {
-        next, c2 := insertText(text, ln, col, v); out = next; nc = c2
-    } else {
-        lines := splitLines(text)
-        if ln >= len(lines) { ln = len(lines) - 1 }
-        rs := []rune(lines[ln])
-        if col > len(rs) { col = len(rs) }
-        left := string(rs[:col]); right := string(rs[col:])
-        parts := splitLines(v)
-        newLines := []string{}
-        for i, l := range lines {
-            if i < ln { newLines = append(newLines, l) } else if i == ln {
-                newLines = append(newLines, left+parts[0])
-                for j := 1; j < len(parts)-1; j = j + 1 { newLines = append(newLines, parts[j]) }
-                newLines = append(newLines, parts[len(parts)-1]+right)
-                nl = ln + len(parts) - 1; nc = runeLen(parts[len(parts)-1])
-            } else { newLines = append(newLines, l) }
-        }
-        out = joinLines(newLines)
-    }
+    off := r.LineColToOffset(ln, col)
+    nr := r.Insert(off, v)
+    nl, nc := nr.OffsetToLineCol(off + runeLen(v))
     Signal.Batch(func() {
-        s.setSource(out)
+        s.applyRope(nr)
         s.cursorLine(nl); s.cursorCol(nc); s.selAnchorLine(nl); s.selAnchorCol(nc); s.focused(true)
     })
 }
@@ -673,7 +765,54 @@ func (s *EditorState) Text() string { return s.sourceCode() }
 // ---- caret / 选区几何（与行版本 getter 共用同一套坐标公式）----
 
 func (s *EditorState) caretLeft() float64 { return 56 + s.PrefixWidth(s.lineText(s.cursorLine()), s.cursorCol()) }
-func (s *EditorState) caretTop() float64  { return 6 + float64(s.cursorLine()*22) }
+func (s *EditorState) caretTop() float64  { return 6 + float64(s.cursorLine()*editorRowHeight) }
+
+// caretTopVisible 把光标的文档坐标减去当前滚动偏移，得到视口内的屏幕坐标。
+// 虚拟滚动下容器把子树上移了 scrollTop，绝对定位的 caret 必须同步补偿。
+func (s *EditorState) caretTopVisible() float64 { return s.caretTop() - s.scrollTop() }
+
+// SetScrollTop 写回受控滚动偏移（VirtualList on-scroll / 滚轮事件调用）。夹紧 >=0。
+func (s *EditorState) SetScrollTop(v float64) {
+    if v < 0 { v = 0 }
+    s.scrollTopVal = v // 先更新镜像，effect 读到的是最新值
+    Signal.Batch(func() { s.scrollTop(v) })
+}
+
+// ScrollBy 相对滚动（滚轮事件用：delta 为行数像素，向下为正）。
+func (s *EditorState) ScrollBy(delta float64) {
+    s.SetScrollTop(s.scrollTopVal + delta)
+}
+
+// ScrollLines 按行数滚动（滚轮一行一行的语义）。
+func (s *EditorState) ScrollLines(lines float64) {
+    s.ScrollBy(lines * editorRowHeight)
+}
+
+// ensureCursorVisible 若光标行落在视口外，滚动到让它可见。读 scrollTopVal
+// （非响应式镜像）而非 scrollTop()——这样跟随 effect 只订阅 cursorLine，
+// 用户主动滚动（on-scroll 写 scrollTop）不会被拉回，避免回环。
+func (s *EditorState) ensureCursorVisible() {
+    top := float64(s.cursorLine() * editorRowHeight)
+    bottom := top + editorRowHeight
+    st := s.scrollTopVal
+    view := float64(editorViewportHeight)
+    if top < st {
+        s.SetScrollTop(top)
+    } else if bottom > st+view {
+        s.SetScrollTop(bottom - view)
+    }
+}
+
+// installCursorFollow 在 Editor 建树期登记一个 effect：仅订阅 cursorLine/lineCount，
+// 光标移出视口时自动滚动。它不读 scrollTop()（只读镜像 scrollTopVal），
+// 故 on-scroll 的写回不会触发它，无回环。
+func (s *EditorState) installCursorFollow() {
+    Signal.Effect(func() {
+        _ = s.cursorLine()
+        _ = s.lineCount()
+        s.ensureCursorVisible()
+    })
+}
 
 func (s *EditorState) selRectStartCol(idx int) int {
     fl, fc := s.selFrom(); _ , tc := s.selTo(); _ = tc
@@ -889,68 +1028,88 @@ func (s *EditorState) buildGradient(toks []token) string {
     return b.String()
 }
 
-func (s *EditorState) rebuildTokenCache(lines []string) {
-    oldLines := s.lineTextCache
-    oldTokens := s.tokenCache
-    oldText := s.textCache
-    nextLines := []string{}; nextTokens := [][]token{}; nextText := []string{}
+// rebuildTokenCache 已改为惰性：不再逐行 highlight。这里只保留行文本快照，
+// 把变化行的 token/text 缓存置 nil 失效，并返回变化行索引供行版本 bump；
+// 真正的 tokenize 推迟到该行被 lineText/lineCodeGradient/lineRichText 读取时。
+func (s *EditorState) rebuildTokenCache(lines []string) []int {
+    old := s.lineTextCache
+    s.ensureCacheLen(len(lines))
+    changed := []int{}
     for i := 0; i < len(lines); i = i + 1 {
-        line := lines[i]
-        nextLines = append(nextLines, line)
-        if i < len(oldLines) && oldLines[i] == line && i < len(oldTokens) {
-            nextTokens = append(nextTokens, oldTokens[i])
-            if i < len(oldText) { nextText = append(nextText, oldText[i]) } else { nextText = append(nextText, joinLineText(oldTokens[i])) }
-        } else {
-            toks := highlight(line)
-            nextTokens = append(nextTokens, toks)
-            nextText = append(nextText, joinLineText(toks))
+        if i >= len(old) || old[i] != lines[i] {
+            // 行内容变化或新增 → 文本快照更新 + token 缓存失效（nil = 待惰性解析）。
+            s.lineTextCache[i] = lines[i]
+            s.tokenCache[i] = nil
+            s.textCache[i] = ""
+            changed = append(changed, i)
         }
     }
-    s.lineTextCache = nextLines
-    s.tokenCache = nextTokens
-    s.textCache = nextText
+    return changed
+}
+
+// ensureLineParsed 惰性解析单行：缓存命中直接返回，未解析则现场 highlight。
+// 行内容以 lineTextCache 为准（setSource 已同步）。
+func (s *EditorState) ensureLineParsed(idx int) {
+    if idx < 0 || idx >= len(s.tokenCache) { return }
+    if s.tokenCache[idx] != nil { return }
+    line := ""
+    if idx < len(s.lineTextCache) { line = s.lineTextCache[idx] }
+    toks := highlight(line)
+    s.tokenCache[idx] = toks
+    s.textCache[idx] = joinLineText(toks)
 }
 
 func (s *EditorState) rowVersion(idx int) int {
-    if idx < 0 { return 0 }
-    if idx >= 24 { idx = 23 }
+    if idx < 0 || idx >= s.rowVers.Len() { return 0 }
     cell := s.rowVers.At(idx)
     if cell == nil { return 0 }
     return cell()
 }
 func (s *EditorState) bumpRow(idx int) {
-    if idx < 0 { return }
-    if idx >= 24 { idx = 23 }
+    if idx < 0 || idx >= s.rowVers.Len() { return }
     cell := s.rowVers.At(idx)
     if cell == nil { return }
     cell(cell() + 1)
 }
 
-// setSource 是写 sourceCode 的唯一入口：重算 token 缓存、只 bump 变化行。
+// setSource 是写 sourceCode 的唯一入口：同步 Rope 根、重算 token 缓存、只 bump 变化行。
 func (s *EditorState) setSource(text string) {
-    oldLines := s.lineTextCache
-    newLines := splitLines(text)
-    s.rebuildTokenCache(newLines)
+    s.doc = Rope.Of(text)
+    s.setSourceFromRope(s.doc, text)
+}
+
+// setSourceFromRope 以已构造好的 Rope 根 + 其字符串写状态，避免编辑命令里
+// 先从 Rope.String() 拿到 text 后再次 Rope.Of(text) 的重复构造。
+func (s *EditorState) setSourceFromRope(r *Rope.Rope, text string) {
+    s.doc = r
+    newLines := splitLines(text) // 仅为定位变化行；O(N) 但无 tokenize，行级 highlight 已惰性化
+    changed := s.rebuildTokenCache(newLines)
     Signal.Batch(func() {
-        for i := 0; i < len(newLines); i = i + 1 {
-            if i >= len(oldLines) || oldLines[i] != newLines[i] { s.bumpRow(i) }
-        }
+        // 先扩容 Vec（>64 自动切 pvector 大后端），再 bump——否则新增行的 bumpRow 越界被跳过。
+        s.rowVers.SetLen(len(newLines))
+        for _, i := range changed { s.bumpRow(i) }
         s.lineCount(len(newLines))
         s.sourceCode(text)
     })
 }
 
+// applyRope 把一次 Rope 编辑的结果（新根 + 光标）落地到状态：由新根取字符串，
+// 复用同一份根做 token/行版本更新（不重复构造 Rope）。
+func (s *EditorState) applyRope(r *Rope.Rope) {
+    s.setSourceFromRope(r, r.String())
+}
+
 func (s *EditorState) lineText(idx int) string {
-    _ = s.rowVersion(idx)
-    if s.tokenCache == nil { return "" }
+    _ = s.rowVersion(idx) // 登记行版本订阅：该行变化 → 视图重读
     if idx < 0 || idx >= len(s.textCache) { return "" }
+    s.ensureLineParsed(idx) // 惰性：首次进入可见窗口才 tokenize
     return s.textCache[idx]
 }
 
 func (s *EditorState) lineCodeGradient(idx int) string {
     _ = s.rowVersion(idx)
-    if s.tokenCache == nil { return "" }
     if idx < 0 || idx >= len(s.tokenCache) { return "" }
+    s.ensureLineParsed(idx)
     return s.buildGradient(s.tokenCache[idx])
 }
 
@@ -959,8 +1118,8 @@ func (s *EditorState) lineCodeGradient(idx int) string {
 // 的 Rust 后端，rich-text 给能消费结构化分段的 Web/Skia，三端语法高亮同源。
 func (s *EditorState) lineRichText(idx int) gxscene.RichText {
     _ = s.rowVersion(idx)
-    if s.tokenCache == nil { return gxscene.RichText{} }
     if idx < 0 || idx >= len(s.tokenCache) { return gxscene.RichText{} }
+    s.ensureLineParsed(idx)
     toks := s.tokenCache[idx]
     out := gxscene.RichText{}
     for _, t := range toks {
@@ -995,10 +1154,27 @@ func (s *EditorState) selectionView(idx int) *gxscene.Instance {
 
 // Editor 构造整个编辑器视图。每次建树时建立主题色 palette（UseToken 依赖建树期
 // Owner），使配色随明暗主题响应式切换。
+//
+// 虚拟滚动：用 VirtualList 取代原来写死的 indices(24) <For>。行高固定 22px，
+// 走显式 height 模式（零回流）；场景树里只存在可见行 + overscan，节点数与文档
+// 行数解耦——几千行文档也只建约 20 个行节点。scrollTop 受控于 EditorState，
+// 光标移出视口时由 ensureCursorVisible 自动滚动跟随。
 func Editor(st *EditorState) *gxscene.Instance {
     if st == nil { st = NewEditorState("") }
     st.palette = newEditorPalette()
-    return gxscene.Render(gxscene.Template{Ops:[]gxscene.Op{gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"bg",Slot:0,},gxscene.Op{Code:gxscene.OpAttr,Arg:"8",Key:"border-radius",},gxscene.Op{Code:gxscene.OpAttr,Arg:"6",Key:"padding",},gxscene.Op{Code:gxscene.OpAttr,Arg:"column",Key:"flex-direction",},gxscene.Op{Code:gxscene.OpAttr,Arg:"0",Key:"gap",},gxscene.Op{Code:gxscene.OpAttr,Arg:"470",Key:"height",},gxscene.Op{Code:gxscene.OpAttr,Arg:"auto",Key:"overflow",},gxscene.Op{Code:gxscene.OpAttr,Arg:"relative",Key:"position",},gxscene.Op{Code:gxscene.OpFor,Slot:1,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpAttr,Arg:"gx-caret",Key:"class",},gxscene.Op{Code:gxscene.OpAttr,Arg:"none",Key:"pointer-events",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"opacity",Slot:2,},gxscene.Op{Code:gxscene.OpDynAttr,Key:"animation",Slot:3,},gxscene.Op{Code:gxscene.OpAttr,Arg:"absolute",Key:"position",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"left",Slot:4,},gxscene.Op{Code:gxscene.OpDynAttr,Key:"top",Slot:5,},gxscene.Op{Code:gxscene.OpAttr,Arg:"2",Key:"width",},gxscene.Op{Code:gxscene.OpAttr,Arg:"22",Key:"height",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"bg",Slot:6,},gxscene.Op{Code:gxscene.OpAttr,Arg:"6",Key:"z-index",},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpClose,},},N:7,}, func() any{ return st.color("bg") }, gxscene.ForGetterOfSignal[int](func() []int { return editorRowIDs },nil,func(i func() int) *gxscene.Instance { return st.lineView(i()) }), func() any{ return st.caretOpacity() }, func() any{ return st.caretAnimation() }, func() any{ return st.caretLeft() }, func() any{ return st.caretTop() }, func() any{ return st.color("caret") })
+    list := VirtualList(gxscene.Props{
+        "count":           func() any { return st.lineCount() },
+        "item-height":     editorRowHeight,
+        "viewport-height": editorViewportHeight,
+        "scroll-top":      func() any { return st.scrollTop() },
+        "render-item":     func(i int) *gxscene.Instance { return st.lineView(i) },
+        "on-scroll":       func(v any) { if f, ok := v.(float64); ok { st.SetScrollTop(f) } },
+        "overscan":        editorOverscan,
+        "bg":              st.color("bg"),
+    })
+    // 光标跟随：建树期订阅光标行/行数，移出视口时自动滚动（见 ensureCursorVisible）。
+    st.installCursorFollow()
+    return gxscene.Render(gxscene.Template{Ops:[]gxscene.Op{gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"bg",Slot:0,},gxscene.Op{Code:gxscene.OpAttr,Arg:"8",Key:"border-radius",},gxscene.Op{Code:gxscene.OpAttr,Arg:"6",Key:"padding",},gxscene.Op{Code:gxscene.OpAttr,Arg:"column",Key:"flex-direction",},gxscene.Op{Code:gxscene.OpAttr,Arg:"0",Key:"gap",},gxscene.Op{Code:gxscene.OpAttr,Arg:"482",Key:"height",},gxscene.Op{Code:gxscene.OpAttr,Arg:"relative",Key:"position",},gxscene.Op{Code:gxscene.OpDynChild,Slot:1,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpAttr,Arg:"gx-caret",Key:"class",},gxscene.Op{Code:gxscene.OpAttr,Arg:"none",Key:"pointer-events",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"opacity",Slot:2,},gxscene.Op{Code:gxscene.OpDynAttr,Key:"animation",Slot:3,},gxscene.Op{Code:gxscene.OpAttr,Arg:"absolute",Key:"position",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"left",Slot:4,},gxscene.Op{Code:gxscene.OpDynAttr,Key:"top",Slot:5,},gxscene.Op{Code:gxscene.OpAttr,Arg:"2",Key:"width",},gxscene.Op{Code:gxscene.OpAttr,Arg:"22",Key:"height",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"bg",Slot:6,},gxscene.Op{Code:gxscene.OpAttr,Arg:"6",Key:"z-index",},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpClose,},},N:7,}, func() any{ return st.color("bg") }, func() any{ return list }, func() any{ return st.caretOpacity() }, func() any{ return st.caretAnimation() }, func() any{ return st.caretLeft() }, func() any{ return st.caretTopVisible() }, func() any{ return st.color("caret") })
 }
 
 // Status 返回编辑器状态栏文本（行列 + 行数），供 playground 头部展示。
@@ -1012,8 +1188,8 @@ func (s *EditorState) Status() string {
 // LineText 导出给装配层诊断/集成用：读第 idx 行第 slot 个 token 文本。
 func (s *EditorState) LineText(idx int, slot int) string {
     _ = s.rowVersion(idx)
-    if s.tokenCache == nil { return "" }
     if idx < 0 || idx >= len(s.tokenCache) { return "" }
+    s.ensureLineParsed(idx)
     toks := s.tokenCache[idx]
     if slot < 0 || slot >= len(toks) { return "" }
     return toks[slot].Text

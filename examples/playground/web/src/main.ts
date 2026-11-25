@@ -467,6 +467,15 @@ function bindKeyboard(elements: Elements, api: GoxPlaygroundAPI): void {
   // 用时间戳标记「刚刚发生过触摸」，在合成的 mousedown 上阻止其默认聚焦行为。
   // 不在 pointerdown 上 preventDefault：那会破坏 iOS 的触摸焦点链，反而让键盘收起。
   let lastTouchAt: number = 0;
+  // 滚轮 → 虚拟滚动窗口移动。deltaMode=0 为像素、1 为行、2 为页，统一折算成行数；
+  // preventDefault 阻止浏览器原生滚动（overflow 容器由 VirtualList 受控 scrollTop 管理）。
+  app.addEventListener("wheel", (ev: WheelEvent): void => {
+    const px: number = ev.deltaMode === 1 ? ev.deltaY * 22
+      : ev.deltaMode === 2 ? ev.deltaY * 470
+      : ev.deltaY;
+    api.scrollLines(px / 22);
+    ev.preventDefault();
+  }, { passive: false });
   app.addEventListener("mousedown", (ev: MouseEvent): void => {
     if (performance.now() - lastTouchAt < 800) {
       ev.preventDefault();

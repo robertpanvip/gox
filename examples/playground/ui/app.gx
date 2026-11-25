@@ -342,6 +342,7 @@ pub func EditorDeleteSelection()             { editorState.DeleteSelection() }
 pub func EditorPaste(s string)               { editorState.Paste(s) }
 pub func EditorUndo()                        { editorState.Undo() }
 pub func EditorRedo()                        { editorState.Redo() }
+pub func EditorScrollLines(lines float64)    { editorState.ScrollLines(lines) }
 pub func EditorFocus()                       { editorState.Focus() }
 pub func EditorBlur()                        { editorState.Blur() }
 pub func EditorSettle()                      { editorState.Settle() }

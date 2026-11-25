@@ -130,6 +130,13 @@ func main() {
 		refreshLSP()
 		return nil
 	}))
+	// 虚拟滚动：前端 wheel 事件把 deltaY 换算成行数传入，移动可见窗口。
+	g.Set("scrollLines", js.FuncOf(func(this js.Value, args []js.Value) any {
+		if len(args) > 0 {
+			ui.EditorScrollLines(args[0].Float())
+		}
+		return nil
+	}))
 	// run 解释当前源码并运行（供 Ctrl+Enter 快捷键；工具栏 Run 按钮走 GX 节点）。
 	g.Set("run", js.FuncOf(func(this js.Value, args []js.Value) any {
 		ui.TriggerRun()
