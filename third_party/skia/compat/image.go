@@ -1,28 +1,27 @@
 package compat
 
-import usk "github.com/robertpanvip/gox-skia"
+import (
+	"github.com/richardwilkes/canvas/imagecore"
+	"github.com/richardwilkes/canvas/shaders"
+)
 
 // Image 是值类型、可比较（imageCache 用 sync.Map 存值）。
-type Image struct{ p usk.Image }
+type Image struct{ p *imagecore.Image }
 
-func (i Image) IsNil() bool    { return i.p == nil }
-func (i Image) Width() int     { return usk.ImageGetWidth(i.p) }
-func (i Image) Height() int    { return usk.ImageGetHeight(i.p) }
-func (i Image) Delete() {
-	if i.p != nil {
-		usk.ImageUnref(i.p)
-	}
-}
+func (i Image) IsNil() bool  { return i.p == nil }
+func (i Image) Width() int   { if i.p == nil { return 0 }; return int(i.p.Width()) }
+func (i Image) Height() int  { if i.p == nil { return 0 }; return int(i.p.Height()) }
+func (i Image) Delete()      { i.p = nil }
 
-// Data 包装上游 Data。
-type Data = usk.Data
+// Data 在纯 Go canvas 中不需要（像素直接在 []byte），保留不透明占位。
+type Data struct{ p []byte }
 
-func DataMakeWithCopy(data []byte, _ uint32) Data { return usk.DataNewWithCopy(data) }
+func DataMakeWithCopy(data []byte, _ uint32) Data { return Data{p: append([]byte(nil), data...)} }
 
 // ImageInfo 是值类型，提供与 pekim go-skia 一致的链式构造。
-type ImageInfo struct{ v usk.ImageInfo }
+type ImageInfo struct{ v imagecore.ImageInfo }
 
-func NewImageInfo() ImageInfo { return ImageInfo{usk.ImageInfo{}} }
+func NewImageInfo() ImageInfo { return ImageInfo{} }
 func (i ImageInfo) MakeColorType(ct ColorType) ImageInfo {
 	i.v.ColorType = ct
 	return i
@@ -40,21 +39,22 @@ func (i ImageInfo) ColorType() ColorType        { return i.v.ColorType }
 func (i ImageInfo) AlphaType() AlphaType        { return i.v.AlphaType }
 
 func ImagesRasterFromData(info ImageInfo, pixels Data, rowBytes uint32) Image {
-	v := info.v
-	return Image{usk.ImageNewRasterData(&v, pixels, int(rowBytes))}
+	img := imagecore.NewRasterData(info.v, pixels.p, int(rowBytes))
+	return Image{p: img}
 }
 
-// SamplingOptions 值类型；上游无构造，用补充的 SamplingOptionsNew。
-type SamplingOptions = usk.SamplingOptions
+// SamplingOptions 值类型；canvas 用零值采样即可。
+type SamplingOptions struct{}
 
-func NewSamplingOptions() SamplingOptions { return usk.SamplingOptionsNew() }
+func NewSamplingOptions() SamplingOptions { return SamplingOptions{} }
 
-// SurfaceProps 值类型。
-type SurfaceProps struct{ p usk.SurfaceProps }
+// SurfaceProps 值类型占位。
+type SurfaceProps struct{}
 
-func NewSurfaceProps() SurfaceProps {
-	return SurfaceProps{usk.SurfacePropsNew(usk.PixelGeometryUnknown)}
-}
+func NewSurfaceProps() SurfaceProps { return SurfaceProps{} }
 func NewSurfacePropsPixelGeometry(flags uint32, pg PixelGeometry) SurfaceProps {
-	return SurfaceProps{usk.SurfacePropsNew(pg)}
+	return SurfaceProps{}
 }
+
+// 供 canvas.go 使用：shaders.SamplingOptions 零值转换。
+func toSamplingOptions(_ SamplingOptions) shaders.SamplingOptions { return shaders.SamplingOptions{} }

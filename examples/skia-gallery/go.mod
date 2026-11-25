@@ -12,7 +12,9 @@ require (
 
 require (
 	github.com/ahati/yoga-go-binding v0.1.0 // indirect
-	github.com/richardwilkes/toolbox/v2 v2.22.0 // indirect
+	github.com/go-text/typesetting v0.3.5 // indirect
+	github.com/richardwilkes/canvas v0.3.2 // indirect
+	golang.org/x/image v0.46.0 // indirect
 )
 
 replace github.com/robertpanvip/gox => ../..

@@ -1,9 +1,9 @@
 // Package compat 提供与 github.com/pekim/go-skia v0.1.0 同形的 API 外观，
-// 内部委托给 unison 的完整 Skia 绑定（github.com/robertpanvip/gox-skia）。
+// 内部委托给纯 Go 的 Skia 渲染库 github.com/richardwilkes/canvas。
 //
 // 目的：让 GoX 的 backend/skia 绘制层与真实 GL 窗口只需改 import 路径，
-// 即可从能力受限的 pekim 绑定迁移到支持原生 Shader/MaskFilter/ImageFilter
-// 的完整绑定，同时保留旧 API 的值类型语义（Rect/Font/Image 等为 struct 值）。
+// 即可用纯 Go canvas（零 cgo 静态库、9MB module）替换掉带 55MB libskia.a
+// 的 fork 绑定，同时保留旧 API 的值类型语义（Rect/Font/Image 等为 struct 值）。
 //
 // 值类型（Rect/Font/Image/Paint/Path/Canvas/...）用 struct 包装上游指针；
 // 因为这些类型在业务代码里按值传递、可比较（Font 用作 map key、与零值比较），
@@ -11,20 +11,27 @@
 package compat
 
 import (
-	usk "github.com/robertpanvip/gox-skia"
-	"github.com/richardwilkes/toolbox/v2/geom"
+	cc "github.com/richardwilkes/canvas/canvas"
+	"github.com/richardwilkes/canvas/colorcore"
+	"github.com/richardwilkes/canvas/filtercore"
+	"github.com/richardwilkes/canvas/geom"
+	"github.com/richardwilkes/canvas/imagecore"
+	"github.com/richardwilkes/canvas/maskfilter"
+	cp "github.com/richardwilkes/canvas/path"
+	"github.com/richardwilkes/canvas/shaders"
 )
 
 // Color 是 ARGB 的 uint32，与 Skia C API 一致。
-type Color = usk.Color
+type Color = colorcore.Color
 
 // ColorSetARGB 以 A/R/G/B 分量构造颜色。
-func ColorSetARGB(a, r, g, b uint32) Color { return Color(a<<24 | r<<16 | g<<8 | b) }
+func ColorSetARGB(a, r, g, b uint32) Color {
+	return colorcore.ARGB(uint8(a), uint8(r), uint8(g), uint8(b))
+}
 
 // ---------- Rect ----------
 
-// Rect 是值类型矩形：左上角 (X,Y)，尺寸 (W,H)。与 pekim go-skia 的
-// RectMakeXYWH/MakeWH 语义一致（存 x/y/w/h，非 left/top/right/bottom）。
+// Rect 是值类型矩形：左上角 (X,Y)，尺寸 (W,H)。
 type Rect struct{ X, Y, W, H float32 }
 
 func RectMakeXYWH(x, y, w, h float32) Rect    { return Rect{x, y, w, h} }
@@ -34,15 +41,17 @@ func (r Rect) Width() float32                 { return r.W }
 func (r Rect) Height() float32                { return r.H }
 func (r Rect) IsEmpty() bool                  { return r.W <= 0 || r.H <= 0 }
 
-func toGeomRect(r Rect) geom.Rect { return geom.Rect{X: r.X, Y: r.Y, Width: r.W, Height: r.H} }
+func toGeomRect(r Rect) geom.Rect { return geom.RectXYWH(r.X, r.Y, r.W, r.H) }
 
 // ---------- Point / Size ----------
 
 type Point struct{ X, Y float32 }
 
+func toGeomPoint(p Point) geom.Point { return geom.Point{X: p.X, Y: p.Y} }
+
 // ---------- 枚举常量（数值对齐 pekim go-skia / Skia C API）----------
 
-type PaintStyle = usk.PaintStyle
+type PaintStyle uint32
 
 const (
 	PaintStyleFill          PaintStyle = 0
@@ -50,21 +59,21 @@ const (
 	PaintStyleStrokeAndFill PaintStyle = 2
 )
 
-type ClipOp = usk.ClipOp
+type ClipOp uint32
 
 const (
 	ClipOpDifference ClipOp = 0
 	ClipOpIntersect  ClipOp = 1
 )
 
-type PathDirection = usk.Direction
+type PathDirection uint32
 
 const (
 	PathDirectionCW  PathDirection = 0
 	PathDirectionCCW PathDirection = 1
 )
 
-type TextEncoding = usk.TextEncoding
+type TextEncoding uint32
 
 const (
 	TextEncodingUTF8  TextEncoding = 0
@@ -76,28 +85,28 @@ type CanvasSrcRectConstraint int32
 
 const CanvasSrcRectConstraintStrict CanvasSrcRectConstraint = 0
 
-type ColorType = usk.ColorType
+type ColorType = imagecore.ColorType
 
 const (
-	ColorTypeRGBA_8888 ColorType = usk.ColorTypeRGBA8888
-	ColorTypeBGRA_8888 ColorType = usk.ColorTypeBGRA8888
+	ColorTypeRGBA_8888 ColorType = imagecore.ColorTypeRGBA8888
+	ColorTypeBGRA_8888 ColorType = imagecore.ColorTypeBGRA8888
 )
 
-type AlphaType = usk.AlphaType
+type AlphaType = imagecore.AlphaType
 
-const AlphaTypePremul AlphaType = usk.AlphaTypePreMul
+const AlphaTypePremul AlphaType = imagecore.AlphaTypePremul
 
-type PixelGeometry = usk.PixelGeometry
+type PixelGeometry uint32
 
-const PixelGeometryRGB_H PixelGeometry = usk.PixelGeometryRGBH
+const PixelGeometryRGB_H PixelGeometry = 0
 
-type FontStyleWeight = usk.FontWeight
-type FontStyleSpacing = usk.FontSpacing
-type FontStyleSlant = usk.FontSlant
+type FontStyleWeight uint32
+type FontStyleSpacing uint32
+type FontStyleSlant uint32
 
 const (
-	FontWeightNormal FontStyleWeight = 400
-	FontWeightBold   FontStyleWeight = 700
+	FontWeightNormal  FontStyleWeight = 400
+	FontWeightBold    FontStyleWeight = 700
 	FontSpacingNormal FontStyleSpacing = 0
 	FontSlantUpright  FontStyleSlant = 0
 )
@@ -105,94 +114,91 @@ const (
 // ---------- Paint ----------
 
 // Paint 包装上游 Paint 指针。值类型、可比较（仅含一个指针字段）。
-type Paint struct{ p usk.Paint }
+type Paint struct{ p *cc.Paint }
 
-func NewPaint() Paint { return Paint{usk.PaintNew()} }
+func NewPaint() Paint { return Paint{cc.NewPaint()} }
 func (p Paint) Delete() {
-	if p.p != nil {
-		usk.PaintDelete(p.p)
-	}
+	p.p = nil // Go GC 回收；保留方法签名以兼容旧调用
 }
-func (p Paint) IsNil() bool { return p.p == nil }
-func (p Paint) SetColor(c Color) { usk.PaintSetColor(p.p, c) }
-func (p Paint) SetStyle(s PaintStyle) { usk.PaintSetStyle(p.p, s) }
-func (p Paint) SetStrokeWidth(w float32) { usk.PaintSetStrokeWidth(p.p, w) }
-func (p Paint) SetStrokeMiter(m float32) { usk.PaintSetStrokeMiter(p.p, m) }
-func (p Paint) SetStrokeCap(c usk.StrokeCap) { usk.PaintSetStrokeCap(p.p, c) }
-func (p Paint) SetStrokeJoin(j usk.StrokeJoin) { usk.PaintSetStrokeJoin(p.p, j) }
-func (p Paint) SetAntiAlias(aa bool) { usk.PaintSetAntialias(p.p, aa) }
-func (p Paint) SetDither(d bool) { usk.PaintSetDither(p.p, d) }
-func (p Paint) SetBlendMode(m usk.BlendMode) { usk.PaintSetBlendMode(p.p, m) }
+func (p Paint) IsNil() bool              { return p.p == nil }
+func (p Paint) SetColor(c Color)         { p.p.Color = c }
+func (p Paint) SetStyle(s PaintStyle)    { p.p.Style = cc.Style(s) }
+func (p Paint) SetStrokeWidth(w float32) { p.p.StrokeWidth = w }
+func (p Paint) SetStrokeMiter(m float32) { p.p.MiterLimit = m }
+func (p Paint) SetAntiAlias(aa bool)     { p.p.AntiAlias = aa }
+func (p Paint) SetDither(d bool)         { p.p.Dither = d }
 
-// SetAlpha 通过乘改颜色 alpha 实现（上游绑定无 PaintSetAlpha）。
+// SetAlpha 通过改颜色 alpha 实现（与旧 shim 一致）。
 func (p Paint) SetAlpha(a uint32) {
-	c := usk.PaintGetColor(p.p)
-	r, g, b := uint32(c>>16&0xff), uint32(c>>8&0xff), uint32(c&0xff)
-	usk.PaintSetColor(p.p, ColorSetARGB(a, r, g, b))
+	p.p.Color = colorcore.ARGB(uint8(a), p.p.Color.R(), p.p.Color.G(), p.p.Color.B())
 }
 
-// SetShader 设置渐变/图案 shader（上游原生能力）。
-func (p Paint) SetShader(s Shader) { usk.PaintSetShader(p.p, s.p) }
-func (p Paint) GetShader() Shader  { return Shader{usk.PaintGetShader(p.p)} }
-func (p Paint) SetMaskFilter(f MaskFilter) { usk.PaintSetMaskFilter(p.p, f.p) }
-func (p Paint) SetImageFilter(f ImageFilter) { usk.PaintSetImageFilter(p.p, f.p) }
+// SetShader 设置渐变/图案 shader。
+func (p Paint) SetShader(s Shader) { p.p.Shader = s.p }
+func (p Paint) GetShader() Shader  { return Shader{p.p.Shader} }
+func (p Paint) SetMaskFilter(f MaskFilter) { p.p.MaskFilter = f.p }
+func (p Paint) SetImageFilter(f ImageFilter) { p.p.ImageFilter = f.p }
 
 // ---------- Shader / Filter ----------
 
-type TileMode = usk.TileMode
+type TileMode uint32
 
 const (
-	TileModeClamp  TileMode = usk.TileMode(0)
-	TileModeRepeat TileMode = usk.TileMode(1)
-	TileModeMirror TileMode = usk.TileMode(2)
-	TileModeDecal  TileMode = usk.TileMode(3)
+	TileModeClamp  TileMode = 0
+	TileModeRepeat TileMode = 1
+	TileModeMirror TileMode = 2
+	TileModeDecal  TileMode = 3
 )
 
-type Shader struct{ p usk.Shader }
+func toShadersTileMode(m TileMode) shaders.TileMode { return shaders.TileMode(m) }
+
+type Shader struct{ p shaders.Shader }
+
 func (s Shader) IsNil() bool { return s.p == nil }
-func (s Shader) Delete() { if s.p != nil { usk.ShaderUnref(s.p) } }
+func (s Shader) Delete()     { s.p = nil }
 
-// NewLinearGradientShader 用原生 Skia shader 构造线性渐变。
-// start/end 为 canvas 坐标系下的起止点，colors 与 positions 等长（positions∈[0,1] 单调递增）。
-// 内部强制使用单位矩阵——上游绑定对零值 geom.Matrix 会返回 nil shader。
+// NewLinearGradientShader 构造线性渐变 shader。
+// start/end 为 canvas 坐标系下的起止点，colors 与 positions 等长。
 func NewLinearGradientShader(start, end Point, colors []Color, positions []float32) Shader {
-	return Shader{usk.ShaderNewLinearGradient(
-		geom.Point{X: start.X, Y: start.Y},
-		geom.Point{X: end.X, Y: end.Y},
-		colors, positions, TileModeClamp, geom.NewIdentityMatrix(),
+	return Shader{shaders.NewLinearGradient(
+		toGeomPoint(start), toGeomPoint(end), colors, positions,
+		shaders.TileClamp, nil,
 	)}
 }
 
-// Radial-gradient shader（供后续扩展）。
+// NewRadialGradientShader 供后续扩展。
 func NewRadialGradientShader(center Point, radius float32, colors []Color, positions []float32) Shader {
-	return Shader{usk.ShaderNewRadialGradient(
-		geom.Point{X: center.X, Y: center.Y}, radius,
-		colors, positions, TileModeClamp, geom.NewIdentityMatrix(),
+	return Shader{shaders.NewRadialGradient(
+		toGeomPoint(center), radius, colors, positions,
+		shaders.TileClamp, nil,
 	)}
 }
 
-type MaskFilter struct{ p usk.MaskFilter }
+// MaskFilter / ImageFilter：backend/skia 未使用，保留真实接口类型以兼容旧 API。
+type MaskFilter struct{ p maskfilter.MaskFilter }
 func (f MaskFilter) IsNil() bool { return f.p == nil }
 
-type ImageFilter struct{ p usk.ImageFilter }
+type ImageFilter struct{ p filtercore.Filter }
 func (f ImageFilter) IsNil() bool { return f.p == nil }
 
 // ---------- Path ----------
 
-type Path struct{ p usk.Path }
+type Path struct{ p *cp.Path }
 
-func NewPath() Path { return Path{usk.PathNew()} }
-func (p Path) Delete() { if p.p != nil { usk.PathDelete(p.p) } }
-func (p Path) IsEmpty() bool { return usk.PathIsEmpty(p.p) }
-func (p Path) MoveToPoint(x, y float32) { usk.PathMoveTo(p.p, geom.Point{X: x, Y: y}) }
-func (p Path) LineTo(x, y float32) { usk.PathLineTo(p.p, geom.Point{X: x, Y: y}) }
-func (p Path) QuadTo(x1, y1, x2, y2 float32) {
-	usk.PathQuadTo(p.p, geom.Point{X: x1, Y: y1}, geom.Point{X: x2, Y: y2})
-}
+func NewPath() Path { return Path{p: cp.New()} }
+func (p Path) Delete() { p.p = nil }
+func (p Path) IsEmpty() bool { return p.p == nil || p.p.IsEmpty() }
+func (p Path) MoveToPoint(x, y float32) { p.p.MoveTo(x, y) }
+func (p Path) LineTo(x, y float32)      { p.p.LineTo(x, y) }
+func (p Path) QuadTo(x1, y1, x2, y2 float32) { p.p.QuadTo(x1, y1, x2, y2) }
 func (p Path) CubicTo(x1, y1, x2, y2, x3, y3 float32) {
-	usk.PathCubicTo(p.p, geom.Point{X: x1, Y: y1}, geom.Point{X: x2, Y: y2}, geom.Point{X: x3, Y: y3})
+	p.p.CubicTo(x1, y1, x2, y2, x3, y3)
 }
-func (p Path) Close() { usk.PathClose(p.p) }
+func (p Path) Close() { p.p.Close() }
 func (p Path) AddRoundRect1(rect Rect, rx, ry float32, dir PathDirection) {
-	usk.PathAddRoundedRect(p.p, toGeomRect(rect), geom.Size{Width: rx, Height: ry}, usk.Direction(dir))
+	d := geom.DirectionCW
+	if dir == PathDirectionCCW {
+		d = geom.DirectionCCW
+	}
+	p.p.AddRoundRect(toGeomRect(rect), rx, ry, d)
 }

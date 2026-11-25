@@ -42,6 +42,7 @@ type glWindow struct {
 	backend sk.GrBackendRenderTarget
 	target  sk.GrBackendRenderTarget
 	fonts   map[int]sk.Font
+	blit    *rasterBlit // CPU raster → GL 纹理显示端
 
 	mu     sync.Mutex
 	root   *gxscene.Node // 最近一次 Draw 提交的场景树根
@@ -137,6 +138,13 @@ func (g *glWindow) Open(cfg gxapp.WindowConfig) error {
 	g.win = win
 	g.context = sk.GrDirectContextsMakeGLInterface(sk.GrGLMakeNativeInterface())
 	g.fonts = make(map[int]sk.Font)
+	// CPU raster 显示端：canvas 画到像素缓冲 → 上传纹理 → 全屏 blit。
+	var blitErr error
+	g.blit, blitErr = newRasterBlit()
+	if blitErr != nil {
+		glfw.Terminate()
+		return fmt.Errorf("newRasterBlit: %w", blitErr)
+	}
 
 	// 键盘输入统一转发到 GX 编辑器命令（由 editor.gx 用 GX 编写）。
 	// 装配层只做"平台按键 → 语义命令"的翻译，不碰编辑逻辑——这正是
@@ -278,9 +286,12 @@ func (g *glWindow) resizeToWindow() {
 	var cs sk.ColorSpace
 	g.surface = sk.SurfacesWrapBackendRenderTarget(
 		g.context.AsGrRecordingContext(), g.backend,
-		sk.GrSurfaceOriginBottomLeft, sk.ColorTypeBGRA_8888, cs,
+		sk.GrSurfaceOriginBottomLeft, sk.ColorTypeRGBA_8888, cs,
 		sk.NewSurfacePropsPixelGeometry(0, sk.PixelGeometryRGB_H),
 	)
+	if g.blit != nil {
+		g.blit.resize(int32(w), int32(h))
+	}
 }
 
 // Draw 实现 gxapp.Window：线程安全地把最新场景树提交给主线程的绘制循环。
@@ -323,7 +334,13 @@ func (g *glWindow) paintNow() {
 	}
 	_, hits := skia.PaintToScaled(canvas, float32(fx), float32(fy), dpr, g.root, g.fonts)
 	g.hits = hits
-	g.context.FlushAndSubmit(sk.GrSyncCpuYes)
+	// CPU raster → GL 纹理 → 全屏 blit（替代原 Skia GL surface 的直接绘制）。
+	if g.blit != nil {
+		if pix := canvas.Pixmap(); pix != nil {
+			g.blit.upload(int32(fx), int32(fy), pix.Pix)
+			g.blit.blit()
+		}
+	}
 	gl.Flush()
 	g.win.SwapBuffers()
 	g.frames++
@@ -496,6 +513,10 @@ func (g *glWindow) Close() error {
 		g.backend.Delete()
 	}
 	// GrDirectContext 在本绑定无显式 Release；surface/backend 解引用后由 finalizer 回收。
+	if g.blit != nil {
+		g.blit.destroy()
+		g.blit = nil
+	}
 	if g.win != nil {
 		g.win.Destroy()
 	}

@@ -10,8 +10,8 @@ import (
 	gxscene "github.com/robertpanvip/gox/runtime/scene"
 )
 
-// Window 实现 gxapp.Window：一个基于真实 Skia（pekim/go-skia CGO 绑定）的
-// 离屏光栅后端。
+// Window 实现 gxapp.Window：一个基于纯 Go Skia 渲染后端
+// （github.com/richardwilkes/canvas，经 gox-skia/compat 适配）的离屏光栅后端。
 //
 // 它不依赖 GLFW / 窗口系统：每帧 Draw 把场景树遍历成一组绘制指令，逐条调用
 // 真实 Skia 绘制 API 画到一块 raster canvas。同时保留一份「绘制指令记录」
