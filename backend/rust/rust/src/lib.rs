@@ -27,6 +27,7 @@ mod protocol;
 mod render;
 mod scene;
 mod style;
+mod text_effects;
 mod video;
 
 use render::Renderer;

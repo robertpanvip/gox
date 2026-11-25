@@ -177,6 +177,40 @@ fn round_rect_path(x: f32, y: f32, w: f32, h: f32, r: f32) -> Option<tiny_skia::
     pb.finish()
 }
 
+/// 把统一语义的 CSS linear-gradient 转成 tiny-skia shader。
+/// 角度换算对齐 CSS：0°=向上，90°=向右，180°=向下；渐变线穿过盒子中心，
+/// 长度取盒子在渐变方向上的投影（与 Go paintGradientBackgroundShader 同算法）。
+fn gradient_shader(
+    g: &crate::text_effects::LinearGradient,
+    box_rect: (f32, f32, f32, f32),
+) -> Option<tiny_skia::Shader<'static>> {
+    use tiny_skia::{Color, GradientStop, Point, SpreadMode, Transform};
+    let (x, y, w, h) = box_rect;
+    if w <= 0.0 || h <= 0.0 || g.stops.is_empty() {
+        return None;
+    }
+    let rad = g.angle.to_radians();
+    // CSS 角度以"向上"为 0 顺时针，转成方向向量 (dx, dy)（屏幕 y 向下）。
+    let dx = rad.sin();
+    let dy = -rad.cos();
+    let cx = x + w / 2.0;
+    let cy = y + h / 2.0;
+    // 渐变线长度 = 盒子宽高在方向上的投影绝对值之和。
+    let len = (w * dx.abs() + h * dy.abs()) * 0.5;
+    let start = Point::from_xy(cx - dx * len, cy - dy * len);
+    let end = Point::from_xy(cx + dx * len, cy + dy * len);
+
+    let stops: Vec<GradientStop> = g.stops.iter().map(|s| {
+        let pos = s.offset.unwrap_or_else(|| {
+            // ch 边界型色段无百分比：按最大 end_ch 归一化，保持相对位置。
+            let max_ch = g.stops.last().map(|x| x.end_ch.max(1)).unwrap_or(1) as f32;
+            s.end_ch as f32 / max_ch
+        });
+        GradientStop::new(pos, Color::from_rgba8(s.color.0, s.color.1, s.color.2, s.color.3))
+    }).collect();
+    tiny_skia::LinearGradient::new(start, end, stops, SpreadMode::Pad, Transform::identity())
+}
+
 fn parse_color(s: &str) -> (u8, u8, u8) {
     let s = s.trim();
     if let Some(hex) = s.strip_prefix('#') {
@@ -256,6 +290,9 @@ struct TextDraw {
     size: f32,
     color: (u8, u8, u8),
     clip: ClipRect,
+    /// 统一 TextEffects 解析出的渐变着色分段（文本, RGB）。
+    /// 空表示普通单色文字，走 default_color 快路径；非空走 glyphon 富文本 span。
+    spans: Vec<(String, (u8, u8, u8))>,
 }
 
 /// object-fit：图片如何映射进布局盒（与 Skia 端 image.go 语义一致）。
@@ -272,13 +309,21 @@ impl ObjectFit {
     }
 }
 
-/// 单条文本的内容签名：字形 buffer 只取决于 (内容, 字号)，与坐标/颜色无关。
+/// 单条文本的内容签名：字形 buffer 取决于 (内容, 字号, 着色分段)，与坐标无关。
 /// 缓存按 node_id 索引，同一 ID 签名不变即可复用其 buffer。
+/// 渐变分段纳入签名：颜色/分界变化时重排 span，但坐标滚动不影响签名。
 fn text_sig(t: &TextDraw) -> String {
     let mut s = String::with_capacity(t.text.len() + 16);
     s.push_str(&t.text);
     s.push('@');
     s.push_str(&format!("{:.2}", t.size));
+    if !t.spans.is_empty() {
+        s.push('@');
+        for (seg, c) in &t.spans {
+            s.push_str(seg);
+            s.push_str(&format!(":{:02x}{:02x}{:02x};", c.0, c.1, c.2));
+        }
+    }
     s
 }
 
@@ -319,6 +364,9 @@ struct ShapeDraw {
     h: f32,
     bg: (u8, u8, u8),
     bg_present: bool,
+    /// 通用 CSS linear-gradient 背景（无 gradient-text 标记时作用于容器本身）。
+    /// 与文字渐变互斥：带 gradient-text 的 div 其渐变只裁剪到文字，不画背景。
+    bg_gradient: Option<crate::text_effects::LinearGradient>,
     radius: f32,
     border: Option<((u8, u8, u8), f32)>,
     shadow: Option<crate::style::BoxShadow>,
@@ -629,6 +677,7 @@ impl DisplayList {
             avail_w: f32, avail_h: f32,
             skip_overlays: bool,
             parent_clip: ClipRect,
+            inherited_gradient: Option<crate::text_effects::LinearGradient>,
         ) -> f32 {
             // 主树遍历时跳过浮层子树（它们由后续的遮罩/浮层遍单独绘制，保证层级）。
             if skip_overlays && is_overlay(node) {
@@ -637,6 +686,12 @@ impl DisplayList {
             let p = |k: &str| node.props.get(k).map(|s| s.as_str());
             let color = p("color").map(parse_color).unwrap_or(inherited_color);
             let size = p("font-size").and_then(parse_px).unwrap_or(inherited_size);
+            // 统一 TextEffects：当前节点声明 gradient-text / background-clip:text + bg 渐变时，
+            // 解析出渐变并传给文本子节点；否则沿用祖先渐变。语义与 Go text/effects.Parse 一致。
+            let my_gradient = match crate::text_effects::TextEffects::from_props(&node.props).fill {
+                crate::text_effects::TextFill::Gradient(g) => Some(g),
+                _ => inherited_gradient,
+            };
             let lay = ctx.taffy.layout(tnode).expect("taffy layout");
             // 浮层根用第二遍算出的目标坐标；其余节点沿用 Taffy 相对坐标累加。
             let (x, y) = overrides.get(&node.id).copied()
@@ -668,13 +723,35 @@ impl DisplayList {
                 // (font_size, line_height=1.35×size) 自行处理行盒内基线，故这里不加
                 // 任何 size 比例的魔法偏移——否则紧凑容器（如 Input 高 20px）里文字会偏下。
                 if !clip_rejects(my_clip, x, y, size * 4.0, size * 1.35) {
-                    dl.texts.push(TextDraw { id: node.id.clone(), text: node.text.clone(), x, y, size, color, clip: my_clip });
+                    // 统一渐变文字：按 ch 边界把文本切成着色分段，glyphon 逐 span 上色。
+                    // 无渐变时 spans 为空 → 走 default_color 快路径，零额外分配。
+                    let spans = my_gradient.as_ref()
+                        .map(|g| crate::text_effects::gradient_spans(&node.text, g, color))
+                        .unwrap_or_default();
+                    dl.texts.push(TextDraw {
+                        id: node.id.clone(), text: node.text.clone(), x, y, size, color,
+                        clip: my_clip, spans,
+                    });
                 }
                 return y + size * 1.35;
             }
 
             if node.typ == NodeType::Div {
-                let bg = p("bg").or_else(|| p("background")).map(parse_color);
+                let bg_raw = p("bg").or_else(|| p("background"));
+                let bg = bg_raw.map(parse_color);
+                // 通用渐变背景：带 gradient-text 标记的节点渐变只作用于文字，
+                // 不画背景（与 Go paint.go 的例外一致）；其余节点的 bg 渐变画到容器。
+                let is_gradient_text = node.props.get("gradient-text")
+                    .map(|v| v.trim() == "1" || v.trim().eq_ignore_ascii_case("true"))
+                    .unwrap_or(false)
+                    || node.props.get("background-clip").or_else(|| node.props.get("-webkit-background-clip"))
+                    .map(|v| v.to_ascii_lowercase().contains("text"))
+                    .unwrap_or(false);
+                let bg_gradient = if is_gradient_text {
+                    None
+                } else {
+                    bg_raw.and_then(crate::text_effects::parse_linear_gradient)
+                };
                 let radius = p("border-radius").and_then(parse_px).unwrap_or(0.0);
                 let border = p("border").map(|c| {
                     let bw = p("border-width").and_then(parse_px).unwrap_or(1.0);
@@ -705,7 +782,11 @@ impl DisplayList {
                     };
                     dl.shapes.push(ShapeDraw {
                         x, y, w, h,
-                        bg: bg.unwrap_or((0, 0, 0)), bg_present: bg.is_some(), radius, border,
+                        bg: bg.unwrap_or((0, 0, 0)),
+                        // 有渐变时纯色底不绘制，由 LinearGradient shader 填充（对齐 Skia/canvas 端）。
+                        bg_present: bg.is_some() && bg_gradient.is_none(),
+                        bg_gradient,
+                        radius, border,
                         shadow: st.shadow.clone(),
                         clip: my_clip,
                         img, canvas,
@@ -726,7 +807,7 @@ impl DisplayList {
             let mut subtree_bottom = y + h; // 至少到自身底边
             for (i, c) in kids.iter().enumerate() {
                 let child_tnode = ctx.taffy.child_at_index(tnode, i).expect("taffy child");
-                let cb = emit(c, child_tnode, ctx, dl, color, size, child_ox, child_oy, overrides, avail_w, avail_h, skip_overlays, my_clip);
+                let cb = emit(c, child_tnode, ctx, dl, color, size, child_ox, child_oy, overrides, avail_w, avail_h, skip_overlays, my_clip, my_gradient.clone());
                 if cb > subtree_bottom {
                     subtree_bottom = cb;
                 }
@@ -752,17 +833,17 @@ impl DisplayList {
 
         // 第一遍：主树，跳过浮层子树。
         emit(root, root_node, &ctx, &mut dl, (226, 232, 240), 16.0, 0.0, 0.0,
-            &overrides, avail_w, avail_h, true, None);
+            &overrides, avail_w, avail_h, true, None, None);
         // 第二遍：遮罩（拦截外部点击）。
         for ov in overlays.iter().filter(|o| is_scrim(o.node)) {
             emit(ov.node, ov.tnode, &ctx, &mut dl, (226, 232, 240), 16.0, 0.0, 0.0,
-                &overrides, avail_w, avail_h, false, None);
+                &overrides, avail_w, avail_h, false, None, None);
         }
         // 第三遍：内容浮层 popover → modal → portal（最上层），按角色分层保证层级稳定。
         for role in ["popover", "modal", "portal"] {
             for ov in overlays.iter().filter(|o| gx_role(o.node) == role) {
                 emit(ov.node, ov.tnode, &ctx, &mut dl, (226, 232, 240), 16.0, 0.0, 0.0,
-                    &overrides, avail_w, avail_h, false, None);
+                    &overrides, avail_w, avail_h, false, None, None);
             }
         }
         dl
@@ -1214,6 +1295,16 @@ struct VSOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f };
                     p.anti_alias = true;
                     pm.fill_path(&path, &p, FillRule::Winding, Transform::identity(), None);
                 }
+                // 通用 linear-gradient 背景：一次构造 shader + 一次 fill_path，
+                // 与 Go 桌面端 paintGradientBackgroundShader 路径一致（无逐像素条带）。
+                if let Some(g) = &s.bg_gradient {
+                    if let Some(shader) = gradient_shader(g, (rx, ry, rw, rh)) {
+                        let mut p = Paint::default();
+                        p.shader = shader;
+                        p.anti_alias = true;
+                        pm.fill_path(&path, &p, FillRule::Winding, Transform::identity(), None);
+                    }
+                }
                 // img：object-fit 缩放绘制，圆角时用同形状 Mask 裁剪，与 Skia 端一致。
                 if let Some((pix, fit)) = &s.img {
                     Self::draw_image_fit_impl(&mut pm, pix, *fit, rx, ry, rw, rh, s.radius);
@@ -1363,8 +1454,18 @@ struct VSOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f };
                 let mut b = Buffer::new(&mut self.font_system, Metrics::new(t.size, t.size * 1.35));
                 b.set_size(&mut self.font_system, Some(700.0), Some(80.0));
                 let attrs = Attrs::new().family(Family::SansSerif);
-                b.set_text(&mut self.font_system, &t.text, &attrs, Shaping::Advanced);
-                b.shape_until_scroll(&mut self.font_system, false);
+                if t.spans.is_empty() {
+                    // 快路径：普通单色文字，颜色走 TextArea.default_color。
+                    b.set_text(&mut self.font_system, &t.text, &attrs, Shaping::Advanced);
+                    b.shape_until_scroll(&mut self.font_system, false);
+                } else {
+                    // 统一渐变文字：按 ch 分段逐 span 着色。段内颜色编进 Attrs，
+                    // glyphon 渲染时优先读 glyph.color_opt（见 text_render.rs:245）。
+                    let styled: Vec<(&str, Attrs)> = t.spans.iter().map(|(seg, c)| {
+                        (seg.as_str(), attrs.clone().color(Color::rgb(c.0, c.1, c.2)))
+                    }).collect();
+                    b.set_rich_text(&mut self.font_system, styled, &attrs, Shaping::Advanced, None);
+                }
                 self.glyph_cache.insert(t.id.clone(), GlyphEntry { sig: text_sig(t), buffer: b });
             }
             for id in evicted {
@@ -1639,7 +1740,7 @@ mod text_sig_tests {
     fn td(id: &str, text: &str, size: f32) -> TextDraw {
         TextDraw {
             id: id.into(), text: text.into(), x: 0.0, y: 0.0, size,
-            color: (0, 0, 0), clip: None,
+            color: (0, 0, 0), clip: None, spans: vec![],
         }
     }
 
@@ -1717,6 +1818,57 @@ mod text_sig_tests {
         let (shaped, evicted) = plan_glyphs(&cur, &cache);
         assert_eq!(shaped, vec![0, 1]);
         assert!(evicted.is_empty());
+    }
+
+    #[test]
+    fn gradient_spans_change_signature_for_reshaping() {
+        // 同一文本/字号，仅渐变分段颜色不同 → 签名必须不同，否则 span 不会更新。
+        let mut a = td("code", "func", 13.0);
+        a.spans = vec![("fun".into(), (197, 134, 192)), ("c".into(), (212, 212, 212))];
+        let mut b = td("code", "func", 13.0);
+        b.spans = vec![("fun".into(), (255, 0, 0)), ("c".into(), (0, 0, 255))];
+        assert_ne!(text_sig(&a), text_sig(&b), "渐变颜色变化应触发重新 shape");
+
+        // 坐标移动不影响签名（滚动零 shape）。
+        let moved = TextDraw { x: 99.0, y: -6.0, ..a.clone() };
+        assert_eq!(text_sig(&a), text_sig(&moved));
+    }
+
+    #[test]
+    fn gradient_shader_builds_for_linear_gradient() {
+        let g = crate::text_effects::parse_linear_gradient(
+            "linear-gradient(90deg, #ff0000 0%, #0000ff 100%)",
+        ).unwrap();
+        // 90°=水平渐变；盒子 200x100。shader 应成功构造（非退化、色标 ≥2）。
+        assert!(gradient_shader(&g, (10.0, 10.0, 200.0, 100.0)).is_some());
+        // 退化盒子不构造 shader。
+        assert!(gradient_shader(&g, (0.0, 0.0, 0.0, 100.0)).is_none());
+    }
+
+    #[test]
+    fn from_scene_inherits_gradient_from_parent_to_text() {
+        // 模拟编辑器代码行：<span gradient-text="1" bg=linear-gradient(...)>文本</span>。
+        // 验证父 span 解析出的渐变能传到文本子节点并生成着色分段（三端统一的核心链路）。
+        use crate::binprotocol::NodeType;
+        let text = crate::scene::SceneNode {
+            typ: NodeType::Text, kind: String::new(), id: "code-text".into(),
+            text: "ab".into(), props: Default::default(), events: vec![], children: vec![],
+        };
+        let mut props = std::collections::HashMap::new();
+        props.insert("gradient-text".into(), "1".into());
+        props.insert("bg".into(),
+            "linear-gradient(90deg, #ff0000 0ch 1ch, #0000ff 1ch 2ch)".into());
+        props.insert("white-space".into(), "pre".into());
+        let span = crate::scene::SceneNode {
+            typ: NodeType::Div, kind: "span".into(), id: "code-line".into(),
+            text: String::new(), props, events: vec![], children: vec![text],
+        };
+        let dl = DisplayList::from_scene(&span, 800.0, 600.0);
+        let td = dl.texts.iter().find(|t| t.id == "code-text")
+            .expect("文本节点应进入 DisplayList");
+        assert_eq!(td.spans.len(), 2, "应按 ch 边界切成两段: {:?}", td.spans);
+        assert_eq!(td.spans[0], ("a".to_string(), (255, 0, 0)));
+        assert_eq!(td.spans[1], ("b".to_string(), (0, 0, 255)));
     }
 }
 

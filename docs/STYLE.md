@@ -221,9 +221,27 @@ GX 语法本是 Go 的超集——`.gx` 里既能写 JSX，也能直接写原生
 
 其余 GX 变换（JSX / `pub` / 小写符号还原 / import 注入等）照常进行。**默认无此标记**，普通 `.gx` 应用行为零变化。回归测试见 `pkg/compiler/nocollections_test.go`。
 
+## 13. 渐变与文字效果：三端统一契约
+
+三端（Web WASM / Go 桌面 Skia+canvas / Rust 桌面 wgpu+tiny-skia+glyphon）消费**同一份声明式 CSS 数据**，不新增协议字段——所有样式走 `Props` 全量透传（见 `backend/rust/PROTOCOL.md`）。核心约定：
+
+| 场景 | 声明方式 | Web | Go 桌面 | Rust 桌面 |
+|---|---|---|---|---|
+| 通用渐变背景 | `bg: linear-gradient(90deg, #f00 0%, #00f 100%)` | CSS 原生 | `PaintSetShader` 原生 shader | tiny-skia `LinearGradient` shader |
+| 渐变文字 | `gradient-text="1"` + `bg: linear-gradient(90deg, #c 0ch 7ch, …)` | `background-clip:text` | `gradientToRich` → shader | glyphon `set_rich_text` 逐段 span |
+
+关键语义（三端一致，见 `text/effects/effects.go` 与 `backend/rust/rust/src/text_effects.rs`）：
+
+- **只有**带 `gradient-text="1"`（或 `background-clip:text`）标记时，`bg` 渐变才裁剪到文字；否则渐变是容器背景。不能仅凭存在 `linear-gradient` 就判定渐变文字。
+- 编辑器代码高亮的渐变是**按 `ch` 边界的分段纯色**（不是平滑插值）。`runeWidth`/`gradientCells` 三端必须一致：ASCII=1ch，CJK（≥U+2E80）=2ch，否则色段与 rune 错位。
+- 渐变标记在父节点，文本是子节点：emit/绘制时把渐变沿继承链传给文本节点再分段着色。改颜色只重排 span，不改布局。
+
+Rust 端统一语义入口是 `text_effects.rs`（`parse_linear_gradient` / `gradient_spans` / `TextEffects::from_props`），与 Go `text/effects` 输入输出语义对齐。可视化验收程序 `backend/rust/go/cmd/gradcheck` 渲染分段渐变文字 + 平滑渐变背景，`preview/rust-backend-gradient.png` 为截图证据。
+
 ## 验证
 
-- 单元测试：两端各有解析 / 定位 / 裁剪 / 插值 / 阴影单测（Go `go test ./...`、Rust `cargo test`）。
+- 单元测试：两端各有解析 / 定位 / 裁剪 / 插值 / 阴影单测（Go `go test ./...`、Rust `cargo test`）。渐变额外覆盖：`text_effects.rs` 7 项解析/CJK 边界/标记语义、`render.rs` 父子继承链路 + shader 构造 + 签名失效，`text/effects/effects_test.go` CSS 属性映射。
+- 渐变端到端：`backend/rust/go/cmd/gradcheck` 经 xvfb 渲染后截图采样——文字 AB 红/CD 绿/EF 蓝分段正确，背景块 x=25 红→x=305 蓝平滑过渡，与 Web/Go 桌面端语义一致。
 - 新增组件单测：`widgets/` 下 context/theme + tooltip/form_container/timepicker/table/filepicker 各自 `_test.go`；FilePicker 用 mock Dialog 验证契约回传；Theme 测试覆盖令牌解析、`SetTheme` 驱动插槽重绘。
 - 窗口配置单测：`runtime/app/windowconfig_test.go`（默认值语义 / 三态 helper）、`backend/rust/go/windowconfig_test.go`（`decoratedC` 三态翻译）。
 - 端到端截图：`examples/skia-style-demo` 展示 absolute 徽标、阴影卡片、transition 进度条、1000 项虚拟滚动列表、5 个企业级组件、Context/Theme 切换区；`preview-enterprise.png` 与 `preview-context-theme.png` 两张确认。无边框配置经 `GX_NODECOR=1` 验证无系统标题栏、无崩溃。
