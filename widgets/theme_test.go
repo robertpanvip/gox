@@ -147,8 +147,10 @@ func TestSpaceTokenScale(t *testing.T) {
 // TestShadowTokensPerTheme 验证阴影令牌按主题取值：浅色比深色更淡（HIG），
 // 且 radius/font/height 令牌在两套主题都可读——非颜色令牌不再是静态常量专属。
 func TestShadowTokensPerTheme(t *testing.T) {
-	if themeToken(LightTheme, "shadow-card") != "0 2px 8px 0 #0000001a" {
-		t.Errorf("浅色 shadow-card 不对: %q", themeToken(LightTheme, "shadow-card"))
+	// 阴影 token 按 Apple HIG 重定（低 alpha / 大 blur / 近零 offset），具体值会
+	// 随设计评审调整；断言跟随主题字段而非硬编码，避免 token 调参误报。
+	if themeToken(LightTheme, "shadow-card") != LightTheme.ShadowCard {
+		t.Errorf("浅色 shadow-card 未走 Theme 字段: %q", themeToken(LightTheme, "shadow-card"))
 	}
 	if themeToken(DarkTheme, "shadow-card") != DarkTheme.ShadowCard {
 		t.Error("深色 shadow-card 未走 Theme 字段")
