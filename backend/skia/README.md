@@ -127,8 +127,26 @@ _ = w.DrawLog() // 最近一帧的绘制指令（观测面）
 
 协议面不变，host 依旧零改动。
 
+## 增量帧（FramePresenter，`present.go`）
+
+`Window` 现在实现 `gxapp.FramePresenter`，消费 Host 的 `Frame.Changes` 增量流——补齐了三端里 skia 唯一没接增量的缺口（Web/Rust 早已接）。App 装配时自动走 `Present`，老 `Window.Draw` 路径完全不变（headless 测试、PaintTo/Cached 零影响）。
+
+- **快速路径**：`len(Changes)==0 && 无动画 && 非 FullSync && 根/尺寸不变` 时，画面必然未变，直接复用上帧 log/hits 与画布，**跳过每帧 O(N) 的 `snapshotTree`**（O(N)→O(1)）。
+- **慢速路径**：有 Change / 动画 / FullSync 时仍走 `renderCached` 的全量快照 + 脏矩形局部重绘，保持正确性。
+- **正确性依据**：所有画面变化都经 Change 流（signal 写回 `record(ChangeSetAttr/Text/结构指令)`，命令式 CanvasContext 写回也 `record`）；唯一例外是 transition 动画——`Animator.apply` 渲染期临时写 props、不产生 Change，故用 `Animator.Active()` 显式排除。FullSync 是丢帧恢复兜底，强制全量。
+
+**基准**（1000 节点树，无变化帧，3 轮）：
+
+| 路径 | ns/op | B/op | allocs/op |
+|---|---:|---:|---:|
+| `Draw`（每帧全量 snapshotTree） | ~2,180,000 | 1,858,212 | 23,067 |
+| `Present`（O(1) 快速复用） | ~35,000 | 155,648 | 2 |
+
+约 **62× 快、11,553× 少分配**。复跑：`go test ./backend/skia -run '^$' -bench BenchmarkNoChangeFrame -benchmem`。
+
 ## 已知边界
 
 - `NewCanvasWithDimensions` 产生的 canvas 在本绑定里像素不可读（属 picture-recording 类），故本后端用 `DrawLog` 作为可观测面而非读回像素。真实 GL surface 可正常 `ReadPixels`。
+- 桌面 playground 的 `glWindow` 走独立绘制链（`Draw→markDirty→PaintToScaled`，每帧全量、无 FrameCache），尚未接入本节增量帧；它靠 `dirty` 标志抑制无请求帧，但每次 signal 变化仍全量重绘。要兑现增量收益到桌面运行路径，需让 `glWindow` 持有 `FrameCache` 并实现 `Present`（下一步）。
 - 链接顺序修复用 GNU ld 的 `--start-group`，仅 Linux；macOS 需去掉该 directive（`linkflags.go` 已可按平台加 build tag）。
 - 布局是简单纵向流式，仅为证明节点分派；生产布局可替换 `painter` 的布局器。

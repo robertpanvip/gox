@@ -45,6 +45,13 @@ func NewAnimator() *Animator {
 	}
 }
 
+// Active 报告是否有正在进行的过渡动画。动画期间每帧的插值值不同、但不产生
+// Host Change（apply 在渲染时临时写 props），因此即使 Change 流为空也必须重绘。
+// 增量帧路径（Window.Present）据此拒绝"无 Change 即复用"的短路。
+func (a *Animator) Active() bool {
+	return a != nil && len(a.anims) > 0
+}
+
 // numericProps 是可数值插值的属性集合。
 var numericProps = map[string]bool{
 	"width": true, "height": true, "opacity": true, "font-size": true,
@@ -52,6 +59,7 @@ var numericProps = map[string]bool{
 	"top": true, "right": true, "bottom": true, "left": true,
 	"gap": true, "row-gap": true, "column-gap": true,
 }
+
 // colorProps 是可颜色插值的属性集合。
 var colorProps = map[string]bool{"color": true, "bg": true, "background": true, "border": true}
 

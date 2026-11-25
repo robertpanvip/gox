@@ -149,16 +149,16 @@ func stableValueSig(v any) string {
 
 // FrameCache 是跨帧持有的缓存。挂在 skia.Window 上；PaintTo 的带缓存版本由调用方持有。
 type FrameCache struct {
-	valid   bool
-	root    *gxscene.Node
-	w, h    float32
-	stamps  map[*gxscene.Node]nodeStamp
-	structSig string   // 整棵树的快照拼接，用于 O(1) 无变化判断
-	layout  layoutCache // 上一帧布局结果
-	log     DrawLog     // 上一帧绘制指令（整帧复用时返回）
-	hits    []HitBox    // 上一帧命中盒（整帧复用时返回）
-	paints  int         // 实际发生重绘的帧数（观测指标）
-	reuses  int         // 整帧复用的帧数（观测指标）
+	valid     bool
+	root      *gxscene.Node
+	w, h      float32
+	stamps    map[*gxscene.Node]nodeStamp
+	structSig string      // 整棵树的快照拼接，用于 O(1) 无变化判断
+	layout    layoutCache // 上一帧布局结果
+	log       DrawLog     // 上一帧绘制指令（整帧复用时返回）
+	hits      []HitBox    // 上一帧命中盒（整帧复用时返回）
+	paints    int         // 实际发生重绘的帧数（观测指标）
+	reuses    int         // 整帧复用的帧数（观测指标）
 
 	// lastMeasured 是最近一次真实布局导出的尺寸回流（node ID → W/H）。
 	// 由 renderCached 在布局后填入，Window.Draw 在释放 canvas 锁后投递给 Host，
@@ -169,6 +169,25 @@ type FrameCache struct {
 // shouldReuse 判断本帧能否整体复用上一帧：根/尺寸不变且内容快照一致。
 func (c *FrameCache) shouldReuse(root *gxscene.Node, w, h float32, structSig string) bool {
 	return c.valid && c.root == root && c.w == w && c.h == h && c.structSig == structSig
+}
+
+// canReuseFast 判断"增量帧快速复用"：调用方已确认本帧无 Host Change、无动画、
+// 且非 FullSync。此时场景树内容必然未变（所有画面变化都经 Change 流到达，
+// 见 change.go；命令式写回也会 record），无需再 O(N) 拍快照比对——根指针与
+// 尺寸不变即可直接复用上一帧的 log/hits 与画布。
+//
+// 这是 skia 接入 FramePresenter 的核心收益：无变化的帧从 O(N) snapshotTree
+// 降到 O(1)。老 Draw 路径不传 changeHint，仍走全量快照，行为完全不变。
+func (c *FrameCache) canReuseFast(root *gxscene.Node, w, h float32) bool {
+	return c.valid && c.root == root && c.w == w && c.h == h
+}
+
+// reuseFast 执行一次快速复用：只更新统计、返回上一帧的 log/hits 副本。画布不动。
+func (c *FrameCache) reuseFast() (log DrawLog, hits []HitBox) {
+	c.reuses++
+	log = append(DrawLog(nil), c.log...)
+	hits = append([]HitBox(nil), c.hits...)
+	return
 }
 
 // dirtyRect 是一块需要重绘的屏幕矩形（已含阴影/描边外扩）。
@@ -213,13 +232,17 @@ func diffLayout(prev, next layoutCache, prevRoot, nextRoot *gxscene.Node) []dirt
 			nb, nok := next[n]
 			ob, ook := prev[n]
 			if !nok {
-				for _, c := range n.Children { walk(c) }
+				for _, c := range n.Children {
+					walk(c)
+				}
 				return
 			}
 			if !ook || boxChanged(ob, nb) {
 				rects = append(rects, boxDirtyRect(n, ob, nb))
 			}
-			for _, c := range n.Children { walk(c) }
+			for _, c := range n.Children {
+				walk(c)
+			}
 		}
 		walk(nextRoot)
 	}
@@ -253,7 +276,9 @@ func boxDirtyRect(n *gxscene.Node, old, cur layoutBox) dirtyRect {
 	if old.HasClip || cur.HasClip {
 		// 有裁剪的容器：脏区至少覆盖裁剪矩形本身（滚动条带进出）。
 		cb := cur
-		if !cb.HasClip { cb = old }
+		if !cb.HasClip {
+			cb = old
+		}
 		if cb.HasClip {
 			d = dirtyRect{cb.ClipX, cb.ClipY, cb.ClipW, cb.ClipH}
 		}
@@ -285,15 +310,27 @@ func boxToRect(b layoutBox) dirtyRect {
 	return dirtyRect{b.X, b.Y, b.W, b.H}
 }
 
-func absF(a float32) float32 { if a < 0 { return -a }; return a }
+func absF(a float32) float32 {
+	if a < 0 {
+		return -a
+	}
+	return a
+}
 
 func boundsOf(c layoutCache) dirtyRect {
 	var d dirtyRect
 	first := true
 	for _, b := range c {
-		if b.W <= 0 || b.H <= 0 { continue }
+		if b.W <= 0 || b.H <= 0 {
+			continue
+		}
 		r := boxToRect(b)
-		if first { d = r; first = false } else { d = d.union(r) }
+		if first {
+			d = r
+			first = false
+		} else {
+			d = d.union(r)
+		}
 	}
 	return d
 }
@@ -302,8 +339,18 @@ func boundsOf(c layoutCache) dirtyRect {
 func overlayChanged(prev, next layoutCache) bool {
 	var pn, nn int
 	var pid, nid gxscene.NodeID
-	for n := range prev { if isOverlay(n) { pn++; pid += n.ID } }
-	for n := range next { if isOverlay(n) { nn++; nid += n.ID } }
+	for n := range prev {
+		if isOverlay(n) {
+			pn++
+			pid += n.ID
+		}
+	}
+	for n := range next {
+		if isOverlay(n) {
+			nn++
+			nid += n.ID
+		}
+	}
 	return pn != nn || pid != nid
 }
 
@@ -315,7 +362,9 @@ func mergeRects(in []dirtyRect) []dirtyRect {
 	// 去掉零面积。
 	rs := in[:0]
 	for _, r := range in {
-		if r.w > 0 && r.h > 0 { rs = append(rs, r) }
+		if r.w > 0 && r.h > 0 {
+			rs = append(rs, r)
+		}
 	}
 	// 迭代合并相交矩形。
 	for changed := true; changed; {
