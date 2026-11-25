@@ -48,7 +48,9 @@ func (s *Session) lines() []string {
 }
 
 // diagnostics 跑编译器 + GX 语义检查，产出 0 基 LSP 诊断。
-// 不做 go build 回投：单文件 HTML 里没有 Go 工具链，也不需要它。
+// 语法层：go/parser 纯 Go，可在 wasm 内运行，parse 诊断已逐条回投 .gx 坐标；
+// 类型层：完整 go/types/go build 兜底需要外部 Go 工具链，js/wasm 不可用——
+// 浏览器内不提供该层，桌面 gox-lsp / CLI `gox check -check` 负责。
 func (s *Session) diagnostics() {
 	s.diags = make([]Diagnostic, 0)
 	if strings.TrimSpace(s.src) == "" {

@@ -1,6 +1,9 @@
 package goxlsp
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 const validSource = `package main
 
@@ -91,5 +94,28 @@ func TestFormatIsIdempotent(t *testing.T) {
 	twice := s.Format()
 	if once != twice {
 		t.Fatal("格式化应幂等")
+	}
+}
+
+// TestGoSyntaxDiagnosticMapped 验证 wasm LSP 的 Go 语法诊断：位置回投 .gx（不钉
+// 0:0）、消息不携带用户不可见的生成文件坐标（check.go:N:M）。
+func TestGoSyntaxDiagnosticMapped(t *testing.T) {
+	s := New()
+	s.SetSource("package main\n\nfunc f() {\n\tx := ;\n}\n")
+	diags := s.Diagnostics()
+	var hit *Diagnostic
+	for i := range diags {
+		if diags[i].Code != nil && *diags[i].Code == "parse" {
+			hit = &diags[i]
+		}
+	}
+	if hit == nil {
+		t.Fatalf("期望 parse 诊断: %+v", diags)
+	}
+	if hit.Range.Start.Line < 2 || hit.Range.Start.Line > 4 {
+		t.Fatalf("诊断行应指向错误附近（0 基 3±1）: %+v", *hit)
+	}
+	if strings.Contains(hit.Message, "check.go") {
+		t.Fatalf("消息不应含生成文件坐标: %q", hit.Message)
 	}
 }

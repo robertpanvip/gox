@@ -54,6 +54,29 @@ const STACKING_EXPR = `
   });
 })()`;
 
+// 探针 C：Go 语法诊断——真实浏览器内调 Gox.setSource 注入坏 Go，再经
+// Gox.lspDiagnostics() 取诊断（面板渲染由 TS 事件驱动，程序化注入不触发它，
+// 故断言走 API 层）。契约：parse 诊断行=错误所在 .gx 行（0 基 3）、消息不含
+// 生成文件坐标 check.go。
+const GSYNTAX_EXPR = `
+(async () => {
+  const wait = ms => new Promise(r => setTimeout(r, ms));
+  const deadline = Date.now() + 30000;
+  while (!(window.Gox && window.Gox.setSource && window.Gox.lspDiagnostics)) {
+    if (Date.now() > deadline) return JSON.stringify({ err: "Gox 超时未就绪" });
+    await wait(250);
+  }
+  Gox.setSource("package main\\n\\nfunc f() {\\n\\tx := ;\\n}\\n");
+  await wait(500);
+  const diags = JSON.parse(Gox.lspDiagnostics());
+  const parse = diags.filter(d => d.code === "parse");
+  const hit = parse.find(d => d.range.start.line >= 2 && d.range.start.line <= 4);
+  return JSON.stringify({ n: diags.length, np: parse.length,
+    sample: parse.slice(0, 3).map(d => [d.range.start.line, d.range.start.character, d.message.slice(0, 40)]),
+    leaked: diags.some(d => (d.message || "").includes("check.go")),
+    ok: !!hit && !diags.some(d => (d.message || "").includes("check.go")) });
+})()`;
+
 const PROVIDER_EXPR = `
 (async () => {
   const wait = ms => new Promise(r => setTimeout(r, ms));
@@ -77,9 +100,9 @@ const PROVIDER_EXPR = `
 })()`;
 
 (async () => {
-  const expr = mode === "stacking" ? STACKING_EXPR : PROVIDER_EXPR;
+  const expr = mode === "stacking" ? STACKING_EXPR : (mode === "gsyntax" ? GSYNTAX_EXPR : PROVIDER_EXPR);
   let url;
-  if (mode === "stacking") {
+  if (mode === "stacking" || mode === "gsyntax") {
     url = "file://" + target;
   } else {
     server = http.createServer((q, s) => {

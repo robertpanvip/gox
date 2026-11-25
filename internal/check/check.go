@@ -6,7 +6,10 @@
 // table 里取回 desugar 中被擦除的联合类型 / 收窄信息，应用 GX 自己的规则。
 //
 // 这就是 TS 对 JS 的关系在本项目的落地：
-//   - 语法结构（AST）与"降级代码合法性"交给 go/parser + go/types 兜底；
+//   - 语法结构（AST）与"降级代码合法性"交给 go/parser 兜底，语法错误经
+//     sourcemap 逐条回投 GX 坐标；类型级完整兜底在 CLI `gox check -check` /
+//     桌面 gox-lsp 的 buildcheck（真实 go build + go/types），js/wasm 无工具链，
+//     浏览器内 LSP 只保证「语法层 + GX 语义层」两类诊断。
 //   - 联合成员、收窄、穷尽性等 GX 特有类型规则由本包负责，产出 GX 原生诊断。
 //
 // 诊断分两路，由 CheckAll 统一出口（GX 坐标、排序、去重）：
@@ -18,8 +21,10 @@ import (
 	"fmt"
 	"go/ast"
 	"go/parser"
+	"go/scanner"
 	"go/token"
 	"sort"
+	"strings"
 
 	"github.com/robertpanvip/gox/pkg/compiler"
 	"github.com/robertpanvip/gox/pkg/sourcemap"
@@ -49,16 +54,55 @@ func New(sm *sourcemap.SourceMap, an *compiler.Analysis) *Checker {
 }
 
 // Check 解析 goSrc 为 AST 并遍历，返回 AST 规则诊断（GX 坐标）。
-// 语法解析失败时返回一条 1:1 的诊断（Go 坐标，未经映射）。
+// 语法解析失败时逐条产出 parse 诊断（parser.AllErrors，最多 maxParseDiags 条）：
+// 位置优先经 sourcemap 回投 GX 坐标（消息只带 go/scanner 的裸错误文本，
+// 不暴露用户看不见的生成文件坐标）；无映射时回退 Go 坐标。空源码返回无诊断
+// ——InvalidGo 清空产物的场景下，诊断来自 Analysis 层，不得再叠 EOF 噪音。
 func (c *Checker) Check(goSrc string) ([]Diagnostic, error) {
+	if strings.TrimSpace(goSrc) == "" {
+		return nil, nil
+	}
 	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, "check.go", goSrc, 0)
+	f, err := parser.ParseFile(fset, "check.go", goSrc, parser.AllErrors)
 	if err != nil {
-		return []Diagnostic{{Line: 1, Col: 1, Code: "parse", Message: err.Error()}}, nil
+		return c.parseDiags(err), nil
 	}
 	v := newVisitor(c, fset)
 	ast.Walk(v, f)
 	return v.diags, nil
+}
+
+// maxParseDiags 限制一次报出的语法错误条数：go/parser 的 AllErrors 在
+// 括号失配等场景会产生级联噪音，首因最具定位价值，超出部分截断。
+const maxParseDiags = 8
+
+// parseDiags 把 go/parser 的 scanner.ErrorList 转成逐条、已映射 GX 坐标的诊断。
+func (c *Checker) parseDiags(err error) []Diagnostic {
+	out := []Diagnostic{}
+	if el, ok := err.(scanner.ErrorList); ok {
+		for _, e := range el {
+			if len(out) >= maxParseDiags {
+				break
+			}
+			line, col := e.Pos.Line, e.Pos.Column
+			if c.sm != nil {
+				if gp, mapped := c.sm.GoToGx(line, col); mapped {
+					line, col = gp.Line, gp.Column
+				}
+			}
+			if line < 1 {
+				line = 1
+			}
+			if col < 1 {
+				col = 1
+			}
+			out = append(out, Diagnostic{Line: line, Col: col, Code: "parse", Message: e.Msg})
+		}
+	}
+	if len(out) == 0 {
+		out = append(out, Diagnostic{Line: 1, Col: 1, Code: "parse", Message: err.Error()})
+	}
+	return out
 }
 
 // CheckAll 是统一诊断出口：合并 AST 规则诊断与 Analysis 层诊断，
