@@ -427,10 +427,21 @@ GoX 的核心线程规则：**响应式系统是单线程的，业务任务可�
 - **职责分离**：`Dispatch`/`Safe` 只管线程切换（后台 → UI Runtime），`Batch` 只管合并更新。Owner 的创建 / Dispose / Cleanup / Mount 全部属于响应式生命周期，必须在 UI Runtime 线程执行；后台请用 `app.Dispatch` 包装 `Dispose`。`withObserver` 先注册 defer 再执行用户 Cleanup，保证 Cleanup panic 时观察者栈与 Owner 栈必定复位；Computed 内 panic 原样传播（不吞用户异常），内部状态复位后下次读取可正常重算。
 
 ```gx
-// 后台任务：网络回包后更新 UI
+// 网络回包后更新 UI：推荐用 UIFetch（基于 UIPromise），无需手写 go + Dispatch。
+// UIFetch 内部在后台 goroutine 发请求，结果经 Executor 投回 UI 上下文，
+// 下面的 loop.then 回调保证在 UI Runtime 执行，可直接读写 Signal。
+loop.then(
+    fetch.uiFetch(rt, fetch.request{url: "https://api.example.com/items"}),
+    func(r *fetch.response) ([]item, error) {
+        if !r.ok() { return nil, fmt.errorf("HTTP %d", r.status()) }
+        var items []item
+        return items, r.json(&items)
+    },
+)
+// 需要自己起后台任务时（非网络），仍用 go func + Signal.safe 投递，不等待：
 go func() {
-    let data = fetch()
-    Signal.safe(() => { items = data })   // 投递到 UI Runtime，不等待
+    let data = compute()
+    Signal.safe(() => { items = data })
 }()
 
 // UI Runtime 内：批量更新，合并为一帧
@@ -439,6 +450,11 @@ Signal.batch(() => {
     name = "Pan"
 })
 ```
+
+> `fetch.uiFetch` / `loop.then` 是 `runtime/fetch` 与 `runtime/loop` 的 Go 符号经外
+> 部符号还原后的 GX 写法（首字母大写还原：`UIFetch`→`uiFetch` 亦兼容）。详见
+> `runtime/fetch/README.md`。三端（桌面 GLFW、Web/WASM、Rust 渲染后端）业务逻辑
+> 共用这一份 `runtime/fetch`，差异仅在宿主的 Executor 构造。
 - **作用域排除**：selector `obj.n`、复合字段键 `{n: ...}`、struct 字段、函数参数、已显式调用 `n()` 均不改写（注：struct 里显式声明的 `sig name T` 字段是另一项特性，见 §11.1）。
 - **computed**：惰性求值 + 缓存，仅依赖变化时失效；链式派生正确传播。
 - **effect**：立即执行一次，依赖变化时重跑；每次重跑动态重建依赖集合（条件分支依赖可增删）。
