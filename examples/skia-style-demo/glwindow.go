@@ -7,11 +7,11 @@ import (
 
 	"github.com/go-gl/gl/v3.3-core/gl"
 	"github.com/go-gl/glfw/v3.3/glfw"
-	sk "github.com/robertpanvip/gox-skia/compat"
 	skia "github.com/robertpanvip/gox-backend-skia"
-	"github.com/robertpanvip/gox/widgets"
+	sk "github.com/robertpanvip/gox-skia/compat"
 	gxapp "github.com/robertpanvip/gox/runtime/app"
 	gxscene "github.com/robertpanvip/gox/runtime/scene"
+	"github.com/robertpanvip/gox/widgets"
 )
 
 func init() {
@@ -36,14 +36,15 @@ type glWindow struct {
 	target  sk.GrBackendRenderTarget
 	fonts   map[int]sk.Font
 
-	mu     sync.Mutex
-	root   *gxscene.Node // 最近一次 Draw 提交的场景树根
-	hits   []skia.HitBox // 最近一帧命中矩形（左上原点）
-	dirty  bool          // 有新帧待绘制
-	frames int           // 已绘制帧数
-	opened bool
-	closed bool
-	transparent bool     // 透明 framebuffer：每帧清成 (0,0,0,0) 让场景透明区透出桌面
+	mu          sync.Mutex
+	root        *gxscene.Node // 最近一次 Draw 提交的场景树根
+	hits        []skia.HitBox // 最近一帧命中矩形（左上原点）
+	dirty       bool          // 有新帧待绘制
+	frames      int           // 已绘制帧数
+	opened      bool
+	closed      bool
+	transparent bool // 透明 framebuffer：每帧清成 (0,0,0,0) 让场景透明区透出桌面
+	passthrough bool // 鼠标穿透：场景无内容的透明区不拦截鼠标，点击落到后面窗口
 }
 
 var _ gxapp.Window = (*glWindow)(nil)
@@ -60,6 +61,7 @@ func (g *glWindow) Open(cfg gxapp.WindowConfig) error {
 	}
 	g.cfg = cfg
 	g.transparent = cfg.Transparent
+	g.passthrough = cfg.MousePassthrough
 
 	if err := glfw.Init(); err != nil {
 		return fmt.Errorf("glfw.Init: %w", err)
@@ -207,8 +209,10 @@ func (g *glWindow) paintNow() {
 			dpr = 1
 		}
 	}
-	_, hits := skia.PaintToScaled(canvas, float32(w), float32(h), dpr, g.root, g.fonts)
+	log, hits := skia.PaintToScaled(canvas, float32(w), float32(h), dpr, g.root, g.fonts)
 	g.hits = hits
+	// 鼠标穿透：按本帧实际绘制的内容设置窗口输入形状，透明区让鼠标落到后面窗口。
+	applyInputShape(g.win, log, dpr, w, h, g.passthrough)
 	g.context.FlushAndSubmit(sk.GrSyncCpuYes)
 	gl.Flush()
 	g.win.SwapBuffers()

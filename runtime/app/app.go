@@ -55,6 +55,14 @@ type WindowConfig struct {
 	// 后端负责解码；解码失败静默忽略，不影响窗口创建。
 	IconPath string
 
+	// MousePassthrough 请求"透明区不拦截鼠标"：窗口仅在没有场景内容的区域
+	// 让鼠标事件穿透到后面的窗口（点击后面应用），有内容的节点仍正常接收点击。
+	// 典型用途：无背景悬浮面板 / 桌面挂件——配合 Decorated=false + Transparent=true。
+	// 需要后端支持按命中矩形动态设置窗口输入形状（Linux/X11: XShape ShapeInput；
+	// macOS/Windows: 对应区域命中机制）。不支持的后端静默忽略，行为退化为普通窗口。
+	// 默认 false（窗口整体拦截鼠标），与既有行为一致。
+	MousePassthrough bool
+
 	// Backend 是后端提示（"headless" / "skia" / "wgpu" ...）。
 	// Open 忽略它（固定 Headless）；OpenWith 由调用方按此字段挑选 Window 实现。
 	Backend string

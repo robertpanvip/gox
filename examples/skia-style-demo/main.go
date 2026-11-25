@@ -25,7 +25,7 @@ func label(value, color, size string) *gxscene.Instance {
 
 func main() {
 	scrollTop := signal.New(0.0)
-	barWidth := signal.New(60.0)   // transition 目标宽度
+	barWidth := signal.New(60.0) // transition 目标宽度
 	barColor := signal.New("#4ade80")
 	fruit := signal.New("苹果 Apple") // Select 当前选中值
 
@@ -36,6 +36,11 @@ func main() {
 	if os.Getenv("GX_NODECOR") == "1" {
 		cfg.Decorated = gxapp.NoDecorations()
 		cfg.Transparent = true
+	}
+	// GX_PASSTHROUGH=1 时开启鼠标穿透：场景无内容的透明区不拦截鼠标，
+	// 点击直接落到后面的应用窗口（X11 下用 XShape ShapeInput 实现）。
+	if os.Getenv("GX_PASSTHROUGH") == "1" {
+		cfg.MousePassthrough = true
 	}
 	app, err := gxapp.OpenWith(cfg, openGL())
 	if err != nil {
@@ -138,7 +143,7 @@ func main() {
 									return []any{
 										widgets.FormItem(gxscene.Props{
 											"label": "邮箱", "name": "email", "required": true,
-											"hint": "我们不会公开你的邮箱",
+											"hint":  "我们不会公开你的邮箱",
 											"error": func() any { return "邮箱格式不正确" },
 											"children": func() any {
 												return widgets.Input(gxscene.Props{

@@ -177,7 +177,7 @@ Context **可以跨文件共享**，且共享的是同一个响应式实例（�
 
 集成测试 `TestIntegrationContextSubtreeIsolation` 覆盖兄弟隔离/嵌套覆盖/全局回落的运行值。
 
-## 11. 窗口外观配置（无边框 / 透明 / 置顶 / 图标）
+## 11. 窗口外观配置（无边框 / 透明 / 置顶 / 图标 / 鼠标穿透）
 
 `gxapp.WindowConfig` 新增外观字段，两端各自实现：
 
@@ -188,10 +188,22 @@ Context **可以跨文件共享**，且共享的是同一个响应式实例（�
 | `AlwaysOnTop` | bool | 窗口置顶 |
 | `Opacity` | float32 | 窗口级不透明度 0..1；<=0 或 >1 表示不设置（winit 端暂未生效） |
 | `IconPath` | string | 图标路径（字段已定义；skia 端待接 `SetIcon`，当前静默忽略） |
+| `MousePassthrough` | bool | 透明区不拦截鼠标：点击落到后面的窗口，只有场景有内容处才接收点击。默认 false，见下文 |
 
 - skia（GLFW）：`CreateWindow` 前设 `Decorated/TransparentFramebuffer/Floating` hints；透明时每帧 `gl.Clear(0,0,0,0)` 让场景透明区透出桌面。
 - rust（winit）：新增 C ABI `gx_window_new_ex(w,h,title,decorated,transparent,always_on_top,opacity)`；`gx_window_new` 保留为兼容包装。Backend 存配置，`WinitApp::resumed` 应用 `with_decorations/with_transparent/with_window_level`；title 参数也真正生效（此前写死）。
 - `GX_NODECOR=1` 运行 skia-style-demo 可验证无边框+透明配置（截图 `preview-context-theme.png` 含 Context/Theme 演示区）。
+
+### 11.1 鼠标穿透（MousePassthrough）
+
+**问题**：透明 framebuffer 只让像素透明，鼠标事件仍由 X11 窗口按矩形整体捕获——点击透明区不会落到后面的应用（"透明 ≠ 鼠标穿透"）。
+
+**方案**：把窗口的 **input shape**（X11 `ShapeInput`）设为"本帧真正绘制出的不透明内容"矩形集合。X11 只把鼠标事件投递到 input shape 覆盖的区域，其余区域直接穿透给下层窗口——这是 OS 级点击穿透，等价于 Web `pointer-events:none`。
+
+- **口径用 DrawLog 而非 hitbox**：hitbox 对所有节点（含 `#root`/`#frag` 透明容器、无 bg 的纯透明 div）都记录，若据此设形状会把整窗算作输入区、失去穿透。`DrawLog` 只含真正画出的 `rect`/`text`/`fragment`，跳过 `ARGB` alpha=0 的透明项，再按 dpr 换算到物理像素。
+- **每帧更新**：`paintNow` 绘制后调用 `applyInputShape(win, log, dpr, ...)`；`MousePassthrough=false` 时恢复整窗矩形，行为与既有完全一致。
+- **实现落点**：`examples/skia-style-demo/passthrough_linux.go`（cgo + libXext `XShapeCombineRectangles`）；`passthrough_other.go` 为非 Linux 的 no-op 桩（保持签名，后续可在 macOS `NSView.hitTest` / Windows 命中测试实现）。
+- **验证**：`GX_PASSTHROUGH=1` 开启；xvfb + openbox 下把透明窗口叠在 xev 上，实测透明区点击到达后面窗口（xev ButtonPress=1）、内容区点击被拦截（xev=0）。单测 `passthrough_linux_test.go` 固化透明项跳过与 DPR 换算口径。
 
 ## 12. 用 GX 编写组件库（自举）
 

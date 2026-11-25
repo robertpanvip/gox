@@ -1,7 +1,7 @@
 package main
 
 // #cgo linux LDFLAGS: -L${SRCDIR}/../../.demolibs
-// #cgo linux LDFLAGS: -lX11 -lXrandr -lXxf86vm -lXi -lXcursor -lXinerama -lGL -lfontconfig -lfreetype -lpthread -ldl -lm
+// #cgo linux LDFLAGS: -lX11 -lXext -lXrandr -lXxf86vm -lXi -lXcursor -lXinerama -lGL -lfontconfig -lfreetype -lpthread -ldl -lm
 import "C"
 
 // 上面的 cgo 指令提供 GLFW 所需的 X11 系列开发库（沙箱里只有运行时 .so.1，
