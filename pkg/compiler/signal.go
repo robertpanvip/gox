@@ -138,10 +138,6 @@ func checkNoExplicitSigCall(toks []Token, b *Bindings, tbl signalFieldTable) err
 		if t.Kind != Ident || t.IsGen {
 			continue
 		}
-		n := nextSig(toks, i+1)
-		if n < 0 || toks[n].Text != "(" {
-			continue // 非显式调用形态，早退
-		}
 		// 形态排除：复合字段键 / 声明目标 / 声明区。
 		if nk := nextSig(toks, i+1); nk >= 0 && toks[nk].Text == ":" {
 			continue
@@ -149,26 +145,30 @@ func checkNoExplicitSigCall(toks []Token, b *Bindings, tbl signalFieldTable) err
 		if isSignalDeclTarget(toks, i) || inDeclZone(toks, i) {
 			continue
 		}
-		// 类别 1：sig 变量。selector 右侧跳过（那是 sig 字段的领地）。
-		bd := bindingAt(b, t.Text, t.Pos)
-		if bd != nil && (bd.Kind == BkSignal || bd.Kind == BkComputed) {
-			if p := prevSig(toks, i-1); p >= 0 && toks[p].Text == "." {
-				continue // obj.name 形态，交给 sig 字段判定
+		// 类别 1：sig 变量。标识符后紧跟 '(' 且解析到 sig/computed 绑定。
+		// selector 右侧（obj.name）的 name 跳过——那是 sig 字段的领地，交类别 2。
+		if n := nextSig(toks, i+1); n >= 0 && toks[n].Text == "(" {
+			bd := bindingAt(b, t.Text, t.Pos)
+			if bd != nil && (bd.Kind == BkSignal || bd.Kind == BkComputed) {
+				if p := prevSig(toks, i-1); p >= 0 && toks[p].Text == "." {
+					continue
+				}
+				return fmt.Errorf("%d:%d: sig 变量 %s 应像普通变量一样读写（写 %s 而非 %s()）；GX 会编译期自动补全信号读写",
+					t.Pos.Line, t.Pos.Col, t.Text, t.Text, t.Text)
 			}
-			return fmt.Errorf("%d:%d: sig 变量 %s 应像普通变量一样读写（写 %s 而非 %s()）；GX 会编译期自动补全信号读写",
-				t.Pos.Line, t.Pos.Col, t.Text, t.Text, t.Text)
 		}
-		// 类别 2：sig 字段。recv.field(...) 的 field 命中字段表 → 报错。
-		// isSignalSelector 需要从 receiver 链首（如 s.x 的 s）进入；i 当前指向
-		// selector 右侧的 field，故先回溯到 '.' 左侧的 receiver 起点。
-		if p := prevSig(toks, i-1); p >= 0 && toks[p].Text == "." {
-			if recv := prevSig(toks, p-1); recv >= 0 {
-				if _, ok, fieldIdx := isSignalSelector(toks, recv, b, tbl); ok {
-					if call := nextSig(toks, fieldIdx+1); call >= 0 && toks[call].Text == "(" {
-						field := toks[fieldIdx].Text
-						return fmt.Errorf("%d:%d: sig 字段 %s 应像普通字段一样读写（写 recv.%s 而非 recv.%s()）；GX 会编译期自动补全信号字段读写",
-							toks[fieldIdx].Pos.Line, toks[fieldIdx].Pos.Col, field, field, field)
-					}
+		// 类别 2：sig 字段链。把 i 当链首，复用编译器改写所用的 resolveSignalChainEx
+		// ——它沿 '.' 逐段传播 receiver 类型，覆盖简单链 s.x、多级链 s.a.b.x、
+		// 索引链 m["k"].x、调用结果链 getP().x。skipCalls=true 让中间段已显式写的
+		// 括号（m.leaf().v）也能走过、收集到链尾所有 sig 段。
+		// 对收集到的每个 sig 段，若其后紧跟 '('（用户手写的函数式读写）即报错。
+		// 裸读（s.x）、普通方法（s.Method()）无 sig 段后跟括号，不受影响。
+		if chain, ok := resolveSignalChainEx(toks, i, t.Pos, b, tbl, 0, true); ok {
+			for _, seg := range chain.segs {
+				if c := nextSig(toks, seg+1); c >= 0 && toks[c].Text == "(" {
+					field := toks[seg].Text
+					return fmt.Errorf("%d:%d: sig 字段 %s 应像普通字段一样读写（写 recv.%s 而非 recv.%s()）；GX 会编译期自动补全信号字段读写",
+						toks[seg].Pos.Line, toks[seg].Pos.Col, field, field, field)
 				}
 			}
 		}

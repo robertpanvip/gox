@@ -551,3 +551,71 @@ func TestNoExplicitSigFieldCall(t *testing.T) {
 		})
 	}
 }
+
+// 回归：链式 selector 上的 sig 字段同样禁止函数式读写。此前检查器只从 '.'
+// 左边紧邻 token 判定，链式 s.inner.x() 时那是字段名（推不出类型）而漏放。
+// 现复用 resolveSignalChainEx 从链首沿链传播类型，覆盖多级链、索引链、
+// 调用结果链；中间 sig 段显式写括号（s.leaf().v）亦拦截。
+func TestNoExplicitSigFieldChainCall(t *testing.T) {
+	forbidden := []struct{ name, src string }{
+		{
+			"多级链函数式读",
+			"package main\ntype Inner struct{ sig x int }\ntype S struct{ inner Inner }\nfunc main(){ s := S{}; _ = s.inner.x() }",
+		},
+		{
+			"多级链函数式写",
+			"package main\ntype Inner struct{ sig x int }\ntype S struct{ inner Inner }\nfunc main(){ s := S{}; s.inner.x(2) }",
+		},
+		{
+			"索引链函数式读",
+			"package main\ntype Item struct{ sig x int }\nfunc main(){ m := map[string]Item{}; _ = m[\"a\"].x() }",
+		},
+		{
+			"三层链函数式读",
+			"package main\ntype Leaf struct{ sig x int }\ntype Mid struct{ b Leaf }\ntype S struct{ a Mid }\nfunc main(){ s := S{}; _ = s.a.b.x() }",
+		},
+		{
+			"调用结果链函数式读",
+			"package main\ntype P struct{ sig x int }\nfunc getP() P { return P{} }\nfunc main(){ _ = getP().x() }",
+		},
+		{
+			"中间段显式括号",
+			"package main\ntype Leaf struct{ sig v int }\ntype S struct{ sig leaf Leaf }\nfunc main(){ s := S{}; _ = s.leaf().v }",
+		},
+	}
+	for _, tc := range forbidden {
+		t.Run("forbid_"+tc.name, func(t *testing.T) {
+			_, err := Compile("chain.gx", tc.src)
+			if err == nil || !strings.Contains(err.Error(), "sig 字段") {
+				t.Errorf("%s 应被拦截，got: %v", tc.name, err)
+			}
+		})
+	}
+	allowed := []struct{ name, src string }{
+		{
+			"多级链裸读",
+			"package main\ntype Inner struct{ sig x int }\ntype S struct{ inner Inner }\nfunc main(){ s := S{}; _ = s.inner.x }",
+		},
+		{
+			"索引链裸读",
+			"package main\ntype Item struct{ sig x int }\nfunc main(){ m := map[string]Item{}; _ = m[\"a\"].x }",
+		},
+		{
+			"多级链赋值写",
+			"package main\ntype Inner struct{ sig x int }\ntype S struct{ inner Inner }\nfunc main(){ s := S{}; s.inner.x = 2; _ = s }",
+		},
+		{
+			"普通方法链不误伤",
+			"package main\ntype Leaf struct{}\nfunc (l Leaf) Method() int{return 1}\ntype Mid struct{ b Leaf }\ntype S struct{ a Mid }\nfunc main(){ s := S{}; _ = s.a.b.Method() }",
+		},
+		{
+			"context getter 不误伤",
+			"package main\nfunc main(){ f := func() int{return 1}; _ = f() }",
+		},
+	}
+	for _, tc := range allowed {
+		t.Run("allow_"+tc.name, func(t *testing.T) {
+			compileOK(t, "chain.gx", tc.src)
+		})
+	}
+}

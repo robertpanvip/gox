@@ -583,7 +583,8 @@ func main() {
 	}
 }
 
-// 链式两段都是 sig + 已是调用式：每段各补一次，不重复补（防 c.n()()）。
+// 链式两段都是 sig：每段各补一次调用，不重复补（防 c.n()()）。
+// 用户按透明变量写 o.mid.b.v，编译器补成 o.mid.b().v()。
 func TestSignalFieldChainTwoSignalNoDoubleCall(t *testing.T) {
 	src := `package main
 type Leaf struct { sig v string }
@@ -591,7 +592,7 @@ type Mid struct { sig b Leaf }
 type Outer struct { mid Mid }
 func main() {
 	o := Outer{mid: Mid{b: Leaf{v: "hi"}}}
-	println(o.mid.b().v(), o.mid.b.v)
+	println(o.mid.b.v, o.mid.b.v)
 }
 `
 	got := compileOK(t, "sf8_twochain.gx", src)
@@ -700,7 +701,7 @@ type Outer struct { mid Mid }
 type Q struct { sig v string }
 func main() {
 	o := Outer{mid: Mid{b: Leaf{c: "x"}}}
-	q := Q{v: o.mid.b().c() + "!"}
+	q := Q{v: o.mid.b.c + "!"}
 	_ = q; _ = o
 }
 `
