@@ -53,9 +53,15 @@ type glWindow struct {
 	closed bool
 
 	// 增量帧（FramePresenter）：App 每次提交带递增 Version 与 Changes。
-	// 无 Change 且 Version 未前进的帧画面不变，Present 不置 dirty，paintNow 跳过
-	// 整条绘制/blit/swap 链（屏幕保持上帧）——省去桌面端每次信号抖动的全量重绘。
+	// 无 Change 的帧画面不变，Present 不置 dirty，paintNow 跳过整条绘制/blit/swap
+	// 链（屏幕保持上帧）——这是帧级短路。
 	painted bool // 是否至少绘制过一帧；首帧即使无 Change 也必须绘制（建树期不记录 Change）
+
+	// 像素级脏矩形：桌面 canvas 是跨帧持久的 CPU raster（SurfacesWrapBackendRenderTarget
+	// 实际返回 NewCanvasWithDimensions 的 Pixmap），可直接复用 skia 的帧缓存。
+	// 有 Change 的帧进 paintNow 后，PaintToCachedScaled 只重画脏区、不清整屏，
+	// 大幅降低编辑器逐字输入/光标移动时的光栅化量。resize 重建画布时必须清空。
+	frameCache skia.FrameCache
 
 	// 编辑器选区交互状态。GLFW 回调都在主线程（Run 的 WaitEvents 循环里）串行执行，无需加锁。
 	dragging   bool      // 左键按住拖拽选择中
@@ -298,6 +304,9 @@ func (g *glWindow) resizeToWindow() {
 	if g.blit != nil {
 		g.blit.resize(int32(w), int32(h))
 	}
+	// 新 surface 的 raster 像素是全白的；旧缓存的布局与脏区基于旧尺寸，
+	// 必须丢弃，否则下一帧会误判"整帧复用"而在白画布上留下空画面。
+	g.frameCache = skia.FrameCache{}
 }
 
 // Draw 实现 gxapp.Window：线程安全地把最新场景树提交给主线程的绘制循环。
@@ -315,10 +324,16 @@ func (g *glWindow) Draw(root *gxscene.Node) error {
 
 // Present 实现 gxapp.FramePresenter：消费 Host 的增量帧。
 //
-// 桌面端绘制链是"全量 PaintToScaled → CPU Pixmap → GL 纹理 blit → SwapBuffers"，
-// 没有 FrameCache 的脏矩形画布（GL surface 跨帧像素不可靠），所以增量收益落在
-// 更上层：无实质变化的帧根本不进绘制链——不置 dirty，paintNow 直接跳过绘制、
-// 纹理上传与缓冲交换，屏幕保持上一帧内容（GL 双缓冲语义下安全）。
+// 两级增量，叠加生效：
+//  1. 帧级短路：无实质变化的帧不进绘制链——不置 dirty，paintNow 跳过绘制、
+//     纹理上传与缓冲交换，屏幕保持上一帧（GL 双缓冲语义下安全）。
+//  2. 像素级脏矩形：有 Change 的帧进 paintNow 后，PaintToCachedScaled 复用
+//     跨帧持久的 CPU raster，只重画 diffLayout 算出的脏区、不清整屏——
+//     编辑器逐字输入/光标移动只光栅化一小条。
+//
+// 桌面 canvas 是跨帧持久的 raster Pixmap（SurfacesWrapBackendRenderTarget 实为
+// NewCanvasWithDimensions），不是易失的 GL 默认帧缓冲，故 skia 的帧缓存可直接
+// 复用；resize 重建画布时须清空缓存（见 resizeToWindow）。
 //
 // changed 判定只看 FullSync 与 Changes：Version 每帧都递增（即使无变化），
 // 不能作为"有变化"的依据——frame.go 明确：Changes 为空但 Version 前进即表示
@@ -333,6 +348,10 @@ func (g *glWindow) Present(frame *gxapp.Frame) error {
 	// 首帧必须绘制（Render 建树期 sink 未开，Changes 为空但树是全新的）；
 	// 之后只有真正有变更的帧才置 dirty，无 Change 帧跳过整条绘制链。
 	if !g.painted || frame.FullSync || len(frame.Changes) > 0 {
+		if frame.FullSync {
+			// 丢帧恢复：强制全量，丢弃基于旧画面的脏区缓存。
+			g.frameCache = skia.FrameCache{}
+		}
 		g.dirty = true
 	}
 	g.mu.Unlock()
@@ -377,7 +396,9 @@ func (g *glWindow) paintNow() {
 			dpr = 1
 		}
 	}
-	_, hits := skia.PaintToScaled(canvas, float32(fx), float32(fy), dpr, g.root, g.fonts)
+	// 带缓存的 DPR 绘制：内容未变整帧不动、有变化只重画脏矩形区域。
+	// canvas 是跨帧持久的 CPU raster，局部重绘保留脏区外的上帧像素。
+	_, hits := skia.PaintToCachedScaled(&g.frameCache, canvas, float32(fx), float32(fy), dpr, g.root, g.fonts)
 	g.hits = hits
 	// CPU raster → GL 纹理 → 全屏 blit（替代原 Skia GL surface 的直接绘制）。
 	if g.blit != nil {

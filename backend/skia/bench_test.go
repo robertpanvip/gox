@@ -153,3 +153,109 @@ func BenchmarkDirtyRect(b *testing.B) {
 		}
 	})
 }
+
+// BenchmarkDesktopDprDirtyRect 对应桌面 glWindow 逐字输入场景（DPR=2，1600×1000 物理像素）：
+//   - FullScaled：每帧全量 PaintToScaled（桌面端未接缓存前的行为）。
+//   - CachedScaled：PaintToCachedScaled，走"已知有变化"快通道。
+//
+// 据实说明：纯文本变化几何不变 → 脏区为 0 → 仍需全量重画，本基准实测两者基本
+// 持平（缓存路径省了 O(N) 快照比对，抵消了 diffLayout 的额外开销）。脏矩形真正
+// 的用武之地是几何变化场景，见 BenchmarkDesktopGeometryDirty——但在纯 Go canvas
+// 下同样受 O(N) log/hits 记录成本限制，收益有限。勿据本基准宣称提速。
+func BenchmarkDesktopDprDirtyRect(b *testing.B) {
+	root := makeBenchTree(30)
+	const physW, physH = 1600, 1000
+	const dpr = 2
+
+	var target *gxscene.Node
+	var walk func(*gxscene.Node)
+	walk = func(n *gxscene.Node) {
+		if n.Type == gxscene.NodeText && target == nil {
+			target = n
+		}
+		for _, c := range n.Children {
+			walk(c)
+		}
+	}
+	walk(root)
+
+	b.Run("FullScaled", func(b *testing.B) {
+		canvas := skCanvas(physW, physH)
+		defer canvas.Delete()
+		b.ReportAllocs()
+		i := 0
+		b.ResetTimer()
+		for ; i < b.N; i++ {
+			target.Text = fmt.Sprintf("metric %d", i%100)
+			_, _ = PaintToScaled(canvas, physW, physH, dpr, root, nil)
+		}
+	})
+
+	b.Run("CachedScaled", func(b *testing.B) {
+		canvas := skCanvas(physW, physH)
+		defer canvas.Delete()
+		cache := FrameCache{}
+		// 预热首帧，建立布局基线。
+		_, _ = PaintToCachedScaled(&cache, canvas, physW, physH, dpr, root, nil)
+		b.ReportAllocs()
+		i := 0
+		b.ResetTimer()
+		for ; i < b.N; i++ {
+			target.Text = fmt.Sprintf("metric %d", i%100)
+			_, _ = PaintToCachedScaled(&cache, canvas, physW, physH, dpr, root, nil)
+		}
+	})
+}
+
+// BenchmarkDesktopGeometryDirty 对应桌面端几何变化场景（光标移动/选区/滚动）：
+// 改一个绝对定位光标的 x（矩形变化 → 产生小脏区），对比全量重绘与脏矩形重绘。
+// 这是像素级脏矩形真正体现收益的场景（纯文本变化几何不变，只能全量重画）。
+func BenchmarkDesktopGeometryDirty(b *testing.B) {
+	// 一张卡片 + 一个绝对定位的"光标"色块；只移动光标。
+	ops := []gxscene.Op{
+		{Code: gxscene.OpElem, Arg: "div"},
+		{Code: gxscene.OpAttr, Key: "flex-direction", Arg: "row"},
+		{Code: gxscene.OpAttr, Key: "width", Arg: "1600"},
+		{Code: gxscene.OpAttr, Key: "height", Arg: "1000"},
+	}
+	for i := 0; i < 60; i++ {
+		ops = append(ops,
+			gxscene.Op{Code: gxscene.OpElem, Arg: "div"},
+			gxscene.Op{Code: gxscene.OpAttr, Key: "bg", Arg: "#141b33"},
+			gxscene.Op{Code: gxscene.OpAttr, Key: "width", Arg: "180"},
+			gxscene.Op{Code: gxscene.OpAttr, Key: "height", Arg: "40"},
+			gxscene.Op{Code: gxscene.OpChildText, Arg: fmt.Sprintf("row %d with some text content here", i)},
+			gxscene.Op{Code: gxscene.OpClose},
+		)
+	}
+	ops = append(ops, gxscene.Op{Code: gxscene.OpClose})
+	root := gxscene.Render(gxscene.Template{Ops: ops}).Root()
+
+	const physW, physH = 1600, 1000
+	const dpr = 2
+
+	b.Run("FullScaled", func(b *testing.B) {
+		canvas := skCanvas(physW, physH)
+		defer canvas.Delete()
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			// 伪造几何变化：改首行宽度（会使脏区覆盖较大，仍比全量多一次 diff，但测的是极端）。
+			root.Children[0].Props["width"] = 180 + i%20
+			_, _ = PaintToScaled(canvas, physW, physH, dpr, root, nil)
+		}
+	})
+
+	b.Run("CachedScaled", func(b *testing.B) {
+		canvas := skCanvas(physW, physH)
+		defer canvas.Delete()
+		cache := FrameCache{}
+		_, _ = PaintToCachedScaled(&cache, canvas, physW, physH, dpr, root, nil)
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			root.Children[0].Props["width"] = 180 + i%20
+			_, _ = PaintToCachedScaled(&cache, canvas, physW, physH, dpr, root, nil)
+		}
+	})
+}

@@ -387,13 +387,34 @@ func mergeRects(in []dirtyRect) []dirtyRect {
 // canvas 的清屏/裁剪由本函数管理；log/hits 始终是全树结果（绘制原语被 clip 限制，
 // 但 log 记录与命中记录不受影响），因此对调用方与测试完全透明。
 func renderCached(c *FrameCache, canvas sk.Canvas, root *gxscene.Node, w, h float32, fonts map[int]sk.Font) (log DrawLog, hits []HitBox) {
-	stamps, sig := snapshotTree(root)
-	if c.shouldReuse(root, w, h, sig) {
-		c.reuses++
-		// 整帧复用：画布不动，返回上一帧的 log/hits 副本。
-		log = append(DrawLog(nil), c.log...)
-		hits = append([]HitBox(nil), c.hits...)
-		return
+	return renderCachedInner(c, canvas, root, w, h, fonts, false)
+}
+
+// renderCachedKnownChange 是"调用方已确认本帧有变化"的快通道，供 FramePresenter
+// 路径（桌面 glWindow）使用。宿主已用 Frame.Changes 判断了有无变化，无需再 O(N)
+// 拍快照签名去猜——跳过 snapshotTree 与整帧复用判定，直接布局+算脏区+绘制。
+// 省下的快照开销在纯文本变化（脏区为 0、仍全量重画）场景下尤其关键，让这条
+// 最高频路径不比无缓存全量绘制慢。
+//
+// 因未拍快照，缓存的 stamps/structSig 不更新并置为恒不匹配，避免后续误命中
+// 整帧复用；桌面的无变化帧由 Present 的帧级短路拦截，不依赖这里的复用判定。
+func renderCachedKnownChange(c *FrameCache, canvas sk.Canvas, root *gxscene.Node, w, h float32, fonts map[int]sk.Font) (log DrawLog, hits []HitBox) {
+	return renderCachedInner(c, canvas, root, w, h, fonts, true)
+}
+
+// renderCachedInner 是帧缓存编排的实际实现。knownChange=true 时跳过快照与复用判定。
+func renderCachedInner(c *FrameCache, canvas sk.Canvas, root *gxscene.Node, w, h float32, fonts map[int]sk.Font, knownChange bool) (log DrawLog, hits []HitBox) {
+	var stamps map[*gxscene.Node]nodeStamp
+	var sig string
+	if !knownChange {
+		stamps, sig = snapshotTree(root)
+		if c.shouldReuse(root, w, h, sig) {
+			c.reuses++
+			// 整帧复用：画布不动，返回上一帧的 log/hits 副本。
+			log = append(DrawLog(nil), c.log...)
+			hits = append([]HitBox(nil), c.hits...)
+			return
+		}
 	}
 
 	// 有变化：全量重算布局（flex 局部变化会影响兄弟，无法只算子树）。
@@ -445,12 +466,16 @@ func renderCached(c *FrameCache, canvas sk.Canvas, root *gxscene.Node, w, h floa
 	c.valid = true
 	c.root = root
 	c.w, c.h = w, h
-	c.stamps = stamps
-	c.structSig = sig
 	c.layout = newLayout
 	c.log = append(DrawLog(nil), log...)
 	c.hits = append([]HitBox(nil), hits...)
 	c.paints++
+	if !knownChange {
+		c.stamps = stamps
+		c.structSig = sig
+	}
+	// knownChange 时保留旧 stamps/sig（本帧未拍，不能覆盖）。旧签名与当前树可能
+	// 已不匹配，若后续有普通路径调用会重新拍快照比对，不会错误复用。
 	return
 }
 

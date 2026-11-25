@@ -144,9 +144,25 @@ _ = w.DrawLog() // 最近一帧的绘制指令（观测面）
 
 约 **62× 快、11,553× 少分配**。复跑：`go test ./backend/skia -run '^$' -bench BenchmarkNoChangeFrame -benchmem`。
 
+## 桌面 glWindow 的两级增量
+
+桌面 `glWindow`（`examples/playground/desktop/glwindow.go`）实现了 `FramePresenter`，两级增量叠加：
+
+1. **帧级短路**（主要收益）：无 Change 帧不置 `dirty`，`paintNow` 跳过整条绘制/blit/swap 链，屏幕保持上帧。首帧强制绘制（建树期不记录 Change）；标准动画（signal/RAF/命令式写回）都产生 Change、自动放行，`ForceRedraw()` 给旁路动画留逃生口。
+2. **像素级脏矩形**（架构接通）：桌面 canvas 是跨帧持久的 CPU raster（`SurfacesWrapBackendRenderTarget` 实为 `NewCanvasWithDimensions` 的 Pixmap，像素可读、不随 swap 失效），因此有 Change 帧走 `PaintToCachedScaled` → `renderCachedKnownChange`，复用 `FrameCache` 的布局差分，几何变化（光标/选区/滚动）只重画脏区。该路径由 Present 已确认有变化，跳过 O(N) 快照比对；resize 重建画布时清空缓存。
+
+**收益要据实看**（`BenchmarkDesktopDprDirtyRect` / `BenchmarkDesktopGeometryDirty`，DPR=2、1600×1000、40 节点）：
+
+| 场景 | 全量 `PaintToScaled` | 缓存 `PaintToCachedScaled` | 结论 |
+|---|---:|---:|---|
+| 无变化帧（帧级短路） | 全量绘制链 | 整帧跳过 | 主要收益，上一轮已落地 |
+| 纯文本变化（几何不变） | ~1.38 ms | ~1.40 ms | **基本持平**：脏区为 0 → 全量重画，但省了快照抵消 diff 开销 |
+| 几何变化（光标移动） | ~1.48 ms | ~1.49 ms | **基本持平**：纯 Go canvas 绘制调用相对廉价，O(N) 遍历/log 记录省不掉 |
+
+原因：`renderCached` 需为整棵树记录完整 `DrawLog`/`HitBox`，`paintTree` 遍历、`inheritedStyle`/`parseStyle` 解析、`computeLayout`+`diffLayout` 都是 O(N) 固定成本，脏矩形只能省下不相交节点的 `DrawString`/`DrawRect` 调用——在纯 Go canvas（字形有缓存）下这部分不够贵，收益被固定开销淹没。**脏矩形基础设施已接通且正确，未来若换回真 Skia GL surface 或字体 shaping 变昂贵即可释放收益**；当前桌面端真正的性能收益来自帧级短路。勿把本节数据宣传为"N 倍提速"。
+
 ## 已知边界
 
-- `NewCanvasWithDimensions` 产生的 canvas 在本绑定里像素不可读（属 picture-recording 类），故本后端用 `DrawLog` 作为可观测面而非读回像素。真实 GL surface 可正常 `ReadPixels`。
-- 桌面 playground 的 `glWindow` 已实现 `FramePresenter`，但走的是**轻量短路**而非本节的 `FrameCache`：GL surface 跨帧像素不可靠，不能做脏矩形画布复用，故在无 Change 帧里直接不置 `dirty`、跳过整条绘制/blit/swap 链（屏幕保持上帧），有 Change 帧仍全量 `PaintToScaled`。首帧强制绘制（建树期不记录 Change）。标准动画（signal/RAF/命令式写回）都产生 Change、自动放行；`ForceRedraw()` 给旁路动画留逃生口。
+- `NewCanvasWithDimensions` 产生的 canvas 像素在本后端可直接读回（`canvas.Pixmap().RGBA8888Bytes()`），`DrawLog` 仍作为主要可观测面。
 - 链接顺序修复用 GNU ld 的 `--start-group`，仅 Linux；macOS 需去掉该 directive（`linkflags.go` 已可按平台加 build tag）。
 - 布局是简单纵向流式，仅为证明节点分派；生产布局可替换 `painter` 的布局器。

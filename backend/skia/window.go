@@ -292,3 +292,43 @@ func PaintToCached(cache *FrameCache, canvas sk.Canvas, width, height float32, r
 	gxscene.PublishMeasured(cache.lastMeasured)
 	return log, hits
 }
+
+// PaintToCachedScaled 是支持设备像素比（DPR）的带缓存绘制入口，供真实 GUI 窗口
+// （如桌面 glWindow）在 HiDPI 屏上做像素级脏矩形重绘。
+//
+// 与 PaintToScaled 同样的坐标模型：组件尺寸是逻辑点，physW/physH 是物理像素，
+// 布局在逻辑坐标系进行，绘制前把 canvas 缩放 dpr 倍，用物理像素光栅化。
+//
+// 契约（与 PaintToCached 不同）：本入口假定调用方**已经确认本帧有变化**（桌面端
+// 由 Present 用 Frame.Changes 判定，无变化帧在更上层短路、不会走到这里）。因此
+// 内部跳过 O(N) 快照比对，直接布局+算几何脏区+局部重绘：
+//   - 几何变化（光标/选区/滚动/尺寸）：脏区小，只重画脏区，收益显著；
+//   - 纯文本/颜色变化（脏区为 0）：退化为全量重画，但因省了快照，不会比
+//     PaintToScaled 更慢。
+//
+// 关键点（正确性）：richardwilkes/canvas 的 Clear 填充"当前 clip"（设备坐标），
+// 不受 CTM 影响——Save 后的 Scale 不改变 clip，所以全屏 Clear 仍覆盖整块
+// framebuffer；而 ClipRect 会被当前 matrix 映射——逻辑坐标脏区经 Scale(dpr) 后
+// 自动落到物理像素，局部重绘位置正确。
+//
+// cache 由调用方跨帧持有；画布尺寸/DPR 变化时必须传新 &FrameCache{}（旧缓存的
+// 布局与脏区基于旧尺寸，继续复用会留下残影）。dpr<=0 时按 1 处理。
+func PaintToCachedScaled(cache *FrameCache, canvas sk.Canvas, physW, physH, dpr float32, root *gxscene.Node, fonts map[int]sk.Font) (DrawLog, []HitBox) {
+	if dpr <= 0 {
+		dpr = 1
+	}
+	if canvas.IsNil() || root == nil {
+		return nil, nil
+	}
+	if cache == nil {
+		return PaintToScaled(canvas, physW, physH, dpr, root, fonts)
+	}
+	logicalW, logicalH := physW/dpr, physH/dpr
+	canvas.Save()
+	canvas.Scale(dpr, dpr)
+	log, hits := renderCachedKnownChange(cache, canvas, root, logicalW, logicalH, fonts)
+	canvas.Restore()
+	// 回流实测尺寸（逻辑坐标，与 PaintToScaled 一致）。
+	gxscene.PublishMeasured(cache.lastMeasured)
+	return log, hits
+}
