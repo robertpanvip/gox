@@ -1,6 +1,3 @@
-// gx:nocollections
-// 本文件为原生 Go 组件源码，经 gox build 转译为 timepicker.go。
-// gx:nocollections 声明跳过集合/裸对象字面量 desugar，保留手写 opcode 的原生 Go 语义。
 package widgets
 
 // TimePicker 时间选择器：把"时/分/(秒)"三段选择封装成一个组件，业务只需提供

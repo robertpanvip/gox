@@ -1,4 +1,3 @@
-// gx:nocollections
 // editor.gx —— Ace 风格代码编辑器（公共组件，实例化 + Apple 主题）。
 //
 // 从 playground/ui/editor.gx 抽离为组件库公共组件：
@@ -7,8 +6,8 @@
 //   - 命令是实例方法（st.Insert / st.Undo / st.SetCursor ...），装配层持有 state 句柄。
 //   - 渲染 Editor(st) 用同一份 GX JSX，三端（Skia/Web/Rust）共用，零条件编译。
 //
-// gx:nocollections 保留手写 opcode / signal.Signal 原生语义：EditorState 的字段
-// 由构造函数显式用 Signal.New 建立，避免编译器对 struct sig 字段初值的特殊包装。
+// EditorState 的响应式字段用 GX 的 sig 字段声明，由构造函数按编译器六档语义构造，
+// 不手写底层大写 API。
 package widgets
 
 import (
@@ -39,19 +38,19 @@ const (
 // EditorState 是一个编辑器实例的全部可变状态。每个实例互不共享，
 // 可在同一 App 内并存多个，或被不同 App 分别持有（多 App 隔离）。
 type EditorState struct {
-    sourceCode    Signal.Signal[string]
+    sourceCode Signal.Signal[string]
     doc           *Rope.Rope        // 文本权威：持久 Rope 根，编辑走 O(log N)；sourceCode 是它的字符串派生
-    cursorLine    Signal.Signal[int]
-    cursorCol     Signal.Signal[int]
+    cursorLine Signal.Signal[int]
+    cursorCol Signal.Signal[int]
     selAnchorLine Signal.Signal[int]
-    selAnchorCol  Signal.Signal[int]
-    focused       Signal.Signal[bool]
-    lineCount     Signal.Signal[int]
-    scrollTop     Signal.Signal[float64] // 受控滚动偏移（虚拟滚动的窗口起点）
-    scrollTopVal  float64                // scrollTop 的非响应式镜像：供 effect 读而不订阅（避免跟随回环）
-    charWidth     Signal.Signal[float64]
-    wideWidth     Signal.Signal[float64]
-    caretSettled  Signal.Signal[bool]
+    selAnchorCol Signal.Signal[int]
+    focused Signal.Signal[bool]
+    lineCount Signal.Signal[int]
+    scrollTop Signal.Signal[float64] // 受控滚动偏移（虚拟滚动的窗口起点）
+    scrollTopVal  float64     // scrollTop 的非响应式镜像：供 effect 读而不订阅（避免跟随回环）
+    charWidth Signal.Signal[float64]
+    wideWidth Signal.Signal[float64]
+    caretSettled Signal.Signal[bool]
 
     rowVers *Signal.Vec[int] // 每行的独立版本信号（细粒度订阅）
     undoStack []editSnapshot
@@ -71,14 +70,18 @@ func NewEditorState(source string) *EditorState {
     vers := make([]int, 24)
     lc := Rope.Of(source).LineCount()
     st := &EditorState{
-        sourceCode:    Signal.New(source),
+        sourceCode:    Signal.LockedGetterShared("sf:source:3030",func() string { return source },
+func(__v string) { source = __v },
+),
         doc:           Rope.Of(source),
         cursorLine:    Signal.New(0),
         cursorCol:     Signal.New(0),
         selAnchorLine: Signal.New(0),
         selAnchorCol:  Signal.New(0),
         focused:       Signal.New(false),
-        lineCount:     Signal.New(lc),
+        lineCount:     Signal.LockedGetterShared("sf:lc:3145",func() int { return lc },
+func(__v int) { lc = __v },
+),
         scrollTop:     Signal.New(0.0),
         charWidth:     Signal.New(7.83),
         wideWidth:     Signal.New(13.02),

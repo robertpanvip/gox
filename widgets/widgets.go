@@ -1,6 +1,3 @@
-// gx:nocollections
-// 本文件为原生 Go 组件源码，经 gox build 转译为 widgets.go。
-// gx:nocollections 声明跳过集合/裸对象字面量 desugar，保留手写 opcode 的原生 Go 语义。
 // Package widgets 是 skia 后端预制的 GX 控件库。
 //
 // 它是一组「组件函数」——签名为 func(gxscene.Props) *gxscene.Instance，与 GX
@@ -26,6 +23,8 @@
 // GUI 层（如 GLFW 适配）只需在命中/键盘回调里调这几个函数，无需理解控件内部结构。
 package widgets
 
+import Signal "github.com/robertpanvip/gox/runtime/signal"
+
 import (
 	"fmt"
 	"strconv"
@@ -33,7 +32,6 @@ import (
 	"time"
 
 	gxscene "github.com/robertpanvip/gox/runtime/scene"
-	"github.com/robertpanvip/gox/runtime/signal"
 )
 
 // ---- 预制主题（Apple HIG，默认深色，SetTheme 可整体切换）----
@@ -87,10 +85,11 @@ func toneColor(tone string) string {
 // ---------- 焦点与光标状态（全局，signal 驱动重绘）----------
 
 var (
-	focusToken = signal.New("")   // 当前聚焦输入框的 token；空串表示无焦点
-	blinkOn    = signal.New(true) // 光标是否可见
-	inputSeq   atomic.Uint64      // token 生成器
+	inputSeq atomic.Uint64 // token 生成器
 )
+
+var focusToken = Signal.New(""   )// 当前聚焦输入框的 token；空串表示无焦点
+var blinkOn = Signal.New(true )// 光标是否可见
 
 func init() {
 	// 光标闪烁：每 530ms 翻转一次。写 signal 会触发订阅了光标 getter 的 app
@@ -377,7 +376,7 @@ func Focus(n *gxscene.Node) {
 }
 
 // Blur 清空焦点。
-func Blur() { focusToken("") }
+func Blur() { focusToken("" )}
 
 // Focused 返回当前是否有聚焦输入框。
 func Focused() bool { return focusToken() != "" }

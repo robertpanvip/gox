@@ -1,6 +1,3 @@
-// gx:nocollections
-// 本文件为原生 Go 组件源码，经 gox build 转译为 virtualList.go。
-// gx:nocollections 声明跳过集合/裸对象字面量 desugar，保留手写 opcode 的原生 Go 语义。
 package widgets
 
 import (
@@ -9,7 +6,7 @@ import (
 	"strings"
 
 	gxscene "github.com/robertpanvip/gox/runtime/scene"
-	"github.com/robertpanvip/gox/runtime/signal"
+	Signal "github.com/robertpanvip/gox/runtime/signal"
 )
 
 func parseFloat(s string) (float64, error) {
@@ -80,7 +77,7 @@ func VirtualList(props gxscene.Props) *gxscene.Instance {
 	// itemRootID → index：把后端回流的节点 ID 映射回列表索引。
 	itemRootID := make(map[gxscene.NodeID]int)
 	// measureSeq 是回填版本号：每次回填 +1，作为信号驱动窗口重算（融入 app 帧边界）。
-	measureSeq := signal.New(0.0)
+	var measureSeq = Signal.New(0.0)
 	// jump 是 VIRTUA 风格锚定补偿，累积后经 on-scroll flush 回外部并清零。
 	var jump float64
 
@@ -246,7 +243,7 @@ func VirtualList(props gxscene.Props) *gxscene.Instance {
 		}
 
 		// 自动测量：订阅该项根节点的回流。For 在 per-item Owner 下调 render，
-		// signal.OnCleanup 保证项滚出窗口销毁时退订 + 清理映射，防止注册表膨胀。
+		// Signal.onCleanup 保证项滚出窗口销毁时退订 + 清理映射，防止注册表膨胀。
 		if !explicitHeight && child.Root() != nil {
 			root := child.Root()
 			id := root.ID
@@ -255,7 +252,7 @@ func VirtualList(props gxscene.Props) *gxscene.Instance {
 				unsub := gxscene.SubscribeMeasured(id, func(m gxscene.Measured) {
 					onItemMeasured(index, m)
 				})
-				signal.OnCleanup(func() {
+				Signal.OnCleanup(func() {
 					unsub()
 					delete(itemRootID, id)
 					gxscene.ForgetMeasured(id)

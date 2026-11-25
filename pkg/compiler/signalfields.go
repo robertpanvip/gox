@@ -766,8 +766,26 @@ func containerElemTypeOnce(typeText string) string {
 //   - *T                 → 先剥指针再判断
 // 推不出（非容器、元素非具名类型）返回空串，调用方保守放弃。
 func containerElemType(typeText string) string {
+	return containerElemTypeKeepQualifier(typeText, true)
+}
+
+// containerElemTypeKeepQualifier 从容器类型文本剥出元素类型。
+//
+// keepQualifier 控制是否保留元素类型的包限定名前缀（如 gxscene.Op 中的 "gxscene."）：
+//   - true（对象字面量期望类型下推用）：必须保留限定名，否则 []gxscene.Op{{...}} 的
+//     内层 {Code: ...} 会把期望类型误判成裸 Op，降级成匿名 struct 而无法赋回 []Op。
+//   - false（sig 字段链 receiver 判定用）：剥成裸名，供字段链沿链传播。
+//
+// 两种模式对泛型外壳（list.List[T] / map[K]V / []T）都剥出真实元素类型 T / V。
+func containerElemTypeKeepQualifier(typeText string, keepQualifier bool) string {
 	t := strings.TrimSpace(typeText)
 	t = strings.TrimSpace(strings.TrimPrefix(t, "*"))
+	strip := func(ft string) string {
+		if keepQualifier {
+			return stripInnerQualifier(ft, true)
+		}
+		return bareFieldType(ft)
+	}
 	// map[K]V：找到匹配的 ']'，其后即 V。
 	if strings.HasPrefix(t, "map[") {
 		depth := 0
@@ -779,7 +797,7 @@ func containerElemType(typeText string) string {
 				depth--
 				if depth == 0 {
 					v := strings.TrimSpace(t[i+1:])
-					return bareFieldType(v)
+					return strip(v)
 				}
 			}
 		}
@@ -796,14 +814,26 @@ func containerElemType(typeText string) string {
 				depth--
 				if depth == 0 {
 					elem := strings.TrimSpace(t[i+1:])
-					return bareFieldType(elem)
+					return strip(elem)
 				}
 			}
 		}
 		return ""
 	}
 	// list.List[T]：剥出 T。
-	return bareFieldType(t)
+	return strip(t)
+}
+
+// stripInnerQualifier 递归剥泛型内部类型，按 keepQualifier 决定是否保留包限定名。
+func stripInnerQualifier(ft string, keepQualifier bool) string {
+	x := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(ft), "*"))
+	if i := strings.Index(x, "["); i >= 0 && strings.HasSuffix(x, "]") {
+		return stripInnerQualifier(x[i+1:strings.LastIndex(x, "]")], keepQualifier)
+	}
+	if keepQualifier {
+		return x
+	}
+	return bareFieldType(x)
 }
 
 // isBuiltinType 判断是否为内建标量类型（不能作为 struct 字段链 receiver）。

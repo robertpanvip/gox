@@ -1,6 +1,3 @@
-// gx:nocollections
-// 本文件为原生 Go 组件源码，经 gox build 转译为 popover.go。
-// gx:nocollections 声明跳过集合/裸对象字面量 desugar，保留手写 opcode 的原生 Go 语义。
 package widgets
 
 // Popover 浮层组件——下拉菜单/Select/Dropdown/Tooltip 的共同底座。
@@ -37,19 +34,19 @@ import (
 	"sync/atomic"
 
 	gxscene "github.com/robertpanvip/gox/runtime/scene"
-	"github.com/robertpanvip/gox/runtime/signal"
 )
 
 var popoverSeq atomic.Uint64
 
-// PopoverState 是 Popover 的开关状态，内部持有一个 bool signal。
+// PopoverState 是 Popover 的开关状态，内部持有一个 bool sig 字段。
 // 业务持有它即可在任意位置打开/关闭浮层（如选中菜单项后关闭）。
 type PopoverState struct {
-	open signal.Signal[bool]
+	sig open bool
 }
 
 func NewPopoverState(initial bool) *PopoverState {
-	return &PopoverState{open: signal.new(initial)}
+	sig open = initial
+	return &PopoverState{open: open}
 }
 
 func (s *PopoverState) Open()             { s.open(true) }

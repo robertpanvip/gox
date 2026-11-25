@@ -1,6 +1,3 @@
-// gx:nocollections
-// 本文件为原生 Go 组件源码，经 gox build 转译为 context.go。
-// gx:nocollections 声明跳过集合/裸对象字面量 desugar，保留手写 opcode 的原生 Go 语义。
 // Context 是 GX 的响应式上下文，语义对齐 React Context：
 //
 //   - Provider 在自己的响应式作用域（Owner）里挂一个 value signal，只有它的
@@ -12,23 +9,25 @@
 //   - 没有任何 Provider 时回落到 Context 自带的默认 signal，Set / Value 写读它——
 //     这保留了 SetTheme 这类全局单例用法（应用只有一个上下文时更简单）。
 //
-// 实现落点：signal.Owner 提供 ProvideValue / LookupValue（沿 parent 链就近查找），
+// 实现落点：Signal.owner 提供 ProvideValue / LookupValue（沿 parent 链就近查找），
 // Context 本身是纯 Go 运行期通道，不进场景树 wire 协议，零后端改动。
 package widgets
 
 import (
 	gxscene "github.com/robertpanvip/gox/runtime/scene"
-	"github.com/robertpanvip/gox/runtime/signal"
+	Signal "github.com/robertpanvip/gox/runtime/signal"
 )
 
 // Context 是一个带类型的响应式上下文句柄。零值不可用，请用 NewContext 创建。
+// 注：泛型 struct 的 sig 字段暂不受编译器支持（会生成无效 Go），故此处用
+// Signal.Signal[T] 类型字段 + Signal.new 语法糖显式构造，语义等价。
 type Context[T any] struct {
-	def signal.Signal[T] // 无 Provider 时的默认值通道（Set 写它）
+	def Signal.Signal[T] // 无 Provider 时的默认值通道（Set 写它）
 }
 
 // NewContext 创建一个默认值为 def 的 Context。
 func NewContext[T any](def T) *Context[T] {
-	return &Context[T]{def: signal.New(def)}
+	return &Context[T]{def: Signal.New(def)}
 }
 
 // Use 返回读取「当前作用域 context 值」的 getter，可直接作为 GX 动态插槽使用：
@@ -39,7 +38,7 @@ func NewContext[T any](def T) *Context[T] {
 // 注意：Use 必须在「建树期 / 响应式重算期」调用才有作用域可查；拿到 getter 后
 // 可长期保存，它捕获的绑定不随后续求值改变（与 React useContext 的快照一致）。
 func (c *Context[T]) Use() func() T {
-	if v, ok := signal.LookupValue(signal.GetOwner(), c); ok {
+	if v, ok := Signal.LookupValue(Signal.GetOwner(), c); ok {
 		switch sig := v.(type) {
 		case *valueCell[T]:
 			return sig.get
@@ -67,7 +66,7 @@ func (c *Context[T]) Set(v T) { c.def(v) }
 // 处于 Provider 子树内时读该 Provider 的值，否则读默认值。
 func (c *Context[T]) Value() T { return c.Use()() }
 
-// valueCell 承载 Provider 的值。静态值用恒 getter；动态值用 signal.Computed，
+// valueCell 承载 Provider 的值。静态值用恒 getter；动态值用 Signal.computed，
 // 使上游 signal 变化时订阅该 cell 的消费者 effect 被精确唤醒。
 type valueCell[T any] struct {
 	get func() T
@@ -79,7 +78,7 @@ type valueCell[T any] struct {
 //   - value    T 或 func() T / func() any：值；getter 形式随上游 signal 响应式变化。
 //   - children func() any → *Instance：子树。
 //
-// 作用域语义：Provider 用 signal.CreateRoot 建独立 Owner 挂值，children 在该
+// 作用域语义：Provider 用 Signal.createRoot 建独立 Owner 挂值，children 在该
 // Owner 下构建——所以只有这棵子树能 Lookup 到本值；嵌套 Provider 就近覆盖，
 // 兄弟 Provider 互不影响。value 变化通过 getter 内的 signal 订阅驱动消费者重绘。
 func (c *Context[T]) Provider(props gxscene.Props) *gxscene.Instance {
@@ -88,7 +87,7 @@ func (c *Context[T]) Provider(props gxscene.Props) *gxscene.Instance {
 	childrenGet := gxscene.Get[any](props, "children")
 	var inst *gxscene.Instance
 	// 在独立 Owner 下建子树并挂值：子树组件 Use() 沿 Owner 链命中本 cell。
-	_ = signal.CreateRoot(func(o *signal.Owner) {
+	_ = Signal.CreateRoot(func(o *Signal.Owner) {
 		o.ProvideValue(c, cell)
 		var v any
 		if childrenGet != nil {

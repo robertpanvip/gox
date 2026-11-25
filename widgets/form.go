@@ -1,6 +1,3 @@
-// gx:nocollections
-// 本文件为原生 Go 组件源码，经 gox build 转译为 form.go。
-// gx:nocollections 声明跳过集合/裸对象字面量 desugar，保留手写 opcode 的原生 Go 语义。
 package widgets
 
 import (
@@ -15,12 +12,9 @@ import (
 // 业务用 Bind* 包装自己的 setter 接收新值并写回 signal。这样组件保持无状态，
 // 信号所有权始终在业务侧，与响应式系统天然契合。
 //
-//	checked := signal.New(false)
-//	widgets.Checkbox(Props{
-//	    "checked": func() any { return checked() },
-//	    "onChange": widgets.BindBool(func(v bool) { checked(v) }),
-//	    "label": "我已阅读",
-//	})
+//	sig checked = false
+//	<Checkbox checked={() => checked} onChange={widgets.BindBool((v) => { checked = v })}
+//	          label="我已阅读"/>
 
 const (
 	dataChecked = "checked"

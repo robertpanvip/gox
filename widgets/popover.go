@@ -1,7 +1,6 @@
-// gx:nocollections
-// 本文件为原生 Go 组件源码，经 gox build 转译为 popover.go。
-// gx:nocollections 声明跳过集合/裸对象字面量 desugar，保留手写 opcode 的原生 Go 语义。
 package widgets
+
+import Signal "github.com/robertpanvip/gox/runtime/signal"
 
 // Popover 浮层组件——下拉菜单/Select/Dropdown/Tooltip 的共同底座。
 //
@@ -37,19 +36,19 @@ import (
 	"sync/atomic"
 
 	gxscene "github.com/robertpanvip/gox/runtime/scene"
-	"github.com/robertpanvip/gox/runtime/signal"
 )
 
 var popoverSeq atomic.Uint64
 
-// PopoverState 是 Popover 的开关状态，内部持有一个 bool signal。
+// PopoverState 是 Popover 的开关状态，内部持有一个 bool sig 字段。
 // 业务持有它即可在任意位置打开/关闭浮层（如选中菜单项后关闭）。
 type PopoverState struct {
-	open signal.Signal[bool]
+	open Signal.Signal[bool]
 }
 
 func NewPopoverState(initial bool) *PopoverState {
-	return &PopoverState{open: signal.New(initial)}
+	var open = Signal.New(initial)
+	return &PopoverState{open: open}
 }
 
 func (s *PopoverState) Open()             { s.open(true) }
@@ -106,17 +105,17 @@ func Popover(props gxscene.Props) *gxscene.Instance {
 
 	ops := []gxscene.Op{
 		// 根透明包装
-		{Code: gxscene.OpElem, Arg: "div"},
-		{Code: gxscene.OpAttr, Key: "gx-role", Arg: "anchor"},
-		{Code: gxscene.OpAttr, Key: "gx-anchor-id", Arg: uid},
-		{Code: gxscene.OpAttr, Key: "flex-direction", Arg: "column"},
+		gxscene.Op{Code: gxscene.OpElem, Arg: "div"},
+		gxscene.Op{Code: gxscene.OpAttr, Key: "gx-role", Arg: "anchor"},
+		gxscene.Op{Code: gxscene.OpAttr, Key: "gx-anchor-id", Arg: uid},
+		gxscene.Op{Code: gxscene.OpAttr, Key: "flex-direction", Arg: "column"},
 		// trigger 子组件挂在此 div 下
-		{Code: gxscene.OpElem, Arg: "div"},
-		{Code: gxscene.OpComp, Arg: "PopoverTrigger", Slot: triggerSlot},
-		{Code: gxscene.OpClose},
+		gxscene.Op{Code: gxscene.OpElem, Arg: "div"},
+		gxscene.Op{Code: gxscene.OpComp, Arg: "PopoverTrigger", Slot: triggerSlot},
+		gxscene.Op{Code: gxscene.OpClose},
 		// 浮层开关分支
-		{Code: gxscene.OpBranch, Slot: branchSlot},
-		{Code: gxscene.OpClose},
+		gxscene.Op{Code: gxscene.OpBranch, Slot: branchSlot},
+		gxscene.Op{Code: gxscene.OpClose},
 	}
 
 	// content getter 返回 *Instance；在 branch builder 内重建子树，其内部 signal 由
@@ -160,23 +159,23 @@ func Popover(props gxscene.Props) *gxscene.Instance {
 			}
 			floatOps := []gxscene.Op{
 				// 遮罩：全屏，点击关闭
-				{Code: gxscene.OpElem, Arg: "div"},
-				{Code: gxscene.OpAttr, Key: "gx-role", Arg: "scrim"},
-				{Code: gxscene.OpEvent, Key: "onClick", Slot: 0},
-				{Code: gxscene.OpClose},
+				gxscene.Op{Code: gxscene.OpElem, Arg: "div"},
+				gxscene.Op{Code: gxscene.OpAttr, Key: "gx-role", Arg: "scrim"},
+				gxscene.Op{Code: gxscene.OpEvent, Key: "onClick", Slot: 0},
+				gxscene.Op{Code: gxscene.OpClose},
 				// 浮层内容
-				{Code: gxscene.OpElem, Arg: "div"},
-				{Code: gxscene.OpAttr, Key: "gx-role", Arg: "popover"},
-				{Code: gxscene.OpAttr, Key: "gx-anchor", Arg: uid},
-				{Code: gxscene.OpAttr, Key: "gx-placement", Arg: p},
-				{Code: gxscene.OpAttr, Key: "gx-offset", Arg: off},
-				{Code: gxscene.OpAttr, Key: "bg", Arg: ThemeMaterial},
-				{Code: gxscene.OpAttr, Key: "border-radius", Arg: RadiusCard},
-				{Code: gxscene.OpAttr, Key: "border", Arg: ThemeHairline},
-				{Code: gxscene.OpAttr, Key: "border-width", Arg: HairlineWidth},
-				{Code: gxscene.OpAttr, Key: "box-shadow", Arg: ShadowFloat},
-				{Code: gxscene.OpAttr, Key: "flex-direction", Arg: "column"},
-				{Code: gxscene.OpAttr, Key: "padding", Arg: "6"},
+				gxscene.Op{Code: gxscene.OpElem, Arg: "div"},
+				gxscene.Op{Code: gxscene.OpAttr, Key: "gx-role", Arg: "popover"},
+				gxscene.Op{Code: gxscene.OpAttr, Key: "gx-anchor", Arg: uid},
+				gxscene.Op{Code: gxscene.OpAttr, Key: "gx-placement", Arg: p},
+				gxscene.Op{Code: gxscene.OpAttr, Key: "gx-offset", Arg: off},
+				gxscene.Op{Code: gxscene.OpAttr, Key: "bg", Arg: ThemeMaterial},
+				gxscene.Op{Code: gxscene.OpAttr, Key: "border-radius", Arg: RadiusCard},
+				gxscene.Op{Code: gxscene.OpAttr, Key: "border", Arg: ThemeHairline},
+				gxscene.Op{Code: gxscene.OpAttr, Key: "border-width", Arg: HairlineWidth},
+				gxscene.Op{Code: gxscene.OpAttr, Key: "box-shadow", Arg: ShadowFloat},
+				gxscene.Op{Code: gxscene.OpAttr, Key: "flex-direction", Arg: "column"},
+				gxscene.Op{Code: gxscene.OpAttr, Key: "padding", Arg: "6"},
 			}
 			if w := width(); w != "" {
 				floatOps = append(floatOps, gxscene.Op{Code: gxscene.OpAttr, Key: "width", Arg: w})

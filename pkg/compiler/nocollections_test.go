@@ -93,6 +93,33 @@ func Render() {
 	}
 }
 
+// 无 gx:nocollections 时，[]pkg.Type{{...}} 的省略类型元素应沿用容器元素类型
+// （含包限定名），不能降级成匿名 struct 而无法赋回 []pkg.Type。
+// 这是组件库移除原生 Go 豁免标记后能纯 GX 书写的关键。
+func TestContainerElemKeepsQualifierForObjectLit(t *testing.T) {
+	src := `package widgets
+import gxscene "github.com/robertpanvip/gox/runtime/scene"
+func ops() []gxscene.Op {
+	return []gxscene.Op{
+		{Code: gxscene.OpElem, Arg: "div"},
+		{Code: gxscene.OpClose},
+	}
+}
+`
+	res, err := CompileSource(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := res.GoSource
+	if err := res.Validate(); err != nil {
+		t.Fatalf("生成非法 Go: %v\n%s", err, got)
+	}
+	if !strings.Contains(got, "gxscene.Op{Code: gxscene.OpElem, Arg: \"div\"}") {
+		t.Errorf("裸元素字面量应补全为带限定名的 gxscene.Op{...}，实际:\n%s", got)
+	}
+	assertNotContains(t, got, "struct{ Code", "不应降级为匿名 struct")
+}
+
 func TestHasChainMethodCalls(t *testing.T) {
 	yes := []string{
 		`xs.map(f)`,

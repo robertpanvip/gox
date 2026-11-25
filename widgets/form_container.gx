@@ -1,6 +1,3 @@
-// gx:nocollections
-// 本文件为原生 Go 组件源码，经 gox build 转译为 form_container.go。
-// gx:nocollections 声明跳过集合/裸对象字面量 desugar，保留手写 opcode 的原生 Go 语义。
 package widgets
 
 // Form / FormItem 是声明式表单容器层，与 form.go 里的"表单控件"（Checkbox /
@@ -12,12 +9,9 @@ package widgets
 // map[string]string），信号所有权始终在业务侧，与响应式系统契合。Scan 场景树
 // 即可验证结构，绘制完全交给后端原生层。
 //
-//	errors := signal.New(map[string]string{})
-//	widgets.Form(gxscene.Props{
-//	    "onSubmit": widgets.BindSubmit(func() { /* 校验 + 提交 */ }),
-//	    "errors":   func() any { return errors() },
-//	    "children": func() any { return fieldItems },
-//	})
+//	sig errors = map[string]string{}
+//	<Form onSubmit={widgets.BindSubmit(() => { /* 校验 + 提交 */ })}
+//	       errors={() => errors} children={() => fieldItems}/>
 import (
 	"sort"
 	"strconv"

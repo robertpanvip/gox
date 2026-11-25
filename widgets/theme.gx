@@ -1,6 +1,3 @@
-// gx:nocollections
-// 本文件为原生 Go 组件源码，经 gox build 转译为 theme.go。
-// gx:nocollections 声明跳过集合/裸对象字面量 desugar，保留手写 opcode 的原生 Go 语义。
 // Theme 是基于 Context 的预制设计令牌系统。
 //
 // 与 apple_theme.go 的编译期常量不同，这里把整套设计令牌放进 Context，使

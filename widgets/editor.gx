@@ -1,4 +1,3 @@
-// gx:nocollections
 // editor.gx —— Ace 风格代码编辑器（公共组件，实例化 + Apple 主题）。
 //
 // 从 playground/ui/editor.gx 抽离为组件库公共组件：
@@ -7,8 +6,8 @@
 //   - 命令是实例方法（st.Insert / st.Undo / st.SetCursor ...），装配层持有 state 句柄。
 //   - 渲染 Editor(st) 用同一份 GX JSX，三端（Skia/Web/Rust）共用，零条件编译。
 //
-// gx:nocollections 保留手写 opcode / signal.Signal 原生语义：EditorState 的字段
-// 由构造函数显式用 Signal.New 建立，避免编译器对 struct sig 字段初值的特殊包装。
+// EditorState 的响应式字段用 GX 的 sig 字段声明，由构造函数按编译器六档语义构造，
+// 不手写底层大写 API。
 package widgets
 
 import (
@@ -39,19 +38,19 @@ const (
 // EditorState 是一个编辑器实例的全部可变状态。每个实例互不共享，
 // 可在同一 App 内并存多个，或被不同 App 分别持有（多 App 隔离）。
 type EditorState struct {
-    sourceCode    Signal.Signal[string]
+    sig sourceCode    string
     doc           *Rope.Rope        // 文本权威：持久 Rope 根，编辑走 O(log N)；sourceCode 是它的字符串派生
-    cursorLine    Signal.Signal[int]
-    cursorCol     Signal.Signal[int]
-    selAnchorLine Signal.Signal[int]
-    selAnchorCol  Signal.Signal[int]
-    focused       Signal.Signal[bool]
-    lineCount     Signal.Signal[int]
-    scrollTop     Signal.Signal[float64] // 受控滚动偏移（虚拟滚动的窗口起点）
-    scrollTopVal  float64                // scrollTop 的非响应式镜像：供 effect 读而不订阅（避免跟随回环）
-    charWidth     Signal.Signal[float64]
-    wideWidth     Signal.Signal[float64]
-    caretSettled  Signal.Signal[bool]
+    sig cursorLine    int
+    sig cursorCol     int
+    sig selAnchorLine int
+    sig selAnchorCol  int
+    sig focused       bool
+    sig lineCount     int
+    sig scrollTop     float64 // 受控滚动偏移（虚拟滚动的窗口起点）
+    scrollTopVal  float64     // scrollTop 的非响应式镜像：供 effect 读而不订阅（避免跟随回环）
+    sig charWidth     float64
+    sig wideWidth     float64
+    sig caretSettled  bool
 
     rowVers *Signal.Vec[int] // 每行的独立版本信号（细粒度订阅）
     undoStack []editSnapshot
@@ -71,19 +70,19 @@ func NewEditorState(source string) *EditorState {
     vers := make([]int, 24)
     lc := Rope.Of(source).LineCount()
     st := &EditorState{
-        sourceCode:    Signal.New(source),
+        sourceCode:    source,
         doc:           Rope.Of(source),
-        cursorLine:    Signal.New(0),
-        cursorCol:     Signal.New(0),
-        selAnchorLine: Signal.New(0),
-        selAnchorCol:  Signal.New(0),
-        focused:       Signal.New(false),
-        lineCount:     Signal.New(lc),
-        scrollTop:     Signal.New(0.0),
-        charWidth:     Signal.New(7.83),
-        wideWidth:     Signal.New(13.02),
-        caretSettled:  Signal.New(true),
-        rowVers:       Signal.NewVec(vers),
+        cursorLine:    0,
+        cursorCol:     0,
+        selAnchorLine: 0,
+        selAnchorCol:  0,
+        focused:       false,
+        lineCount:     lc,
+        scrollTop:     0.0,
+        charWidth:     7.83,
+        wideWidth:     13.02,
+        caretSettled:  true,
+        rowVers:       Signal.newVec(vers),
     }
     // 惰性解析：不再全文 tokenize。缓存切片按行数预留（nil 元素 = 该行未解析），
     // 首屏 O(1)；行进入可见窗口时由 lineText/lineCodeGradient 现场解析并缓存。
@@ -408,7 +407,7 @@ func (s *EditorState) deleteSelectionInner() {
     fl, fc := s.selFrom()
     tl, tc := s.selTo()
     nr := ropeDeleteRange(s.doc, fl, fc, tl, tc)
-    Signal.Batch(func() {
+    Signal.batch(() => {
         s.applyRope(nr)
         s.cursorLine(fl); s.cursorCol(fc); s.selAnchorLine(fl); s.selAnchorCol(fc)
     })
@@ -442,7 +441,7 @@ func (s *EditorState) Undo() {
     if len(s.undoStack) == 0 { return }
     n := len(s.undoStack); st := s.undoStack[n-1]; s.undoStack = s.undoStack[:n-1]
     s.redoStack = append(s.redoStack, s.snapshot())
-    Signal.Batch(func() { s.restore(st) })
+    Signal.batch(() => { s.restore(st) })
 }
 
 // Redo 重做一步；无重做历史时什么也不做。
@@ -450,7 +449,7 @@ func (s *EditorState) Redo() {
     if len(s.redoStack) == 0 { return }
     n := len(s.redoStack); st := s.redoStack[n-1]; s.redoStack = s.redoStack[:n-1]
     s.undoStack = append(s.undoStack, s.snapshot())
-    Signal.Batch(func() { s.restore(st) })
+    Signal.batch(() => { s.restore(st) })
 }
 
 // ---- 包级编辑命令（装配层收到键盘事件后调用）----
@@ -463,7 +462,7 @@ func (s *EditorState) Insert(v string) {
         r = ropeDeleteRange(r, fl, fc, tl, tc); ln = fl; col = fc
     }
     nr, c := ropeInsertText(r, ln, col, v)
-    Signal.Batch(func() {
+    Signal.batch(() => {
         s.applyRope(nr)
         s.cursorLine(ln); s.cursorCol(c); s.selAnchorLine(ln); s.selAnchorCol(c); s.focused(true)
     })
@@ -473,7 +472,7 @@ func (s *EditorState) Backspace() {
     s.pushUndo()
     if s.HasSelection() { s.deleteSelectionInner(); return }
     nr, ln, c := ropeBackspaceAt(s.doc, s.cursorLine(), s.cursorCol())
-    Signal.Batch(func() {
+    Signal.batch(() => {
         s.applyRope(nr)
         s.cursorLine(ln); s.cursorCol(c); s.selAnchorLine(ln); s.selAnchorCol(c)
     })
@@ -487,7 +486,7 @@ func (s *EditorState) Newline() {
         r = ropeDeleteRange(r, fl, fc, tl, tc); ln = fl; col = fc
     }
     nr, nl, c := ropeNewlineAt(r, ln, col)
-    Signal.Batch(func() {
+    Signal.batch(() => {
         s.applyRope(nr)
         s.cursorLine(nl); s.cursorCol(c); s.selAnchorLine(nl); s.selAnchorCol(c)
     })
@@ -507,7 +506,7 @@ func (s *EditorState) moveCursorRel(dln int, dcol int) {
 
 // Move 方向移动：有选区时先折叠再移动（左/上收到选区起点，右/下放到终点）。
 func (s *EditorState) Move(dln int, dcol int) {
-    Signal.Batch(func() {
+    Signal.batch(() => {
         if s.HasSelection() {
             fl, fc := s.selFrom(); tl, tc := s.selTo()
             if dln < 0 || (dln == 0 && dcol < 0) { s.cursorLine(fl); s.cursorCol(fc) } else { s.cursorLine(tl); s.cursorCol(tc) }
@@ -521,7 +520,7 @@ func (s *EditorState) Move(dln int, dcol int) {
 // MoveEx 带 Shift 的方向移动：锚点不动扩展选区。
 func (s *EditorState) MoveEx(dln int, dcol int, shift bool) {
     if !shift { s.Move(dln, dcol); return }
-    Signal.Batch(func() {
+    Signal.batch(() => {
         if !s.HasSelection() { s.selAnchorLine(s.cursorLine()); s.selAnchorCol(s.cursorCol()) }
         s.moveCursorRel(dln, dcol)
     })
@@ -530,7 +529,7 @@ func (s *EditorState) MoveEx(dln int, dcol int, shift bool) {
 // SetText 整体替换文本（切换示例用）。
 func (s *EditorState) SetText(v string) {
     s.pushUndo()
-    Signal.Batch(func() {
+    Signal.batch(() => {
         s.setSource(v)
         l, c := s.clampLineCol(s.cursorLine(), s.cursorCol())
         s.cursorLine(l); s.cursorCol(c); s.selAnchorLine(l); s.selAnchorCol(c)
@@ -539,7 +538,7 @@ func (s *EditorState) SetText(v string) {
 
 // Home 一次性把光标归位。
 func (s *EditorState) Home() {
-    Signal.Batch(func() {
+    Signal.batch(() => {
         s.cursorLine(0); s.cursorCol(0); s.selAnchorLine(0); s.selAnchorCol(0)
     })
 }
@@ -556,7 +555,7 @@ func (s *EditorState) clampLineCol(ln int, col int) (int, int) {
 
 // SetCursor 把光标定位到指定行/列，并折叠选区。
 func (s *EditorState) SetCursor(ln int, col int) {
-    Signal.Batch(func() {
+    Signal.batch(() => {
         l, c := s.clampLineCol(ln, col)
         s.cursorLine(l); s.cursorCol(c); s.selAnchorLine(l); s.selAnchorCol(c); s.focused(true)
     })
@@ -590,12 +589,12 @@ func firstNonSpace(rs []rune) int {
 
 // ClearSelection 折叠选区到光标处。
 func (s *EditorState) ClearSelection() {
-    Signal.Batch(func() { s.selAnchorLine(s.cursorLine()); s.selAnchorCol(s.cursorCol()) })
+    Signal.batch(() => { s.selAnchorLine(s.cursorLine()); s.selAnchorCol(s.cursorCol()) })
 }
 
 // SetSelect 拖拽/程序式定位：锚点与光标同时落到 (ln, col)。
 func (s *EditorState) SetSelect(ln int, col int) {
-    Signal.Batch(func() {
+    Signal.batch(() => {
         l, c := s.clampLineCol(ln, col)
         s.cursorLine(l); s.cursorCol(c); s.selAnchorLine(l); s.selAnchorCol(c); s.focused(true)
     })
@@ -603,7 +602,7 @@ func (s *EditorState) SetSelect(ln int, col int) {
 
 // ExtendTo 拖拽移动 / Shift+点击：只移动光标，锚点保持原位。
 func (s *EditorState) ExtendTo(ln int, col int) {
-    Signal.Batch(func() {
+    Signal.batch(() => {
         l, c := s.clampLineCol(ln, col)
         s.cursorLine(l); s.cursorCol(c); s.focused(true)
     })
@@ -611,7 +610,7 @@ func (s *EditorState) ExtendTo(ln int, col int) {
 
 // MoveWord Ctrl/Alt+方向：按词移动光标；shift 时保留锚点扩展选区。
 func (s *EditorState) MoveWord(dir int, shift bool) {
-    Signal.Batch(func() {
+    Signal.batch(() => {
         if !shift {
             if s.HasSelection() {
                 fl, fc := s.selFrom(); tl, tc := s.selTo()
@@ -641,7 +640,7 @@ func (s *EditorState) MoveWord(dir int, shift bool) {
 
 // KeyHome Home 键：光标到首非空白、再到纯行首（两段式）；shift 扩展选区。
 func (s *EditorState) KeyHome(shift bool) {
-    Signal.Batch(func() {
+    Signal.batch(() => {
         if shift && !s.HasSelection() { s.selAnchorLine(s.cursorLine()); s.selAnchorCol(s.cursorCol()) }
         rs := []rune(s.lineText(s.cursorLine()))
         target := 0
@@ -654,7 +653,7 @@ func (s *EditorState) KeyHome(shift bool) {
 
 // KeyEnd End 键：光标到行尾；shift 扩展选区。
 func (s *EditorState) KeyEnd(shift bool) {
-    Signal.Batch(func() {
+    Signal.batch(() => {
         if shift && !s.HasSelection() { s.selAnchorLine(s.cursorLine()); s.selAnchorCol(s.cursorCol()) }
         s.cursorCol(len([]rune(s.lineText(s.cursorLine()))))
         if !shift { s.selAnchorLine(s.cursorLine()); s.selAnchorCol(s.cursorCol()) }
@@ -667,7 +666,7 @@ func (s *EditorState) DeleteForward() {
     if s.HasSelection() { s.deleteSelectionInner(); return }
     ln := s.cursorLine(); col := s.cursorCol()
     nr, c := ropeDeleteForward(s.doc, ln, col)
-    Signal.Batch(func() {
+    Signal.batch(() => {
         s.applyRope(nr)
         s.cursorLine(ln); s.cursorCol(c); s.selAnchorLine(ln); s.selAnchorCol(c)
     })
@@ -675,7 +674,7 @@ func (s *EditorState) DeleteForward() {
 
 // SelectAll 全选。
 func (s *EditorState) SelectAll() {
-    Signal.Batch(func() {
+    Signal.batch(() => {
         lc := s.doc.LineCount()
         last := lc - 1
         s.selAnchorLine(0); s.selAnchorCol(0)
@@ -686,7 +685,7 @@ func (s *EditorState) SelectAll() {
 
 // SelectWord 双击选词：锚点落词首、光标落词尾。
 func (s *EditorState) SelectWord(ln int, col int) {
-    Signal.Batch(func() {
+    Signal.batch(() => {
         l, c := s.clampLineCol(ln, col)
         s.cursorLine(l)
         start, end := wordRunAt(s.lineText(l), c)
@@ -697,7 +696,7 @@ func (s *EditorState) SelectWord(ln int, col int) {
 
 // SelectLine 三击选行：选中本行含行尾换行符（末行只选行内容）。
 func (s *EditorState) SelectLine(ln int) {
-    Signal.Batch(func() {
+    Signal.batch(() => {
         lc := s.doc.LineCount()
         l := ln
         if l < 0 { l = 0 }
@@ -741,21 +740,21 @@ func (s *EditorState) Paste(v string) {
     off := r.LineColToOffset(ln, col)
     nr := r.Insert(off, v)
     nl, nc := nr.OffsetToLineCol(off + runeLen(v))
-    Signal.Batch(func() {
+    Signal.batch(() => {
         s.applyRope(nr)
         s.cursorLine(nl); s.cursorCol(nc); s.selAnchorLine(nl); s.selAnchorCol(nc); s.focused(true)
     })
 }
 
 // Focus / Blur 焦点状态。
-func (s *EditorState) Focus()  { Signal.Batch(func() { s.focused(true) }) }
-func (s *EditorState) Blur()   { Signal.Batch(func() { s.focused(false) }) }
-func (s *EditorState) Settle() { Signal.Batch(func() { s.caretSettled(true) }) }
-func (s *EditorState) Idle()   { Signal.Batch(func() { s.caretSettled(false) }) }
+func (s *EditorState) Focus()  { Signal.batch(() => { s.focused(true) }) }
+func (s *EditorState) Blur()   { Signal.batch(() => { s.focused(false) }) }
+func (s *EditorState) Settle() { Signal.batch(() => { s.caretSettled(true) }) }
+func (s *EditorState) Idle()   { Signal.batch(() => { s.caretSettled(false) }) }
 
 // SetCharWidth / SetWideWidth 由装配层在启动时用 canvas 实测注入。
-func (s *EditorState) SetCharWidth(w float64)  { Signal.Batch(func() { s.charWidth(w) }) }
-func (s *EditorState) SetWideWidth(w float64) { Signal.Batch(func() { s.wideWidth(w) }) }
+func (s *EditorState) SetCharWidth(w float64)  { Signal.batch(() => { s.charWidth(w) }) }
+func (s *EditorState) SetWideWidth(w float64) { Signal.batch(() => { s.wideWidth(w) }) }
 
 // Line / Col / Text 读取当前光标与源码（非响应式，供 handler 一次性读取）。
 func (s *EditorState) Line() int    { return s.cursorLine() }
@@ -775,7 +774,7 @@ func (s *EditorState) caretTopVisible() float64 { return s.caretTop() - s.scroll
 func (s *EditorState) SetScrollTop(v float64) {
     if v < 0 { v = 0 }
     s.scrollTopVal = v // 先更新镜像，effect 读到的是最新值
-    Signal.Batch(func() { s.scrollTop(v) })
+    Signal.batch(() => { s.scrollTop(v) })
 }
 
 // ScrollBy 相对滚动（滚轮事件用：delta 为行数像素，向下为正）。
@@ -1084,7 +1083,7 @@ func (s *EditorState) setSourceFromRope(r *Rope.Rope, text string) {
     s.doc = r
     newLines := splitLines(text) // 仅为定位变化行；O(N) 但无 tokenize，行级 highlight 已惰性化
     changed := s.rebuildTokenCache(newLines)
-    Signal.Batch(func() {
+    Signal.batch(() => {
         // 先扩容 Vec（>64 自动切 pvector 大后端），再 bump——否则新增行的 bumpRow 越界被跳过。
         s.rowVers.SetLen(len(newLines))
         for _, i := range changed { s.bumpRow(i) }

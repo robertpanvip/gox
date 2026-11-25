@@ -1,6 +1,3 @@
-// gx:nocollections
-// 本文件为原生 Go 组件源码，经 gox build 转译为 icon.go。
-// gx:nocollections 声明跳过集合/裸对象字面量 desugar，保留手写 opcode 的原生 Go 语义。
 // Icon 是 GX 通用组件层的矢量图标组件。
 //
 // 与 Img/Canvas 同构：只产出一个后端无关的 gxscene 场景树节点（kind="canvas"），

@@ -1,6 +1,3 @@
-// gx:nocollections
-// 本文件为原生 Go 组件源码，经 gox build 转译为 widgets.go。
-// gx:nocollections 声明跳过集合/裸对象字面量 desugar，保留手写 opcode 的原生 Go 语义。
 // Package widgets 是 skia 后端预制的 GX 控件库。
 //
 // 它是一组「组件函数」——签名为 func(gxscene.Props) *gxscene.Instance，与 GX
@@ -33,7 +30,6 @@ import (
 	"time"
 
 	gxscene "github.com/robertpanvip/gox/runtime/scene"
-	"github.com/robertpanvip/gox/runtime/signal"
 )
 
 // ---- 预制主题（Apple HIG，默认深色，SetTheme 可整体切换）----
@@ -87,10 +83,11 @@ func toneColor(tone string) string {
 // ---------- 焦点与光标状态（全局，signal 驱动重绘）----------
 
 var (
-	focusToken = signal.new("")   // 当前聚焦输入框的 token；空串表示无焦点
-	blinkOn    = signal.new(true) // 光标是否可见
-	inputSeq   atomic.Uint64      // token 生成器
+	inputSeq atomic.Uint64 // token 生成器
 )
+
+sig focusToken = ""   // 当前聚焦输入框的 token；空串表示无焦点
+sig blinkOn    = true // 光标是否可见
 
 func init() {
 	// 光标闪烁：每 530ms 翻转一次。写 signal 会触发订阅了光标 getter 的 app
@@ -100,7 +97,7 @@ func init() {
 		t := time.newTicker(530 * time.millisecond)
 		defer t.Stop()
 		for range t.C {
-			blinkOn(!blinkOn())
+			blinkOn = !blinkOn
 		}
 	}()
 }
@@ -291,7 +288,7 @@ func Input(props gxscene.Props) *gxscene.Instance {
 		closeEl(),
 	)
 
-	focused := func() bool { return focusToken() == focusID }
+	focused := func() bool { return focusToken == focusID }
 	text := func() string {
 		v := value()
 		if v != "" {
@@ -323,7 +320,7 @@ func Input(props gxscene.Props) *gxscene.Instance {
 			return mutedOf()
 		},
 		func() any { // cursor bg
-			if focused() && blinkOn() {
+			if focused() && blinkOn {
 				return accentOf()
 			}
 			return inputBgOf()
@@ -370,23 +367,23 @@ func IsInput(n *gxscene.Node) bool {
 // 写焦点 id 会触发订阅了边框/光标 getter 的 effect 重绘。
 func Focus(n *gxscene.Node) {
 	if !IsInput(n) {
-		focusToken("")
+		focusToken = ""
 		return
 	}
-	focusToken(fmt.sprint(n.Props["gx-input-id"]))
+	focusToken = fmt.sprint(n.Props["gx-input-id"])
 }
 
 // Blur 清空焦点。
-func Blur() { focusToken("") }
+func Blur() { focusToken = "" }
 
 // Focused 返回当前是否有聚焦输入框。
-func Focused() bool { return focusToken() != "" }
+func Focused() bool { return focusToken != "" }
 
 // FocusedInputIn 从当前帧场景树里找回焦点输入框节点。
 // 用稳定的 gx-input-id 而非裸指针定位，嵌在动态插槽里的组件被重建后仍能命中；
 // GUI 层每次按键时调用它。
 func FocusedInputIn(root *gxscene.Node) *gxscene.Node {
-	id := focusToken()
+	id := focusToken
 	if id == "" {
 		return nil
 	}
