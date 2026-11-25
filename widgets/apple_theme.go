@@ -100,6 +100,12 @@ const (
 	RadiusPill    = "999"
 )
 
+// ---- hairline 描边宽度（Apple HIG）----
+// Apple 的 separator / hairline 本质是 0.5pt：@2x Retina 屏恰好落到 1 物理像素，
+// 是 macOS 分隔线、卡片与控件描边的标志性细节。三端均按逻辑点解析浮点宽度，
+// 因此统一用该 token，避免 1pt 描边比 Apple 原生粗一倍。
+const HairlineWidth = "0.5"
+
 // ---- 控件高度（macOS regular=28pt, small=24, large=32）----
 const (
 	ControlHeightSmall  = "24"

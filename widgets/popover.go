@@ -173,7 +173,7 @@ func Popover(props gxscene.Props) *gxscene.Instance {
 				{Code: gxscene.OpAttr, Key: "bg", Arg: ThemeMaterial},
 				{Code: gxscene.OpAttr, Key: "border-radius", Arg: RadiusCard},
 				{Code: gxscene.OpAttr, Key: "border", Arg: ThemeHairline},
-				{Code: gxscene.OpAttr, Key: "border-width", Arg: "1"},
+				{Code: gxscene.OpAttr, Key: "border-width", Arg: HairlineWidth},
 				{Code: gxscene.OpAttr, Key: "box-shadow", Arg: ShadowFloat},
 				{Code: gxscene.OpAttr, Key: "flex-direction", Arg: "column"},
 				{Code: gxscene.OpAttr, Key: "padding", Arg: "6"},

@@ -111,7 +111,7 @@ func FilePicker(props gxscene.Props) *gxscene.Instance {
 	ops := []gxscene.Op{
 		el("button"), attr("gx-role", "filepicker"),
 		attr("variant", "secondary"), attr("bg", ThemePanel),
-		attr("border", ThemeBorder), attr("border-width", "1"),
+		attr("border", ThemeBorder), attr("border-width", HairlineWidth),
 		attr("border-radius", RadiusControl), attr("padding", "10"),
 		attr("color", accent),
 	}

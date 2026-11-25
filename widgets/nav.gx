@@ -58,7 +58,7 @@ func Tabs(props gxscene.Props) *gxscene.Instance {
 	// 标签栏
 	ops = append(ops,
 		el("div"), attr("flex-direction", "row"), attr("gap", "2"),
-		attr("border", ThemeBorder), attr("border-width", "1"),
+		attr("border", ThemeBorder), attr("border-width", HairlineWidth),
 		attr("border-radius", RadiusControl), attr("padding", "3"), attr("bg", ThemePanel),
 		gxscene.Op{Code: gxscene.opFor, Slot: tabForSlot},
 		closeEl(),
@@ -227,7 +227,7 @@ func Segmented(props gxscene.Props) *gxscene.Instance {
 	ops := []gxscene.Op{
 		el("div"), attr("gx-role", "segmented"),
 		attr("flex-direction", "row"), attr("gap", "2"),
-		attr("border", ThemeBorder), attr("border-width", "1"),
+		attr("border", ThemeBorder), attr("border-width", HairlineWidth),
 		attr("border-radius", RadiusControl), attr("padding", "3"), attr("bg", ThemePanel),
 	}
 	if w := width(); w != "" {

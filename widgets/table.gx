@@ -106,7 +106,7 @@ func Table(props gxscene.Props) *gxscene.Instance {
 			attr("gx-row-index", strconv.itoa(index)),
 			attr("flex-direction", "row"), attr("align-items", "center"),
 			attr("height", fmt.sprintf("%g", rowHeight)),
-			attr("border-bottom", ThemeBorder2), attr("border-width", "1"),
+			attr("border-bottom", ThemeBorder2), attr("border-width", HairlineWidth),
 		}
 		if striped() && index%2 == 1 {
 			// 斑马纹：极淡分层（tertiarySystemBackground），不抢主文字层级。
@@ -154,7 +154,7 @@ func Table(props gxscene.Props) *gxscene.Instance {
 		// 让表头底与斑马纹都被圆角裁切，避免在四角溢出方角。不套阴影，
 		// 外层 group 已提供卡片层次。
 		attr("bg", ThemePanel), attr("border-radius", RadiusCard),
-		attr("border", ThemeBorder2), attr("border-width", "1"),
+		attr("border", ThemeBorder2), attr("border-width", HairlineWidth),
 		attr("overflow", "hidden"),
 	}
 	if w := width(); w != "" {
@@ -166,7 +166,7 @@ func Table(props gxscene.Props) *gxscene.Instance {
 		attr("flex-direction", "row"), attr("align-items", "center"),
 		attr("height", fmt.sprintf("%g", rowHeight)),
 		attr("bg", ThemeFill),
-		attr("border-bottom", ThemeBorder2), attr("border-width", "1"),
+		attr("border-bottom", ThemeBorder2), attr("border-width", HairlineWidth),
 		gxscene.Op{Code: gxscene.opFor, Slot: headSlot},
 		closeEl(),
 		gxscene.Op{Code: gxscene.opComp, Arg: "TableBody", Slot: listSlot},

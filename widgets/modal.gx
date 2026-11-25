@@ -170,7 +170,7 @@ func Modal(props gxscene.Props) *gxscene.Instance {
 				{Code: gxscene.opAttr, Key: "bg", Arg: ThemeMaterial},
 				{Code: gxscene.opAttr, Key: "border-radius", Arg: RadiusModal},
 				{Code: gxscene.opAttr, Key: "border", Arg: ThemeHairline},
-				{Code: gxscene.opAttr, Key: "border-width", Arg: "1"},
+				{Code: gxscene.opAttr, Key: "border-width", Arg: HairlineWidth},
 				{Code: gxscene.opAttr, Key: "box-shadow", Arg: ShadowModal},
 				{Code: gxscene.opAttr, Key: "padding", Arg: Space6},
 				{Code: gxscene.opAttr, Key: "flex-direction", Arg: "column"},

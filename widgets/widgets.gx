@@ -173,7 +173,7 @@ func Button(props gxscene.Props) *gxscene.Instance {
 		el("button"),
 		// macOS 控件高 28pt：固定 height + 对称 padding，紧凑对齐 HIG。
 		attr("padding", "7"), attr("border-radius", RadiusSmall),
-		attr("border-width", "1"), attr("font-size", FontBody), attr("weight", "bold"),
+		attr("border-width", HairlineWidth), attr("font-size", FontBody), attr("weight", "bold"),
 		// icon + label 横向并排：显式 row，否则默认 column 会把图标与文字竖排。
 		attr("flex-direction", "row"), attr("gap", "5"),
 		attr("align-items", "center"), attr("justify-content", "center"),
@@ -273,7 +273,7 @@ func Input(props gxscene.Props) *gxscene.Instance {
 		attr("gx-input-id", focusID),
 		attr("border-radius", RadiusSmall),
 		// macOS 输入框高 28pt：固定 height + padding，13px 文字自然居中。
-		attr("border-width", "1"), attr("padding", "6"), attr("height", ControlHeight),
+		attr("border-width", HairlineWidth), attr("padding", "6"), attr("height", ControlHeight),
 		attr("flex-direction", "row"), attr("align-items", "center"), attr("width", w),
 		dynAttr("bg", bgSlot), dynAttr("border", borderSlot),
 		dynAttr("value", valueSlot),

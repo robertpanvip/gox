@@ -175,7 +175,7 @@ func Stat(props gxscene.Props) *gxscene.Instance {
 	hasDelta := delta() != ""
 	ops := []gxscene.Op{
 		el("div"), attr("gx-role", "stat"),
-		attr("bg", ThemePanel), attr("border", ThemeBorder), attr("border-width", "1"),
+		attr("bg", ThemePanel), attr("border", ThemeBorder), attr("border-width", HairlineWidth),
 		attr("border-radius", RadiusCard), attr("box-shadow", ShadowCard), attr("padding", "14"),
 		attr("flex-direction", "column"), attr("gap", "4"),
 	}
@@ -227,7 +227,7 @@ func Tag(props gxscene.Props) *gxscene.Instance {
 		attr("border-radius", "6"), attr("padding", "4"),
 		attr("font-size", "12"), attr("weight", "bold"),
 		dynAttr("bg", bgSlot), dynAttr("color", colorSlot),
-		dynAttr("border", borderSlot), attr("border-width", "1"),
+		dynAttr("border", borderSlot), attr("border-width", HairlineWidth),
 		dynChild(textSlot), closeEl(),
 	}
 	return gxscene.render(gxscene.Template{Ops: ops, N: nSlots},

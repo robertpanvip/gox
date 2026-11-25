@@ -118,7 +118,7 @@ func Tooltip(props gxscene.Props) *gxscene.Instance {
 				attr("bg", ThemeMaterial),
 				attr("border-radius", RadiusSmall),
 				attr("border", ThemeHairline),
-				attr("border-width", "1"),
+				attr("border-width", HairlineWidth),
 				attr("box-shadow", ShadowFloat),
 				attr("padding", "6"),
 				attr("flex-direction", "column"),

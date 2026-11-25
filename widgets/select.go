@@ -87,7 +87,7 @@ func selectTrigger(value func() string, options []Option, placeholder, width, to
 	ops := []gxscene.Op{
 		el("div"), attr("gx-role", "select-trigger"),
 		attr("width", width), attr("bg", ThemeInputBg),
-		attr("border", ThemeBorder), attr("border-width", "1"),
+		attr("border", ThemeBorder), attr("border-width", HairlineWidth),
 		attr("border-radius", RadiusControl), attr("padding", "6"), attr("height", ControlHeight),
 		attr("flex-direction", "row"), attr("align-items", "center"),
 		attr("justify-content", "space-between"), attr("gap", "8"), attr("opacity", "1"),
