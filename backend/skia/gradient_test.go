@@ -94,12 +94,14 @@ func TestGradientCacheConsistency(t *testing.T) {
 	}
 }
 
-func TestGradientBgSkipsPlainTextChild(t *testing.T) {
-	// 集成：div 的 bg 为渐变 + 纯文本子节点 → 应走 rich-text 彩色绘制，纯文本子节点被跳过。
+func TestGradientTextSkipsPlainTextChild(t *testing.T) {
+	// 集成：带 gradient-text 标记的节点 + 渐变 bg + 纯文本子节点
+	// → 走 rich-text 彩色绘制，纯文本子节点被跳过（编辑器代码行）。
 	grad := "linear-gradient(90deg, #c586c0 0ch 4ch, #dcdcaa 4ch 8ch)"
 	inst := gxscene.Render(gxscene.Template{Ops: []gxscene.Op{
 		{Code: gxscene.OpElem, Arg: "span"},
 		{Code: gxscene.OpDynAttr, Key: "bg", Slot: 0},
+		{Code: gxscene.OpAttr, Key: "gradient-text", Arg: "1"},
 		{Code: gxscene.OpAttr, Key: "font-size", Arg: "13"},
 		{Code: gxscene.OpAttr, Key: "color", Arg: "#d4d4d4"},
 		{Code: gxscene.OpChildText, Arg: "func main"}, // 纯文本子节点：应被跳过
@@ -121,5 +123,55 @@ func TestGradientBgSkipsPlainTextChild(t *testing.T) {
 	}
 	if got := log.Find("text", "func main"); got != 0 {
 		t.Fatalf("纯文本子节点应被跳过, got=%d log=%v", got, log)
+	}
+}
+
+func TestGradientBackgroundOnPlainDiv(t *testing.T) {
+	// 通用能力：普通 div 的 bg=linear-gradient 画成渐变背景，文本子节点正常绘制。
+	grad := "linear-gradient(90deg, #ff0000 0%, #0000ff 100%)"
+	inst := gxscene.Render(gxscene.Template{Ops: []gxscene.Op{
+		{Code: gxscene.OpElem, Arg: "div"},
+		{Code: gxscene.OpDynAttr, Key: "bg", Slot: 0},
+		{Code: gxscene.OpAttr, Key: "width", Arg: "100"},
+		{Code: gxscene.OpAttr, Key: "height", Arg: "30"},
+		{Code: gxscene.OpChildText, Arg: "hello"}, // 普通文本：应正常绘制
+		{Code: gxscene.OpClose},
+	}, N: 1}, func() any { return grad })
+	defer inst.Dispose()
+
+	w := NewWindow()
+	if err := w.Open(gxapp.WindowConfig{Width: 200, Height: 60}); err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+	if err := w.Draw(inst.Root()); err != nil {
+		t.Fatalf("Draw: %v", err)
+	}
+	log := w.DrawLog()
+	if got := log.Find("gradient-bg", ""); got < 1 {
+		t.Fatalf("应有渐变背景绘制记录, log=%v", log)
+	}
+	if got := log.Find("text", "hello"); got != 1 {
+		t.Fatalf("普通 div 的文本子节点应正常绘制, got=%d log=%v", got, log)
+	}
+}
+
+func TestParseLinearGradientGeneral(t *testing.T) {
+	g := parseLinearGradient("linear-gradient(90deg, #ff0000 0%, #0000ff 100%)")
+	if g == nil || g.angle != 90 || len(g.stops) != 2 {
+		t.Fatalf("解析失败: %+v", g)
+	}
+	if g.stops[0].color != "#ff0000" || g.stops[1].color != "#0000ff" {
+		t.Errorf("色标错误: %+v", g.stops)
+	}
+	// 平滑插值中点应为紫红色系（R≈B≈128）。
+	mid := sampleGradient(g, 0.5, 100)
+	r, b := mid>>16&0xff, mid&0xff
+	if r < 110 || r > 145 || b < 110 || b > 145 {
+		t.Errorf("中点插值应接近 #800080, got #%08x", mid)
+	}
+	// 方向关键字。
+	if g2 := parseLinearGradient("linear-gradient(to right, red, blue)"); g2 == nil || g2.angle != 90 {
+		t.Errorf("to right 应解析为 90deg, got %+v", g2)
 	}
 }

@@ -262,9 +262,10 @@ func (p *painter) paintChildrenClipped(n *gxscene.Node, box layoutBox, eff textS
 		p.canvas.ClipRect(clip, sk.ClipOpIntersect, false)
 	}
 	for _, c := range n.Children {
-		// 父节点带 rich-text 或 CSS 渐变背景时，其分段着色已由 paintElement 一次绘制；
+		// 父节点带 rich-text 或用渐变给文字着色时，分段着色已由 paintElement 一次绘制；
 		// 跳过纯文本子节点，避免普通单色文字覆盖在上面（同时抵消正确着色）。
-		if (isRichText(n) || gradientBg(n) != "") && (c.Kind == "#text" || c.Type == gxscene.NodeText) {
+		// 普通渐变背景节点不跳过——其文本子节点应正常绘制在渐变背景之上。
+		if (isRichText(n) || isGradientText(n)) && (c.Kind == "#text" || c.Type == gxscene.NodeText) {
 			continue
 		}
 		if overlay {
@@ -302,6 +303,21 @@ func gradientBg(n *gxscene.Node) string {
 	return ""
 }
 
+// isGradientText 报告节点是否用渐变给文字着色（编辑器代码行）。
+// 这类节点的 bg=linear-gradient 是逐 token 颜色编码，映射到文字而非画成背景。
+// 用显式的 gradient-text 属性标记，避免与普通渐变背景 div 混淆。
+func isGradientText(n *gxscene.Node) bool {
+	if n == nil {
+		return false
+	}
+	v, ok := n.Props["gradient-text"]
+	if !ok {
+		return false
+	}
+	s, _ := v.(string)
+	return s == "1" || s == "true"
+}
+
 // nodeText 返回节点下第一个非空文本子节点的文本，作为渐变着色的落笔内容。
 func nodeText(n *gxscene.Node) string {
 	if n == nil {
@@ -337,6 +353,15 @@ func (p *painter) paintElement(n *gxscene.Node, box layoutBox) {
 			}
 			paint.Delete()
 		}
+		// 通用 CSS 渐变背景：所有 div 的 bg=linear-gradient(...) 都在此绘制。
+		// 带 gradient-text 标记的节点（编辑器代码行）例外——它们的渐变映射到文字，
+		// 不在背景绘制，交由下方着色逻辑处理。
+		if grad := gradientBg(n); grad != "" && !isGradientText(n) {
+			if lg := parseLinearGradient(grad); lg != nil {
+				p.paintGradientBackground(lg, box, s.radius)
+				*p.log = append(*p.log, DrawOp{Kind: "gradient-bg", Name: n.Kind, X: box.X, Y: box.Y, W: box.W, H: box.H, ARGB: s.bg})
+			}
+		}
 		// img 原语：<img src="..."> 在背景之后、描边之前绘制。src 由 runtime/imgutil
 		// 解析（data URI / 本地路径 / http），object-fit 控制映射，border-radius 裁剪。
 		// 解码结果按 src 缓存，响应式重绘不重复解码（见 image.go）。
@@ -364,7 +389,9 @@ func (p *painter) paintElement(n *gxscene.Node, box layoutBox) {
 			st := textStyle{color: s.color, fontSize: s.fontSize, bold: s.bold}
 			p.paintRichText(n, rt, box, st)
 			coloredText = rt.Plain()
-		} else if grad := gradientBg(n); grad != "" {
+		} else if grad := gradientBg(n); grad != "" && isGradientText(n) {
+			// 仅编辑器代码行（gradient-text 标记）把渐变映射到文字；
+			// 普通 div 的渐变已在上方画成背景，此处不处理。
 			if rt := cachedGradientRich(grad, nodeText(n)); len(rt) > 0 {
 				st := textStyle{color: s.color, fontSize: s.fontSize, bold: s.bold}
 				p.paintRichText(n, rt, box, st)

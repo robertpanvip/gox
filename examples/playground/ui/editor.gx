@@ -1295,6 +1295,7 @@ func lineView(idx int) *gxscene.Instance {
         <span
             class="gx-code-line"
             data-code={lineText(idx)}
+            gradient-text="1"
             white-space="pre"
             font-size="13"
             height="22"
