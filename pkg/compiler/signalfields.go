@@ -82,6 +82,22 @@ type signalFieldDecl struct {
 	typeTo   int    // 类型结束下标（开区间）
 }
 
+// skipTypeParams 跳过类型名之后可选的泛型参数列表 `[T any, U comparable]`，
+// 返回其后第一个有效 token 下标（通常指向 `struct`）。非泛型声明原样返回
+// nextSig(from)。这样 `type Box[T any] struct{...}` 与 `type Box struct{...}`
+// 都能被 sig 字段收集逻辑识别。
+func skipTypeParams(toks []Token, from int) int {
+	k := nextSig(toks, from)
+	if k < 0 || toks[k].Text != "[" {
+		return k
+	}
+	closeIdx := matchDelimSkipSpace(toks, k, "[", "]")
+	if closeIdx <= k {
+		return k // 未闭合：交下游 Go 报错，不在此处吞掉
+	}
+	return nextSig(toks, closeIdx+1)
+}
+
 // collectSignalFieldDecls 扫描原始 token 流里的 `type X struct { ... }`，
 // 找出其中形如 `sig name TYPE` 的字段声明。
 //
@@ -98,7 +114,7 @@ func collectSignalFieldDecls(toks []Token) []signalFieldDecl {
 			continue
 		}
 		typeName := toks[j].Text
-		k := nextSig(toks, j+1)
+		k := skipTypeParams(toks, j+1) // 兼容 `type X[T any] struct{...}`
 		if k < 0 || !toks[k].is("struct") {
 			continue
 		}
@@ -174,7 +190,7 @@ func buildSignalFieldTable(toks []Token, decls []signalFieldDecl) signalFieldTab
 		if tn < 0 || toks[tn].Kind != Ident {
 			continue
 		}
-		sk := nextSig(toks, tn+1)
+		sk := skipTypeParams(toks, tn+1) // 兼容 `type X[T any] struct{...}`
 		if sk < 0 || !toks[sk].is("struct") {
 			continue
 		}
@@ -219,21 +235,41 @@ func buildSignalFieldTable(toks []Token, decls []signalFieldDecl) signalFieldTab
 // hasSignalFields 报告表里是否有任何 sig 字段（供管线早退）。
 func (t signalFieldTable) hasSignalFields() bool { return len(t.sig) > 0 }
 
+// lookupType 归一化类型名用于字段表查询：形如 `Box[int]` / `pkg.Box[T]` 的
+// 泛型实例化类型，剥掉方括号参数段与包限定，回退到声明时的裸类型名 `Box`。
+// 先查原始 typeName（精确命中优先），再查归一化名，避免误伤恰好同名的其它包类型。
+func lookupType[K any](m map[string]map[string]K, typeName string) map[string]K {
+	if v, ok := m[typeName]; ok {
+		return v
+	}
+	base := typeName
+	if i := strings.Index(base, "["); i >= 0 {
+		base = base[:i]
+	}
+	if j := strings.LastIndex(base, "."); j >= 0 {
+		base = base[j+1:]
+	}
+	if base != typeName {
+		return m[base]
+	}
+	return nil
+}
+
 // has 判断 typeName 的 field 是否是 sig 字段。
 func (t signalFieldTable) has(typeName, field string) bool {
-	_, ok := t.sig[typeName][field]
+	_, ok := lookupType(t.sig, typeName)[field]
 	return ok
 }
 
 // fieldType 返回 typeName.field 的字段类型文本；非 sig 字段返回空串。
 func (t signalFieldTable) fieldType(typeName, field string) string {
-	return t.sig[typeName][field]
+	return lookupType(t.sig, typeName)[field]
 }
 
 // fieldTypeOf 返回任意字段（含普通字段）的声明类型文本，供链式 selector 沿链
 // 传播 receiver 类型；字段或类型未知返回空串。
 func (t signalFieldTable) fieldTypeOf(typeName, field string) string {
-	return t.all[typeName][field]
+	return lookupType(t.all, typeName)[field]
 }
 
 // downgradeSignalFields 把 `sig name TYPE` 降级为 `name Signal.Signal[TYPE]`。

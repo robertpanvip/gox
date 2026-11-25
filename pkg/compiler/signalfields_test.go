@@ -1322,3 +1322,23 @@ func main() {
 	// 规则 1（写）：普通字段写仍是标准 Go 赋值，sig 字段写是调用式。
 	containsAll(t, got, `r.v = "x"`, `l.plain = "z"`)
 }
+
+// 回归：泛型 struct `type Box[T any] struct { sig value T }` 的 sig 字段必须
+// 被识别并降级。修复前 collectSignalFieldDecls/buildSignalFieldTable 要求类型名
+// 后紧跟 struct，被 `[T any]` 打断，导致 sig 漏给局部逻辑生成非法 `var`。
+func TestGenericStructSigField(t *testing.T) {
+	src := `package main
+type Box[T any] struct {
+    sig value T
+}
+func NewBox[T any](v T) *Box[T] { return &Box[T]{value: v} }
+func read(b *Box[int]) int { return b.value }
+`
+	got := compileOK(t, "genericsig.gx", src)
+	containsAll(t, got,
+		`value Signal.Signal[T]`,          // sig 字段降级（泛型参数保留）
+		`return &Box[T]{value: v}`,         // 构造字面量不被误包装
+		`return b.value()`,                 // 泛型 receiver 的 sig 字段读补 ()
+		`import Signal "github.com/robertpanvip/gox/runtime/signal"`,
+	)
+}

@@ -806,9 +806,9 @@ func (s *EditorState) ensureCursorVisible() {
 // 光标移出视口时自动滚动。它不读 scrollTop()（只读镜像 scrollTopVal），
 // 故 on-scroll 的写回不会触发它，无回环。
 func (s *EditorState) installCursorFollow() {
-    Signal.Effect(func() {
-        _ = s.cursorLine()
-        _ = s.lineCount()
+    Signal.effect(() => {
+        _ = s.cursorLine
+        _ = s.lineCount
         s.ensureCursorVisible()
     })
 }

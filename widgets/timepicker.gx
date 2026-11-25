@@ -24,7 +24,7 @@ import (
 	"sync/atomic"
 
 	gxscene "github.com/robertpanvip/gox/runtime/scene"
-	"github.com/robertpanvip/gox/runtime/signal"
+	Signal "github.com/robertpanvip/gox/runtime/signal"
 )
 
 var timePickerSeq atomic.Uint64
@@ -59,7 +59,7 @@ func TimePicker(props gxscene.Props) *gxscene.Instance {
 	}
 
 	// 当前打开的段（段号+1；0 表示全关）——用 signal 驱动 Branch 切换菜单内容。
-	openSeg := signal.new(0)
+	openSeg := Signal.new(0)
 
 	// 解析当前值成时/分/秒（无效片段返回 -1，显示 placeholder）。
 	parse := func() [3]int {
@@ -191,7 +191,7 @@ func TimePicker(props gxscene.Props) *gxscene.Instance {
 // timeSegmentTrigger 一个段触发器：点击时把 openSeg 设为该段(+1)或关闭(0)。
 // 视觉对齐 macOS NSDatePicker：输入底 + 细描边 + 常规字重数字 + 控件高度，
 // 当前打开的段用强调色描边强调；不像按钮那样用粗重填充块和放大粗体。
-func timeSegmentTrigger(seg timeSegment, text func() string, width, tone string, openSeg signal.Signal[int], uid string) *gxscene.Instance {
+func timeSegmentTrigger(seg timeSegment, text func() string, width, tone string, openSeg Signal.Signal[int], uid string) *gxscene.Instance {
 	const (
 		clickSlot = iota
 		textSlot
@@ -242,7 +242,7 @@ func timeSegmentTrigger(seg timeSegment, text func() string, width, tone string,
 }
 
 // timePickerMenu 根据 openSeg 生成选项浮层。selector = openSeg（0 关闭）。
-func timePickerMenu(openSeg signal.Signal[int], onChange func() gxscene.Handler, emit func(gxscene.EventContext, timeSegment, int), hour12, withSeconds bool, tone, width string) *gxscene.Branch {
+func timePickerMenu(openSeg Signal.Signal[int], onChange func() gxscene.Handler, emit func(gxscene.EventContext, timeSegment, int), hour12, withSeconds bool, tone, width string) *gxscene.Branch {
 	return gxscene.newBranch(
 		func() int { return openSeg() },
 		// [0] 关闭

@@ -69,10 +69,34 @@ func checkNoRawSignalAPI(toks []Token, b *Bindings) error {
 		if name < 0 || toks[name].Kind != Ident || !startsUpper(toks[name].Text) {
 			continue
 		}
+		// 类型位置放行：Signal.Signal[T] / Signal.Owner / Signal.Vec[T] 等是
+		// signal 包的「类型名」而非底层构造器。它们在函数签名、字段类型、
+		// 类型断言里合法出现（尤其泛型组件如 Context[T] 的 Signal.Signal[T]）。
+		// 判据：成员名是 signal 包已知导出类型，且其后不是调用括号 '('。
+		if isSignalTypeName(toks[name].Text) && !isCallParen(toks, name+1) {
+			continue
+		}
 		return fmt.Errorf("%d:%d: 不允许直接调用底层 API Signal.%s；源信号请用 `sig n = v`，派生用 `Signal.computed(() => expr)`，副作用用 `Signal.effect(() => {...})`",
 			toks[name].Pos.Line, toks[name].Pos.Col, toks[name].Text)
 	}
 	return nil
+}
+
+// isSignalTypeName 判断标识符是否为 runtime/signal 包的导出类型名。
+// 这些标识符出现在类型位置（Signal.Signal[T]、Signal.Owner、Signal.Vec[T]）时
+// 是合法的类型引用，不应被当作底层构造器 API 拦截。
+func isSignalTypeName(name string) bool {
+	switch name {
+	case "Signal", "Owner", "Vec", "Computation", "Runtime", "TaskPoster", "GlobalLease":
+		return true
+	}
+	return false
+}
+
+// isCallParen 判断 from 之后第一个有效 token 是否为调用括号 '('。
+func isCallParen(toks []Token, from int) bool {
+	k := nextSig(toks, from)
+	return k >= 0 && toks[k].Text == "("
 }
 
 // startsUpper 判断标识符是否以大写字母开头，用于区分底层 API（New/Computed/...）

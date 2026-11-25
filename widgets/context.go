@@ -19,8 +19,6 @@ import (
 )
 
 // Context 是一个带类型的响应式上下文句柄。零值不可用，请用 NewContext 创建。
-// 注：泛型 struct 的 sig 字段暂不受编译器支持（会生成无效 Go），故此处用
-// Signal.Signal[T] 类型字段 + Signal.new 语法糖显式构造，语义等价。
 type Context[T any] struct {
 	def Signal.Signal[T] // 无 Provider 时的默认值通道（Set 写它）
 }
@@ -60,7 +58,7 @@ func (c *Context[T]) Use() func() T {
 // Set 写入默认值通道，触发所有「不在 Provider 内」的 Use 消费者重绘。
 // 子树内有 Provider 时，请用 Provider 的 value getter 驱动更新——Provider 的
 // 值只由它自己决定（React 语义），Set 不会穿透覆盖子树。
-func (c *Context[T]) Set(v T) { c.def(v) }
+func (c *Context[T]) Set(v T) { c.def( v )}
 
 // Value 立即读取当前作用域的值（非响应式，供事件 handler 等一次性读取）。
 // 处于 Provider 子树内时读该 Provider 的值，否则读默认值。

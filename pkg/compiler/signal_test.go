@@ -483,3 +483,37 @@ func main() {
 		`import Signal "github.com/robertpanvip/gox/runtime/signal"`,
 	)
 }
+
+// 回归：signal 包「类型名」出现在类型位置（函数参数/返回值/字段/断言）时，
+// checkNoRawSignalAPI 不得误判为底层构造器。Context[T] 等泛型组件需要在
+// 签名里写 `Signal.Signal[T]`。修复前该写法会被误拦，逼得组件只能用小写别名。
+func TestNoRawSignalAPITypeNamesAllowed(t *testing.T) {
+	cases := []struct {
+		name, src string
+	}{
+		{"param-generic", "package main\nimport Signal \"github.com/robertpanvip/gox/runtime/signal\"\nfunc f(s Signal.Signal[int]) int { return s() }"},
+		{"return-generic", "package main\nimport Signal \"github.com/robertpanvip/gox/runtime/signal\"\nfunc f() Signal.Signal[int] { return Signal.New(0) }"},
+		{"param-plain-alias", "package main\nimport \"github.com/robertpanvip/gox/runtime/signal\"\nfunc f(s Signal.Signal[int]) int { return s() }"},
+		{"owner-type", "package main\nimport Signal \"github.com/robertpanvip/gox/runtime/signal\"\nfunc f(o Signal.Owner) {}"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := compileOK(t, "typename.gx", c.src)
+			if !strings.Contains(got, "Signal.Signal[") && !strings.Contains(got, "Signal.Owner") {
+				t.Errorf("类型引用应保留:\n%s", got)
+			}
+		})
+	}
+}
+
+// 回归：白名单类型名若被当作函数调用（后跟 '('）仍须拦截，不能因白名单放行
+// 而给底层构造器开后门。
+func TestNoRawSignalAPIWhitelistTypeCallStillForbidden(t *testing.T) {
+	_, err := Compile("typecall.gx", "package main\nimport \"github.com/robertpanvip/gox/runtime/signal\"\nfunc f() { Signal.Computation(0) }")
+	if err == nil {
+		t.Fatal("Signal.Computation(...) 作调用应被禁止")
+	}
+	if !strings.Contains(err.Error(), "不允许直接调用底层 API Signal.Computation") {
+		t.Errorf("错误信息应点名 Signal.Computation，got: %v", err)
+	}
+}
