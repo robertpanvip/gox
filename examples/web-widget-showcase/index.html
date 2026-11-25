@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>GX · Apple 风格组件库（Web）</title>
+  <style>
+    html, body { margin: 0; padding: 0; background: #f2f2f7; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif; }
+    /* GX 场景树的根容器：Web 后端把 style 属性透传到 DOM，flex 布局由后端处理。 */
+    #app { width: 900px; margin: 0 auto; }
+    #app > div { display: flex; }
+    body[data-theme="dark"] { background: #000; }
+    #loading { position: fixed; inset: 0; display: grid; place-items: center;
+               font: 13px -apple-system, system-ui, sans-serif; color: #6e6e73; }
+    #loading[data-state="error"] { color: #ff3b30; }
+  </style>
+</head>
+<body>
+  <div id="loading">正在加载 Apple 风格组件库（WebAssembly）…</div>
+  <div id="app"></div>
+  <script src="wasm_exec.js"></script>
+  <!-- 前端加载器为严格 TypeScript（tsconfig strict 全套），编译产物见 dist/main.js -->
+  <script type="module" src="dist/main.js"></script>
+</body>
+</html>

@@ -1,0 +1,13 @@
+{
+  "name": "gox-wasm-demo-frontend",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Strict TypeScript frontend loader for the gox WebAssembly backend demo.",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "tsc"
+  },
+  "devDependencies": {
+    "typescript": "7.0.2"
+  }
+}

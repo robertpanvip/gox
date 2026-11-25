@@ -185,6 +185,13 @@ func (d *jsDriver) SetAttr(e ElemID, key, value string) {
 		if value == "" {
 			el.v.Get("style").Call("removeProperty", cssName(key))
 		} else {
+			// GX 场景树用 flex-direction / gap / align-items 声明布局——Skia 端由
+			// 布局引擎直接消费；浏览器端这些 CSS 属性只在 display:flex 容器上生效。
+			// 因此任何 flex 意图属性出现时，同步把容器切成 flex，保持两端布局一致。
+			// 注意只在有值时设置，清属性不反向删除 display（避免误伤宿主自己的布局）。
+			if isFlexLayoutKey(key) {
+				el.v.Get("style").Call("setProperty", "display", "flex")
+			}
 			el.v.Get("style").Call("setProperty", cssName(key), cssValue(key, value))
 		}
 		return

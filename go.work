@@ -10,4 +10,5 @@ use (
 	./examples/playground
 	./examples/icon-gallery
 	./examples/widget-showcase
+	./examples/web-widget-showcase
 )

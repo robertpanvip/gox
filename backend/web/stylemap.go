@@ -53,6 +53,18 @@ var dimensionlessProps = map[string]bool{
 	"flex-grow": true, "flex-shrink": true, "line-height": true, "order": true,
 }
 
+// isFlexLayoutKey 判定一个 GX 样式属性是否表达了 flex 布局意图。
+// 浏览器只在 display:flex 容器上解释这些属性，故 js 驱动设置它们时需同步补
+// display:flex（见 dom_js.go SetAttr），否则 GX 场景树在 Web 上退化为块级堆叠。
+func isFlexLayoutKey(key string) bool {
+	switch strings.ToLower(key) {
+	case "flex-direction", "flex-wrap", "justify-content", "align-items",
+		"align-content", "gap", "row-gap", "column-gap", "flex-grow", "flex-shrink":
+		return true
+	}
+	return false
+}
+
 // cssValue 把样式值规整为 CSS 值：纯数字的长度属性补 px；盒模型简写属性支持
 // 1~4 值逐边补单位；颜色/关键字原样。
 func cssValue(key, v string) string {
