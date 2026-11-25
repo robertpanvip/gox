@@ -24,16 +24,17 @@
        这里不再用 [style*="overflow"] 粗匹配覆盖——否则编辑器的
        overflow:hidden（裁掉隐藏行）会被强制成 auto 导致空行撑高。 */
     #app div { box-sizing: border-box; }
-    /* 编辑器逐 token 着色：GX 侧把颜色编码成 linear-gradient 背景，这里裁到文字上。 */
+    /* 编辑器逐 token 着色：GX 侧把颜色编码成 linear-gradient 背景，这里裁到文字上。
+       文字本身是 GX 场景的真实文本子节点（桌面 Skia 端也可见），Web 用
+       background-clip:text 把渐变裁到文本上；不再用 ::before attr(data-code)，
+       否则真文本节点与伪元素会显示两份。 */
     .gx-code-line { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
                     color: transparent !important; -webkit-background-clip: text !important;
                     background-clip: text !important; white-space: pre;
                     position: relative; z-index: 2; }
-    .gx-code-line::before { content: attr(data-code); }
     /* 列光标：GX 场景节点（两端共用），绝对定位在编辑器容器内随内容滚动。
        class 三态由 wasm 的 caretClass() getter 驱动：off 隐藏 / steady 常亮 / 默认闪烁。
        pointer-events:none 让点击穿透到下方代码行。 */
-    .gx-code-line::before { pointer-events: none; }
     .gx-caret { pointer-events: none; }
     .gx-caret.gx-caret-off { display: none; }
     .gx-caret.gx-caret-steady { opacity: 1; }

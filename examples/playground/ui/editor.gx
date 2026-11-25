@@ -1280,7 +1280,10 @@ func lineView(idx int) *gxscene.Instance {
             line-height="22px"
             flex-shrink="0"
             bg={lineCodeGradient(idx)}
-        />
+            color="#d4d4d4"
+        >
+            {lineText(idx)}
+        </span>
     </div>
 }
 
