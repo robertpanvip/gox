@@ -13,15 +13,21 @@ import (
 
 func main() {
 	// 窗口需容纳 Playground() 的 1180x720 界面，另留边距，否则内容被裁切。
+	win := openGL()
 	app, err := gxapp.OpenWith(gxapp.WindowConfig{
 		Title:  "GX Playground (Desktop)",
 		Width:  1220,
 		Height: 820,
-	}, openGL())
+	}, win)
 	if err != nil {
 		panic(err)
 	}
 	defer app.Close()
+
+	// P2 宿主接线（提案 §5.1/§6.1，须在 Render 前）：Loop 作为 UIExecutor 注入，
+	// 帧请求、后台 Dispatch、微任务全部进入共享 Loop 队列，由 Run() 在
+	// GLFW 线程 drain 执行；不启动第二个事件循环。
+	app.SetUIExecutor(win)
 
 	// 桌面端 Run 与网页端同源：解释当前编辑器源码生成场景树，替换预览后
 	// 重渲染整棵树。源码在包级 sig 中，重建不丢编辑内容。

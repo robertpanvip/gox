@@ -3,10 +3,12 @@ package main
 import (
 	"fmt"
 	"math"
+	"os"
 	"runtime"
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-gl/gl/v3.3-core/gl"
@@ -15,6 +17,7 @@ import (
 	skia "github.com/robertpanvip/gox-backend-skia"
 	"github.com/robertpanvip/gox-playground/ui"
 	gxapp "github.com/robertpanvip/gox/runtime/app"
+	"github.com/robertpanvip/gox/runtime/loop"
 	gxscene "github.com/robertpanvip/gox/runtime/scene"
 )
 
@@ -54,11 +57,48 @@ type glWindow struct {
 	clickX     float64
 	clickY     float64
 	clickCount int
+
+	// UI Loop（提案 P2）：桌面主循环接入的任务队列与监测器；
+	// openGL() 创建、Run() drain、Close() 停止。
+	uiLoop *loop.Queue
+	wd     *loop.Watchdog
 }
 
 var _ gxapp.Window = (*glWindow)(nil)
+var _ gxapp.UIExecutor = (*glWindow)(nil)
 
-func openGL() *glWindow { return &glWindow{} }
+// glfwWokeReady：glfw.Init 完成后唤醒才有意义（事件系统就位后 PostEmptyEvent
+// 才能打断 WaitEventsTimeout）。
+var glfwWokeReady atomic.Bool
+
+func openGL() *glWindow {
+	g := &glWindow{}
+	// 进程级共享 UI Loop（提案决议 7）：任务只入队、不在调用栈执行，
+	// 统一由 Run() 主循环 drain——即 runtime.LockOSThread 绑定的 GLFW 线程。
+	g.uiLoop = loop.New(loop.Config{Wake: func() {
+		if glfwWokeReady.Load() {
+			glfw.PostEmptyEvent()
+		}
+	}})
+	return g
+}
+
+// Post 实现 gxapp.UIExecutor：共享 Loop 即桌面端 UI 任务投递上下文（提案 §6.1，
+// UIExecutor 语义未变，仅落点换成 Loop 队列）。
+func (g *glWindow) Post(fn func()) error {
+	if g.uiLoop == nil {
+		return loop.ErrClosed
+	}
+	return g.uiLoop.Post(fn)
+}
+
+// reportSlow：Watchdog 诊断输出；只报告不恢复（提案 §10.1）。
+func reportSlow(ev loop.WatchEvent) {
+	fmt.Fprintf(os.Stderr, "[gox loop] 慢任务 level=%v kind=%v id=%d elapsed=%v\n", ev.Level, ev.Task.Kind, ev.Task.ID, ev.Elapsed)
+	if ev.Stack != "" {
+		fmt.Fprintln(os.Stderr, ev.Stack)
+	}
+}
 
 // Open 实现 gxapp.Window：创建 GLFW 窗口、GL context 与 Skia GL surface。
 func (g *glWindow) Open(cfg gxapp.WindowConfig) error {
@@ -73,6 +113,7 @@ func (g *glWindow) Open(cfg gxapp.WindowConfig) error {
 	if err := glfw.Init(); err != nil {
 		return fmt.Errorf("glfw.Init: %w", err)
 	}
+	glfwWokeReady.Store(true)
 	glfw.WindowHint(glfw.Resizable, glfw.True)
 	glfw.WindowHint(glfw.ContextVersionMajor, 3)
 	glfw.WindowHint(glfw.ContextVersionMinor, 3)
@@ -207,6 +248,8 @@ func (g *glWindow) Open(cfg gxapp.WindowConfig) error {
 	})
 
 	g.resizeToWindow()
+	g.wd = loop.NewWatchdog(g.uiLoop, loop.WatchConfig{Report: reportSlow})
+	g.wd.Start()
 	g.opened = true
 	return nil
 }
@@ -393,6 +436,22 @@ func (g *glWindow) editorHit(px, py float32) (int, int, bool) {
 	return 0, 0, false
 }
 
+// drainLoop：提案 §4.1 宿主节奏——每执行一个宏任务即过一次微任务检查点；
+// 预算未清空（Ran>0 或 Remaining>0）继续消耗，直到无可执行任务。只在
+// GLFW 主线程调用，天然满足线程亲和性；不启动第二个并行事件循环。
+func (g *glWindow) drainLoop() {
+	if g.uiLoop == nil {
+		return
+	}
+	for {
+		ran := g.uiLoop.RunOneMacro()
+		rep := g.uiLoop.RunMicrotasks()
+		if !ran && rep.Ran == 0 && rep.Remaining == 0 {
+			return
+		}
+	}
+}
+
 // Run 实现 gxapp.Window：主线程事件循环，处理 GLFW 事件并按需绘制新帧。
 func (g *glWindow) Run() error {
 	if !g.opened {
@@ -401,7 +460,8 @@ func (g *glWindow) Run() error {
 	// 首帧：Render() 已在 Run 前调用 Draw 置 dirty，主线程立即绘制。
 	g.paintNow()
 	for !g.win.ShouldClose() {
-		glfw.WaitEventsTimeout(0.02) // 20ms 超时，兼顾事件响应与 signal 异步重绘
+		glfw.WaitEventsTimeout(0.02) // 20ms 超时；Loop.Wake 经 PostEmptyEvent 即时打断
+		g.drainLoop()
 		g.paintNow()
 	}
 	return nil
@@ -415,6 +475,13 @@ func (g *glWindow) Close() error {
 		return nil
 	}
 	g.closed = true
+	if g.wd != nil {
+		g.wd.Stop()
+	}
+	if g.uiLoop != nil {
+		_ = g.uiLoop.Stop() // 先拒绝新任务；未执行任务丢弃并计数（提案 §8）
+	}
+	glfwWokeReady.Store(false)
 	for _, f := range g.fonts {
 		f.Delete()
 	}
