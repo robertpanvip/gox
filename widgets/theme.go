@@ -105,6 +105,22 @@ type Theme struct {
 	Space5 string
 	Space6 string
 	Space8 string
+
+	// 代码编辑器（Syntax）——语法高亮与编辑器底色，随明暗主题切换。
+	// 用 UseToken("syntax-keyword") 等读取；编辑器组件据此生成渐变色标。
+	SyntaxText    string // 普通代码文字
+	SyntaxKeyword string // 关键字
+	SyntaxString  string // 字符串字面量
+	SyntaxNumber  string // 数字
+	SyntaxComment string // 注释
+	SyntaxTag     string // JSX 标签名
+	SyntaxAttr    string // JSX 属性名
+	SyntaxPunct   string // 标点/括号
+	EditorBg      string // 编辑器底色
+	EditorGutter  string // 行号槽文字
+	EditorActive  string // 光标所在行底色
+	EditorCaret   string // 光标颜色
+	EditorSelect  string // 选区色块（8 位 hex 含 alpha，Skia 半透明/Web CSS 可覆盖）
 }
 
 // DarkTheme 是 Apple macOS HIG 深色主题（系统色精确取值）。
@@ -127,6 +143,12 @@ var DarkTheme = Theme{
 	ShadowCard: ShadowCard, ShadowFloat: ShadowFloat, ShadowModal: ShadowModal,
 	Space1: Space1, Space2: Space2, Space3: Space3, Space4: Space4,
 	Space5: Space5, Space6: Space6, Space8: Space8,
+	// 代码编辑器（深色）：沿用 VS Code Dark+，与既有 playground 视觉一致。
+	SyntaxText: "#d4d4d4", SyntaxKeyword: "#c586c0", SyntaxString: "#ce9178",
+	SyntaxNumber: "#b5cea8", SyntaxComment: "#6a9955", SyntaxTag: "#569cd6",
+	SyntaxAttr: "#9cdcfe", SyntaxPunct: "#808080",
+	EditorBg: "#1e1e1e", EditorGutter: "#858585", EditorActive: "#2a2d3a",
+	EditorCaret: "#aeafad", EditorSelect: "#264f7899",
 }
 
 // LightTheme 是 Apple macOS HIG 浅色主题（系统色精确取值）。
@@ -151,6 +173,12 @@ var LightTheme = Theme{
 	ShadowModal: "0 16px 44px 0 #0000003d",
 	Space1:      Space1, Space2: Space2, Space3: Space3, Space4: Space4,
 	Space5: Space5, Space6: Space6, Space8: Space8,
+	// 代码编辑器（浅色）：Apple 浅色语法配色，底色配合系统页面底色。
+	SyntaxText: "#1d1d1f", SyntaxKeyword: "#ad3fc1", SyntaxString: "#c41a16",
+	SyntaxNumber: "#1c00cf", SyntaxComment: "#4b9955", SyntaxTag: "#2563c7",
+	SyntaxAttr: "#6b3fa0", SyntaxPunct: "#6e6e73",
+	EditorBg: "#ffffff", EditorGutter: "#aeaeb2", EditorActive: "#e8f0fb",
+	EditorCaret: "#1d1d1f", EditorSelect: "#b4d5fe80",
 }
 
 // themeCtx 是全应用共享的主题通道，默认深色。
@@ -364,6 +392,33 @@ func themeToken(t Theme, name string) string {
 		return t.Space6
 	case "space8":
 		return t.Space8
+	// 代码编辑器语法色 / 底色。
+	case "syntaxtext":
+		return t.SyntaxText
+	case "syntaxkeyword":
+		return t.SyntaxKeyword
+	case "syntaxstring":
+		return t.SyntaxString
+	case "syntaxnumber":
+		return t.SyntaxNumber
+	case "syntaxcomment":
+		return t.SyntaxComment
+	case "syntaxtag":
+		return t.SyntaxTag
+	case "syntaxattr":
+		return t.SyntaxAttr
+	case "syntaxpunct":
+		return t.SyntaxPunct
+	case "editorbg":
+		return t.EditorBg
+	case "editorgutter":
+		return t.EditorGutter
+	case "editoractive":
+		return t.EditorActive
+	case "editorcaret":
+		return t.EditorCaret
+	case "editorselect":
+		return t.EditorSelect
 	}
 	return ""
 }

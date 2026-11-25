@@ -13,6 +13,25 @@ import (
     widgets "github.com/robertpanvip/gox/widgets"
 )
 
+// ---- 编辑器实例（widgets.Editor 公共组件）----
+// 从 ui/editor.gx 抽离到 widgets 后，playground 持有一个 EditorState 句柄，
+// 通过下列转发函数把装配层（desktop/web）的 ui.Editor* 调用委托给实例方法。
+// 这样装配层零改动，同时编辑器本身成为可多实例/多 App 隔离的公共组件。
+var editorState = widgets.NewEditorState("")
+
+// Ed 暴露编辑器实例句柄（供需要直接访问 state 的装配层使用）。
+ func Ed() *widgets.EditorState { return editorState }
+
+// Editor 构造编辑器视图（替代原 ui.Editor()）。
+func Editor() *gxscene.Instance { return widgets.Editor(editorState) }
+
+// Indices 生成 [0,n) 索引切片（<For> 逐行/逐项渲染用）。
+func Indices(n int) []int {
+    out := []int{}
+    for i := 0; i < n; i = i + 1 { out = append(out, i) }
+    return out
+}
+
 // ---- 运行态：Run 按钮解释源码后的预览实例与错误 ----
 // 装配层（web wasm / desktop）调用 RunCurrent 解释当前源码，把结果存这里；
 // 预览槽读 runInstance 决定渲染解释结果还是预编译 demo。
@@ -212,3 +231,40 @@ func toolbar() *gxscene.Instance {
                         "size": widgets.FontFootnote, "tone": "muted",
                     }) }, func() any{ return gxscene.Style{Background:appBg(),Padding:"12",BorderRadius:widgets.RadiusSmall,MinHeight:"400",BorderWidth:widgets.HairlineWidth,Border:borderColor(),} }, func() any{ return demoPreview() }, func() any{ return gxscene.Style{Color:RunInfoColor(),FontSize:widgets.FontFootnote,} }, func() any{ return RunInfo() }, func() any{ return gxscene.Style{Color:mutedColor(),FontSize:widgets.FontFootnote,Padding:"12 16",} })
 }
+// ---- 编辑器命令转发（装配层 ui.Editor* API 保持兼容）----
+
+ func EditorInsert(s string)              { editorState.Insert(s) }
+ func EditorBackspace()                   { editorState.Backspace() }
+ func EditorNewline()                     { editorState.Newline() }
+ func EditorMove(dln int, dcol int)       { editorState.Move(dln, dcol) }
+ func EditorMoveEx(dln int, dcol int, shift bool) { editorState.MoveEx(dln, dcol, shift) }
+ func EditorMoveWord(dir int, shift bool) { editorState.MoveWord(dir, shift) }
+ func EditorSetText(s string)             { editorState.SetText(s) }
+ func EditorHome()                        { editorState.Home() }
+ func EditorSetCursor(ln int, col int)    { editorState.SetCursor(ln, col) }
+ func EditorClearSelection()              { editorState.ClearSelection() }
+ func EditorSetSelect(ln int, col int)    { editorState.SetSelect(ln, col) }
+ func EditorExtendTo(ln int, col int)     { editorState.ExtendTo(ln, col) }
+ func EditorKeyHome(shift bool)           { editorState.KeyHome(shift) }
+ func EditorKeyEnd(shift bool)            { editorState.KeyEnd(shift) }
+ func EditorDeleteForward()               { editorState.DeleteForward() }
+ func EditorSelectAll()                   { editorState.SelectAll() }
+ func EditorSelectWord(ln int, col int)   { editorState.SelectWord(ln, col) }
+ func EditorSelectLine(ln int)            { editorState.SelectLine(ln) }
+ func EditorSelectedText() string         { return editorState.SelectedText() }
+ func EditorDeleteSelection()             { editorState.DeleteSelection() }
+ func EditorPaste(s string)               { editorState.Paste(s) }
+ func EditorUndo()                        { editorState.Undo() }
+ func EditorRedo()                        { editorState.Redo() }
+ func EditorFocus()                       { editorState.Focus() }
+ func EditorBlur()                        { editorState.Blur() }
+ func EditorSettle()                      { editorState.Settle() }
+ func EditorIdle()                        { editorState.Idle() }
+ func SetCharWidth(w float64)             { editorState.SetCharWidth(w) }
+ func SetWideWidth(w float64)             { editorState.SetWideWidth(w) }
+ func EditorLine() int                    { return editorState.Line() }
+ func EditorCol() int                     { return editorState.Col() }
+ func EditorText() string                 { return editorState.Text() }
+ func EditorStatus() string               { return editorState.Status() }
+ func PickColumn(idx int, x float64) int  { return editorState.PickColumn(idx, x) }
+ func EditorLineText(idx int, slot int) string { return editorState.LineText(idx, slot) }

@@ -7,9 +7,10 @@
     body { margin: 0; font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
            background: #020617; color: #e2e8f0; min-height: 100vh;
            display: flex; flex-direction: column; align-items: center; padding: 16px;
-           overflow-x: auto; }
+           overflow-x: auto;
+           --gx-sel: #264f78; }
     /* Apple 浅色主题：切换按钮写 body[data-theme=light]，视口底色随之换肤。 */
-    body[data-theme="light"] { background: #f2f2f7; color: #1e1e1e; }
+    body[data-theme="light"] { background: #f2f2f7; color: #1e1e1e; --gx-sel: #b4d5fe; }
     #app { outline: none; flex: none; user-select: none; -webkit-user-select: none; }
     /* 移动端软键盘代理：隐藏但必须可聚焦（display:none 无法唤起键盘）。
        关键：不能用 pointer-events:none——iOS Safari 会判定该元素不可交互，
@@ -47,7 +48,7 @@
        之下（.gx-code-line 提到 2）；背景用 !important 覆盖回不透明标准色
        （GX 源码里的半透明值是为 skia 桌面端树序绘制保文字可读而设）。
        拖拽起点由 JS preventDefault + 全局 user-select:none 屏蔽原生选词。 */
-    .gx-sel { pointer-events: none; background-color: #264f78 !important; }
+    .gx-sel { pointer-events: none; background-color: var(--gx-sel, #264f78) !important; }
     #hint { margin-top: 10px; font-size: 12px; color: #64748b; }
 
     /* ---- 内建 LSP UI（无服务端，全部由 wasm 侧 goxlsp 驱动） ---- */

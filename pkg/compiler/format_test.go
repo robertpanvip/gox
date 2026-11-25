@@ -172,7 +172,7 @@ func view() any {
 func TestFormatRealPlaygroundFiles(t *testing.T) {
 	for _, path := range []string{
 		"../../examples/playground/ui/app.gx",
-		"../../examples/playground/ui/editor.gx",
+		"../../widgets/editor.gx",
 	} {
 		b, err := os.ReadFile(path)
 		if err != nil {

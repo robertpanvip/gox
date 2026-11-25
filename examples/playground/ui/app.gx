@@ -13,6 +13,25 @@ import (
     widgets "github.com/robertpanvip/gox/widgets"
 )
 
+// ---- 编辑器实例（widgets.Editor 公共组件）----
+// 从 ui/editor.gx 抽离到 widgets 后，playground 持有一个 EditorState 句柄，
+// 通过下列转发函数把装配层（desktop/web）的 ui.Editor* 调用委托给实例方法。
+// 这样装配层零改动，同时编辑器本身成为可多实例/多 App 隔离的公共组件。
+var editorState = widgets.NewEditorState("")
+
+// Ed 暴露编辑器实例句柄（供需要直接访问 state 的装配层使用）。
+pub func Ed() *widgets.EditorState { return editorState }
+
+// Editor 构造编辑器视图（替代原 ui.Editor()）。
+func Editor() *gxscene.Instance { return widgets.Editor(editorState) }
+
+// Indices 生成 [0,n) 索引切片（<For> 逐行/逐项渲染用）。
+func Indices(n int) []int {
+    out := []int{}
+    for i := 0; i < n; i = i + 1 { out = append(out, i) }
+    return out
+}
+
 // ---- 运行态：Run 按钮解释源码后的预览实例与错误 ----
 // 装配层（web wasm / desktop）调用 RunCurrent 解释当前源码，把结果存这里；
 // 预览槽读 runInstance 决定渲染解释结果还是预编译 demo。
@@ -298,3 +317,40 @@ pub func Playground() *gxscene.Instance {
         </div>
     </div>
 }
+// ---- 编辑器命令转发（装配层 ui.Editor* API 保持兼容）----
+
+pub func EditorInsert(s string)              { editorState.Insert(s) }
+pub func EditorBackspace()                   { editorState.Backspace() }
+pub func EditorNewline()                     { editorState.Newline() }
+pub func EditorMove(dln int, dcol int)       { editorState.Move(dln, dcol) }
+pub func EditorMoveEx(dln int, dcol int, shift bool) { editorState.MoveEx(dln, dcol, shift) }
+pub func EditorMoveWord(dir int, shift bool) { editorState.MoveWord(dir, shift) }
+pub func EditorSetText(s string)             { editorState.SetText(s) }
+pub func EditorHome()                        { editorState.Home() }
+pub func EditorSetCursor(ln int, col int)    { editorState.SetCursor(ln, col) }
+pub func EditorClearSelection()              { editorState.ClearSelection() }
+pub func EditorSetSelect(ln int, col int)    { editorState.SetSelect(ln, col) }
+pub func EditorExtendTo(ln int, col int)     { editorState.ExtendTo(ln, col) }
+pub func EditorKeyHome(shift bool)           { editorState.KeyHome(shift) }
+pub func EditorKeyEnd(shift bool)            { editorState.KeyEnd(shift) }
+pub func EditorDeleteForward()               { editorState.DeleteForward() }
+pub func EditorSelectAll()                   { editorState.SelectAll() }
+pub func EditorSelectWord(ln int, col int)   { editorState.SelectWord(ln, col) }
+pub func EditorSelectLine(ln int)            { editorState.SelectLine(ln) }
+pub func EditorSelectedText() string         { return editorState.SelectedText() }
+pub func EditorDeleteSelection()             { editorState.DeleteSelection() }
+pub func EditorPaste(s string)               { editorState.Paste(s) }
+pub func EditorUndo()                        { editorState.Undo() }
+pub func EditorRedo()                        { editorState.Redo() }
+pub func EditorFocus()                       { editorState.Focus() }
+pub func EditorBlur()                        { editorState.Blur() }
+pub func EditorSettle()                      { editorState.Settle() }
+pub func EditorIdle()                        { editorState.Idle() }
+pub func SetCharWidth(w float64)             { editorState.SetCharWidth(w) }
+pub func SetWideWidth(w float64)             { editorState.SetWideWidth(w) }
+pub func EditorLine() int                    { return editorState.Line() }
+pub func EditorCol() int                     { return editorState.Col() }
+pub func EditorText() string                 { return editorState.Text() }
+pub func EditorStatus() string               { return editorState.Status() }
+pub func PickColumn(idx int, x float64) int  { return editorState.PickColumn(idx, x) }
+pub func EditorLineText(idx int, slot int) string { return editorState.LineText(idx, slot) }

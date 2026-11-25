@@ -45,18 +45,19 @@ func TestHighlight(t *testing.T) {
 	if sb.String() != line {
 		t.Fatalf("tokens 拼回不等原文: %q", sb.String())
 	}
+	// 语法色已主题化：Highlight 返回语义 token 名，具体色值由当前主题解析。
 	colors := map[string]string{}
 	for _, tk := range toks {
 		colors[tk.Text] = tk.Color
 	}
-	if colors["func"] != "#c586c0" {
-		t.Errorf("func 关键字颜色错误: %q", colors["func"])
+	if colors["func"] != "keyword" {
+		t.Errorf("func 关键字语义色错误: %q", colors["func"])
 	}
-	if colors[`"hi"`] != "#ce9178" {
-		t.Errorf("字符串颜色错误: %q", colors[`"hi"`])
+	if colors[`"hi"`] != "str" {
+		t.Errorf("字符串语义色错误: %q", colors[`"hi"`])
 	}
-	if colors["// note"] != "#6a9955" {
-		t.Errorf("注释颜色错误: %q", colors["// note"])
+	if colors["// note"] != "comment" {
+		t.Errorf("注释语义色错误: %q", colors["// note"])
 	}
 }
 
@@ -82,13 +83,13 @@ func TestHighlightJSX(t *testing.T) {
 		return false
 	}
 	for _, c := range []struct{ text, color string }{
-		{"div", "#569cd6"},            // 标签名
-		{"flex-direction", "#9cdcfe"}, // kebab-case 属性名
-		{`"column"`, "#ce9178"},       // 属性值字符串
-		{"each", "#9cdcfe"},           // 插值外的属性名
-		{"todos", "#d4d4d4"},          // 插值内的 Go 标识符
-		{"string", "#c586c0"},         // 插值内的 Go 类型关键字
-		{"For", "#569cd6"},            // 闭合标签名
+		{"div", "tag"},            // 标签名
+		{"flex-direction", "attr"}, // kebab-case 属性名
+		{`"column"`, "str"},       // 属性值字符串
+		{"each", "attr"},           // 插值外的属性名
+		{"todos", "text"},          // 插值内的 Go 标识符
+		{"string", "keyword"},      // 插值内的 Go 类型关键字
+		{"For", "tag"},             // 闭合标签名
 	} {
 		if !has(c.text, c.color) {
 			t.Errorf("缺少 token %q 颜色 %q；实际: %+v", c.text, c.color, toks)

@@ -1,0 +1,44 @@
+/* editor.css —— widgets.Editor 公共组件的 Web 端样式资产。
+ *
+ * 三端共用组件 widgets.Editor（editor.gx）生成的场景树，Web 端需要这几条 CSS
+ * 才能把 GX 侧的 linear-gradient 语法高亮裁到文字上、驱动光标闪烁与选区色块。
+ * Skia/Rust 后端在渲染管线里直接解析同一份渐变数据，不依赖本文件。
+ *
+ * 用法：在宿主页 <head> 里 <link rel="stylesheet" href="editor.css">，
+ * 或把本文件内容内联进 <style>。主题切换写 body[data-theme="light"] 即可，
+ * 选区色/光标色通过 CSS 变量随主题变化（与 widgets Theme token 对齐）。
+ */
+
+/* 编辑器逐 token 着色：bg=linear-gradient 由 GX 侧 lineCodeGradient 生成，
+   浏览器用 background-clip:text 裁到文字（GPU 合成，Go 侧零成本）。
+   文字本身是真实文本子节点，data-code 供列定位；::before 兜底老后端。 */
+.gx-code-line {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color: transparent !important;
+  -webkit-background-clip: text !important;
+  background-clip: text !important;
+  white-space: pre;
+  position: relative;
+  z-index: 2;
+}
+.gx-code-line::before { content: attr(data-code); }
+
+/* 列光标：GX 场景节点，绝对定位随内容滚动；三态由 caretClass() getter 驱动。 */
+.gx-caret { pointer-events: none; }
+.gx-caret.gx-caret-off { display: none; }
+.gx-caret.gx-caret-steady { opacity: 1; }
+@keyframes caret-blink { 0%,49% { opacity: 1; } 50%,100% { opacity: 0; } }
+.gx-caret:not(.gx-caret-off):not(.gx-caret-steady) {
+  animation: caret-blink 1.06s steps(1) infinite;
+}
+
+/* 选区色块：GX 场景节点 selectionView。Web 分层 z-index:1 在文字之下，
+   GX 侧半透明值是为 Skia 树序绘制保文字可读，Web 用变量覆盖回不透明主题色。 */
+.gx-sel {
+  pointer-events: none;
+  background-color: var(--gx-sel, #264f78) !important;
+}
+
+/* 主题变量：默认深色（与 DarkTheme 对齐）；浅色由宿主 body[data-theme=light] 覆盖。 */
+body { --gx-sel: #264f78; }
+body[data-theme="light"] { --gx-sel: #b4d5fe; }

@@ -5,11 +5,9 @@ import "testing"
 // resetEditor 把编辑器置于已知初始状态并清空撤销/重做栈，避免各测试之间
 // 共享的包级状态互相污染。
 func resetEditor(text string) {
-	undoStack = nil
-	redoStack = nil
+	clearHistory()
 	EditorSetText(text)
-	undoStack = nil
-	redoStack = nil
+	clearHistory()
 	EditorHome()
 }
 
