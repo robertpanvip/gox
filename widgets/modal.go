@@ -57,10 +57,10 @@ func NewModalState(initial bool) *ModalState {
 	return &ModalState{open: open}
 }
 
-func (s *ModalState) Open()        { s.open(true) }
-func (s *ModalState) Close()       { s.open(false) }
-func (s *ModalState) Toggle()      { s.open(!s.open()) }
-func (s *ModalState) Set(v bool)   { s.open(v) }
+func (s *ModalState) Open()        { s.open( true )}
+func (s *ModalState) Close()       { s.open( false )}
+func (s *ModalState) Toggle()      { s.open( !s.open() )}
+func (s *ModalState) Set(v bool)   { s.open( v )}
 func (s *ModalState) IsOpen() bool { return s.open() }
 func (s *ModalState) Getter() func() bool {
 	return func() bool { return s.open() }

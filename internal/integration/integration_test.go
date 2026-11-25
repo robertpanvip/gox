@@ -1019,10 +1019,10 @@ func main() {
 	plain := "x"
 	q := Q{title: "y"}
 	p := P{a: plain, b: q.title}
-	fmt.Println("before", p.a(), p.b())
+	fmt.Println("before", p.a, p.b)
 	plain = "X"
 	q.title = "Y"
-	fmt.Println("after", p.a(), p.b())
+	fmt.Println("after", p.a, p.b)
 }
 `
 	out := runGX(t, src)
@@ -1044,10 +1044,10 @@ func main() {
 	p := P{a: "x", b: "y"}
 	q := P{a: p.a + p.b}
 	o := Outer{mid: Mid{in: Inner{v: "chain"}}}
-	fmt.Println("before", q.a(), o.mid.in.v())
+	fmt.Println("before", q.a, o.mid.in.v)
 	p.a = "X"
 	p.b = "Y"
-	fmt.Println("after", q.a())
+	fmt.Println("after", q.a)
 }
 `
 	out := runGX(t, src)
@@ -1070,11 +1070,11 @@ func main() {
 	sig lb = Leaf{c: "first"}
 	o := Outer{mid: Mid{b: lb}}
 	q := Q{v: o.mid.b.c}
-	fmt.Println("read1", q.v())
+	fmt.Println("read1", q.v)
 	lb = Leaf{c: "second"}
-	fmt.Println("read2", q.v())
+	fmt.Println("read2", q.v)
 	q.v = "written"
-	fmt.Println("read3", q.v())
+	fmt.Println("read3", q.v)
 }
 `
 	out := runGX(t, src)
@@ -1121,9 +1121,9 @@ func main() {
 	v := "one"
 	p := P{a: v}
 	p.a = "two"
-	fmt.Println("field", p.a(), "var", v)
+	fmt.Println("field", p.a, "var", v)
 	v = "three"
-	fmt.Println("follow", p.a())
+	fmt.Println("follow", p.a)
 }
 `
 	out := runGX(t, src)
@@ -1141,11 +1141,11 @@ type Leaf struct { sig v string }
 type Mid struct { sig leaf Leaf }
 func main() {
 	m := Mid{leaf: Leaf{v: "a"}}
-	fmt.Println("before", m.leaf().v)
-	m.leaf().v = "c"
-	fmt.Println("after", m.leaf().v)
-	m.leaf().v += "!"
-	fmt.Println("compound", m.leaf().v)
+	fmt.Println("before", m.leaf.v)
+	m.leaf.v = "c"
+	fmt.Println("after", m.leaf.v)
+	m.leaf.v += "!"
+	fmt.Println("compound", m.leaf.v)
 }
 `
 	out := runGX(t, src)
@@ -1168,10 +1168,10 @@ func makeP2(v string) *P { return &P{a: v} }
 func main() {
 	p := makeP("x")
 	q := makeP2("y")
-	fmt.Println("read", p.a(), q.a())
+	fmt.Println("read", p.a, q.a)
 	p.a = "z"
 	q.a = "w"
-	fmt.Println("write", p.a(), q.a())
+	fmt.Println("write", p.a, q.a)
 }
 `
 	out := runGX(t, src)
@@ -1189,11 +1189,11 @@ type P struct { sig a string; sig b string }
 func main() {
 	v := "x"
 	p := P{a: v, b: v}
-	fmt.Println("init", p.a(), p.b())
+	fmt.Println("init", p.a, p.b)
 	p.a = "y"
-	fmt.Println("write-a", p.a(), p.b(), v)
+	fmt.Println("write-a", p.a, p.b, v)
 	v = "z"
-	fmt.Println("follow", p.a(), p.b())
+	fmt.Println("follow", p.a, p.b)
 }
 `
 	out := runGX(t, src)

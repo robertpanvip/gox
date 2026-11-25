@@ -517,3 +517,37 @@ func TestNoRawSignalAPIWhitelistTypeCallStillForbidden(t *testing.T) {
 		t.Errorf("错误信息应点名 Signal.Computation，got: %v", err)
 	}
 }
+
+// 回归：sig 字段一律按普通字段读写，禁止函数式读写。函数式读 s.x() 与
+// 函数式写 s.x(2) 都必须拦截；裸读 s.x、赋值写 s.x = 2、复合赋值 s.x += 2
+// 放行。此前检查器只覆盖 sig 变量，sig 字段的 () 写法会侥幸通过。
+func TestNoExplicitSigFieldCall(t *testing.T) {
+	forbidden := []struct{ name, expr string }{
+		{"函数式读", "_ = s.x()"},
+		{"函数式写", "s.x(2)"},
+		{"函数式写-bool", "s.x(true)"},
+	}
+	for _, tc := range forbidden {
+		t.Run("forbid_"+tc.name, func(t *testing.T) {
+			src := "package main\ntype S struct{ sig x int }\nfunc main(){ s := S{x:1}; " + tc.expr + " }"
+			_, err := Compile("sigfield.gx", src)
+			if err == nil || !strings.Contains(err.Error(), "sig 字段") {
+				t.Errorf("函数式 %s 应被拦截，got: %v", tc.expr, err)
+			}
+		})
+	}
+	allowed := []struct{ name, expr string }{
+		{"裸读", "_ = s.x"},
+		{"赋值写", "s.x = 2"},
+		{"复合赋值", "s.x += 2"},
+	}
+	for _, tc := range allowed {
+		t.Run("allow_"+tc.name, func(t *testing.T) {
+			src := "package main\ntype S struct{ sig x int }\nfunc main(){ s := S{x:1}; " + tc.expr + "; _ = s }"
+			got := compileOK(t, "sigfield.gx", src)
+			if !strings.Contains(got, "x Signal.Signal[int]") {
+				t.Errorf("sig 字段应降级:\n%s", got)
+			}
+		})
+	}
+}

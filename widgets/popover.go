@@ -51,10 +51,10 @@ func NewPopoverState(initial bool) *PopoverState {
 	return &PopoverState{open: open}
 }
 
-func (s *PopoverState) Open()             { s.open(true) }
-func (s *PopoverState) Close()            { s.open(false) }
-func (s *PopoverState) Toggle()           { s.open(!s.open()) }
-func (s *PopoverState) Set(v bool)        { s.open(v) }
+func (s *PopoverState) Open()             { s.open( true )}
+func (s *PopoverState) Close()            { s.open( false )}
+func (s *PopoverState) Toggle()           { s.open( !s.open() )}
+func (s *PopoverState) Set(v bool)        { s.open( v )}
 func (s *PopoverState) IsOpen() bool      { return s.open() }
 // Getter 返回可用于 JSX 插值的 bool getter。
 func (s *PopoverState) Getter() func() bool { return func() bool { return s.open() } }

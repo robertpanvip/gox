@@ -108,25 +108,28 @@ func startsUpper(s string) bool {
 	return false
 }
 
-// checkNoExplicitSigCall 禁止用户显式调用 sig 变量（如 count()）。
+// checkNoExplicitSigCall 禁止用户显式调用 sig（如 count()、s.name()）。
 //
-// GX 的 sig 是「透明响应式变量」：读写都按普通变量书写（count + 1、count = 5），
-// 编译器统一降级为函数式 Signal 的调用式（count()、count(5)）。用户手写 count()
-// 是把实现细节当语法用——它虽被「已是调用」形态排除而原样保留、侥幸能跑，但语义
-// 脆弱（JSX 插值里绕过订阅登记、与隐式读混用易错），且误导读者以为 GX 需要 ()
-// 读信号。故统一报错，强制惯用写法。
+// GX 的 sig 是「透明响应式变量/字段」：读写都按普通变量书写（count + 1、
+// s.name = v），编译器统一降级为函数式 Signal 的调用式（count()、s.name()）。
+// 用户手写 () 是把实现细节当语法用——它虽被「已是调用」形态排除而原样保留、
+// 侥幸能跑，但语义脆弱（JSX 插值里绕过订阅登记、与隐式读混用易错），且误导
+// 读者以为 GX 需要 () 读信号。故统一报错，强制惯用写法。
 //
-// 判据：用户手写（IsGen==false）的标识符解析到 BkSignal/BkComputed 绑定，且下一
-// 有效 token 是 '('（显式调用）。形态排除与 ParseSignalExprs 一致：selector 右侧
-// (obj.name)、复合字段键 ({name: ...})、声明目标、声明区不报。
+// 覆盖两类：
+//  1. sig 变量：标识符解析到 BkSignal/BkComputed 绑定且后跟 '('；
+//  2. sig 字段：`recv.field(...)` 中 field 是 struct 的 sig 字段（由 signalFieldTable
+//     判定），后跟 '(' 即报错，强制写 `recv.field` 让编译器补 ()。
 //
-// 不误伤：
-//   - context getter（score := scoreCtx.use() 后的 score()）是 BkLocal，不是 sig；
-//   - 编译器生成物带 IsGen，跳过；
-//   - sig 声明的初值、赋值目标均非「后跟 (」。
+// 形态排除：复合字段键 ({name: ...})、声明目标、声明区不报。selector 右侧不再是
+// 无条件排除——它正是 sig 字段的所在，交由 isSignalSelector 精确判定（普通方法
+// 如 s.HasSelection() 不会被误判，因为 HasSelection 不是 sig 字段）。
+//
+// 不误伤：context getter（scoreCtx.use() 后的 score()）是 BkLocal 且非 sig 字段；
+// 编译器生成物带 IsGen，跳过；sig 声明的初值、赋值目标均非「后跟 (」。
 //
 // 调用时机：与 checkNoRawSignalAPI 同处——Bind 之后、transformSignals 之前。
-func checkNoExplicitSigCall(toks []Token, b *Bindings) error {
+func checkNoExplicitSigCall(toks []Token, b *Bindings, tbl signalFieldTable) error {
 	if b == nil {
 		return nil
 	}
@@ -135,23 +138,39 @@ func checkNoExplicitSigCall(toks []Token, b *Bindings) error {
 		if t.Kind != Ident || t.IsGen {
 			continue
 		}
-		bd := bindingAt(b, t.Text, t.Pos)
-		if bd == nil || (bd.Kind != BkSignal && bd.Kind != BkComputed) {
+		n := nextSig(toks, i+1)
+		if n < 0 || toks[n].Text != "(" {
+			continue // 非显式调用形态，早退
+		}
+		// 形态排除：复合字段键 / 声明目标 / 声明区。
+		if nk := nextSig(toks, i+1); nk >= 0 && toks[nk].Text == ":" {
 			continue
 		}
-		// 形态排除：与 ParseSignalExprs 的读改写排除保持一致。
-		if p := prevSig(toks, i-1); p >= 0 && toks[p].Text == "." {
-			continue // selector 右侧 obj.name
-		}
-		if n := nextSig(toks, i+1); n >= 0 && toks[n].Text == ":" {
-			continue // 复合字段键 {name: ...}
-		}
 		if isSignalDeclTarget(toks, i) || inDeclZone(toks, i) {
-			continue // 声明目标 / 函数参数 / struct 字段
+			continue
 		}
-		if n := nextSig(toks, i+1); n >= 0 && toks[n].Text == "(" {
+		// 类别 1：sig 变量。selector 右侧跳过（那是 sig 字段的领地）。
+		bd := bindingAt(b, t.Text, t.Pos)
+		if bd != nil && (bd.Kind == BkSignal || bd.Kind == BkComputed) {
+			if p := prevSig(toks, i-1); p >= 0 && toks[p].Text == "." {
+				continue // obj.name 形态，交给 sig 字段判定
+			}
 			return fmt.Errorf("%d:%d: sig 变量 %s 应像普通变量一样读写（写 %s 而非 %s()）；GX 会编译期自动补全信号读写",
 				t.Pos.Line, t.Pos.Col, t.Text, t.Text, t.Text)
+		}
+		// 类别 2：sig 字段。recv.field(...) 的 field 命中字段表 → 报错。
+		// isSignalSelector 需要从 receiver 链首（如 s.x 的 s）进入；i 当前指向
+		// selector 右侧的 field，故先回溯到 '.' 左侧的 receiver 起点。
+		if p := prevSig(toks, i-1); p >= 0 && toks[p].Text == "." {
+			if recv := prevSig(toks, p-1); recv >= 0 {
+				if _, ok, fieldIdx := isSignalSelector(toks, recv, b, tbl); ok {
+					if call := nextSig(toks, fieldIdx+1); call >= 0 && toks[call].Text == "(" {
+						field := toks[fieldIdx].Text
+						return fmt.Errorf("%d:%d: sig 字段 %s 应像普通字段一样读写（写 recv.%s 而非 recv.%s()）；GX 会编译期自动补全信号字段读写",
+							toks[fieldIdx].Pos.Line, toks[fieldIdx].Pos.Col, field, field, field)
+					}
+				}
+			}
 		}
 	}
 	return nil

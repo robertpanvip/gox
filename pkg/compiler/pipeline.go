@@ -136,7 +136,7 @@ func compileWithMode(file, src, module string, imports map[string]ImportInfo) (*
 	// 禁止显式调用 sig 变量（count()）：GX 的 sig 读写都按普通变量书写，
 	// 编译器自动降级为函数式 Signal。同样必须在 transformSignals 之前——
 	// 改写后所有 sig 读都会变成 count()，那时的 () 是编译器产物（IsGen），不是用户手写。
-	if err := checkNoExplicitSigCall(toks, bindings); err != nil {
+	if err := checkNoExplicitSigCall(toks, bindings, signalFields); err != nil {
 		return nil, err
 	}
 	// P1：传入 bindings，用 ResolveAt 做遮蔽判断（P1-1 根治）。

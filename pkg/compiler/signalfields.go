@@ -1080,6 +1080,20 @@ func rewriteSignalFieldRefs(toks []Token, b *Bindings, tbl signalFieldTable, dia
 			out = append(out, tokOp("(", toks[k].Pos), tokOp(")", toks[k].Pos))
 		}
 	}
+	// emitExpr 按「纯读」改写 [from,to) 区间内的 sig 字段链（补 ()），非 sig token
+	// 原样搬运。用于赋值右侧 `p.x = <expr>`：expr 里的 sig 字段读（如 s.y）必须
+	// 补 () 才是取值，否则原样搬运会把 Signal 函数当值传入，产出非法 Go/函数地址。
+	emitExpr := func(from, to int) {
+		for k := from; k < to; k++ {
+			chain, ok := resolveSignalChainEx(toks, k, toks[k].Pos, b, tbl, to, true)
+			if !ok || len(chain.segs) == 0 {
+				out = append(out, toks[k])
+				continue
+			}
+			emitChain(k, chain.tailIdx, chain.segs, -1)
+			k = chain.tailIdx
+		}
+	}
 	for i := 0; i < len(toks); i++ {
 		t := toks[i]
 		// skipCalls=true：中间 sig 段用户可能已显式写调用括号（m.leaf().v），
@@ -1173,16 +1187,12 @@ func rewriteSignalFieldRefs(toks []Token, b *Bindings, tbl signalFieldTable, dia
 			emitChain(i, fieldIdx, chain.segs, fieldIdx)
 			out = append(out, tokOp("()", p), tokSpace(" ", p), tokOp(binop, p), tokSpace(" ", p), tokOp("1", p))
 		case isAssignOp(op):
-			for k := opIdx + 1; k < end; k++ {
-				out = append(out, toks[k])
-			}
+			emitExpr(opIdx+1, end) // 右侧 sig 字段读补 ()
 		default:
 			binop := strings.TrimSuffix(op, "=")
 			emitChain(i, fieldIdx, chain.segs, fieldIdx)
 			out = append(out, tokOp("()", p), tokSpace(" ", p), tokOp(binop, p), tokSpace(" ", p))
-			for k := opIdx + 1; k < end; k++ {
-				out = append(out, toks[k])
-			}
+			emitExpr(opIdx+1, end) // 右侧 sig 字段读补 ()
 		}
 		out = append(out, tokOp(")", p))
 		i = end - 1

@@ -497,7 +497,7 @@ func main() {
 func TestSignalFieldAddrOmittedTypeLit(t *testing.T) {
 	src := `package main
 type CardProps struct { sig name string; title string }
-func Card(p *CardProps) { println(p.name(), p.title) }
+func Card(p *CardProps) { println(p.name, p.title) }
 func main() {
 	sig n = "nn"
 	Card(&{name: n, title: "t"})
@@ -537,7 +537,7 @@ func main() {
 func TestSignalFieldPtrExplicitLitGetsAmp(t *testing.T) {
 	src := `package main
 type CardProps struct { sig name string }
-func Card(p *CardProps) { println(p.name()) }
+func Card(p *CardProps) { println(p.name) }
 func main() {
 	sig n = "nn"
 	Card(CardProps{name: n})
@@ -809,10 +809,11 @@ func main() { Card(&{inner: {v: "x"}}) }
 	containsAll(t, got, `&Out{inner: Inner{v: Signal.New("x")}}`)
 }
 
-// 第十一轮：中间 sig 段用户显式写调用括号（m.leaf().v）时，读写改写必须
-// 跳过该括号走到真正链尾，而不是在 '(' 处断链漏改写。与裸写 m.leaf.v 产物一致。
+// 第十一轮：中间 sig 段（m.leaf）的链尾读写必须走到真正链尾 v，而不是在
+// leaf 处断链漏改写。sig 字段一律裸写：显式 m.leaf() 由检查器拦截（见
+// checkNoExplicitSigCall），裸写 m.leaf.v 的链尾写产物应是 m.leaf().v(...)。
 func TestR11ExplicitParenMiddleSegment(t *testing.T) {
-	write := `package main
+	explicit := `package main
 type Leaf struct { sig v string }
 type Mid struct { sig leaf Leaf }
 func main() {
@@ -821,8 +822,10 @@ func main() {
 	_ = m
 }
 `
-	got := compileOK(t, "r11_write.gx", write)
-	containsAll(t, got, `m.leaf().v( "c")`)
+	if _, err := Compile("r11_explicit.gx", explicit); err == nil ||
+		!strings.Contains(err.Error(), "sig 字段") {
+		t.Errorf("显式调用中间 sig 段 m.leaf() 应被拦截，got: %v", err)
+	}
 
 	bare := `package main
 type Leaf struct { sig v string }
@@ -843,7 +846,7 @@ type Leaf struct { sig n int }
 type Mid struct { sig leaf Leaf }
 func main() {
 	m := Mid{leaf: Leaf{n: 1}}
-	m.leaf().n += 2
+	m.leaf.n += 2
 	_ = m
 }
 `
@@ -854,8 +857,8 @@ func main() {
 	}
 }
 
-// 第十一轮：JSX props / 插值里的显式括号中间段同样走到链尾。
-func TestR11JSXExplicitParenMiddleSegment(t *testing.T) {
+// 第十一轮：JSX props / 插值里的裸写中间 sig 段同样走到链尾（用户不写 ()）。
+func TestR11JSXMiddleSigSegment(t *testing.T) {
 	src := `package main
 import gxscene "github.com/robertpanvip/gox/runtime/scene"
 type Leaf struct { sig v string }
@@ -864,8 +867,8 @@ type CardProps struct { sig title string }
 func Card(p CardProps) *gxscene.Instance { return <div>{p.title}</div> }
 func main() {
 	m := Mid{leaf: Leaf{v: "a"}}
-	_ = <Card title={m.leaf().v}/>
-	_ = <div>{m.leaf().v}</div>
+	_ = <Card title={m.leaf.v}/>
+	_ = <div>{m.leaf.v}</div>
 	_ = m
 }
 `
@@ -1341,4 +1344,35 @@ func read(b *Box[int]) int { return b.value }
 		`return b.value()`,                 // 泛型 receiver 的 sig 字段读补 ()
 		`import Signal "github.com/robertpanvip/gox/runtime/signal"`,
 	)
+}
+
+// 回归：sig 字段赋值右侧的 sig 字段读必须补 ()。用户按透明变量写 `s.x = s.y`，
+// 编译器降级后应是 `s.x(s.y())`（取值传入）；此前右侧原样搬运产出 `s.x(s.y)`，
+// 把 Signal 函数当值传入导致类型错误。复合赋值 `+=` 同理。
+func TestSigFieldAssignRHSReadGetsCall(t *testing.T) {
+	cases := []struct{ name, src, want string }{
+		{
+			"赋值",
+			"package main\ntype S struct{ sig x int; sig y int }\nfunc main(){ s := S{x:1,y:2}; s.x = s.y; _ = s }",
+			`s.x( s.y())`,
+		},
+		{
+			"复合赋值",
+			"package main\ntype S struct{ sig x int; sig y int }\nfunc main(){ s := S{x:1,y:2}; s.x += s.y; _ = s }",
+			`s.x(s.x() +  s.y())`,
+		},
+		{
+			"表达式右侧",
+			"package main\ntype S struct{ sig x int; sig y int }\nfunc main(){ s := S{x:1,y:2}; s.x = s.y + 1; _ = s }",
+			`s.x( s.y() + 1)`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := compileOK(t, "rhs.gx", tc.src)
+			if !strings.Contains(got, tc.want) {
+				t.Errorf("赋值右侧 sig 读应补 ()，期望含 %q:\n%s", tc.want, got)
+			}
+		})
+	}
 }
