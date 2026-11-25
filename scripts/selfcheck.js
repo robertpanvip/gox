@@ -66,7 +66,7 @@ const GSYNTAX_EXPR = `
     await wait(250);
   }
   await wait(600);
-  const src = "package main\n\nfunc f() {\n\tn := 41\n\tvar g string = n\n\t_ = g\n}\n";
+  const src = "package main\\n\\nfunc f() {\\n\\tn := 41\\n\\tvar g string = n\\n\\t_ = g\\n}\\n";
   const t0 = performance.now();
   Gox.setSource(src);
   let diags = [];
@@ -165,6 +165,8 @@ const PROVIDER_EXPR = `
   try { v = JSON.parse(String(out)); } catch {}
   const pass = mode === "stacking"
     ? !v.err && v.selW > 0 && v.topIsCodeLine === true
-    : v.ok === true;
+    : mode === "gsyntax"
+      ? v.typeHit === true && v.leaked === false && v.sample && v.sample[0] && v.sample[0][0] === 4
+      : v.ok === true;
   fin(pass ? 0 : 1);
 })().catch((e) => fin(2, "ENV/CRASH: " + String(e).slice(0, 200)));
