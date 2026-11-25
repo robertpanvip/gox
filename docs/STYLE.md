@@ -139,6 +139,7 @@ GX 侧用 `widgets.Canvas(props)` 构建（`ops` 传 `[]canvas.Op`）。两端�
 - `DarkTheme` / `LightTheme` 两套预置；`SetTheme(t)` 全局切换默认通道；`ThemeProvider(props)` 为子树提供主题（子树隔离，不改全局）；`UseTheme()` 返回 `func() Theme`，`UseToken("accent")` 返回单个令牌 getter。
 - 组件把 `UseToken(...)` 作为 `dynAttr` getter 即可随主题切换重绘（demo 底部有深色/浅色切换演示）。需要"一个窗口深色、某个面板浅色"时，用 `ThemeProvider` 包住该子树即可，全局主题不受影响。
 - 既有 `Theme*` 常量（apple_theme.go）保持不变向后兼容；新代码优先用 `UseTheme` 以支持切换。
+- **非颜色令牌同样入主题**：圆角/控件高度/字号/阴影/间距（space1–space8）全量是 `Theme` 字段，`UseToken("radius-panel"/"shadow-card"/"font-headline"/"space-6"…)` 在明暗主题各取其所值（浅色阴影按 HIG 更淡：`0 2px 8px 0 #0000001a`）；apple_theme 的静态常量保留为兼容别名。注意可变别名（`ShadowCard` 等 var / `tones` 表）由 `SetTheme` 同步、只作用于全局通道，**子树级隔离请用 `ThemeProvider` + `UseToken`**——showcase 的「子树主题 · 明暗并置」分组即该能力的活示例（`TestUseTokenInsideProviderSubtree` 锁定）。
 
 ### 10.1 在 GX 语言里用 Context/Provider
 

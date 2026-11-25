@@ -129,3 +129,60 @@ func TestThemeProvider(t *testing.T) {
 	}
 	SetTheme(DarkTheme)
 }
+
+// TestSpaceTokenScale 验证间距标度全量入 Theme（space1–space8），两套主题同值。
+func TestSpaceTokenScale(t *testing.T) {
+	for _, th := range []Theme{DarkTheme, LightTheme} {
+		for _, tt := range []struct{ key, want string }{
+			{"space-1", Space1}, {"space-2", Space2}, {"space-3", Space3}, {"space-4", Space4},
+			{"space-5", Space5}, {"space-6", Space6}, {"space-8", Space8},
+		} {
+			if got := themeToken(th, tt.key); got != tt.want {
+				t.Errorf("%s themeToken(%q) = %q want %q", th.Name, tt.key, got, tt.want)
+			}
+		}
+	}
+}
+
+// TestShadowTokensPerTheme 验证阴影令牌按主题取值：浅色比深色更淡（HIG），
+// 且 radius/font/height 令牌在两套主题都可读——非颜色令牌不再是静态常量专属。
+func TestShadowTokensPerTheme(t *testing.T) {
+	if themeToken(LightTheme, "shadow-card") != "0 2px 8px 0 #0000001a" {
+		t.Errorf("浅色 shadow-card 不对: %q", themeToken(LightTheme, "shadow-card"))
+	}
+	if themeToken(DarkTheme, "shadow-card") != DarkTheme.ShadowCard {
+		t.Error("深色 shadow-card 未走 Theme 字段")
+	}
+	if themeToken(LightTheme, "shadow-card") == themeToken(DarkTheme, "shadow-card") {
+		t.Error("明暗 shadow-card 不应同值")
+	}
+	for _, k := range []string{"radius-panel", "font-headline", "control-height", "row-height"} {
+		if themeToken(DarkTheme, k) == "" || themeToken(LightTheme, k) == "" {
+			t.Errorf("令牌 %q 未在主题中生效", k)
+		}
+	}
+}
+
+// TestUseTokenInsideProviderSubtree 验证非颜色令牌同样吃子树主题：
+// Provider(浅色) 子树内 UseToken 读到浅色阴影；子树外全局仍为深色（隔离）。
+func TestUseTokenInsideProviderSubtree(t *testing.T) {
+	SetTheme(DarkTheme)
+	var got string
+	prov := ThemeProvider(gxscene.Props{
+		"value": LightTheme,
+		"children": func() any {
+			got = UseToken("shadow-card")()
+			return Text(gxscene.Props{"value": func() any { return "x" }, "size": FontBody})
+		},
+	})
+	if prov == nil {
+		t.Fatal("provider 为空")
+	}
+	if got != LightTheme.ShadowCard {
+		t.Fatalf("子树内 shadow-card=%q want 浅色 %q", got, LightTheme.ShadowCard)
+	}
+	if UseToken("shadow-card")() != DarkTheme.ShadowCard {
+		t.Error("子树外不应受 Provider 影响（子树隔离）")
+	}
+	SetTheme(DarkTheme)
+}

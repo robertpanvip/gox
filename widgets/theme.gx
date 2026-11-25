@@ -7,6 +7,10 @@
 // 明暗主题可在运行时切换：SetTheme / ThemeProvider 写入新令牌后，所有用
 // UseTheme() 读取的组件插槽自动重绘。既有组件的 Theme* 常量保持不变（向后
 // 兼容），新代码或需要主题切换的场景改用 UseTheme()。
+// 令牌覆盖面：颜色/圆角/控件高度/字号/阴影/间距（space1–space8）全部进 Theme，
+// UseToken 均可读取；SetTheme 同步的是可变别名（全局通道），非颜色令牌多为编译期
+// 常量、不随 SetTheme 变化——子树级主题隔离请用 ThemeProvider + UseToken，
+// showcase 的「子树主题 · 明暗并置」分组是该能力的活示例。
 //
 // 用法：
 //
@@ -93,19 +97,22 @@ type Theme struct {
 	ShadowFloat string
 	ShadowModal string
 
-	// 间距标度
+	// 间距标度（8pt 阶梯全量：space1–space8）
 	Space1 string
 	Space2 string
 	Space3 string
 	Space4 string
+	Space5 string
+	Space6 string
+	Space8 string
 }
 
 // DarkTheme 是 Apple macOS HIG 深色主题（系统色精确取值）。
 var DarkTheme = Theme{
 	Name: "dark",
-	Bg: AppleWindowBg, GroupedBg: AppleGroupedBg, Panel: AppleElevated, PanelAlt: AppleFill,
+	Bg:   AppleWindowBg, GroupedBg: AppleGroupedBg, Panel: AppleElevated, PanelAlt: AppleFill,
 	Skeleton: AppleFill2,
-	InputBg: AppleInputBg, Border: AppleSeparator, Border2: AppleSeparator2, Hairline: AppleHairline,
+	InputBg:  AppleInputBg, Border: AppleSeparator, Border2: AppleSeparator2, Hairline: AppleHairline,
 	Material: AppleMaterialThick, Scrim: AppleScrim,
 	Text: AppleLabel, Muted: AppleLabel2, Faint: AppleLabel3, OnAccent: "#ffffff",
 	Accent: AppleBlue, Success: AppleGreen, Warning: AppleOrange, Danger: AppleRed, Info: DarkCyan,
@@ -119,14 +126,15 @@ var DarkTheme = Theme{
 	FontCallout: FontCallout, FontSubheadline: FontSubheadline, FontFootnote: FontFootnote,
 	ShadowCard: ShadowCard, ShadowFloat: ShadowFloat, ShadowModal: ShadowModal,
 	Space1: Space1, Space2: Space2, Space3: Space3, Space4: Space4,
+	Space5: Space5, Space6: Space6, Space8: Space8,
 }
 
 // LightTheme 是 Apple macOS HIG 浅色主题（系统色精确取值）。
 var LightTheme = Theme{
 	Name: "light",
-	Bg: "#ffffff", GroupedBg: "#f2f2f7", Panel: "#ffffff", PanelAlt: "#f2f2f7",
+	Bg:   "#ffffff", GroupedBg: "#f2f2f7", Panel: "#ffffff", PanelAlt: "#f2f2f7",
 	Skeleton: "#d8d8dd",
-	InputBg: "#ffffff", Border: "#c6c6c8", Border2: "#d1d1d6", Hairline: LightHairline,
+	InputBg:  "#ffffff", Border: "#c6c6c8", Border2: "#d1d1d6", Hairline: LightHairline,
 	Material: "#ffffffeb", Scrim: "#0000004d",
 	Text: "#1d1d1f", Muted: "#86868b", Faint: "#aeaeb2", OnAccent: "#ffffff",
 	Accent: LightBlue, Success: LightGreen, Warning: LightOrange, Danger: LightRed, Info: LightCyan,
@@ -140,7 +148,8 @@ var LightTheme = Theme{
 	FontCallout: FontCallout, FontSubheadline: FontSubheadline, FontFootnote: FontFootnote,
 	ShadowCard: "0 2px 8px 0 #0000001a", ShadowFloat: "0 8px 24px 0 #00000026",
 	ShadowModal: "0 20px 56px 0 #00000033",
-	Space1: Space1, Space2: Space2, Space3: Space3, Space4: Space4,
+	Space1:      Space1, Space2: Space2, Space3: Space3, Space4: Space4,
+	Space5: Space5, Space6: Space6, Space8: Space8,
 }
 
 // themeCtx 是全应用共享的主题通道，默认深色。
@@ -348,6 +357,12 @@ func themeToken(t Theme, name string) string {
 		return t.Space3
 	case "space4":
 		return t.Space4
+	case "space5":
+		return t.Space5
+	case "space6":
+		return t.Space6
+	case "space8":
+		return t.Space8
 	}
 	return ""
 }

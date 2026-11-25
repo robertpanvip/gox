@@ -43,9 +43,9 @@ func group(title string, w string, kids ...*gxscene.Instance) *gxscene.Instance 
 	a := toAny(kids...)
 	return widgets.Col(gxscene.Props{
 		"width": w, "gap": "12", "padding": "20",
-		"bg": widgets.UseToken("panel")(), "border-radius": widgets.RadiusPanel,
+		"bg": widgets.UseToken("panel")(), "border-radius": widgets.UseToken("radius-panel")(),
 		"border": widgets.UseToken("hairline")(), "border-width": "1",
-		"box-shadow": widgets.ShadowCard,
+		"box-shadow": widgets.UseToken("shadow-card")(),
 		"children":   func() any { return a },
 	})
 }
@@ -63,7 +63,7 @@ func sectionTitle(s string) *gxscene.Instance {
 // sectionTitleIcon 分区标题：可选前置矢量图标，复用预制图标系统。
 func sectionTitleIcon(s, iconName string) *gxscene.Instance {
 	txt := widgets.Text(gxscene.Props{
-		"value": func() any { return s }, "size": widgets.FontHeadline,
+		"value": func() any { return s }, "size": widgets.UseToken("font-headline")(),
 		"weight": "bold", "tone": "text",
 	})
 	if iconName == "" {
@@ -102,7 +102,7 @@ func iconGallery(w string) *gxscene.Instance {
 					return toAny(
 						widgets.Icon(gxscene.Props{"name": n, "size": 22, "tone": "primary"}),
 						widgets.Text(gxscene.Props{
-							"value": func() any { return n }, "size": widgets.FontFootnote, "tone": "muted",
+							"value": func() any { return n }, "size": widgets.UseToken("font-footnote")(), "tone": "muted",
 						}),
 					)
 				},
@@ -114,6 +114,38 @@ func iconGallery(w string) *gxscene.Instance {
 		sectionTitleIcon("预制矢量图标 · SVG → canvas", "star"),
 		widgets.Col(gxscene.Props{"gap": "14", "children": func() any { return toAny(rows...) }}),
 	)
+}
+
+// themeMixDemo 演示 ThemeProvider 子树主题：左右两块各自锁定浅色/深色，
+// 不随全局 SetTheme 变化（子树隔离 + 就近覆盖）。面板/文字/阴影令牌走
+// UseToken，在 Provider 上下文内取值；Button 内部配色目前仍走旧全局 tone
+// 别名（SetTheme 同步），是「静态常量兼容别名逐步迁移」的活例子。
+func themeMixDemo(w string) *gxscene.Instance {
+	panel := func(t widgets.Theme, name string) *gxscene.Instance {
+		return widgets.ThemeProvider(gxscene.Props{
+			"value": t,
+			"children": func() any {
+				accent := widgets.UseToken("accent")()
+				panelBg := widgets.UseToken("panel")()
+				return widgets.Col(gxscene.Props{
+					"width": w, "gap": "10", "padding": "18",
+					"bg":            panelBg,
+					"border":        widgets.UseToken("hairline")(),
+					"border-width":  "1",
+					"border-radius": widgets.UseToken("radius-panel")(),
+					"box-shadow":    widgets.UseToken("shadow-card")(),
+					"children": func() any {
+						return toAny(
+							label(name, widgets.UseToken("font-headline")(), "text"),
+							label("accent "+accent+" · panel "+panelBg, widgets.UseToken("font-callout")(), "muted"),
+							widgets.Button(gxscene.Props{"label": "子按钮", "variant": "primary", "onClick": noop()}),
+						)
+					},
+				})
+			},
+		})
+	}
+	return row("16", panel(widgets.LightTheme, "浅色面板 · 子树锁定"), panel(widgets.DarkTheme, "深色面板 · 子树锁定"))
 }
 
 func str(n int) string { return strconv.Itoa(n) }
@@ -198,8 +230,8 @@ func Build(W, H int) *gxscene.Instance {
 		"tabs":     []widgets.Option{{Label: "概览", Value: "overview"}, {Label: "明细", Value: "detail"}},
 		"onChange": widgets.BindValue(func(v string) { tab(v) }),
 		"panels": []func() any{
-			func() any { return label("这里是概览内容", widgets.FontBody, "muted") },
-			func() any { return label("这里是明细内容", widgets.FontBody, "muted") },
+			func() any { return label("这里是概览内容", widgets.UseToken("font-body")(), "muted") },
+			func() any { return label("这里是明细内容", widgets.UseToken("font-body")(), "muted") },
 		},
 	})
 
@@ -228,7 +260,9 @@ func Build(W, H int) *gxscene.Instance {
 
 	card := widgets.Card(gxscene.Props{
 		"title": func() any { return "项目概览" }, "width": str(W - 88),
-		"children": func() any { return label("卡片内容 · 当前主题面板", widgets.FontBody, "text") },
+		"children": func() any {
+			return label("卡片内容 · 当前主题面板", widgets.UseToken("font-body")(), "text")
+		},
 	})
 
 	table := widgets.Table(gxscene.Props{
@@ -260,7 +294,7 @@ func Build(W, H int) *gxscene.Instance {
 				}),
 				widgets.FormItem(gxscene.Props{
 					"label": "说明", "name": "desc", "hint": "简短描述便于团队识别",
-					"children": func() any { return label("表单控件占位", widgets.FontBody, "muted") },
+					"children": func() any { return label("表单控件占位", widgets.UseToken("font-body")(), "muted") },
 				}),
 			)
 		},
@@ -275,10 +309,10 @@ func Build(W, H int) *gxscene.Instance {
 	skeletonRow := row("16",
 		widgets.Skeleton(gxscene.Props{"width": "180", "height": "14"}),
 		widgets.Skeleton(gxscene.Props{"width": "120", "height": "14"}),
-		widgets.Skeleton(gxscene.Props{"width": "80", "height": "28", "radius": widgets.RadiusControl}),
+		widgets.Skeleton(gxscene.Props{"width": "80", "height": "28", "radius": widgets.UseToken("radius-control")()}),
 	)
 	spinnerRow := row("20",
-		label("加载中", widgets.FontBody, "muted"),
+		label("加载中", widgets.UseToken("font-body")(), "muted"),
 		widgets.Spinner(gxscene.Props{"size": 18}),
 	)
 
@@ -291,7 +325,7 @@ func Build(W, H int) *gxscene.Instance {
 	tooltip := widgets.Tooltip(gxscene.Props{
 		"state": tooltipState, "placement": "top",
 		"trigger": func() any { return widgets.Button(gxscene.Props{"label": "悬停我", "variant": "secondary"}) },
-		"content": func() any { return label("轻量的 macOS 提示气泡", widgets.FontCallout, "text") },
+		"content": func() any { return label("轻量的 macOS 提示气泡", widgets.UseToken("font-callout")(), "text") },
 	})
 
 	return widgets.Col(gxscene.Props{
@@ -300,7 +334,7 @@ func Build(W, H int) *gxscene.Instance {
 			return toAny(
 				col(str(W), "4",
 					widgets.Heading(gxscene.Props{"value": func() any { return "组件库 · Apple macOS" }, "level": 1}),
-					label("预制控件 · 明暗双主题 · HIG 对齐", widgets.FontBody, "muted"),
+					label("预制控件 · 明暗双主题 · HIG 对齐", widgets.UseToken("font-body")(), "muted"),
 				),
 				group(str(W-48), str(W-48), sectionTitleIcon("按钮 Buttons", "cursor"), btnRow),
 				group(str(W-48), str(W-48), sectionTitleIcon("输入框 Text Field", "text-field"), inputField),
@@ -317,6 +351,7 @@ func Build(W, H int) *gxscene.Instance {
 				group(str(W-48), str(W-48), sectionTitleIcon("空状态 EmptyState", "doc"), emptyState),
 				group(str(W-48), str(W-48), sectionTitleIcon("骨架屏 / 加载 Skeleton / Spinner", "reload"), skeletonRow, spinnerRow),
 				group(str(W-48), str(W-48), sectionTitleIcon("时间 / 浮层提示", "clock"), timePick, tooltip),
+				group(str(W-48), str(W-48), sectionTitleIcon("子树主题 ThemeProvider · 明暗并置", "sun"), themeMixDemo(str((W-48-40-16)/2))),
 				iconGallery(str(W-48)),
 			)
 		},
