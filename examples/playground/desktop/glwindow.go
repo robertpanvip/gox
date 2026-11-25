@@ -45,12 +45,17 @@ type glWindow struct {
 	blit    *rasterBlit // CPU raster → GL 纹理显示端
 
 	mu     sync.Mutex
-	root   *gxscene.Node // 最近一次 Draw 提交的场景树根
+	root   *gxscene.Node // 最近一次 Draw/Present 提交的场景树根
 	hits   []skia.HitBox // 最近一帧命中矩形（左上原点）
 	dirty  bool          // 有新帧待绘制
 	frames int           // 已绘制帧数
 	opened bool
 	closed bool
+
+	// 增量帧（FramePresenter）：App 每次提交带递增 Version 与 Changes。
+	// 无 Change 且 Version 未前进的帧画面不变，Present 不置 dirty，paintNow 跳过
+	// 整条绘制/blit/swap 链（屏幕保持上帧）——省去桌面端每次信号抖动的全量重绘。
+	painted bool // 是否至少绘制过一帧；首帧即使无 Change 也必须绘制（建树期不记录 Change）
 
 	// 编辑器选区交互状态。GLFW 回调都在主线程（Run 的 WaitEvents 循环里）串行执行，无需加锁。
 	dragging   bool      // 左键按住拖拽选择中
@@ -67,6 +72,7 @@ type glWindow struct {
 
 var _ gxapp.Window = (*glWindow)(nil)
 var _ gxapp.UIExecutor = (*glWindow)(nil)
+var _ gxapp.FramePresenter = (*glWindow)(nil)
 
 // glfwWokeReady：glfw.Init 完成后唤醒才有意义（事件系统就位后 PostEmptyEvent
 // 才能打断 WaitEventsTimeout）。
@@ -296,10 +302,39 @@ func (g *glWindow) resizeToWindow() {
 
 // Draw 实现 gxapp.Window：线程安全地把最新场景树提交给主线程的绘制循环。
 // 注意：此回调可能来自 signal 写入方 goroutine，绝不能在此调用 GL 函数。
+//
+// App 检测到本窗口实现 FramePresenter 后会走 Present，不再调 Draw；保留 Draw
+// 是为了兼容直接调用（headless/测试/第三方装配）。老路径保守处理：总是置 dirty。
 func (g *glWindow) Draw(root *gxscene.Node) error {
 	g.mu.Lock()
 	g.root = root
 	g.dirty = true
+	g.mu.Unlock()
+	return nil
+}
+
+// Present 实现 gxapp.FramePresenter：消费 Host 的增量帧。
+//
+// 桌面端绘制链是"全量 PaintToScaled → CPU Pixmap → GL 纹理 blit → SwapBuffers"，
+// 没有 FrameCache 的脏矩形画布（GL surface 跨帧像素不可靠），所以增量收益落在
+// 更上层：无实质变化的帧根本不进绘制链——不置 dirty，paintNow 直接跳过绘制、
+// 纹理上传与缓冲交换，屏幕保持上一帧内容（GL 双缓冲语义下安全）。
+//
+// changed 判定只看 FullSync 与 Changes：Version 每帧都递增（即使无变化），
+// 不能作为"有变化"的依据——frame.go 明确：Changes 为空但 Version 前进即表示
+// 变更被相等性短路、画面无变化。resize/交互等非帧源通过 markDirty 独立强制
+// 重绘，不经过这里，不受短路影响。
+func (g *glWindow) Present(frame *gxapp.Frame) error {
+	if frame == nil {
+		return g.Draw(nil)
+	}
+	g.mu.Lock()
+	g.root = frame.Root
+	// 首帧必须绘制（Render 建树期 sink 未开，Changes 为空但树是全新的）；
+	// 之后只有真正有变更的帧才置 dirty，无 Change 帧跳过整条绘制链。
+	if !g.painted || frame.FullSync || len(frame.Changes) > 0 {
+		g.dirty = true
+	}
 	g.mu.Unlock()
 	return nil
 }
@@ -309,6 +344,16 @@ func (g *glWindow) markDirty() {
 	g.mu.Lock()
 	g.dirty = true
 	g.mu.Unlock()
+}
+
+// ForceRedraw 请求下一帧强制走完整绘制链，即使该帧没有 Host Change。
+//
+// GX 的标准动画都经 signal/RAF/命令式写回产生 Change，Present 会自动放行；
+// 此方法是给"不写 signal、直接改 props 的旁路动画"预留的逃生口——动画系统
+// 在每帧起点调用它即可，避免被"无 Change 即短路"吞掉。当前桌面端未接动画，
+// 正常路径无需调用。
+func (g *glWindow) ForceRedraw() {
+	g.markDirty()
 }
 
 // paintNow 在主线程执行真正的 Skia GL 绘制：取最新 root → painter 遍历 → flush → 交换缓冲。
@@ -344,6 +389,7 @@ func (g *glWindow) paintNow() {
 	gl.Flush()
 	g.win.SwapBuffers()
 	g.frames++
+	g.painted = true
 	g.dirty = false
 }
 

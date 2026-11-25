@@ -147,6 +147,6 @@ _ = w.DrawLog() // 最近一帧的绘制指令（观测面）
 ## 已知边界
 
 - `NewCanvasWithDimensions` 产生的 canvas 在本绑定里像素不可读（属 picture-recording 类），故本后端用 `DrawLog` 作为可观测面而非读回像素。真实 GL surface 可正常 `ReadPixels`。
-- 桌面 playground 的 `glWindow` 走独立绘制链（`Draw→markDirty→PaintToScaled`，每帧全量、无 FrameCache），尚未接入本节增量帧；它靠 `dirty` 标志抑制无请求帧，但每次 signal 变化仍全量重绘。要兑现增量收益到桌面运行路径，需让 `glWindow` 持有 `FrameCache` 并实现 `Present`（下一步）。
+- 桌面 playground 的 `glWindow` 已实现 `FramePresenter`，但走的是**轻量短路**而非本节的 `FrameCache`：GL surface 跨帧像素不可靠，不能做脏矩形画布复用，故在无 Change 帧里直接不置 `dirty`、跳过整条绘制/blit/swap 链（屏幕保持上帧），有 Change 帧仍全量 `PaintToScaled`。首帧强制绘制（建树期不记录 Change）。标准动画（signal/RAF/命令式写回）都产生 Change、自动放行；`ForceRedraw()` 给旁路动画留逃生口。
 - 链接顺序修复用 GNU ld 的 `--start-group`，仅 Linux；macOS 需去掉该 directive（`linkflags.go` 已可按平台加 build tag）。
 - 布局是简单纵向流式，仅为证明节点分派；生产布局可替换 `painter` 的布局器。
