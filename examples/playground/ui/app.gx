@@ -224,8 +224,8 @@ pub func Playground() *gxscene.Instance {
             padding: 0,
             flexDirection: "column",
             gap: 0,
-            width: 1180,
-            height: 720,
+            width: 1360,
+            height: 760,
             borderRadius: 14,
             overflow: "hidden",
             boxShadow: paneShadow(),
@@ -255,7 +255,7 @@ pub func Playground() *gxscene.Instance {
                 </div>
                 {sampleList()}
             </div>
-            <div style={{ flexDirection: "column", gap: 8, width: 470 }}>
+            <div style={{ flexDirection: "column", gap: 8, width: 660 }}>
                 {toolbar()}
                 <div
                     style={{ background: "#111827", padding: 12, borderRadius: 10, border: "1px solid #232d3f", boxShadow: cardShadow() }}

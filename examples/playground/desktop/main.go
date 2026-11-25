@@ -12,12 +12,12 @@ import (
 )
 
 func main() {
-	// 窗口需容纳 Playground() 的 1180x720 界面，另留边距，否则内容被裁切。
+	// 窗口需容纳 Playground() 的 1360x760 界面，另留边距，否则内容被裁切。
 	win := openGL()
 	app, err := gxapp.OpenWith(gxapp.WindowConfig{
 		Title:  "GX Playground (Desktop)",
-		Width:  1220,
-		Height: 820,
+		Width:  1400,
+		Height: 860,
 	}, win)
 	if err != nil {
 		panic(err)

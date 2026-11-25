@@ -1324,7 +1324,7 @@ pub func Editor() *gxscene.Instance {
         padding="6"
         flex-direction="column"
         gap="0"
-        height="320"
+        height="470"
         overflow="auto"
         position="relative"
     >
