@@ -46,18 +46,29 @@
 宏/微分层一致），但 **rAF 回调时序、页面卸载行为、真实浏览器并发** 与 node
 不等价——下列项目不得因 node 通过而声明。
 
-## 4. 浏览器待实测清单（P3 验收项，未完成前不切换 Web）
+## 4. 真实浏览器实测记录（2026-11-25，沙箱 Chrome headless）
 
-1. `requestAnimationFrame` 帧回调相对 `setTimeout(0)` 回调的先后，与
-   `loop.Queue` 检查点接入后 UI 帧一致性（连续 Post 不产生每任务一次 Draw）。
-2. Go WASM 回调执行中发生 `queueMicrotask` / Promise 微任务时的交错顺序记录
-   （实测前，微任务检查点只允许宿主显式调用 `RunMicrotasks`）。
-3. 页面卸载 / `app.Close()` 时：Loop `Stop` 后浏览器侧不再有任务执行、
-   Dropped 计数可观测、Promise continuation 观察到调度错误。
-4. playground 真实交互（打字/点击/补全）下 RAF executor 全链路无回归。
+工具：`scripts/runwasm_browser.js`（CDP 驱动 Chrome 跑 GOOS=js 测试二进制，
+console 经 CDP 收集判定 PASS/FAIL）、`scripts/browser_smoke.js`（真实加载
+`playground.html` 单文件构建并模拟双击/键入）。宿主：**Google Chrome
+158.0.8127.36 --headless=new**。
 
-实测方式：为 playground web 增加集成测试页（浏览器打开，事件时序写入可视
-日志并断言），由真实浏览器跑通后更新本文档第 3 节。
+| §12 P3 验收项 | 实测结果 |
+| --- | --- |
+| Post 的浏览器调度行为 | 完整 loop 套件 39 用例在 Chrome 内 PASS（含 `TestWasmPostRunsOnlyInHostTurn` 调用栈不执行契约） |
+| PostMicro 的调度行为 + 微任务嵌套投递 | `TestBrowserNativeMicrotaskBeforeLoopCheckpoint` PASS：`Promise.then` / `queueMicrotask` 均先于宿主轮次，Loop 微任务在同一轮次内、宏任务之后收尾——「Loop 微任务 ≠ 浏览器原生微任务」升级为浏览器实测结论 |
+| rAF 宿主节奏 | `TestBrowserRAFAndTimeoutBothArrive`：rAF 与 setTimeout(0) 均到达（本次观测顺序 [timeout, raf]，跨引擎先后不做承诺）；`TestBrowserLoopMacroMicroViaRAF`：rAF 帧轮内宏→微成立 |
+| Go WASM callback 与浏览器事件顺序 | 由上述交错断言固化；未来漂移会直接打破测试而非静默变化 |
+| 页面关闭/App 关闭后的任务处理 | 浏览器内 `TestWasmStopRejectsAndDrops` PASS；playground 冒烟中交互后无残留异常 |
+| 真实 playground 全链路 | `SMOKE_OK`：首帧 rows=24；双击第 0 行词「package」→ 选区色块宽 54.78px、光标 col=7；键入 'x' 替换选区 → 光标 col=1；caret 可见；无任何页面异常 |
+| 卸载（unload）时序、真实 GPU 帧节奏、Safari/Firefox、真实键鼠硬件 | 沙箱无法覆盖，**仍需用户侧验证**；Web 切换 loop.Queue 前建议补这三项 |
+
+复跑命令：
+```
+GOOS=js GOARCH=wasm go test -c -o /tmp/loop.test.wasm ./runtime/loop/
+node scripts/runwasm_browser.js /tmp/loop.test.wasm -- -test.v -test.timeout 200s
+node scripts/browser_smoke.js examples/playground/web/playground.html
+```
 
 ## 5. 风险对照（提案 §14）
 
