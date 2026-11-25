@@ -181,3 +181,19 @@ func TestFormatRealPlaygroundFiles(t *testing.T) {
 		assertFormatSemantics(t, path, string(b))
 	}
 }
+
+// TestFormatWideExprChildNoSpin 回归：当一个插值子节点自身格式化后就是多行
+// （典型是宽 JSX）时，writeJSXNode 的文本/插值合并循环在 j==i 处不能原地
+// i=j 打转。旧实现会反复解析同一表达式直到耗尽内存（表现为
+// TestFormatRealPlaygroundFiles 在 editor.gx 上 OOM）。
+func TestFormatWideExprChildNoSpin(t *testing.T) {
+	src := `package ui
+func view() any {
+    return <div>{<span bg="#0b1020" padding="20" border-radius="12" flex-direction="column" gap="8" color="#ffffff" width="200">card</span>}tail</div>
+}
+`
+	out := assertFormatSemantics(t, "wide-expr-child", src)
+	if !strings.Contains(out, "card") || !strings.Contains(out, "tail") {
+		t.Fatalf("输出丢失内容:\n%s", out)
+	}
+}

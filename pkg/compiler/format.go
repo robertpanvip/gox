@@ -135,10 +135,16 @@ func writeJSXNode(b *strings.Builder, n *jsxNode, indent int) {
 				line += piece
 				j++
 			}
-			b.WriteString(jsxSpaces(indent + jsxFormatStep))
-			b.WriteString(line)
-			i = j
-			continue
+			if j > i {
+				b.WriteString(jsxSpaces(indent + jsxFormatStep))
+				b.WriteString(line)
+				i = j
+				continue
+			}
+			// j == i：首个子节点自身就无法并入一行（单行结果含换行，或
+			// 超过 jsxFormatWidth）。此时 line 为空且 j 未推进；若直接
+			// i = j 会原地打转，反复解析同一个插值表达式直到耗尽内存。
+			// 落到下面走 jsxWriteChild 分支，由它输出该子节点并推进 i。
 		}
 		jsxWriteChild(b, c, indent+jsxFormatStep)
 		i++
