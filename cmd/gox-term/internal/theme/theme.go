@@ -15,20 +15,25 @@ type Palette struct {
 	BG, Panel, TitleBar, Surface, Border lipgloss.Color
 	Text, Muted, Accent, AccentFG        lipgloss.Color
 	Close, Minimize, Zoom                lipgloss.Color
+
+	// 标题栏渐变两端（左 → 右），模拟毛玻璃光影。
+	TitleGradFrom, TitleGradTo string
 }
 
 func paletteFor(m Mode) Palette {
 	if m == Dark {
 		return Palette{
-			BG: "#1c1c1e", Panel: "#141416", TitleBar: "#2b2b2e", Surface: "#323235",
-			Border: "#3a3a3d", Text: "#e6e6e8", Muted: "#8e8e93", Accent: "#0a84ff", AccentFG: "#ffffff",
+			BG: "#151517", Panel: "#0f0f11", TitleBar: "#242427", Surface: "#2e2e32",
+			Border: "#3a3a3f", Text: "#e8e8ea", Muted: "#86868e", Accent: "#0a84ff", AccentFG: "#ffffff",
 			Close: "#ff5f57", Minimize: "#febc2e", Zoom: "#28c840",
+			TitleGradFrom: "#303035", TitleGradTo: "#242427",
 		}
 	}
 	return Palette{
-		BG: "#f2f2f7", Panel: "#ffffff", TitleBar: "#e8e8ed", Surface: "#ffffff",
-		Border: "#d1d1d6", Text: "#1d1d1f", Muted: "#86868b", Accent: "#007aff", AccentFG: "#ffffff",
+		BG: "#ececf1", Panel: "#ffffff", TitleBar: "#e6e6ec", Surface: "#f6f6f9",
+		Border: "#c9c9d1", Text: "#1d1d1f", Muted: "#86868b", Accent: "#007aff", AccentFG: "#ffffff",
 		Close: "#ff5f57", Minimize: "#febc2e", Zoom: "#28c840",
+		TitleGradFrom: "#f4f4f8", TitleGradTo: "#e6e6ec",
 	}
 }
 
@@ -42,33 +47,35 @@ type Theme struct {
 	Terminal  lipgloss.Style
 	Dots      [3]lipgloss.Style
 	TitleText lipgloss.Style
-	Tab       lipgloss.Style
-	TabActive lipgloss.Style
+	// 标签栏用手写 ANSI 渲染（见 app/gradient.go），不用 lipgloss 样式，
+	// 以规避 alt-screen 下多层 Background 嵌套被错误染成 accent 色的问题。
 	StatusKey lipgloss.Style
 	StatusVal lipgloss.Style
 	HelpKey   lipgloss.Style
 	HelpTxt   lipgloss.Style
+	Divider   lipgloss.Style // 区隔细线
+	Badge     lipgloss.Style // accent 小徽标
 }
 
 func New(m Mode) *Theme {
 	p := paletteFor(m)
 	t := &Theme{Mode: m, Palette: p}
 	t.Window = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(p.Border).Background(p.BG)
-	t.TitleBar = lipgloss.NewStyle().Background(p.TitleBar).Foreground(p.Text).Padding(0, 1)
+	t.TitleBar = lipgloss.NewStyle().Background(p.TitleBar).Foreground(p.Text)
 	t.Terminal = lipgloss.NewStyle().Background(p.Panel).Foreground(p.Text)
-	t.Status = lipgloss.NewStyle().Background(p.TitleBar).Foreground(p.Muted).Padding(0, 1)
+	t.Status = lipgloss.NewStyle().Background(p.TitleBar).Foreground(p.Muted)
 	t.Dots = [3]lipgloss.Style{
 		lipgloss.NewStyle().Foreground(p.Close).SetString("●"),
 		lipgloss.NewStyle().Foreground(p.Minimize).SetString("●"),
 		lipgloss.NewStyle().Foreground(p.Zoom).SetString("●"),
 	}
 	t.TitleText = lipgloss.NewStyle().Foreground(p.Muted).Bold(true)
-	t.Tab = lipgloss.NewStyle().Foreground(p.Muted).Background(p.TitleBar).Padding(0, 2)
-	t.TabActive = lipgloss.NewStyle().Foreground(p.Text).Background(p.Surface).Bold(true).Padding(0, 2)
 	t.StatusKey = lipgloss.NewStyle().Foreground(p.Muted).Bold(true)
 	t.StatusVal = lipgloss.NewStyle().Foreground(p.Text)
 	t.HelpKey = lipgloss.NewStyle().Foreground(p.Accent).Bold(true)
 	t.HelpTxt = lipgloss.NewStyle().Foreground(p.Muted)
+	t.Divider = lipgloss.NewStyle().Foreground(p.Border)
+	t.Badge = lipgloss.NewStyle().Background(p.Accent).Foreground(p.AccentFG).Padding(0, 1).Bold(true)
 	return t
 }
 

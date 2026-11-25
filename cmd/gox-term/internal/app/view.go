@@ -6,7 +6,14 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-// View 实现 tea.Model。
+// View 实现 tea.Model。布局（自上而下）：
+//
+//	标题栏（渐变 + 红黄绿点 + 居中标题）
+//	标签栏（独立一行，激活标签带 accent 下划线）
+//	区隔细线
+//	终端区
+//	区隔细线
+//	状态栏（徽标 + 会话信息 + 快捷键）
 func (m *Model) View() string {
 	if m.width <= 0 || m.height <= 0 {
 		return "正在初始化…"
@@ -14,43 +21,90 @@ func (m *Model) View() string {
 	t := m.theme
 	innerW := m.width - 2
 	innerH := m.height - 2
-	if innerW < 20 || innerH < 8 {
+	if innerW < 20 || innerH < 9 {
 		return "终端窗口太小，请放大后重试"
 	}
 
 	title := m.viewTitle(innerW)
-	body := m.viewBody(innerW, innerH-2)
+	tabbar := m.viewTabBar(innerW)
+	rule := m.viewRule(innerW)
+	statusH := 1
+	bodyH := innerH - 3 - statusH // 标题(1) + 标签(1) + 细线(1) + 状态(1)
+	if bodyH < 3 {
+		bodyH = 3
+	}
+	body := m.viewBody(innerW, bodyH)
 	status := m.viewStatus(innerW)
 
-	content := lipgloss.JoinVertical(lipgloss.Left, title, body, status)
+	content := lipgloss.JoinVertical(lipgloss.Left,
+		title, tabbar, rule, body, rule, status,
+	)
 	return t.Window.Width(m.width - 2).Height(m.height - 2).Render(content)
 }
 
+// viewTitle 渲染渐变标题栏：红黄绿点在最左，标题居中。
 func (m *Model) viewTitle(w int) string {
-	t := m.theme
-	dots := t.Dots[0].Render() + " " + t.Dots[1].Render() + " " + t.Dots[2].Render()
-	left := dots + "  " + t.TitleText.Render("gox-term")
+	p := m.theme.Palette
+	cells := map[int]barCell{}
 
-	var tabs []string
+	// 红黄绿点，间距 1 列。
+	dotColors := []lipgloss.Color{p.Close, p.Minimize, p.Zoom}
+	for i, c := range dotColors {
+		cells[2+i*2] = barCell{text: "●", fg: c}
+	}
+
+	// 居中标题。
+	title := "  gox-term  "
+	start := (w - lipgloss.Width(title)) / 2
+	if start < 8 {
+		start = 8
+	}
+	putText(cells, start, title, p.Muted)
+
+	return gradientBar(w, p.TitleGradFrom, p.TitleGradTo, cells)
+}
+
+// viewTabBar 渲染独立标签栏。用手写 ANSI 铺纯色背景，绕开 lipgloss 在
+// alt-screen 下对多层嵌套 Background 的渲染异常（会错误显示 accent 蓝）。
+func (m *Model) viewTabBar(w int) string {
+	p := m.theme.Palette
+	surface := string(p.Surface)
+	cells := map[int]barCell{}
+
+	col := 1
+	activeFG := lipgloss.Color(p.Text)
+	idleFG := lipgloss.Color(p.Muted)
 	for i, s := range m.sessions {
-		label := s.Name
-		if s.Exited() {
-			label += " ×"
-		}
-		style := t.Tab
+		fg := idleFG
 		if i == m.active {
-			style = t.TabActive
+			fg = activeFG
+			putText(cells, col, "▸", lipgloss.Color(p.Accent))
+			col++
 		}
-		tabs = append(tabs, style.Render(" "+label+" "))
+		label := " " + s.Name + " "
+		if s.Exited() {
+			label = " " + s.Name + " × "
+		}
+		for _, r := range label {
+			if col >= w {
+				break
+			}
+			cells[col] = barCell{text: string(r), fg: fg}
+			col++
+		}
+		if col < w {
+			cells[col] = barCell{text: "│", fg: lipgloss.Color(p.Border)}
+			col++
+		}
 	}
-	tabStr := strings.Join(tabs, "")
+	if col < w {
+		putText(cells, col, "  +", lipgloss.Color(p.Muted))
+	}
+	return gradientBar(w, surface, surface, cells)
+}
 
-	used := lipgloss.Width(left) + lipgloss.Width(tabStr) + 1
-	spacer := w - used
-	if spacer < 0 {
-		spacer = 0
-	}
-	return t.TitleBar.Width(w).Render(truncateToWidth(left+strings.Repeat(" ", spacer)+tabStr, w))
+func (m *Model) viewRule(w int) string {
+	return m.theme.Divider.Render(strings.Repeat("─", w))
 }
 
 func (m *Model) viewBody(w, h int) string {
@@ -58,25 +112,21 @@ func (m *Model) viewBody(w, h int) string {
 	var lines []string
 	if s != nil {
 		all := ansiToLines(s.Snapshot())
-		// 取末尾 h 行（考虑回滚）。
 		end := len(all)
-		back := m.scrollBack
-		if back > 0 && end-back > 0 {
-			end = end - back
+		if m.scrollBack > 0 && end-m.scrollBack > 0 {
+			end = end - m.scrollBack
 		}
 		start := end - h
 		if start < 0 {
 			start = 0
 		}
-		visible := all[start:end]
-		for _, ln := range visible {
+		for _, ln := range all[start:end] {
 			lines = append(lines, truncateANSI(ln.text, w))
 		}
 	}
 	for len(lines) < h {
 		lines = append(lines, "")
 	}
-	// 用 Terminal 样式给每行铺背景；保留行内 SGR 颜色。
 	var out []string
 	for _, ln := range lines[:h] {
 		out = append(out, m.theme.Terminal.Width(w).Render(padANSI(ln, w)))
@@ -86,30 +136,33 @@ func (m *Model) viewBody(w, h int) string {
 
 func (m *Model) viewStatus(w int) string {
 	t := m.theme
-	n := len(m.sessions)
-	left := "  " + t.StatusKey.Render("终端") + " " +
-		t.StatusVal.Render("会话 "+itoa(n)) + "  " +
-		t.StatusKey.Render(itoa(m.cols)+"x"+itoa(m.rows))
-	if m.statusMsg != "" {
-		left += "  " + t.StatusVal.Render(m.statusMsg)
-	}
-	right := t.HelpKey.Render("^T") + t.HelpTxt.Render(" 新会话 ") +
-		t.HelpKey.Render("^W") + t.HelpTxt.Render(" 关闭 ") +
-		t.HelpKey.Render("^N") + t.HelpTxt.Render(" 切换 ") +
-		t.HelpKey.Render("^S↑↓") + t.HelpTxt.Render(" 滚动 ")
 
-	used := lipgloss.Width(left) + lipgloss.Width(right) + 1
-	spacer := w - used
-	if spacer < 0 {
-		spacer = 0
+	// 分段：徽标 + 会话信息 | 尺寸 | 快捷键。
+	badge := t.Badge.Render("❯")
+	info := " " + t.StatusKey.Render("会话") + " " + t.StatusVal.Render(itoa(len(m.sessions))) +
+		"   " + t.StatusKey.Render("尺寸") + " " + t.StatusVal.Render(itoa(m.cols)+"×"+itoa(m.rows))
+	if m.statusMsg != "" {
+		info += "   " + t.StatusVal.Render(m.statusMsg)
 	}
-	return t.Status.Width(w).Render(truncateToWidth(left+strings.Repeat(" ", spacer)+right, w))
+	left := badge + info
+
+	right := t.HelpKey.Render("^T") + t.HelpTxt.Render(" 新会话  ") +
+		t.HelpKey.Render("^N") + t.HelpTxt.Render(" 切换  ") +
+		t.HelpKey.Render("^W") + t.HelpTxt.Render(" 关闭")
+
+	// 状态栏无 padding，内容宽度按 w 算，留 2 列安全余量防中文宽度误差换行。
+	avail := w - 2
+	used := lipgloss.Width(left) + lipgloss.Width(right) + 2
+	spacer := avail - used
+	if spacer < 1 {
+		spacer = 1
+	}
+	mid := t.Divider.Render(strings.Repeat("·", spacer))
+	return t.Status.Width(w).Render(truncateToWidth(left+" "+mid+" "+right, avail))
 }
 
 // ---- ANSI 安全的宽度处理 ----
 
-// truncateANSI 按可见宽度截断，保留 SGR 颜色序列并在末尾补全 ANSI 状态，
-// 避免截断后颜色泄漏到后续行。
 func truncateANSI(s string, max int) string {
 	vis := 0
 	i := 0
@@ -127,21 +180,19 @@ func truncateANSI(s string, max int) string {
 			}
 		}
 		r, size := decodeRune(s[i:])
-		w := runeWidth(r)
-		if vis+w > max {
+		rw := runeWidth(r)
+		if vis+rw > max {
 			break
 		}
 		b.WriteString(string(r))
-		vis += w
+		vis += rw
 		i += size
 	}
 	out := b.String()
-	// 重置 SGR，防止颜色跨越到下一行。
 	out += "\x1b[0m"
 	return out
 }
 
-// padANSI 按可见宽度右侧补空格到 width。
 func padANSI(s string, width int) string {
 	v := visibleLen(s)
 	if v >= width {
@@ -171,7 +222,6 @@ func visibleLen(s string) int {
 	return n
 }
 
-// decodeRune 解析首 rune（UTF-8），非法字节当作宽度 1 的单字节。
 func decodeRune(s string) (rune, int) {
 	if len(s) == 0 {
 		return 0, 0
@@ -201,7 +251,6 @@ func decodeRune(s string) (rune, int) {
 	return r[0], n
 }
 
-// runeWidth 返回显示列宽：ASCII 控制/单字节宽字符算 1，其余（CJK/emoji）算 2。
 func runeWidth(r rune) int {
 	if r < 0x20 || (r >= 0x7f && r < 0xa0) {
 		return 0
