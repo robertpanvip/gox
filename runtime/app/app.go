@@ -215,6 +215,11 @@ func (a *App) SetUIExecutor(exec UIExecutor) {
 	}
 	a.setDispatcher(NewUIExecutorDispatcher(exec))
 
+	// UI 线程亲和守卫（仅 -tags gxthreadcheck 生效，默认构建为空操作）：
+	// 记录当前 goroutine 为合法 UI 线程，之后任何后台野写信号都会在结构变更点
+	// 打印带栈诊断，把偶发的 map 竞态提前变成可读报告。
+	signal.BindUIThread()
+
 	// 严格单线程响应式：把 UIExecutor 注入本 App 专属的 signal.Runtime，使后台
 	// goroutine 调用的 app.Dispatch(fn) 能把更新闭包投递到本 App 的 UI 线程执行。
 	// 投递器与关闭状态不再全局共享——多 App 互不覆盖、互不误伤（评审 P0）。

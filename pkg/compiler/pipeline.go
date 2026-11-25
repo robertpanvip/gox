@@ -140,8 +140,12 @@ func compileWithMode(file, src, module string, imports map[string]ImportInfo) (*
 		return nil, err
 	}
 	// P1：传入 bindings，用 ResolveAt 做遮蔽判断（P1-1 根治）。
+	// 跨线程 sig 写检测：必须在 transformSignals 之前扫描（此刻 sig 仍是标识符、
+	// 赋值仍是 =）。诊断在 analysis 建好后合并，交给 CLI/LSP 展示。
+	crossThreadDiags := checkCrossThreadSigWrite(toks, sigs)
 	toks = transformSignals(toks, bindings)
 	analysis := Analyze(toks)    // desugar 之前的 GX 语义层（联合未擦除）
+	analysis.diags = append(crossThreadDiags, analysis.diags...)
 	names := map[string]string{} // 小写原名 → 大写导出名（自身 pub 符号）
 	toks = expandDefaults(toks, defaultDefs)
 	toks = transformLambdas(toks, analysis, bindings, sigTypes)

@@ -90,6 +90,7 @@ func markDirty(n *node) {
 // clearDeps 清空 n 的上游依赖。复用原 map（clear 保留 bucket），避免每次
 // 重跑都 make 新 map 制造持续的 GC 压力。
 func clearDeps(n *node) {
+	checkUIThread("clearDeps") // 改依赖图 map：必须 UI 线程
 	for dep := range n.deps {
 		delete(dep.subs, n)
 	}
@@ -104,6 +105,7 @@ func collectDirty(n *node) []*node {
 	if len(n.subs) == 0 {
 		return nil
 	}
+	checkUIThread("collectDirty") // 写信号触发的标脏传播：必须 UI 线程
 	dirtyEpoch++
 	epoch := dirtyEpoch
 	var effects []*node
@@ -139,6 +141,7 @@ func collectDirty(n *node) []*node {
 // 内部状态全部通过 defer 复位，不会破坏整个 Runtime。Effect 下次因依赖变化重跑、
 // Computed 下次被读取时会重新走完整流程。
 func withObserver(n *node, fn func()) {
+	checkUIThread("withObserver") // 重算/effect 重建依赖：必须 UI 线程
 	observers = append(observers, n)
 	// 先注册栈恢复，再执行任何可能 panic 的用户代码。
 	defer func() {

@@ -99,6 +99,7 @@ func disposeNode(n *node) {
 	if n == nil || n.disposed {
 		return
 	}
+	checkUIThread("disposeNode") // 摘依赖边：必须 UI 线程
 	n.disposed = true
 	for dep := range n.deps {
 		delete(dep.subs, n)
