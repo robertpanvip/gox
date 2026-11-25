@@ -1238,6 +1238,20 @@ func lineCodeGradient(idx int) string {
     return gradientCache[idx]
 }
 
+// lineRich 返回第 idx 行的着色分段，供两端后端原生渲染语法高亮：
+// web 后端一次 innerHTML 写入带内联 color 的 span，skia 后端逐段着色。
+// 每行只占 1 个属性插槽，订阅本行版本（本行变化才重算），token 直接复用缓存。
+func lineRich(idx int) gxscene.RichText {
+    _ = rowVersion(idx)
+    ensureTokenCache()
+    out := gxscene.RichText{}
+    if idx < 0 || idx >= len(tokenCache) { return out }
+    for _, t := range tokenCache[idx] {
+        out = append(out, gxscene.RichSpan{Text: t.Text, Color: t.Color})
+    }
+    return out
+}
+
 // lineGutterColor 与整行同色：行号列不再用独立背景块，避免视觉上把编辑器割成两条。
 // 光标行用左侧强调条（border-left）表达，背景仍与整行一致。
 func lineGutterColor(idx int) string {
@@ -1268,7 +1282,7 @@ func lineView(idx int) *gxscene.Instance {
     // 隐藏行 height=0 + overflow:hidden 裁掉内容，不占空间。
     // 整行（含行号槽 + 代码后的空白）都带 gx-editor-row：点击落在空行或行尾
     // 空白处时前端用 closest 命中这一层拿行号，代码列仍交给 wasm 的 pickColumn。
-    return gxscene.Render(gxscene.Template{Ops:[]gxscene.Op{gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpAttr,Arg:"gx-editor-row",Key:"class",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"bg",Slot:0,},gxscene.Op{Code:gxscene.OpDynAttr,Key:"height",Slot:1,},gxscene.Op{Code:gxscene.OpAttr,Arg:"hidden",Key:"overflow",},gxscene.Op{Code:gxscene.OpAttr,Arg:"0",Key:"flex-shrink",},gxscene.Op{Code:gxscene.OpAttr,Arg:"row",Key:"flex-direction",},gxscene.Op{Code:gxscene.OpAttr,Arg:"center",Key:"align-items",},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"bg",Slot:2,},gxscene.Op{Code:gxscene.OpAttr,Arg:"#858585",Key:"color",},gxscene.Op{Code:gxscene.OpAttr,Arg:"42",Key:"width",},gxscene.Op{Code:gxscene.OpAttr,Arg:"12",Key:"font-size",},gxscene.Op{Code:gxscene.OpAttr,Arg:"22",Key:"height",},gxscene.Op{Code:gxscene.OpAttr,Arg:"22px",Key:"line-height",},gxscene.Op{Code:gxscene.OpAttr,Arg:"8",Key:"margin-right",},gxscene.Op{Code:gxscene.OpAttr,Arg:"0",Key:"flex-shrink",},gxscene.Op{Code:gxscene.OpAttr,Arg:"right",Key:"text-align",},gxscene.Op{Code:gxscene.OpDynChild,Slot:3,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpElem,Arg:"span",},gxscene.Op{Code:gxscene.OpAttr,Arg:"gx-code-line",Key:"class",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"data-code",Slot:4,},gxscene.Op{Code:gxscene.OpAttr,Arg:"pre",Key:"white-space",},gxscene.Op{Code:gxscene.OpAttr,Arg:"13",Key:"font-size",},gxscene.Op{Code:gxscene.OpAttr,Arg:"22",Key:"height",},gxscene.Op{Code:gxscene.OpAttr,Arg:"22px",Key:"line-height",},gxscene.Op{Code:gxscene.OpAttr,Arg:"0",Key:"flex-shrink",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"bg",Slot:5,},gxscene.Op{Code:gxscene.OpAttr,Arg:"#d4d4d4",Key:"color",},gxscene.Op{Code:gxscene.OpDynChild,Slot:6,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpClose,},},N:7,}, func() any{ return lineRowBg(idx) }, func() any{ return rowHeight(idx) }, func() any{ return lineGutterColor(idx) }, func() any{ return lineNumber(idx) }, func() any{ return lineText(idx) }, func() any{ return lineCodeGradient(idx) }, func() any{ return lineText(idx) })
+    return gxscene.Render(gxscene.Template{Ops:[]gxscene.Op{gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpAttr,Arg:"gx-editor-row",Key:"class",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"bg",Slot:0,},gxscene.Op{Code:gxscene.OpDynAttr,Key:"height",Slot:1,},gxscene.Op{Code:gxscene.OpAttr,Arg:"hidden",Key:"overflow",},gxscene.Op{Code:gxscene.OpAttr,Arg:"0",Key:"flex-shrink",},gxscene.Op{Code:gxscene.OpAttr,Arg:"row",Key:"flex-direction",},gxscene.Op{Code:gxscene.OpAttr,Arg:"center",Key:"align-items",},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"bg",Slot:2,},gxscene.Op{Code:gxscene.OpAttr,Arg:"#858585",Key:"color",},gxscene.Op{Code:gxscene.OpAttr,Arg:"42",Key:"width",},gxscene.Op{Code:gxscene.OpAttr,Arg:"12",Key:"font-size",},gxscene.Op{Code:gxscene.OpAttr,Arg:"22",Key:"height",},gxscene.Op{Code:gxscene.OpAttr,Arg:"22px",Key:"line-height",},gxscene.Op{Code:gxscene.OpAttr,Arg:"8",Key:"margin-right",},gxscene.Op{Code:gxscene.OpAttr,Arg:"0",Key:"flex-shrink",},gxscene.Op{Code:gxscene.OpAttr,Arg:"right",Key:"text-align",},gxscene.Op{Code:gxscene.OpDynChild,Slot:3,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpElem,Arg:"span",},gxscene.Op{Code:gxscene.OpAttr,Arg:"gx-code-line",Key:"class",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"data-code",Slot:4,},gxscene.Op{Code:gxscene.OpDynAttr,Key:"rich-text",Slot:5,},gxscene.Op{Code:gxscene.OpAttr,Arg:"pre",Key:"white-space",},gxscene.Op{Code:gxscene.OpAttr,Arg:"13",Key:"font-size",},gxscene.Op{Code:gxscene.OpAttr,Arg:"22",Key:"height",},gxscene.Op{Code:gxscene.OpAttr,Arg:"22px",Key:"line-height",},gxscene.Op{Code:gxscene.OpAttr,Arg:"0",Key:"flex-shrink",},gxscene.Op{Code:gxscene.OpAttr,Arg:"#d4d4d4",Key:"color",},gxscene.Op{Code:gxscene.OpDynChild,Slot:6,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpClose,},},N:7,}, func() any{ return lineRowBg(idx) }, func() any{ return rowHeight(idx) }, func() any{ return lineGutterColor(idx) }, func() any{ return lineNumber(idx) }, func() any{ return lineText(idx) }, func() any{ return lineRich(idx) }, func() any{ return lineText(idx) })
 }
 
 // selectionView 选区色块：绝对定位。两端渲染顺序不同：web 端由 CSS 分层（色块

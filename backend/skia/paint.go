@@ -262,6 +262,11 @@ func (p *painter) paintChildrenClipped(n *gxscene.Node, box layoutBox, eff textS
 		p.canvas.ClipRect(clip, sk.ClipOpIntersect, false)
 	}
 	for _, c := range n.Children {
+		// 父节点带 rich-text 时，其分段着色已由 paintElement 一次绘制；
+		// 跳过纯文本子节点，避免普通单色文字覆盖在上面（同时抵消正确着色）。
+		if isRichText(n) && (c.Kind == "#text" || c.Type == gxscene.NodeText) {
+			continue
+		}
 		if overlay {
 			p.paintOverlayTree(c, eff)
 		} else {
@@ -271,6 +276,15 @@ func (p *painter) paintChildrenClipped(n *gxscene.Node, box layoutBox, eff textS
 	if clipping {
 		p.canvas.Restore()
 	}
+}
+
+// isRichText 报告节点是否携带富文本分段着色数据。
+func isRichText(n *gxscene.Node) bool {
+	if n == nil {
+		return false
+	}
+	rt, ok := gxscene.RichTextFromProps(n.Props)
+	return ok && len(rt) > 0
 }
 
 // paintElement 按 Yoga 给出的矩形画元素背景，并记录命中矩形。
@@ -311,6 +325,14 @@ func (p *painter) paintElement(n *gxscene.Node, box layoutBox) {
 		// video 原语：后端内部 ffmpeg 解码，画当前帧（无帧时画 poster 占位）。
 		if n.Kind == "video" {
 			paintVideo(p, n, box, s)
+		}
+		// 富文本（语法高亮）：div 上的 rich-text 分段在此一次绘制（web 后端对称：
+		// 对 div 也写 innerHTML）。其纯文本子节点会在 paintChildrenClipped 跳过，
+		// 避免单色文字覆盖正确着色。
+		if rt, ok := gxscene.RichTextFromProps(n.Props); ok && len(rt) > 0 {
+			st := textStyle{color: s.color, fontSize: s.fontSize, bold: s.bold}
+			p.paintRichText(n, rt, box, st)
+			*p.log = append(*p.log, DrawOp{Kind: "rich-text", Name: rt.Plain(), X: box.X, Y: box.Y, W: box.W, H: box.H, ARGB: s.color})
 		}
 		// 描边：用 stroke 样式沿矩形（或圆角矩形）边缘绘制。
 		if s.hasBorder && s.borderWidth > 0 {

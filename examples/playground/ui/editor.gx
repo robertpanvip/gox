@@ -1238,6 +1238,20 @@ func lineCodeGradient(idx int) string {
     return gradientCache[idx]
 }
 
+// lineRich 返回第 idx 行的着色分段，供两端后端原生渲染语法高亮：
+// web 后端一次 innerHTML 写入带内联 color 的 span，skia 后端逐段着色。
+// 每行只占 1 个属性插槽，订阅本行版本（本行变化才重算），token 直接复用缓存。
+func lineRich(idx int) gxscene.RichText {
+    _ = rowVersion(idx)
+    ensureTokenCache()
+    out := gxscene.RichText{}
+    if idx < 0 || idx >= len(tokenCache) { return out }
+    for _, t := range tokenCache[idx] {
+        out = append(out, gxscene.RichSpan{Text: t.text, Color: t.color})
+    }
+    return out
+}
+
 // lineGutterColor 与整行同色：行号列不再用独立背景块，避免视觉上把编辑器割成两条。
 // 光标行用左侧强调条（border-left）表达，背景仍与整行一致。
 func lineGutterColor(idx int) string {
@@ -1293,12 +1307,12 @@ func lineView(idx int) *gxscene.Instance {
         <span
             class="gx-code-line"
             data-code={lineText(idx)}
+            rich-text={lineRich(idx)}
             white-space="pre"
             font-size="13"
             height="22"
             line-height="22px"
             flex-shrink="0"
-            bg={lineCodeGradient(idx)}
             color="#d4d4d4"
         >
             {lineText(idx)}
