@@ -12,3 +12,7 @@ gox-lsp
 .idea/
 .vscode/
 *.swp
+
+# embedstd 构建期生成数据（go run ./cmd/gox-stdlib-gen）
+internal/typecheck/embedstd/_srcs/*
+!internal/typecheck/embedstd/_srcs/.gitkeep

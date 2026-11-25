@@ -54,27 +54,32 @@ const STACKING_EXPR = `
   });
 })()`;
 
-// 探针 C：Go 语法诊断——真实浏览器内调 Gox.setSource 注入坏 Go，再经
-// Gox.lspDiagnostics() 取诊断（面板渲染由 TS 事件驱动，程序化注入不触发它，
-// 故断言走 API 层）。契约：parse 诊断行=错误所在 .gx 行（0 基 3）、消息不含
-// 生成文件坐标 check.go。
+// 探针 C：wasm 内嵌类型层端到端——真实浏览器里注入类型错误源码，
+// 断言 lspDiagnostics 产出 code="type" 诊断、坐标回投 .gx（0 基 line 4）、
+// 消息零生成文件坐标泄露；同时输出首次类型检查就绪耗时。
 const GSYNTAX_EXPR = `
 (async () => {
   const wait = ms => new Promise(r => setTimeout(r, ms));
-  const deadline = Date.now() + 30000;
-  while (!(window.Gox && window.Gox.setSource && window.Gox.lspDiagnostics)) {
+  const deadline = Date.now() + 40000;
+  while (!(window.Gox && window.Gox.lspDiagnostics)) {
     if (Date.now() > deadline) return JSON.stringify({ err: "Gox 超时未就绪" });
     await wait(250);
   }
-  Gox.setSource("package main\\n\\nfunc f() {\\n\\tx := ;\\n}\\n");
-  await wait(500);
-  const diags = JSON.parse(Gox.lspDiagnostics());
-  const parse = diags.filter(d => d.code === "parse");
-  const hit = parse.find(d => d.range.start.line >= 2 && d.range.start.line <= 4);
-  return JSON.stringify({ n: diags.length, np: parse.length,
-    sample: parse.slice(0, 3).map(d => [d.range.start.line, d.range.start.character, d.message.slice(0, 40)]),
-    leaked: diags.some(d => (d.message || "").includes("check.go")),
-    ok: !!hit && !diags.some(d => (d.message || "").includes("check.go")) });
+  await wait(600);
+  const src = "package main\n\nfunc f() {\n\tn := 41\n\tvar g string = n\n\t_ = g\n}\n";
+  const t0 = performance.now();
+  Gox.setSource(src);
+  let diags = [];
+  for (let i = 0; i < 250; i++) {
+    diags = JSON.parse(Gox.lspDiagnostics());
+    if (diags.some(d => d.code === "type")) break;
+    await wait(20);
+  }
+  const t1 = performance.now();
+  const td = diags.filter(d => d.code === "type");
+  return JSON.stringify({ msFirst: Math.round(t1 - t0), total: diags.length, typeHit: td.length > 0,
+    sample: td.slice(0, 2).map(d => [d.range.start.line, d.range.start.character, String(d.message).slice(0, 48)]),
+    leaked: diags.some(d => String(d.message).includes("check.go")) });
 })()`;
 
 const PROVIDER_EXPR = `

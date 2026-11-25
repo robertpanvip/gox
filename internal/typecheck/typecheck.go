@@ -16,8 +16,8 @@ import (
 	"go/parser"
 	"go/token"
 	"go/types"
+	"io/fs"
 	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 )
@@ -45,15 +45,29 @@ func dirExists(p string) bool {
 	return err == nil && st.IsDir()
 }
 
-// Check 对 src 执行 go/types 完整检查（语法合法性由调用方先行保证，
-// 语法诊断归 internal/check）。类型错误经 Config.Error 逐条收集。
-func Check(src string, lookup Lookup) ([]Diagnostic, error) {
+// Importer 是可复用的类型检查会话：依赖包（std/gox 闭包）的类型图只构建一次，
+// 跨多次用户代码修改持久缓存——playground 每次击键重检时，成本只剩用户文件本身。
+// 并发不安全：每个 LSP 会话独占一个实例。
+type Importer struct {
+	fset *token.FileSet
+	im   *srcImporter
+}
+
+// NewImporter 创建持久类型检查会话。
+func NewImporter(lookup Lookup) *Importer {
 	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, "input.go", src, parser.SkipObjectResolution)
+	return &Importer{fset: fset, im: &srcImporter{fset: fset, lookup: lookup, pkgs: map[string]*types.Package{}}}
+}
+
+// Check 对 src 执行 go/types 完整检查（语法合法性由调用方先行保证，语法诊断归
+// internal/check）。类型错误只经 Config.Error 回调收集——types.Config.Check 的返回
+// 首错同时也在回调里（重复收集会把每条错误翻倍，RED 测试 TestCheckNoDuplicateError
+// 正是钉这个行为）。
+func (in *Importer) Check(src string) ([]Diagnostic, error) {
+	f, err := parser.ParseFile(in.fset, "input.go", src, parser.SkipObjectResolution)
 	if err != nil {
 		return nil, err
 	}
-	im := &srcImporter{fset: fset, lookup: lookup, pkgs: map[string]*types.Package{}}
 	diags := []Diagnostic{}
 	collect := func(e error) {
 		if len(diags) >= maxDiags {
@@ -64,11 +78,8 @@ func Check(src string, lookup Lookup) ([]Diagnostic, error) {
 			diags = append(diags, Diagnostic{Line: pos.Line, Col: pos.Column, Message: te.Msg})
 		}
 	}
-	conf := types.Config{Importer: im, Error: collect}
-	_, cerr := conf.Check("input", fset, []*ast.File{f}, nil)
-	if cerr != nil {
-		collect(cerr)
-	}
+	conf := types.Config{Importer: in.im, Error: collect}
+	_, _ = conf.Check("input", in.fset, []*ast.File{f}, nil)
 	sort.SliceStable(diags, func(i, j int) bool {
 		if diags[i].Line != diags[j].Line {
 			return diags[i].Line < diags[j].Line
@@ -76,6 +87,11 @@ func Check(src string, lookup Lookup) ([]Diagnostic, error) {
 		return diags[i].Col < diags[j].Col
 	})
 	return diags, nil
+}
+
+// Check 是一次性便捷入口（内部即用 NewImporter）。
+func Check(src string, lookup Lookup) ([]Diagnostic, error) {
+	return NewImporter(lookup).Check(src)
 }
 
 // srcImporter 用 Lookup 的源码做 source 模式类型检查，递归解析依赖并缓存。
@@ -143,15 +159,16 @@ var unixLike = map[string]bool{"linux": true, "android": true, "darwin": true, "
 var littleEndian = map[string]bool{"386": true, "amd64": true, "arm": true, "arm64": true,
 	"loong64": true, "mipsle": true, "mips64le": true, "ppc64le": true, "riscv64": true, "wasm": true}
 
-// DiskLookup 以 root（如 $GOROOT/src）为虚拟文件系统根，按 goos/goarch 过滤：
-// 文件名平台后缀、//go:build 约束、_test.go、含 import "C" 的文件全部排除。
-func DiskLookup(root, goos, goarch string) Lookup {
-	return func(path string) ([]File, bool) {
-		dir := filepath.Join(root, filepath.FromSlash(path))
-		if !dirExists(dir) {
-			return nil, false
+// FSRoot 从任意 io/fs 虚拟文件系统构造 Lookup：dirFor 把 import path 映射到文件系统
+// 内的目录（nil 为恒等映射）。真实磁盘只是 os.DirFS 上的特例——这正是「虚假文件
+// 系统」成立的机制：类型检查只依赖 Lookup 接口，数据源可插拔（磁盘/内存/go:embed）。
+func FSRoot(fsys fs.FS, dirFor func(string) string, goos, goarch string) Lookup {
+	return func(p string) ([]File, bool) {
+		dir := p
+		if dirFor != nil {
+			dir = dirFor(p)
 		}
-		ents, err := os.ReadDir(dir)
+		ents, err := fs.ReadDir(fsys, dir)
 		if err != nil {
 			return nil, false
 		}
@@ -165,24 +182,29 @@ func DiskLookup(root, goos, goarch string) Lookup {
 			if !nameOK(n, goos, goarch) {
 				continue
 			}
-			b, rerr := os.ReadFile(filepath.Join(dir, n))
+			b, rerr := fs.ReadFile(fsys, dir+"/"+n)
 			if rerr != nil {
 				continue
 			}
-			src := string(b)
-			if strings.Contains(src, `import "C"`) {
+			s := string(b)
+			if strings.Contains(s, `import "C"`) {
 				continue
 			}
-			if expr, has := buildConstraint(src); has && !satisfies(expr, goos, goarch) {
+			if expr, has := buildConstraint(s); has && !satisfies(expr, goos, goarch) {
 				continue
 			}
-			out = append(out, File{Name: n, Src: src})
+			out = append(out, File{Name: n, Src: s})
 		}
 		if len(out) == 0 {
 			return nil, false
 		}
 		return out, true
 	}
+}
+
+// DiskLookup 以 root（如 $GOROOT/src）为虚拟文件系统根，按 goos/goarch 过滤。
+func DiskLookup(root, goos, goarch string) Lookup {
+	return FSRoot(os.DirFS(root), nil, goos, goarch)
 }
 
 // nameOK 按 Go 文件名约定过滤 x_<os>.go / x_<os>_<arch>.go / x_<arch>.go。

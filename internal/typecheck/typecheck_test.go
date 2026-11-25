@@ -103,3 +103,46 @@ func TestDiskTagFilter(t *testing.T) {
 		}
 	}
 }
+
+// TestCheckNoDuplicateError 同一错误不得既经 Error 回调又经返回值重复收集。
+func TestCheckNoDuplicateError(t *testing.T) {
+	diags, err := Check("package main\n\nfunc f() {\n\tvar a int\n\ta = \"s\"\n}\n", mapFS(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	for _, d := range diags {
+		if strings.Contains(d.Message, "cannot use") {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Fatalf("cannot use 应恰好一条, got %d: %v", n, diags)
+	}
+}
+
+// TestPersistentImporter 复用同一 Importer：依赖图只建一次，跨多次检查仍正确。
+func TestPersistentImporter(t *testing.T) {
+	vfs := mapFS(map[string]string{
+		"greeter": "package greeter\n\nfunc Hello() string { return \"hi\" }\n",
+	})
+	imp := NewImporter(vfs)
+	d1, err := imp.Check("package main\n\nimport \"greeter\"\n\nfunc f() { var n int = greeter.Hello(); _ = n }\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasDiag(d1, "cannot use") {
+		t.Fatalf("首次检查缺诊断: %v", d1)
+	}
+	d2, err := imp.Check("package main\n\nimport \"greeter\"\n\nfunc f() { var s string = greeter.Hello(); _ = s }\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(d2) != 0 {
+		t.Fatalf("第二次应无错: %v", d2)
+	}
+	d3, _ := imp.Check("package main\n\nfunc g() { var a int = \"z\" }\n")
+	if !hasDiag(d3, "cannot use") {
+		t.Fatalf("复用后仍应检出: %v", d3)
+	}
+}

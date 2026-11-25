@@ -13,6 +13,8 @@ import (
 	"strings"
 
 	"github.com/robertpanvip/gox/internal/check"
+	"github.com/robertpanvip/gox/internal/typecheck"
+	"github.com/robertpanvip/gox/internal/typecheck/embedstd"
 	"github.com/robertpanvip/gox/pkg/compiler"
 )
 
@@ -21,6 +23,8 @@ type Session struct {
 	src   string
 	syms  *SymbolMap
 	diags []Diagnostic
+	// timp 持久类型检查会话（embedstd 就绪时惰性创建，std 依赖图只建一次）
+	timp *typecheck.Importer
 }
 
 // New 创建空会话。
@@ -84,6 +88,39 @@ func (s *Session) diagnostics() {
 			Severity: 1, Source: "gox", Code: &code,
 			Message: d.Code + ": " + d.Message,
 		})
+	}
+	// 类型层（embedstd 就绪时）：go/types 完整检查生成代码，坐标经 sourcemap
+	// 回投 .gx。未生成 embed 数据时整段跳过，行为与接入前逐字节一致。
+	if res.GoSource != "" && !res.InvalidGo {
+		if lk := embedstd.Lookup(); lk != nil {
+			if s.timp == nil {
+				s.timp = typecheck.NewImporter(lk) // std 类型图跨编辑持久，见 typecheck.Importer
+			}
+			tds, terr := s.timp.Check(res.GoSource)
+			if terr == nil {
+				tcode := "type"
+				for _, d := range tds {
+					line, col := d.Line-1, d.Col-1
+					if res.SourceMap != nil {
+						if gp, ok := res.SourceMap.GoToGx(d.Line, d.Col); ok {
+							line, col = gp.Line-1, gp.Column-1
+						}
+					}
+					if line < 0 {
+						line = 0
+					}
+					if col < 0 {
+						col = 0
+					}
+					tp := Position{Line: line, Character: col}
+					s.diags = append(s.diags, Diagnostic{
+						Range:    Range{Start: tp, End: tp},
+						Severity: 1, Source: "gox", Code: &tcode,
+						Message: "type: " + d.Message,
+					})
+				}
+			}
+		}
 	}
 }
 

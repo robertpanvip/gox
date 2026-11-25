@@ -119,3 +119,23 @@ func TestGoSyntaxDiagnosticMapped(t *testing.T) {
 		t.Fatalf("消息不应含生成文件坐标: %q", hit.Message)
 	}
 }
+
+// TestSessionTypeLayerDiagnostic 类型层接线验证：embed 数据存在时，语法合法但
+// 类型错误的源码必须产出 Code="type" 且坐标回投到 .gx 行。
+func TestSessionTypeLayerDiagnostic(t *testing.T) {
+	s := New()
+	s.SetSource("package main\n\nfunc f() {\n\tn := 41\n\tvar g string = n\n\t_ = g\n}\n")
+	var hit *Diagnostic
+	for i := range s.Diagnostics() {
+		d := &s.Diagnostics()[i]
+		if d.Code != nil && *d.Code == "type" {
+			hit = d
+		}
+	}
+	if hit == nil {
+		t.Skip("embedstd 未生成，类型层缺席（预期行为）")
+	}
+	if hit.Range.Start.Line < 4 || hit.Range.Start.Line > 6 {
+		t.Fatalf("type 诊断坐标应回投 .gx 第 6 行附近: %+v", *hit)
+	}
+}
