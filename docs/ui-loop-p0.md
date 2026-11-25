@@ -70,3 +70,35 @@
 - 桌面：后台 Post 唤醒 `WaitEventsTimeout` 的实测延迟分布；UI 线程断言（真实窗口）。
 - Web：`queueMicrotask` 与 Go WASM 回调时序的浏览器实测；若语义无法保证，`PostMicro` 在 Web 标记为受限能力（提案 §5.2 允许）。
 - Loop 与 `UIExecutorDispatcher` 帧去抖的关系保持现状：Loop 不触发 Draw，帧合并仍归 Dispatcher/AfterEffects。
+
+## 5. P4 UIPromise / P5 Watchdog 验收对照（main 实测）
+
+P4（提案 §12 P4）：
+
+| 条目 | 测试 | 结果 |
+| --- | --- | --- |
+| settle 只成功转换一次，后续无效 | `TestSettleOnceFirstWins` | PASS |
+| Then 在 settle 前/后注册；注册与 settle 并发线性化 | `TestThenBeforeAndAfterSettle` `TestThenSettleConcurrentLinearized` | PASS |
+| continuation 经 PostMicro 微任务调度、不在调用栈同步执行 | `TestPromiseThenRunsInUIContext` `TestMicroCheckpointPlacement` | PASS |
+| Then 返回 error / Catch 恢复与再失败 / Finally 保值保错与自身失败传播 | `TestThenErrorPropagates` `TestCatchRecoverAndRethrow` `TestFinallySemantics` | PASS |
+| 回调 panic recover 为下游错误、不逃出 Loop | `TestCallbackPanicBecomesError` | PASS |
+| Executor 关闭 → 下游以可观察调度错误结束，回调不执行 | `TestExecutorClosedPropagates` | PASS |
+| worker 结果经 UI 上下文；worker 返回 error / panic 均 reject | `TestGoWorkerToUIContext` `TestGoRejectAndPanic` | PASS |
+| 多 Then 注册顺序 | `TestMultipleThenRegistrationOrder` | PASS |
+| `-race` 覆盖并发注册与 settle | 全包 `go test -race` | PASS |
+
+P5（提案 §10.4 / §12 P5）：
+
+| 条目 | 测试 | 结果 |
+| --- | --- | --- |
+| 可控阻塞回调触发超时事件：slow→severe→stuck 严格升级、每级一次、每任务仅采一次栈 | `TestWatchdogSlowSevereStuckProgression` | PASS |
+| 任务结束后不再报告该任务 | 同上（结束后再观察 40ms 断言无事件） | PASS |
+| 正常任务不误报 | `TestWatchdogFastTaskNoFalsePositive` | PASS |
+| Loop 关闭后监测 goroutine 退出；Stop 幂等 | `TestWatchdogExitsOnLoopStop` | PASS |
+| 栈采集失败（panic）不导致监测崩溃、不影响 Loop | `TestWatchdogStackCaptureFailureIsolated` | PASS |
+| Report 回调 panic 隔离，监测循环存活 | `TestWatchdogReportPanicIsolated` | PASS |
+| 诊断逻辑（含慢栈采集）不阻塞 UI 任务执行 | `TestWatchdogDiagnosticsDoNotBlockUI` | PASS |
+| §9 观测扩展（等待时间、拒绝计数、drain 耗时） | `TestStatsObservability` | PASS |
+
+Watchdog 定位重申（§10.1）：只诊断、不恢复——不能中断阻塞任务、不能解除死锁、
+不保证界面在阻塞期间继续绘制；以上任何测试都不以「恢复死循环」为验收条件。

@@ -1,4 +1,4 @@
-// Package loop 提供进程级共享的 UI 调度循环（GX 设计提案：UI 调度循环与 UIPromise，P1 阶段）。
+// Package loop 提供进程级共享的 UI 调度循环（GX 设计提案：UI 调度循环与 UIPromise）。
 //
 // 定位（提案 §3.2）：Loop 只是一个任务调度器——
 //   - 接收宏任务 / 微任务；
@@ -84,9 +84,10 @@ type TaskInfo struct {
 
 // DrainReport 是 RunMicrotasks 的结果（提案 §4.2：不得在微任务未清空时宣称检查点完整结束）。
 type DrainReport struct {
-	Ran       int  // 本次 drain 实际执行的任务数
-	Remaining int  // drain 结束后队列中剩余微任务数
-	HitBudget bool // 是否因预算（数量或时间）提前中止
+	Ran       int           // 本次 drain 实际执行的任务数
+	Remaining int           // drain 结束后队列中剩余微任务数
+	HitBudget bool          // 是否因预算（数量或时间）提前中止
+	Took      time.Duration // 本次 drain 的实际耗时（提案 §9 观测项）
 }
 
 // Complete 报告本次检查点是否已彻底清空微任务队列。
@@ -116,7 +117,8 @@ type task struct {
 	posted time.Time
 }
 
-// Stats 是积压与吞吐观测（提案 §9；第一阶段观测优先，不做有界队列阻塞）。
+// Stats 是积压与吞吐观测（提案 §9 第一阶段指标清单：队列长度、drain 数量与
+// 耗时见 DrainReport、提交→开始执行的等待时间、Post 失败次数、被关闭丢弃数）。
 type Stats struct {
 	PostedMacro  int64
 	PostedMicro  int64
@@ -124,6 +126,10 @@ type Stats struct {
 	RanMicro     int64
 	Dropped      int64 // Stop 时丢弃的未执行任务数
 	Panics       int64 // 任务 panic 被 recover 的次数
+	Rejected     int64 // 因 Loop 已关闭被拒绝的 Post/PostMicro 次数
+	WaitedNanos  int64 // 所有已执行任务「提交→开始执行」延迟总和（纳秒）
+	WaitedCount  int64 // 参与等待时间统计的任务数
+	MaxWaitNanos int64 // 单任务最大等待延迟（纳秒）
 	MacroPending int
 	MicroPending int
 }
@@ -150,6 +156,15 @@ type Queue struct {
 	// 避免嵌套 drain 打乱 FIFO 与预算语义。
 	draining bool
 
+	// 任务执行观测（Watchdog 轮询用，见 watchdog.go）。独立小锁，
+	// 避免观测写与队列热路径互相放大竞争。
+	curMu     sync.Mutex
+	curTask   TaskInfo
+	curStart  time.Time
+	curActive bool
+	// closedCh 在首次 Stop 时关闭：旁观者（Watchdog）无需轮询即可退出。
+	closedCh chan struct{}
+
 	st Stats
 	// accepted/run/dropped 一致性计数由 st 汇总。
 }
@@ -158,7 +173,7 @@ var _ Loop = (*Queue)(nil)
 
 // New 按配置创建一个 Loop（第一阶段为进程级共享实例，由宿主创建并持有）。
 func New(cfg Config) *Queue {
-	return &Queue{cfg: cfg}
+	return &Queue{cfg: cfg, closedCh: make(chan struct{})}
 }
 
 // Post 入队一个宏任务（契约：不在调用栈内执行）。
@@ -177,6 +192,7 @@ func (l *Queue) push(kind TaskKind, fn func()) error {
 	}
 	l.mu.Lock()
 	if l.closed {
+		l.st.Rejected++
 		l.mu.Unlock()
 		return ErrClosed
 	}
@@ -272,6 +288,7 @@ func (l *Queue) RunMicrotasks() DrainReport {
 	if l.cfg.MicroDrainTimeBudget > 0 {
 		deadline = time.Now().Add(l.cfg.MicroDrainTimeBudget)
 	}
+	start := time.Now()
 	rep := DrainReport{}
 	for {
 		if l.closed { // Stop 竞态：drain 中途关闭立即停手，剩余已计入 Dropped
@@ -297,6 +314,7 @@ func (l *Queue) RunMicrotasks() DrainReport {
 		rep.Ran++
 	}
 	rep.Remaining = len(l.micro)
+	rep.Took = time.Since(start)
 	if len(l.macro)+len(l.micro) == 0 {
 		l.wakeBusy = false
 	}
@@ -306,9 +324,32 @@ func (l *Queue) RunMicrotasks() DrainReport {
 }
 
 // exec 执行单个任务并落实 panic 策略（recover + 计数 + 钩子；不静默、不逃出 Loop）。
+// 同时写入执行观测（当前任务 + 开始时间）与等待时间统计（提案 §9/§10.2：
+// 每次执行任务前记录任务类型、任务 ID、开始时间；完成后不再处于观测态）。
 func (l *Queue) exec(t task) {
+	now := time.Now()
+	l.curMu.Lock()
+	l.curTask, l.curStart, l.curActive = t.info, now, true
+	l.curMu.Unlock()
+
+	l.mu.Lock()
+	delay := now.Sub(t.posted)
+	if delay < 0 {
+		delay = 0
+	}
+	l.st.WaitedNanos += int64(delay)
+	l.st.WaitedCount++
+	if int64(delay) > l.st.MaxWaitNanos {
+		l.st.MaxWaitNanos = int64(delay)
+	}
+	l.mu.Unlock()
+
 	defer func() {
-		if r := recover(); r != nil {
+		r := recover()
+		l.curMu.Lock()
+		l.curActive = false
+		l.curMu.Unlock()
+		if r != nil {
 			l.mu.Lock()
 			l.st.Panics++
 			hook := l.cfg.OnTaskPanic
@@ -333,6 +374,7 @@ func (l *Queue) Stop() error {
 	l.st.Dropped += int64(len(l.macro) + len(l.micro))
 	l.macro = nil
 	l.micro = nil
+	close(l.closedCh)
 	l.mu.Unlock()
 	return nil
 }
@@ -342,6 +384,17 @@ func (l *Queue) Closed() bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.closed
+}
+
+// ClosedSignal 在首次 Stop 时被关闭，供 Watchdog 等旁观者无轮询退出。
+func (l *Queue) ClosedSignal() <-chan struct{} { return l.closedCh }
+
+// CurrentTask 返回当前正在执行的任务、执行开始时间与是否处于执行中。
+// 观测由 exec 写入（任务开始前置位、结束后清位），供 Watchdog 轮询。
+func (l *Queue) CurrentTask() (TaskInfo, time.Time, bool) {
+	l.curMu.Lock()
+	defer l.curMu.Unlock()
+	return l.curTask, l.curStart, l.curActive
 }
 
 // HasPending 返回当前待处理的宏/微任务数量（宿主调度参考）。
@@ -356,5 +409,7 @@ func (l *Queue) Stats() Stats {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	s := l.st
+	s.MacroPending = len(l.macro)
+	s.MicroPending = len(l.micro)
 	return s
 }
