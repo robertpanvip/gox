@@ -32,10 +32,10 @@ type jsDriver struct {
 }
 
 type jsElem struct {
-	id       ElemID
-	nodeID   gxscene.NodeID
-	v        js.Value
-	kind     string
+	id        ElemID
+	nodeID    gxscene.NodeID
+	v         js.Value
+	kind      string
 	listeners map[string]js.Func
 	canvasCtx js.Value
 }
@@ -313,9 +313,16 @@ func (d *jsDriver) canvasOpsLocked(el *jsElem, opsJSON string) {
 		return
 	}
 	ops := canvas.Decode(opsJSON)
-	// 重置画布尺寸（取布局盒，取不到用元素属性）
+	// 重置画布尺寸：优先取布局盒（元素已插入 DOM 时准确）；首次建树时
+	// CanvasOps 早于 InsertBefore，clientWidth=0，此时回退到 style 里的
+	// width/height（GX 组件写入的 CSS 值），否则 bitmap 停留在默认 300×150，
+	// 而 CSS 只有 15px，图标被压到亚像素几乎不可见。
 	w := el.v.Get("clientWidth").Float()
 	h := el.v.Get("clientHeight").Float()
+	if w <= 0 || h <= 0 {
+		w = cssPixel(el.v.Get("style").Get("width").String())
+		h = cssPixel(el.v.Get("style").Get("height").String())
+	}
 	if w > 0 && h > 0 {
 		el.v.Set("width", int(w))
 		el.v.Set("height", int(h))
@@ -324,6 +331,16 @@ func (d *jsDriver) canvasOpsLocked(el *jsElem, opsJSON string) {
 	for _, op := range ops {
 		drawOp(ctx, op)
 	}
+}
+
+// cssPixel 从 CSS 长度值解析出像素数（"15px" → 15）；非长度返回 0。
+func cssPixel(s string) float64 {
+	s = strings.TrimSpace(strings.TrimSuffix(strings.TrimSuffix(s, "px"), "PX"))
+	f, err := strconv.ParseFloat(s, 64)
+	if err != nil {
+		return 0
+	}
+	return f
 }
 
 // Root 返回挂载容器（供外部直接操作，如设置 body 样式）。
@@ -349,14 +366,24 @@ func mapFiredEvent(name string, id gxscene.NodeID, args []js.Value, doc js.Value
 	ev := FiredEvent{Name: name, NodeID: id}
 	if len(args) > 0 && args[0].Truthy() {
 		e := args[0]
-		if t := e.Get("clientX"); t.Truthy() { ev.X = t.Float() }
-		if t := e.Get("clientY"); t.Truthy() { ev.Y = t.Float() }
-		if t := e.Get("button"); t.Truthy() { ev.Button = t.Int() }
-		if t := e.Get("key"); t.Truthy() { ev.Key = t.String() }
+		if t := e.Get("clientX"); t.Truthy() {
+			ev.X = t.Float()
+		}
+		if t := e.Get("clientY"); t.Truthy() {
+			ev.Y = t.Float()
+		}
+		if t := e.Get("button"); t.Truthy() {
+			ev.Button = t.Int()
+		}
+		if t := e.Get("key"); t.Truthy() {
+			ev.Key = t.String()
+		}
 		ev.Mods = readMods(e)
 		target := e.Get("target")
 		if target.Truthy() {
-			if t := target.Get("value"); t.Truthy() { ev.Value = t.String() }
+			if t := target.Get("value"); t.Truthy() {
+				ev.Value = t.String()
+			}
 		}
 		ev.Raw = e
 	}
@@ -365,10 +392,18 @@ func mapFiredEvent(name string, id gxscene.NodeID, args []js.Value, doc js.Value
 
 func readMods(e js.Value) uint8 {
 	var m uint8
-	if e.Get("shiftKey").Truthy() { m |= 1 }
-	if e.Get("ctrlKey").Truthy() { m |= 2 }
-	if e.Get("altKey").Truthy() { m |= 4 }
-	if e.Get("metaKey").Truthy() { m |= 8 }
+	if e.Get("shiftKey").Truthy() {
+		m |= 1
+	}
+	if e.Get("ctrlKey").Truthy() {
+		m |= 2
+	}
+	if e.Get("altKey").Truthy() {
+		m |= 4
+	}
+	if e.Get("metaKey").Truthy() {
+		m |= 8
+	}
 	return m
 }
 
@@ -394,18 +429,36 @@ func drawOp(ctx js.Value, op canvas.Op) {
 	case canvas.OpCircle:
 		ctx.Call("beginPath")
 		ctx.Call("arc", op.CX, op.CY, op.R, 0, 6.283185307179586)
-		if op.Fill != "" { ctx.Set("fillStyle", op.Fill); ctx.Call("fill") }
-		if op.Stroke != "" { ctx.Set("strokeStyle", op.Stroke); ctx.Set("lineWidth", op.StrokeWidth); ctx.Call("stroke") }
+		if op.Fill != "" {
+			ctx.Set("fillStyle", op.Fill)
+			ctx.Call("fill")
+		}
+		if op.Stroke != "" {
+			ctx.Set("strokeStyle", op.Stroke)
+			ctx.Set("lineWidth", op.StrokeWidth)
+			ctx.Call("stroke")
+		}
 	case canvas.OpLine:
 		ctx.Call("beginPath")
 		ctx.Call("moveTo", op.X1, op.Y1)
 		ctx.Call("lineTo", op.X2, op.Y2)
-		if op.Stroke != "" { ctx.Set("strokeStyle", op.Stroke); ctx.Set("lineWidth", op.StrokeWidth); ctx.Call("stroke") }
+		if op.Stroke != "" {
+			ctx.Set("strokeStyle", op.Stroke)
+			ctx.Set("lineWidth", op.StrokeWidth)
+			ctx.Call("stroke")
+		}
 	case canvas.OpPath:
 		ctx.Call("beginPath")
 		applyPath(ctx, op.D)
-		if op.Fill != "" { ctx.Set("fillStyle", op.Fill); ctx.Call("fill") }
-		if op.Stroke != "" { ctx.Set("strokeStyle", op.Stroke); ctx.Set("lineWidth", op.StrokeWidth); ctx.Call("stroke") }
+		if op.Fill != "" {
+			ctx.Set("fillStyle", op.Fill)
+			ctx.Call("fill")
+		}
+		if op.Stroke != "" {
+			ctx.Set("strokeStyle", op.Stroke)
+			ctx.Set("lineWidth", op.StrokeWidth)
+			ctx.Call("stroke")
+		}
 	}
 }
 
@@ -426,12 +479,16 @@ func roundRect(ctx js.Value, x, y, w, h, r float32) {
 // applyPath 解析 SVG path 子集 M/L/H/V/C/Q/Z，与 Rust 后端 SVG 子集一致。
 // H/V 是相对当前点的水平/垂直线，需跟踪 lastX/lastY。
 func applyPath(ctx js.Value, d string) {
-	tokens := strings.FieldsFunc(d, func(r rune) bool {
-		return r == ',' || r == ' ' || r == '\n' || r == '\t'
-	})
+	// SVG path 允许命令字母与数字粘连（如 "M4.375 2.5 L12.5"），不能只按
+	// 空白分词——否则 cmd 变成 "M4.375"，switch 匹配不到任何命令，整条路径
+	// 被静默忽略（表现为图标 canvas 全空）。这里逐字符切分：命令字母单独成
+	// token，数字（含小数/指数/正负号）单独成 token，逗号与空白视作分隔符。
+	tokens := tokenizePath(d)
 	i := 0
 	num := func() float64 {
-		if i >= len(tokens) { return 0 }
+		if i >= len(tokens) {
+			return 0
+		}
 		f, _ := strconv.ParseFloat(tokens[i], 64)
 		i++
 		return f
@@ -441,25 +498,41 @@ func applyPath(ctx js.Value, d string) {
 		cmd := tokens[i]
 		i++
 		switch cmd {
-		case "M":
+		case "M", "m":
 			lastX, lastY = num(), num()
 			ctx.Call("moveTo", lastX, lastY)
-		case "L":
+		case "L", "l":
 			lastX, lastY = num(), num()
 			ctx.Call("lineTo", lastX, lastY)
-		case "H":
+		case "H", "h":
 			lastX = num()
 			ctx.Call("lineTo", lastX, lastY)
-		case "V":
+		case "V", "v":
 			lastY = num()
 			ctx.Call("lineTo", lastX, lastY)
-		case "C":
+		case "C", "c":
 			x1, y1, x2, y2, x, y := num(), num(), num(), num(), num(), num()
 			ctx.Call("bezierCurveTo", x1, y1, x2, y2, x, y)
 			lastX, lastY = x, y
-		case "Q":
+		case "S", "s":
+			x2, y2, x, y := num(), num(), num(), num()
+			ctx.Call("bezierCurveTo", lastX, lastY, x2, y2, x, y)
+			lastX, lastY = x, y
+		case "Q", "q":
 			cx, cy, x, y := num(), num(), num(), num()
 			ctx.Call("quadraticCurveTo", cx, cy, x, y)
+			lastX, lastY = x, y
+		case "T", "t":
+			x, y := num(), num()
+			ctx.Call("quadraticCurveTo", lastX, lastY, x, y)
+			lastX, lastY = x, y
+		case "A", "a":
+			rx, ry, rot, large, sweep, x, y := num(), num(), num(), num(), num(), num(), num()
+			endAngle := 0.0
+			if sweep != 0 {
+				endAngle = 6.283185307179586
+			}
+			ctx.Call("ellipse", lastX, lastY, rx, ry, rot*3.141592653589793/180, 0, endAngle, large != 0)
 			lastX, lastY = x, y
 		case "Z", "z":
 			ctx.Call("closePath")

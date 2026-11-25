@@ -10,6 +10,7 @@ import (
     demos "github.com/robertpanvip/gox-playground/ui/demos"
     Signal "github.com/robertpanvip/gox/runtime/signal"
     gxscene "github.com/robertpanvip/gox/runtime/scene"
+    widgets "github.com/robertpanvip/gox/widgets"
 )
 
 // ---- 运行态：Run 按钮解释源码后的预览实例与错误 ----
@@ -20,6 +21,19 @@ var runErr = ""
 var runStamp = 0     // 每次 Run 自增，驱动预览 getter 重算
 pub sig runningSig = false
 var runHandler func()  // 装配层注入的 Run 回调（解释源码 + 重渲染）
+
+// ---- 主题切换（Apple 明暗双主题）----
+// 装配层注入切换回调：内部 SetTheme + app.Render 重建整棵树换肤。
+var themeHandler func(bool) // 参数 true=浅色
+pub func SetThemeHandler(fn func(bool)) { themeHandler = fn }
+// SetLightTheme 由装配层在启动时同步 URL 指定的初始主题到 UI 状态。
+pub func SetLightTheme(v bool) { Signal.batch(func() { lightTheme = v }) }
+pub sig lightTheme = false
+pub func ToggleTheme() {
+    next := !lightTheme
+    Signal.batch(func() { lightTheme = next })
+    if themeHandler != nil { themeHandler(next) }
+}
 
 // SetRunHandler 由装配层注入 Run 动作。
 pub func SetRunHandler(fn func()) { runHandler = fn }
@@ -46,9 +60,9 @@ pub func RunInfo() string {
 }
 
 func RunInfoColor() string {
-    if runErr != "" { return "#f85149" }
-    if runInstance != nil { return "#3fb950" }
-    return "#6e7681"
+    if runErr != "" { return widgets.UseToken("danger")() }
+    if runInstance != nil { return widgets.UseToken("success")() }
+    return mutedColor()
 }
 
 func hasRunResult() bool { return runInstance != nil }
@@ -125,28 +139,38 @@ func demoPreview() *gxscene.Instance {
     return demos.View(sampleIndex)
 }
 
-// ---- 配色与选中态（必须是读 sampleIndex 的 getter，不能是渲染快照） ----
+// ---- Apple 设计系统接线（widgets token + 组件库）----
+// 所有配色/阴影/圆角/线宽来自 widgets 的 Apple 明暗双主题 token，
+// 主题切换后由装配层 app.Render 重建场景树即可整体换肤（与 showcase 同源）。
+func RadiusPanelLocal() string { return widgets.RadiusPanel }
+func appBg() string       { return widgets.UseToken("grouped")() }
+func panelBg() string     { return widgets.UseToken("panel")() }
+func canvasBg() string    { return widgets.UseToken("bg")() }
+func borderColor() string { return widgets.UseToken("hairline")() }
+func textColor() string   { return widgets.UseToken("text")() }
+func mutedColor() string  { return widgets.UseToken("muted")() }
+func accentColor() string { return widgets.UseToken("accent")() }
 
-// 现代 IDE 风配色：画布 → 面板 → 卡片三层递进，主色湖蓝，分组用语义色。
+// 分组语义色走 Apple system color token。
 func groupColor(g string) string {
-    if g == "基础" { return "#58a6ff" }
-    if g == "响应式" { return "#3fb950" }
-    if g == "语言特性" { return "#d2a8ff" }
-    return "#8b949e"
+    if g == "基础" { return widgets.UseToken("blue")() }
+    if g == "响应式" { return widgets.UseToken("green")() }
+    if g == "语言特性" { return widgets.UseToken("purple")() }
+    return mutedColor()
 }
 
-// 卡片统一阴影，制造悬浮层次（Pane 阴影更强）。
-func cardShadow() string { return "0 1px 3px rgba(0,0,0,.35)" }
-func paneShadow() string { return "0 8px 24px rgba(0,0,0,.28)" }
+// 阴影统一用 widgets 的 Apple HIG token（三端算法已对齐）。
+func cardShadow() string { return widgets.ShadowCard }
+func paneShadow() string { return widgets.ShadowFloat }
 
-// 选中示例的强调色与左侧 3px 指示条。
+// 选中示例：Apple 强调色底 + 白字；未选中用控件底 + 主文字。
 func sampleRowBg(i int) string {
-    if i == sampleIndex { return "#1f6feb" }
-    return "#1c2333"
+    if i == SampleIndex() { return accentColor() }
+    return widgets.UseToken("panelalt")()
 }
 func sampleRowFg(i int) string {
-    if i == sampleIndex { return "#ffffff" }
-    return "#c9d1d9"
+    if i == SampleIndex() { return widgets.UseToken("onaccent")() }
+    return textColor()
 }
 
 func sampleRow(i int) *gxscene.Instance {
@@ -157,59 +181,46 @@ func sampleRow(i int) *gxscene.Instance {
         style={{
             background: sampleRowBg(i),
             padding: "8 10",
-            borderRadius: 8,
-            border: "1px solid #2a3446",
+            borderRadius: widgets.RadiusSmall,
+            borderWidth: widgets.HairlineWidth,
+            border: borderColor(),
             flexDirection: "column",
             gap: 3,
             cursor: "pointer",
             transition: "background .15s",
-            hover: { background: "#26314a" },
         }}
         onClick={() => loadSample(i)}
     >
-        <div style={{ color: sampleRowFg(i), fontSize: 13, weight: "bold" }}>{s.name}</div>
-        <div style={{ color: groupColor(s.group), fontSize: 10 }}>{s.group + " · " + s.tag}</div>
+        {widgets.Text(gxscene.Props{"value": s.name, "size": widgets.FontBody, "weight": "bold", "tone": sampleRowFg(i)})}
+        <div style={{ color: groupColor(s.group), fontSize: widgets.FontFootnote }}>{s.group + " · " + s.tag}</div>
     </div>
 }
 
 func sampleList() *gxscene.Instance {
-    return <div style={{ flexDirection: "column", gap: 5, height: 500, overflow: "auto" }}>
+    return <div style={{ flexDirection: "column", gap: 4, height: 500, overflow: "auto" }}>
         <For each={Indices(len(samples()))}>{(i int) => sampleRow(i())}</For>
     </div>
 }
 
 // ---- 工具栏 ----
 
-func toolbarButton(label string, bg string, fn func()) *gxscene.Instance {
-    return <div
-        style={{
-            background: bg,
-            color: "#ffffff",
-            padding: "7 14",
-            minWidth: 78,
-            flexShrink: 0,
-            border: "1px solid #3a4457",
-            borderRadius: 7,
-            fontSize: 12,
-            weight: "bold",
-            textAlign: "center",
-            cursor: "pointer",
-            transition: "opacity .15s",
-            hover: { opacity: "0.85" },
-            active: { opacity: "1" },
-        }}
-        onClick={fn}
-    >
-        {label}
-    </div>
+func toolbarButton(label string, icon string, variant string, fn func()) *gxscene.Instance {
+    return widgets.Button(gxscene.Props{
+        "label": label,
+        "icon": icon,
+        "variant": variant,
+        "width": "96",
+        "onClick": gxscene.Handler(func(e gxscene.EventContext) { fn() }),
+    })
 }
 
 func toolbar() *gxscene.Instance {
     return <div style={{ flexDirection: "row", gap: 8, alignItems: "center" }}>
-        {toolbarButton("◀ 上一个", "#30363d", prevSample)}
-        {toolbarButton("下一个 ▶", "#30363d", nextSample)}
-        {toolbarButton("▶ Run", "#238636", TriggerRun)}
-        <div style={{ color: "#8b949e", fontSize: 11, padding: 8 }}>{EditorStatus()}</div>
+        {toolbarButton("上一个", "chevron-left", "secondary", prevSample)}
+        {toolbarButton("下一个", "chevron-right", "secondary", nextSample)}
+        {toolbarButton("运行", "play", "primary", TriggerRun)}
+        {toolbarButton("主题", "moon", "secondary", ToggleTheme)}
+        {widgets.Text(gxscene.Props{"value": EditorStatus(), "size": widgets.FontFootnote, "tone": "muted"})}
     </div>
 }
 
@@ -219,71 +230,71 @@ pub func Playground() *gxscene.Instance {
     n := len(samples())
     return <div
         style={{
-            background: "#0d1117",
-            color: "#c9d1d9",
+            background: canvasBg(),
+            color: textColor(),
             padding: 0,
             flexDirection: "column",
             gap: 0,
             width: 1360,
             height: 760,
-            borderRadius: 14,
+            borderRadius: RadiusPanelLocal(),
+            borderWidth: widgets.HairlineWidth,
+            border: borderColor(),
             overflow: "hidden",
             boxShadow: paneShadow(),
         }}
     >
         <div
             style={{
-                background: "#141c2f",
+                background: panelBg(),
                 padding: "16 20",
                 flexDirection: "column",
                 gap: 4,
             }}
         >
-            <div style={{ color: "#e6edf3", fontSize: 22, weight: "bold", letterSpacing: "0.3" }}>
-                GX Playground
-            </div>
-            <div style={{ color: "#8b949e", fontSize: 12 }}>
-                {"用 GX 写 GX · 桌面与网页同源 · " + strconv.Itoa(n) + " 个示例 · 内建 LSP · Run 真正解释你的代码"}
-            </div>
+            {widgets.Heading(gxscene.Props{"value": "GX Playground", "level": 2, "tone": "text"})}
+            {widgets.Text(gxscene.Props{
+                "value": "用 GX 写 GX · 桌面与网页同源 · " + strconv.Itoa(n) + " 个示例 · 内建 LSP · Run 解释当前源码",
+                "size": widgets.FontCallout, "tone": "muted",
+            })}
         </div>
         <div style={{ flexDirection: "row", gap: 12, padding: 16, flexGrow: 1, height: 620 }}>
             <div
-                style={{ background: "#111827", padding: 12, borderRadius: 10, width: 240, flexDirection: "column", gap: 8, border: "1px solid #232d3f", boxShadow: cardShadow() }}
+                style={{ background: panelBg(), padding: 12, borderRadius: widgets.RadiusCard, width: 240, flexDirection: "column", gap: 8, borderWidth: widgets.HairlineWidth, border: borderColor(), boxShadow: cardShadow() }}
             >
-                <div style={{ color: "#8b949e", fontSize: 11, weight: "bold", letterSpacing: "1" }}>
-                    {"示例  /  " + strconv.Itoa(n)}
-                </div>
+                {widgets.Text(gxscene.Props{"value": "示例  /  " + strconv.Itoa(n), "size": widgets.FontFootnote, "weight": "bold", "tone": "muted"})}
                 {sampleList()}
             </div>
             <div style={{ flexDirection: "column", gap: 8, width: 660 }}>
                 {toolbar()}
                 <div
-                    style={{ background: "#111827", padding: 12, borderRadius: 10, border: "1px solid #232d3f", boxShadow: cardShadow() }}
+                    style={{ background: panelBg(), padding: 12, borderRadius: widgets.RadiusCard, borderWidth: widgets.HairlineWidth, border: borderColor(), boxShadow: cardShadow() }}
                 >
                     {Editor()}
                 </div>
             </div>
             <div
-                style={{ background: "#111827", padding: 12, borderRadius: 10, width: 400, flexDirection: "column", gap: 8, border: "1px solid #232d3f", boxShadow: cardShadow() }}
+                style={{ background: panelBg(), padding: 12, borderRadius: widgets.RadiusCard, width: 400, flexDirection: "column", gap: 8, borderWidth: widgets.HairlineWidth, border: borderColor(), boxShadow: cardShadow() }}
             >
                 <div style={{ flexDirection: "column", gap: 3 }}>
-                    <div style={{ color: "#3fb950", fontSize: 13, weight: "bold" }}>
+                    <div style={{ color: accentColor(), fontSize: widgets.FontBody, weight: "bold" }}>
                         ⬤ 实时预览
                     </div>
-                    <div style={{ color: "#8b949e", fontSize: 11 }}>
-                        {samples()[sampleIndex].name + " · " + samples()[sampleIndex].desc}
-                    </div>
+                    {widgets.Text(gxscene.Props{
+                        "value": samples()[sampleIndex].name + " · " + samples()[sampleIndex].desc,
+                        "size": widgets.FontFootnote, "tone": "muted",
+                    })}
                 </div>
                 <div
-                    style={{ background: "#0b1020", padding: 12, borderRadius: 8, minHeight: 400, border: "1px solid #1c2740" }}
+                    style={{ background: appBg(), padding: 12, borderRadius: widgets.RadiusSmall, minHeight: 400, borderWidth: widgets.HairlineWidth, border: borderColor() }}
                 >
                     {demoPreview()}
                 </div>
-                <div style={{ color: RunInfoColor(), fontSize: 10 }}>{RunInfo()}</div>
+                <div style={{ color: RunInfoColor(), fontSize: widgets.FontFootnote }}>{RunInfo()}</div>
             </div>
         </div>
-        <div style={{ color: "#6e7681", fontSize: 11, padding: "12 16" }}>
-            Ctrl+Enter 运行 · Ctrl+Z 撤销 · Ctrl+Space 补全 · Shift+Alt+F 格式化 · 悬停看符号
+        <div style={{ color: mutedColor(), fontSize: widgets.FontFootnote, padding: "12 16" }}>
+            ⌘↵ 运行 · ⌘Z 撤销 · ⌃空格 补全 · ⇧⌥F 格式化 · 悬停看符号
         </div>
     </div>
 }

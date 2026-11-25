@@ -9,6 +9,7 @@ import (
 	"github.com/robertpanvip/gox-playground/ui"
 	"github.com/robertpanvip/gox-playground/ui/interp"
 	gxapp "github.com/robertpanvip/gox/runtime/app"
+	"github.com/robertpanvip/gox/widgets"
 )
 
 func main() {
@@ -40,6 +41,18 @@ func main() {
 		}
 		if rerr := app.Render(func() any { return ui.Playground() }); rerr != nil {
 			ui.SetRunResult(nil, "重渲染失败: "+rerr.Error())
+		}
+	})
+
+	// 主题切换：Apple 明暗双主题。切主题后重建整棵树换肤（token 立即求值）。
+	ui.SetThemeHandler(func(light bool) {
+		if light {
+			widgets.SetTheme(widgets.LightTheme)
+		} else {
+			widgets.SetTheme(widgets.DarkTheme)
+		}
+		if rerr := app.Render(func() any { return ui.Playground() }); rerr != nil {
+			panic(rerr)
 		}
 	})
 

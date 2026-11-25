@@ -8,6 +8,8 @@
            background: #020617; color: #e2e8f0; min-height: 100vh;
            display: flex; flex-direction: column; align-items: center; padding: 16px;
            overflow-x: auto; }
+    /* Apple 浅色主题：切换按钮写 body[data-theme=light]，视口底色随之换肤。 */
+    body[data-theme="light"] { background: #f2f2f7; color: #1e1e1e; }
     #app { outline: none; flex: none; user-select: none; -webkit-user-select: none; }
     /* 移动端软键盘代理：隐藏但必须可聚焦（display:none 无法唤起键盘）。
        关键：不能用 pointer-events:none——iOS Safari 会判定该元素不可交互，

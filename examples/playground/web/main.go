@@ -16,8 +16,9 @@ import (
 	gxweb "github.com/robertpanvip/gox-backend-web"
 	"github.com/robertpanvip/gox-playground/ui"
 	"github.com/robertpanvip/gox-playground/ui/interp"
-	gxapp "github.com/robertpanvip/gox/runtime/app"
 	"github.com/robertpanvip/gox/pkg/goxlsp"
+	gxapp "github.com/robertpanvip/gox/runtime/app"
+	"github.com/robertpanvip/gox/widgets"
 )
 
 // lsp 是浏览器内的语言服务会话。只跑编译器 + GX 语义规则，不启动 go build，
@@ -25,6 +26,14 @@ import (
 var lsp = goxlsp.New()
 
 func main() {
+	// 初始主题读 URL ?theme=light（便于分享浅色链接与视觉回归截图）。
+	// 默认跟随 Apple 深色；显式 light 切浅色。body 属性同步视口底色。
+	if js.Global().Get("location").Get("search").String() == "?theme=light" {
+		widgets.SetTheme(widgets.LightTheme)
+		js.Global().Get("document").Get("body").Call("setAttribute", "data-theme", "light")
+		ui.SetLightTheme(true)
+	}
+
 	win := gxweb.MustOpen("#app")
 	app, err := gxapp.OpenWith(gxapp.WindowConfig{Title: "GX Playground (Web)", Backend: "web"}, win)
 	if err != nil {
@@ -47,6 +56,20 @@ func main() {
 		}
 		if rerr := app.Render(func() any { return ui.Playground() }); rerr != nil {
 			ui.SetRunResult(nil, "重渲染失败: "+rerr.Error())
+		}
+	})
+
+	// 主题切换：Apple 明暗双主题，同步 body 底色避免宽视口露出异色边。
+	ui.SetThemeHandler(func(light bool) {
+		if light {
+			widgets.SetTheme(widgets.LightTheme)
+			js.Global().Get("document").Get("body").Call("setAttribute", "data-theme", "light")
+		} else {
+			widgets.SetTheme(widgets.DarkTheme)
+			js.Global().Get("document").Get("body").Call("setAttribute", "data-theme", "dark")
+		}
+		if rerr := app.Render(func() any { return ui.Playground() }); rerr != nil {
+			panic(rerr)
 		}
 	})
 
