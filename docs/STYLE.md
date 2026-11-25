@@ -198,12 +198,19 @@ Context **可以跨文件共享**，且共享的是同一个响应式实例（�
 
 **问题**：透明 framebuffer 只让像素透明，鼠标事件仍由 X11 窗口按矩形整体捕获——点击透明区不会落到后面的应用（"透明 ≠ 鼠标穿透"）。
 
-**方案**：把窗口的 **input shape**（X11 `ShapeInput`）设为"本帧真正绘制出的不透明内容"矩形集合。X11 只把鼠标事件投递到 input shape 覆盖的区域，其余区域直接穿透给下层窗口——这是 OS 级点击穿透，等价于 Web `pointer-events:none`。
+**方案**：把"本帧真正绘制出的不透明内容"矩形集合设为窗口的可命中区，其余透明区让鼠标穿透到下层窗口——等价于 Web `pointer-events:none`。三端平台机制不同，共用同一份矩形口径：
 
-- **口径用 DrawLog 而非 hitbox**：hitbox 对所有节点（含 `#root`/`#frag` 透明容器、无 bg 的纯透明 div）都记录，若据此设形状会把整窗算作输入区、失去穿透。`DrawLog` 只含真正画出的 `rect`/`text`/`fragment`，跳过 `ARGB` alpha=0 的透明项，再按 dpr 换算到物理像素。
-- **每帧更新**：`paintNow` 绘制后调用 `applyInputShape(win, log, dpr, ...)`；`MousePassthrough=false` 时恢复整窗矩形，行为与既有完全一致。
-- **实现落点**：`examples/skia-style-demo/passthrough_linux.go`（cgo + libXext `XShapeCombineRectangles`）；`passthrough_other.go` 为非 Linux 的 no-op 桩（保持签名，后续可在 macOS `NSView.hitTest` / Windows 命中测试实现）。
-- **验证**：`GX_PASSTHROUGH=1` 开启；xvfb + openbox 下把透明窗口叠在 xev 上，实测透明区点击到达后面窗口（xev ButtonPress=1）、内容区点击被拦截（xev=0）。单测 `passthrough_linux_test.go` 固化透明项跳过与 DPR 换算口径。
+- **统一口径（DrawLog 而非 hitbox）**：`passthrough_common.go` 的 `drawLogToInputRects` 把 `DrawLog` 转成物理像素矩形，跳过 `ARGB` alpha=0 的透明 fragment/隐藏节点。hitbox 对所有节点（含 `#root`/`#frag` 透明容器、无 bg 的纯透明 div）都记录，若据此设输入区会把整窗算作可点、失去穿透。`passthrough_common_test.go` 固化该口径与 DPR 换算。
+- **每帧更新**：`paintNow` 绘制后调用 `applyInputShape(win, log, dpr, ...)`；`MousePassthrough=false` 时各平台恢复整窗可点，行为与既有完全一致。
+
+| 平台 | 机制 | 实现文件 | 穿透粒度 | 验证状态 |
+|---|---|---|---|---|
+| Linux/X11 | `XShapeCombineRectangles(ShapeInput)` | `passthrough_linux.go`（cgo + libXext，OS 级区域形状） | 区域级 | ✅ 真机（xvfb+openbox 叠层实测） |
+| Windows | WndProc 子类化，`WM_NCHITTEST` 透明区返回 `HTTRANSPARENT` | `passthrough_windows.go`（纯 Go syscall user32.dll） | 区域级 | ⚠️ 仅交叉编译验证（amd64/386），无真机 |
+| macOS | `NSWindow.ignoresMouseEvents` + 全局鼠标位置轮询 | `passthrough_darwin.go`（cgo + AppKit；事件循环每帧 `pollPassthrough`） | 整窗动态开关（效果等价） | ⚠️ 仅代码审查，沙箱无 macOS SDK 无法编译/真机 |
+| 其他 | no-op | `passthrough_other.go` | 不支持（静默忽略） | — |
+
+**验证（Linux）**：`GX_PASSTHROUGH=1` 开启；透明窗口叠在 xev 上，透明区点击到达后面窗口（xev ButtonPress=1）、内容区点击被拦截（xev=0）。macOS/Windows 因沙箱无对应 SDK/工具链，只做了交叉编译与代码审查，需在真机上跑同样的叠层实验确认。
 
 ## 12. 用 GX 编写组件库（自举）
 

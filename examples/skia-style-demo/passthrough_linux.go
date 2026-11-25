@@ -18,9 +18,6 @@ import (
 	skia "github.com/robertpanvip/gox-backend-skia"
 )
 
-// inputRect 是窗口内容区坐标系下的物理像素矩形。
-type inputRect struct{ x, y, w, h int32 }
-
 // setInputShape 把窗口的输入形状设为 rects（物理像素，内容区左上原点）。
 // rects 为空表示形状为空——整个窗口鼠标穿透。这是"透明区点击落到后面"的关键：
 // X11 只把输入事件投递到 input shape 覆盖的窗口区域，其余区域直接穿透给下层窗口。
@@ -64,20 +61,7 @@ func applyInputShape(win *glfw.Window, log skia.DrawLog, dpr float32, physW, phy
 	setInputShape(dpy, xw, drawLogToInputRects(log, dpr))
 }
 
-// drawLogToInputRects 把本帧 DrawLog 转成输入形状矩形（物理像素）。
-// 跳过完全透明的内容（alpha=0 的 fragment/隐藏节点），只保留真正画出的
-// 不透明矩形/文字/图片；空结果表示整窗穿透。
-func drawLogToInputRects(log skia.DrawLog, dpr float32) []inputRect {
-	rects := make([]inputRect, 0, len(log))
-	for _, op := range log {
-		if (op.ARGB >> 24) == 0 {
-			continue
-		}
-		x, y := int32(op.X*dpr), int32(op.Y*dpr)
-		w, hh := int32(op.W*dpr), int32(op.H*dpr)
-		if w > 0 && hh > 0 {
-			rects = append(rects, inputRect{x, y, w, hh})
-		}
-	}
-	return rects
-}
+// 平台钩子：Linux 的 XShape 是 OS 级输入形状，设置一次即生效，无需每帧轮询。
+func pollPassthrough()            {}
+func ptDarwinInit(_ *glfw.Window) {}
+func darwinRelease()              {}

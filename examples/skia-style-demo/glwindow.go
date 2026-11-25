@@ -104,6 +104,8 @@ func (g *glWindow) Open(cfg gxapp.WindowConfig) error {
 	gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
 
 	g.win = win
+	// macOS 穿透需要 NSWindow 句柄绑定（其他平台 no-op）。
+	ptDarwinInit(win)
 	g.context = sk.GrDirectContextsMakeGLInterface(sk.GrGLMakeNativeInterface())
 	g.fonts = make(map[int]sk.Font)
 
@@ -299,6 +301,8 @@ func (g *glWindow) Run() error {
 	for !g.win.ShouldClose() {
 		glfw.WaitEventsTimeout(0.02) // 20ms 超时，兼顾事件响应与 signal 异步重绘
 		g.paintNow()
+		// macOS 穿透：每帧按全局鼠标位置切换 ignoresMouseEvents（其他平台 no-op）。
+		pollPassthrough()
 	}
 	return nil
 }
@@ -328,6 +332,7 @@ func (g *glWindow) Close() error {
 	if g.win != nil {
 		g.win.Destroy()
 	}
+	darwinRelease()
 	glfw.Terminate()
 	return nil
 }

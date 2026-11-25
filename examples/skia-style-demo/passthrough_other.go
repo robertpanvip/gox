@@ -1,4 +1,4 @@
-//go:build !linux
+//go:build !linux && !windows && !darwin
 
 package main
 
@@ -13,3 +13,7 @@ import (
 // 后续可在 darwin（NSWindow contentArea 命中）与 windows（SetWindowRgn/命中测试）
 // 分别实现，接口签名保持不变。
 func applyInputShape(_ *glfw.Window, _ skia.DrawLog, _ float32, _, _ int, _ bool) {}
+
+func pollPassthrough()            {}
+func ptDarwinInit(_ *glfw.Window) {}
+func darwinRelease()              {}
