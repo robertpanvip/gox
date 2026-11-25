@@ -13,9 +13,9 @@ import (
 
 	"github.com/go-gl/gl/v3.3-core/gl"
 	"github.com/go-gl/glfw/v3.3/glfw"
-	sk "github.com/robertpanvip/gox-skia/compat"
 	skia "github.com/robertpanvip/gox-backend-skia"
 	"github.com/robertpanvip/gox-playground/ui"
+	sk "github.com/robertpanvip/gox-skia/compat"
 	gxapp "github.com/robertpanvip/gox/runtime/app"
 	"github.com/robertpanvip/gox/runtime/loop"
 	gxscene "github.com/robertpanvip/gox/runtime/scene"
@@ -460,13 +460,9 @@ func (g *glWindow) drainLoop() {
 	if g.uiLoop == nil {
 		return
 	}
-	for {
-		ran := g.uiLoop.RunOneMacro()
-		rep := g.uiLoop.RunMicrotasks()
-		if !ran && rep.Ran == 0 && rep.Remaining == 0 {
-			return
-		}
-	}
+	// 单次宿主轮次：微任务预算耗尽（洪水续命）时带积压让出，由下一轮
+	// WaitEventsTimeout 继续——紧凑清空会架空 §4.2 的公平性让步。
+	g.uiLoop.DrainTurn()
 }
 
 // Run 实现 gxapp.Window：主线程事件循环，处理 GLFW 事件并按需绘制新帧。

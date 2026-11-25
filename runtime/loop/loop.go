@@ -269,6 +269,37 @@ func (l *Queue) RunOne() bool {
 	return true
 }
 
+// TurnReport 是一次宿主轮次（DrainTurn）的结果汇总。
+type TurnReport struct {
+	Macros  int  // 本轮次执行的宏任务数
+	Micros  int  // 本轮次执行的微任务数
+	Backlog bool // 是否因微任务预算耗尽而提前让出（仍有积压）
+}
+
+// DrainTurn 执行一个完整的宿主轮次（提案 §4.1 节奏 + §4.2 公平性）：
+// 每取出一个宏任务执行后即过一次微任务检查点；微任务 drain 触到预算时
+// 立即带着 Backlog=true 让出——由宿主在下一轮事件循环继续消耗积压。
+// 宿主不得用「循环调用直到无积压」的紧凑循环架空单次预算，否则自我续命
+// 的微任务洪水会饿死窗口事件与输入处理。
+func (l *Queue) DrainTurn() TurnReport {
+	out := TurnReport{}
+	for {
+		ran := l.RunOneMacro()
+		if ran {
+			out.Macros++
+		}
+		mrep := l.RunMicrotasks()
+		out.Micros += mrep.Ran
+		if mrep.HitBudget {
+			out.Backlog = true
+			return out
+		}
+		if !ran && mrep.Ran == 0 {
+			return out
+		}
+	}
+}
+
 // RunMicrotasks 在宿主检查点上 drain 微任务队列（提案 §4.1 规则 3-5、§4.2 预算）。
 // drain 期间新入队的微任务在同一批次按 FIFO 继续执行，直到队列清空或预算耗尽。
 // 重入保护：微任务回调内部再调用本方法时直接返回当前剩余，不嵌套 drain。

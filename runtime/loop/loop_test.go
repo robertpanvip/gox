@@ -303,3 +303,32 @@ func TestTimeBudget(t *testing.T) {
 		t.Fatalf("时间预算未生效: %+v", rep)
 	}
 }
+
+// TestDrainTurnYieldsOnMicrotaskFlood 验证宿主轮次的公平性（提案 §4.2）：
+// 微任务洪水（每个微任务自我续命）下，一次 DrainTurn 必须在数量预算处
+// 让出控制权并如实报告 Backlog——预算若被宿主紧凑循环架空，窗口事件/
+// 输入会被无限饿死。此前宿主接入（while Ran>0 紧凑清空）正是把让步机制
+// 绕空的活缺陷，本测试先失败后修复。
+func TestDrainTurnYieldsOnMicrotaskFlood(t *testing.T) {
+	l := New(Config{MaxMicrotasksPerDrain: 4})
+	var spawn func()
+	spawn = func() { l.PostMicro(func() { spawn() }) }
+	spawn()
+	start := time.Now()
+	rep := l.DrainTurn()
+	if time.Since(start) > 2*time.Second {
+		t.Fatalf("DrainTurn 未在洪水下让出: %v", time.Since(start))
+	}
+	if rep.Micros < 1 || rep.Micros > 4 || !rep.Backlog {
+		t.Fatalf("预算让步异常: %+v", rep)
+	}
+	// 下一轮：宏任务照常执行（backlog 不吞新任务）
+	ran := false
+	if err := l.Post(func() { ran = true }); err != nil {
+		t.Fatal(err)
+	}
+	rep2 := l.DrainTurn()
+	if !ran || rep2.Macros != 1 {
+		t.Fatalf("宏任务应在下一轮次执行: ran=%v rep=%+v", ran, rep2)
+	}
+}
