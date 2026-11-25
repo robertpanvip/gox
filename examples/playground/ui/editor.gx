@@ -854,6 +854,25 @@ func selRectWidth(idx int) float64 {
     return w
 }
 
+// selRectBg 无选区时返回空背景：Skia 布局对 width=0 的绝对定位节点会按内容量出
+// 一个默认宽度（约 8px），若仍带 bg 就会在行号后画出一条竖带。bg 为空时 parseStyle
+// 的 hasBg=false，Skia 不绘制；Web 端该色块本就 0 宽不可见，不受影响。
+func selRectBg(idx int) string {
+    if !hasSelection() || idx < selFromLine() || idx > selToLine() { return "" }
+    if selRectWidth(idx) <= 0 { return "" }
+    return "#264f7899"
+}
+
+func selFromLine() int {
+    fl, _ := selFrom()
+    return fl
+}
+
+func selToLine() int {
+    tl, _ := selTo()
+    return tl
+}
+
 func selRectTop(idx int) float64 {
     return 6 + float64(idx * 22)
 }
@@ -1300,7 +1319,7 @@ func selectionView(idx int) *gxscene.Instance {
         left={selRectLeft(idx)}
         width={selRectWidth(idx)}
         height="22"
-        bg="#264f7899"
+        bg={selRectBg(idx)}
         z-index="1"
     />
 }

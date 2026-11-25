@@ -854,6 +854,25 @@ func selRectWidth(idx int) float64 {
     return w
 }
 
+// selRectBg 无选区时返回空背景：Skia 布局对 width=0 的绝对定位节点会按内容量出
+// 一个默认宽度（约 8px），若仍带 bg 就会在行号后画出一条竖带。bg 为空时 parseStyle
+// 的 hasBg=false，Skia 不绘制；Web 端该色块本就 0 宽不可见，不受影响。
+func selRectBg(idx int) string {
+    if !HasSelection() || idx < selFromLine() || idx > selToLine() { return "" }
+    if selRectWidth(idx) <= 0 { return "" }
+    return "#264f7899"
+}
+
+func selFromLine() int {
+    fl, _ := selFrom()
+    return fl
+}
+
+func selToLine() int {
+    tl, _ := selTo()
+    return tl
+}
+
 func selRectTop(idx int) float64 {
     return 6 + float64(idx * 22)
 }
@@ -1258,7 +1277,7 @@ func lineView(idx int) *gxscene.Instance {
 // 用 8 位 hex 半透明 #264f7899（parseColor 支持 #rrggbbaa）保文字可读，
 // web 端再由页面 CSS 的 background-color !important 覆盖回不透明 #264f78。
 func selectionView(idx int) *gxscene.Instance {
-    return gxscene.Render(gxscene.Template{Ops:[]gxscene.Op{gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpAttr,Arg:"gx-sel",Key:"class",},gxscene.Op{Code:gxscene.OpAttr,Arg:"absolute",Key:"position",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"top",Slot:0,},gxscene.Op{Code:gxscene.OpDynAttr,Key:"left",Slot:1,},gxscene.Op{Code:gxscene.OpDynAttr,Key:"width",Slot:2,},gxscene.Op{Code:gxscene.OpAttr,Arg:"22",Key:"height",},gxscene.Op{Code:gxscene.OpAttr,Arg:"#264f7899",Key:"bg",},gxscene.Op{Code:gxscene.OpAttr,Arg:"1",Key:"z-index",},gxscene.Op{Code:gxscene.OpClose,},},N:3,}, func() any{ return selRectTop(idx) }, func() any{ return selRectLeft(idx) }, func() any{ return selRectWidth(idx) })
+    return gxscene.Render(gxscene.Template{Ops:[]gxscene.Op{gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpAttr,Arg:"gx-sel",Key:"class",},gxscene.Op{Code:gxscene.OpAttr,Arg:"absolute",Key:"position",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"top",Slot:0,},gxscene.Op{Code:gxscene.OpDynAttr,Key:"left",Slot:1,},gxscene.Op{Code:gxscene.OpDynAttr,Key:"width",Slot:2,},gxscene.Op{Code:gxscene.OpAttr,Arg:"22",Key:"height",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"bg",Slot:3,},gxscene.Op{Code:gxscene.OpAttr,Arg:"1",Key:"z-index",},gxscene.Op{Code:gxscene.OpClose,},},N:4,}, func() any{ return selRectTop(idx) }, func() any{ return selRectLeft(idx) }, func() any{ return selRectWidth(idx) }, func() any{ return selRectBg(idx) })
 }
 
 // 固定 24 行：For 的 each 是常量，所有行在首帧就完成叶子 effect 绑定。
