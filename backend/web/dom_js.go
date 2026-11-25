@@ -181,18 +181,36 @@ func (d *jsDriver) SetAttr(e ElemID, key, value string) {
 		d.canvasOpsLocked(el, value)
 		return
 	}
+	// gradient-text 是三端统一的语义开关：Skia/Rust 把 bg 渐变裁到文字，
+	// Web 端在此翻译成 background-clip:text + color:transparent（浏览器原生
+	// 没有 shader，靠 CSS 裁切），使编辑器无需在宿主 HTML 里内联专用 CSS。
+	if isGradientTextProp(key) {
+		style := el.v.Get("style")
+		if gradientTextEnabled(value) {
+			style.Call("setProperty", "-webkit-background-clip", "text")
+			style.Call("setProperty", "background-clip", "text")
+			style.Call("setProperty", "color", "transparent")
+		} else {
+			style.Call("removeProperty", "-webkit-background-clip")
+			style.Call("removeProperty", "background-clip")
+			style.Call("removeProperty", "color")
+		}
+		return
+	}
 	if isStyleKey(key) && !strings.HasPrefix(key, "&:") && !strings.HasPrefix(key, "$:") {
+		style := el.v.Get("style")
 		if value == "" {
-			el.v.Get("style").Call("removeProperty", cssName(key))
+			style.Call("removeProperty", cssName(key))
+			style.Call("removeProperty", "background-image") // bg 渐变可能走此键
 		} else {
 			// GX 场景树用 flex-direction / gap / align-items 声明布局——Skia 端由
 			// 布局引擎直接消费；浏览器端这些 CSS 属性只在 display:flex 容器上生效。
 			// 因此任何 flex 意图属性出现时，同步把容器切成 flex，保持两端布局一致。
 			// 注意只在有值时设置，清属性不反向删除 display（避免误伤宿主自己的布局）。
 			if isFlexLayoutKey(key) {
-				el.v.Get("style").Call("setProperty", "display", "flex")
+				style.Call("setProperty", "display", "flex")
 			}
-			el.v.Get("style").Call("setProperty", cssName(key), cssValue(key, value))
+			style.Call("setProperty", styleTargetProp(key, value), cssValue(key, value))
 		}
 		return
 	}

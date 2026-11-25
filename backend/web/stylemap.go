@@ -26,6 +26,18 @@ func isStyleKey(key string) bool {
 	return strings.HasPrefix(key, "&:") || strings.HasPrefix(key, "$:")
 }
 
+// isGradientTextProp 判断属性是否为「渐变文字」语义开关（三端统一）。
+// Skia/Rust 后端据此把 bg 渐变裁到文字而非画成背景；Web 端在 SetAttr 里
+// 据此生成 background-clip:text + color:transparent，避免编辑器依赖宿主 CSS。
+func isGradientTextProp(key string) bool {
+	return strings.EqualFold(key, "gradient-text")
+}
+
+// gradientTextEnabled 判断渐变文字开关的值是否表示开启（"1"/"true"）。
+func gradientTextEnabled(value string) bool {
+	return value == "1" || strings.EqualFold(value, "true")
+}
+
 // cssName 把 GX 样式名映射到 CSS 属性名。数值型长度由 cssValue 加 px。
 func cssName(key string) string {
 	switch key {
@@ -39,6 +51,22 @@ func cssName(key string) string {
 		return "scrollLeft"
 	}
 	return key
+}
+
+// styleTargetProp 返回设置样式时实际使用的 CSS 属性名。
+//
+// 关键：bg=linear-gradient(...) 必须用 background-image 而非 background 简写。
+// CSS 的 background 简写会把 background-clip 重置为 border-box，若与
+// gradient-text 的 background-clip:text 同时出现，无论两者设置顺序如何，
+// 渐变都会被画成背景色块、文字被 color:transparent 藏掉（截图表现为一条条
+// 彩色方块）。用 background-image 只设背景图，不触碰 clip，编辑器渐变文字
+// 因此完全由 GX 语义属性表达，无需宿主 CSS 兜底。
+func styleTargetProp(key, value string) string {
+	name := cssName(key)
+	if name == "background" && strings.HasPrefix(strings.TrimSpace(value), "linear-gradient(") {
+		return "background-image"
+	}
+	return name
 }
 
 // boxShorthandProps 是支持 1~4 值简写的盒模型属性。这些属性的值先经 cssbox

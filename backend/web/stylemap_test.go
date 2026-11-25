@@ -100,3 +100,49 @@ func approx(s string, want float64) bool {
 	}
 	return d <= 1e-3
 }
+
+// TestGradientTextProp 验证三端统一的 gradient-text 语义开关识别：
+// Web 后端据此把 bg 渐变裁到文字（background-clip:text + color:transparent），
+// 与 Skia/Rust 的 shader 裁剪等价，编辑器因此不再依赖宿主 HTML 内联 CSS。
+func TestGradientTextProp(t *testing.T) {
+	for _, tc := range []struct {
+		key    string
+		isProp bool
+	}{
+		{"gradient-text", true},
+		{"GRADIENT-TEXT", true},
+		{"background", false},
+		{"color", false},
+	} {
+		if got := isGradientTextProp(tc.key); got != tc.isProp {
+			t.Errorf("isGradientTextProp(%q) = %v, want %v", tc.key, got, tc.isProp)
+		}
+	}
+	for _, tc := range []struct {
+		value string
+		want  bool
+	}{
+		{"1", true}, {"true", true}, {"TRUE", true},
+		{"0", false}, {"", false}, {"false", false},
+	} {
+		if got := gradientTextEnabled(tc.value); got != tc.want {
+			t.Errorf("gradientTextEnabled(%q) = %v, want %v", tc.value, got, tc.want)
+		}
+	}
+}
+
+// TestStyleTargetPropGradientUsesImage 回归：bg=linear-gradient 必须映射到
+// background-image，不能用 background 简写——后者会重置 background-clip，
+// 导致 gradient-text 节点的渐变被画成背景块、文字被 color:transparent 藏掉。
+func TestStyleTargetPropGradientUsesImage(t *testing.T) {
+	grad := "linear-gradient(90deg, #c586c0 0ch 4ch, #d4d4d4 4ch 8ch)"
+	if got := styleTargetProp("bg", grad); got != "background-image" {
+		t.Errorf("bg 渐变应映射 background-image，got %q", got)
+	}
+	if got := styleTargetProp("bg", " #ff0000 "); got == "background-image" {
+		t.Errorf("普通 bg 颜色不应映射 background-image，got %q", got)
+	}
+	if got := styleTargetProp("bg", grad); got == "background" {
+		t.Error("bg 渐变不得用 background 简写（会重置 background-clip）")
+	}
+}
