@@ -1,0 +1,16 @@
+// Signal.computed 派生 + Signal.batch 合并 + 事件传函数原值
+sig price = 10
+sig qty = 2
+var total = Signal.computed(() => price * qty)
+func bump() {
+    Signal.batch(() => {
+        price = price + 1
+        qty = qty + 1
+    })
+}
+func view() *gxscene.Instance {
+    return <div style={{ flexDirection: "column", gap: 6 }}>
+        <span>Total: {total}</span>
+        <button onClick={bump}>加价加量</button>
+    </div>
+}

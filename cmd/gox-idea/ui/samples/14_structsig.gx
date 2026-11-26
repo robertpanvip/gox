@@ -1,0 +1,13 @@
+// struct sig 字段：显式标注才响应，构造后读到的是实时值
+type state struct {
+    sig count int
+}
+sig source = 0
+func bump() { source = source + 1 }
+func view() *gxscene.Instance {
+    s := state{count: source}
+    return <div style={{ flexDirection: "column", gap: 8 }}>
+        <button onClick={bump} style={{ padding: 8 }}>+1</button>
+        <span style={{ color: "#9cdcfe" }}>count: {s.count}</span>
+    </div>
+}

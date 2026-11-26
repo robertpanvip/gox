@@ -1,0 +1,13 @@
+// 事件传函数原值：具名函数 / 箭头 / func 字面量 / 带 EventContext 签名
+sig last = "none"
+func named() { last = "named" }
+func onCtx(e gxscene.EventContext) { if e.Synthetic != nil { last = string(e.Synthetic.Type) } }
+func view() *gxscene.Instance {
+    return <div style={{ flexDirection: "column", gap: 6 }}>
+        <button onClick={named} style={{ padding: 8 }}>具名函数</button>
+        <button onClick={() => last = "arrow"} style={{ padding: 8 }}>箭头</button>
+        <button onClick={func() { last = "literal" }} style={{ padding: 8 }}>func 字面量</button>
+        <button onClick={onCtx} style={{ padding: 8 }}>带 ctx</button>
+        <span style={{ color: "#c3e88d" }}>last: {last}</span>
+    </div>
+}

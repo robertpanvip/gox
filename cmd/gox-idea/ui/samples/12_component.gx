@@ -1,0 +1,17 @@
+// 组件：pub func 返回场景树，props 的 sig 字段保鲜（读到的是实时值）
+type cardProps struct {
+    sig title string
+}
+pub func card(p cardProps) *gxscene.Instance {
+    return <div style={{ background: "#1e293b", padding: 12, borderRadius: 8 }}>
+        <b style={{ color: "#7dd3fc" }}>{p.title}</b>
+    </div>
+}
+sig text = "Hello"
+func change() { text = "Changed" }
+func view() *gxscene.Instance {
+    return <div style={{ flexDirection: "column", gap: 8 }}>
+        <button onClick={change} style={{ padding: 8 }}>改标题</button>
+        <Card title={text}/>
+    </div>
+}

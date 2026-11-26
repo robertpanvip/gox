@@ -1,0 +1,16 @@
+// style={{...}} 强类型 struct + 驼峰 key + 伪状态单词 key
+func view() *gxscene.Instance {
+    return <div
+        style={{
+            background: "#0b1020",
+            padding: 20,
+            borderRadius: 12,
+            flexDirection: "column",
+            gap: 8,
+            hover: { background: "#1e293b" },
+        }}
+    >
+        <b style={{ color: "#7dd3fc", fontSize: 24 }}>Card</b>
+        <span style={{ color: "#94a3b8" }}>用 GX style struct 写的样式</span>
+    </div>
+}

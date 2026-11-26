@@ -14,5 +14,6 @@ use (
 	./examples/widget-showcase
 	./examples/web-widget-showcase
 	./cmd/gox-ide
+	./cmd/gox-idea
 	./cmd/gox-term
 )

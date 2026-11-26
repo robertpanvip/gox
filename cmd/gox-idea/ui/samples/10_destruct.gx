@@ -1,0 +1,12 @@
+// 对象解构：{ x, y } := p 逐字段取值
+type point struct { x int; y int }
+func coord() point { return point{x: 3, y: 4} }
+func view() *gxscene.Instance {
+    p := coord()
+    var { x, y } = p
+    return <div style={{ flexDirection: "column", gap: 6 }}>
+        <span style={{ color: "#9cdcfe" }}>x = {x}</span>
+        <span style={{ color: "#c3e88d" }}>y = {y}</span>
+        <span style={{ color: "#858585" }}>sum = {x + y}</span>
+    </div>
+}
