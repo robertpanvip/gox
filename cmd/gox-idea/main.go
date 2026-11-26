@@ -33,7 +33,7 @@ func main() {
 		}
 	}
 
-	// 窗口需容纳 Playground() 的 1360x760 界面，另留边距，否则内容被裁切。
+	// 窗口尺寸与 Playground() 的 1400x860 界面一致，IDE 外壳贴满整个窗口。
 	win := openGL()
 	title := "GoX IDE"
 	if root != "" {

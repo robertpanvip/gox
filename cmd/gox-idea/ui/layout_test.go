@@ -91,6 +91,21 @@ func TestTerminalViewHeightFollowsSignal(t *testing.T) {
 	SetLayoutTerminalH(180) // 复位
 }
 
+// TestEditorAreaShrinksAsTerminalGrows 验证水平分隔条拖拽能真正生效：
+// 编辑区高度必须随终端高度反向变化（显式高度而非 flexGrow，避免编辑器固定高度
+// 阻碍 flex 收缩）。这是 H 分隔条能移动的根本保证。
+func TestEditorAreaShrinksAsTerminalGrows(t *testing.T) {
+	SetLayoutTerminalH(180)
+	if got := editorAreaPx(); got != "524" {
+		t.Errorf("终端 180 时编辑区高度=%q, want 524", got)
+	}
+	SetLayoutTerminalH(300)
+	if got := editorAreaPx(); got != "404" {
+		t.Errorf("终端 300 时编辑区高度=%q, want 404", got)
+	}
+	SetLayoutTerminalH(180) // 复位
+}
+
 func TestSplitDraggingToggle(t *testing.T) {
 	SetSplitDragging(true)
 	if !LayoutSplitActive() {

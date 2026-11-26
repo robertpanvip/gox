@@ -131,6 +131,9 @@ pub func TerminalClear() { terminalState.Clear() }
 // 布局尺寸/分隔条状态的 getter（函数体内裸读 sig，交给 GX 生成响应式 getter）。
 func projectWidthPx() string { return strconv.Itoa(layoutProjectW) }
 func terminalHeightPx() string { return strconv.Itoa(layoutTerminalH) }
+// editorAreaPx 让编辑器区高度随终端高度反向变化（主区 768 - 标签栏32 - 分隔条6 - 终端头26）。
+// 显式高度而非 flexGrow，避免编辑器内置固定高度阻碍 flex 收缩导致水平分隔条拖不动。
+func editorAreaPx() string { return strconv.Itoa(768 - 32 - 6 - 26 - layoutTerminalH) }
 func splitActiveBg() string {
     if layoutSplitActive { return accentColor() }
     return borderColor()
@@ -142,20 +145,19 @@ func terminalText() string  { return terminalState.Text() }
 // 拖拽水平分隔条写 layoutTerminalH 即可实时改变高度（widgets.Terminal 内部
 // height 是静态 attr，无法响应信号，故这里不用该组件）。
 func TerminalView() *gxscene.Instance {
-    return <div
-        style={{ flexDirection: "column", gap: 0, borderRadius: widgets.RadiusCard, overflow: "hidden", borderWidth: widgets.HairlineWidth, border: borderColor(), boxShadow: cardShadow() }}
-    >
+    // WebStorm 底部工具窗口：无圆角卡片、无 Mac 红黄绿灯，贴紧分隔条的细标签头。
+    return <div style={{ flexDirection: "column", gap: 0, overflow: "hidden" }}>
         <div
-            style={{ flexDirection: "row", gap: 8, alignItems: "center", padding: "6 10", background: widgets.UseToken("panelalt")() }}
+            style={{ flexDirection: "row", gap: 16, alignItems: "center", padding: "4 12", background: panelBg() }}
         >
-            <div style={{ width: 8, height: 8, borderRadius: 4, background: "#ff5f57" }}/>
-            <div style={{ width: 8, height: 8, borderRadius: 4, background: "#febc2e" }}/>
-            <div style={{ width: 8, height: 8, borderRadius: 4, background: "#28c840" }}/>
-            {widgets.Text(gxscene.Props{"value": "Terminal", "size": widgets.FontFootnote, "weight": "bold", "tone": "muted"})}
+            {widgets.Text(gxscene.Props{"value": "Terminal", "size": widgets.FontFootnote, "weight": "bold", "tone": accentColor()})}
+            {widgets.Text(gxscene.Props{"value": "Run", "size": widgets.FontFootnote, "tone": "muted"})}
+            {widgets.Text(gxscene.Props{"value": "Problems", "size": widgets.FontFootnote, "tone": "muted"})}
+            <div style={{ flexGrow: 1 }}/>
             {widgets.Text(gxscene.Props{"value": terminalLines(), "size": widgets.FontFootnote, "tone": "muted"})}
         </div>
         <div
-            style={{ background: appBg(), padding: "8 10", height: terminalHeightPx(), overflow: "auto", fontSize: widgets.FontFootnote, color: widgets.UseToken("success")() }}
+            style={{ background: canvasBg(), padding: "6 12", height: terminalHeightPx(), overflow: "auto", fontSize: widgets.FontFootnote, color: widgets.UseToken("success")() }}
         >
             {widgets.Text(gxscene.Props{"value": terminalText(), "size": widgets.FontFootnote, "tone": "muted"})}
         </div>
@@ -656,39 +658,147 @@ func projectPanel() *gxscene.Instance {
     </div>
 }
 
-// ---- 工具栏 ----
+// ---- WebStorm 风格 IDE 外壳（菜单栏 / 工具栏 / 编辑器标签 / 状态栏）----
+// 与 playground 彻底分开：没有营销标题、示例库浏览、上一个/下一个大按钮与圆角卡片。
+// 外壳全部贴边、细分隔线、紧凑控件，还原真实 JetBrains IDE 的观感。
 
-func toolbarButton(label string, icon string, variant string, fn func()) *gxscene.Instance {
-    return widgets.Button(gxscene.Props{
-        "label": label,
-        "icon": icon,
-        "variant": variant,
-        "width": "96",
-        "onClick": gxscene.Handler(func(e gxscene.EventContext) { fn() }),
-    })
-}
+// chromeBg 是 IDE 外壳（菜单栏/工具栏/标签栏/状态栏）底色。
+// 不用 "grouped"（暗色下为纯黑，过于生硬），改用 panel 让外壳呈 JetBrains 风格的深灰。
+func chromeBg() string { return widgets.UseToken("panel")() }
 
-func toolbar() *gxscene.Instance {
-    return <div style={{ flexDirection: "row", gap: 8, alignItems: "center" }}>
-        {toolbarButton("上一个", "chevron-left", "secondary", prevSample)}
-        {toolbarButton("下一个", "chevron-right", "secondary", nextSample)}
-        {toolbarButton("运行", "play", "primary", TriggerRun)}
-        {toolbarButton("主题", "moon", "secondary", ToggleTheme)}
-        {widgets.Text(gxscene.Props{"value": EditorStatus(), "size": widgets.FontFootnote, "tone": "muted"})}
+func ideNoop() {}
+
+func menuItem(label string) *gxscene.Instance {
+    return <div style={{ cursor: "pointer", padding: "3 3" }}>
+        {widgets.Text(gxscene.Props{"value": label, "size": widgets.FontFootnote, "tone": "muted"})}
     </div>
 }
 
-// ---- 主界面 ----
-
-func projectSubtitle(n int) string {
-    if projectRoot != "" {
-        return "WebStorm 风格项目管理器 · " + projectRoot + " · 点击左侧文件打开"
-    }
-    return "用 GX 写 GX · 内置 SVG 图标项目树 · " + strconv.Itoa(n) + " 个示例 · 内建 LSP · Run 解释当前源码"
+func menuBar() *gxscene.Instance {
+    return <div
+        style={{ flexDirection: "row", alignItems: "center", gap: 14, height: 30, padding: "0 12", background: chromeBg(), borderWidth: widgets.HairlineWidth, border: borderColor() }}
+    >
+        {menuItem("File")}{menuItem("Edit")}{menuItem("View")}{menuItem("Navigate")}
+        {menuItem("Code")}{menuItem("Refactor")}{menuItem("Run")}{menuItem("Tools")}
+        {menuItem("Git")}{menuItem("Window")}{menuItem("Help")}
+        <div style={{ flexGrow: 1 }}/>
+        {widgets.Text(gxscene.Props{"value": "GoX IDE", "size": widgets.FontFootnote, "tone": "muted"})}
+    </div>
 }
 
+func iconButton(name string, fn func()) *gxscene.Instance {
+    return <div
+        onClick={() => fn()}
+        style={{ width: 28, height: 26, alignItems: "center", justifyContent: "center", borderRadius: widgets.RadiusSmall, cursor: "pointer", hover: { background: widgets.UseToken("panelalt")() } }}
+    >
+        {widgets.Icon(gxscene.Props{"name": name, "size": 16, "tone": "muted"})}
+    </div>
+}
+
+func runButton() *gxscene.Instance {
+    return <div
+        onClick={() => TriggerRun()}
+        style={{ flexDirection: "row", alignItems: "center", gap: 6, height: 26, padding: "0 12", borderRadius: widgets.RadiusSmall, background: accentColor(), cursor: "pointer" }}
+    >
+        {widgets.Icon(gxscene.Props{"name": "play", "size": 14, "color": widgets.UseToken("onaccent")()})}
+        {widgets.Text(gxscene.Props{"value": "Run", "size": widgets.FontFootnote, "weight": "bold", "tone": widgets.UseToken("onaccent")()})}
+    </div>
+}
+
+func currentFileName() string {
+    if projectRoot != "" && projectFileSelected != "" { return filepath.Base(projectFileSelected) }
+    return sampleFile(sampleIndex)
+}
+
+func breadcrumbText() string {
+    if projectRoot != "" {
+        name := filepath.Base(projectRoot)
+        if projectFileSelected != "" {
+            rel, err := filepath.Rel(projectRoot, projectFileSelected)
+            if err == nil { return name + "  ›  " + filepath.ToSlash(rel) }
+            return name + "  ›  " + filepath.Base(projectFileSelected)
+        }
+        return name
+    }
+    return "gox-idea  ›  " + groupOfSample(sampleIndex) + "  ›  " + sampleFile(sampleIndex)
+}
+
+func ideToolbar() *gxscene.Instance {
+    return <div
+        style={{ flexDirection: "row", alignItems: "center", gap: 6, height: 36, padding: "0 10", background: chromeBg(), borderWidth: widgets.HairlineWidth, border: borderColor() }}
+    >
+        {iconButton("folder", ideNoop)}{iconButton("doc", ideNoop)}{iconButton("search", ideNoop)}
+        <div style={{ width: 1, height: 18, background: borderColor() }}/>
+        {iconButton("chevron-left", prevSample)}{iconButton("chevron-right", nextSample)}
+        <div style={{ width: 1, height: 18, background: borderColor() }}/>
+        {runButton()}{iconButton("refresh", ideNoop)}
+        <div style={{ flexGrow: 1 }}/>
+        {widgets.Text(gxscene.Props{"value": breadcrumbText(), "size": widgets.FontFootnote, "tone": "muted"})}
+        <div style={{ width: 8 }}/>
+        {iconButton("panel", ToggleTerminal)}{iconButton("moon", ToggleTheme)}
+    </div>
+}
+
+// editorTabBar 编辑器标签页：当前文件高亮 + 关闭图标，紧贴代码区顶部。
+func editorTabBar() *gxscene.Instance {
+    return <div
+        style={{ flexDirection: "row", alignItems: "flex-end", height: 32, background: chromeBg(), borderWidth: widgets.HairlineWidth, border: borderColor() }}
+    >
+        <div
+            style={{ flexDirection: "row", alignItems: "center", gap: 8, height: 31, padding: "0 12", background: canvasBg(), borderWidth: widgets.HairlineWidth, border: borderColor() }}
+        >
+            {widgets.Icon(gxscene.Props{"name": "doc", "size": 14, "tone": "blue"})}
+            {widgets.Text(gxscene.Props{"value": currentFileName(), "size": widgets.FontFootnote, "tone": "text"})}
+            {widgets.Icon(gxscene.Props{"name": "close", "size": 12, "tone": "muted"})}
+        </div>
+        <div style={{ flexGrow: 1 }}/>
+    </div>
+}
+
+// toolStripe 最左侧工具窗口竖栏（Project / Search / VCS / Settings），纯展示导航。
+func stripeButton(name string, active bool) *gxscene.Instance {
+    bg := ""
+    tone := "muted"
+    if active { bg = widgets.UseToken("panelalt")(); tone = "blue" }
+    return <div
+        style={{ width: 34, height: 34, alignItems: "center", justifyContent: "center", borderRadius: widgets.RadiusSmall, background: bg, cursor: "pointer", hover: { background: widgets.UseToken("panelalt")() } }}
+    >
+        {widgets.Icon(gxscene.Props{"name": name, "size": 18, "tone": tone})}
+    </div>
+}
+
+func toolStripe() *gxscene.Instance {
+    return <div
+        style={{ flexDirection: "column", alignItems: "center", gap: 4, width: 40, padding: "6 0", background: chromeBg(), borderWidth: widgets.HairlineWidth, border: borderColor() }}
+    >
+        {stripeButton("folder", true)}{stripeButton("search", false)}{stripeButton("graph", false)}
+        {stripeButton("cog", false)}
+        <div style={{ flexGrow: 1 }}/>
+        {stripeButton("gear", false)}
+    </div>
+}
+
+func statusBar() *gxscene.Instance {
+    return <div
+        style={{ flexDirection: "row", alignItems: "center", gap: 16, height: 26, padding: "0 12", background: chromeBg(), borderWidth: widgets.HairlineWidth, border: borderColor() }}
+    >
+        {widgets.Icon(gxscene.Props{"name": "bolt", "size": 13, "tone": "muted"})}
+        {widgets.Text(gxscene.Props{"value": "main", "size": widgets.FontFootnote, "tone": "muted"})}
+        {widgets.Text(gxscene.Props{"value": "GoX IDE 1.0", "size": widgets.FontFootnote, "tone": "muted"})}
+        <div style={{ flexGrow: 1 }}/>
+        {widgets.Text(gxscene.Props{"value": EditorStatus(), "size": widgets.FontFootnote, "tone": "muted"})}
+        {widgets.Text(gxscene.Props{"value": "Spaces: 4", "size": widgets.FontFootnote, "tone": "muted"})}
+        {widgets.Text(gxscene.Props{"value": "UTF-8", "size": widgets.FontFootnote, "tone": "muted"})}
+        {widgets.Text(gxscene.Props{"value": "LF", "size": widgets.FontFootnote, "tone": "muted"})}
+        {widgets.Text(gxscene.Props{"value": "GX", "size": widgets.FontFootnote, "tone": "muted"})}
+    </div>
+}
+
+// ---- 主界面：WebStorm 风格三区布局 ----
+// [菜单栏 / 工具栏] → [工具竖栏 | Project 面板 | ⋮ | (代码区标签 / 编辑器 / ─ / Terminal)] → [状态栏]
+// 左右分隔条 (gx-splitter-v) 调整 Project 宽度，水平分隔条 (gx-splitter-h) 调整 Terminal 高度。
+
 pub func Playground() *gxscene.Instance {
-    n := len(samples())
     return <div
         style={{
             background: canvasBg(),
@@ -696,65 +806,38 @@ pub func Playground() *gxscene.Instance {
             padding: 0,
             flexDirection: "column",
             gap: 0,
-            width: 1360,
-            height: 760,
-            borderRadius: RadiusPanelLocal(),
-            borderWidth: widgets.HairlineWidth,
-            border: borderColor(),
+            width: 1400,
+            height: 860,
             overflow: "hidden",
-            boxShadow: paneShadow(),
         }}
     >
-        <div
-            style={{
-                background: panelBg(),
-                padding: "16 20",
-                flexDirection: "column",
-                gap: 4,
-            }}
-        >
-            {widgets.Heading(gxscene.Props{"value": "GoX IDE", "level": 2, "tone": "text"})}
-            {widgets.Text(gxscene.Props{
-                "value": projectSubtitle(n),
-                "size": widgets.FontCallout, "tone": "muted",
-            })}
-        </div>
-        <div style={{ flexDirection: "row", gap: 0, padding: "8 12", flexGrow: 1, height: 620 }}>
+        {menuBar()}{ideToolbar()}
+        <div style={{ flexDirection: "row", gap: 0, flexGrow: 1, height: 768 }}>
+            {toolStripe()}
             <div
-                style={{ background: panelBg(), padding: 10, borderRadius: widgets.RadiusCard, width: projectWidthPx(), flexShrink: 0, flexDirection: "column", gap: 8, borderWidth: widgets.HairlineWidth, border: borderColor(), boxShadow: cardShadow() }}
+                style={{ background: panelBg(), padding: "4 6", width: projectWidthPx(), flexShrink: 0, flexDirection: "column", gap: 4, borderWidth: widgets.HairlineWidth, border: borderColor(), overflow: "hidden" }}
             >
                 {projectPanel()}
             </div>
             <div
                 class="gx-splitter-v"
-                style={{ width: 8, flexShrink: 0, cursor: "col-resize", background: splitActiveBg(), hover: { background: accentColor() } }}
+                style={{ width: 6, flexShrink: 0, cursor: "col-resize", background: splitActiveBg(), hover: { background: accentColor() } }}
             />
             <div style={{ flexDirection: "column", gap: 0, flexGrow: 1, minWidth: 0 }}>
-                <div style={{ flexDirection: "column", gap: 8, flexGrow: 1, overflow: "hidden" }}>
-                    {toolbar()}
-                    <div
-                        style={{ background: panelBg(), padding: 12, borderRadius: widgets.RadiusCard, borderWidth: widgets.HairlineWidth, border: borderColor(), boxShadow: cardShadow(), overflow: "hidden" }}
-                    >
-                        {Editor()}
-                    </div>
+                {editorTabBar()}
+                <div
+                    style={{ flexDirection: "column", gap: 0, height: editorAreaPx(), flexShrink: 0, overflow: "hidden", background: canvasBg() }}
+                >
+                    {Editor()}
                 </div>
                 <div
                     class="gx-splitter-h"
-                    style={{ height: 8, flexShrink: 0, cursor: "row-resize", background: splitActiveBg(), hover: { background: accentColor() } }}
+                    style={{ height: 6, flexShrink: 0, cursor: "row-resize", background: splitActiveBg(), hover: { background: accentColor() } }}
                 />
-                <div style={{ flexDirection: "column", gap: 0 }}>
-                    {TerminalView()}
-                    <div
-                        style={{ color: RunInfoColor(), fontSize: widgets.FontFootnote, padding: "2 4" }}
-                    >
-                        {RunInfo()}
-                    </div>
-                </div>
+                {TerminalView()}
             </div>
         </div>
-        <div style={{ color: mutedColor(), fontSize: widgets.FontFootnote, padding: "12 16" }}>
-            ⌘↵ 运行 · ⌘Z 撤销 · ⌃空格 补全 · ⇧⌥F 格式化 · 悬停看符号
-        </div>
+        {statusBar()}
     </div>
 }
 // ---- 编辑器命令转发（装配层 ui.Editor* API 保持兼容）----
