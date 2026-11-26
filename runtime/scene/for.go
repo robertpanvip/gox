@@ -491,11 +491,15 @@ func (f *For) Dispose() {
 	f.entries = nil
 	f.order = nil
 	f.mu.Unlock()
+	// 销毁期异常隔离：单个 entry 的 Owner cleanup panic 不阻断其余 entry 释放
+	// （entries 已摘除，中断即永久泄漏），全部释放后统一上报。
+	var caught []any
 	for _, e := range entries {
 		if e.owner != nil {
-			e.owner.Dispose()
+			caught = append(caught, runFuncSafely(e.owner.Dispose)...)
 		}
 	}
+	repanicDisposeErrors(caught)
 }
 
 // Len 当前元素数（调试/测试用）。

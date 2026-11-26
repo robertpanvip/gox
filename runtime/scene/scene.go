@@ -1538,19 +1538,23 @@ func (i *Instance) bindRec(ctx *bindCtx) {
 func (i *Instance) Dispose() {
 	// 丢弃所有尚未执行的 RAF：回调常持有 Element/闭包，销毁后不再触发。
 	i.changes.clearRAF()
+	// 销毁期异常隔离（评审 P1-01/P1-02）：comps 与 slots 的释放逐项单点捕获——
+	// controller 内的 Owner cleanup / 用户 ref 回调 panic 不阻断其余资源释放，
+	// 全部释放完毕后统一上报。
+	var caught []any
 	for _, c := range i.comps {
-		c.Dispose()
+		caught = append(caught, runFuncSafely(c.Dispose)...)
 	}
 	i.comps = nil
 	for _, sl := range i.slots {
 		if ch := sl.stableChildComp(); ch != nil {
-			ch.Dispose()
+			caught = append(caught, runFuncSafely(ch.Dispose)...)
 		}
 		if sl.kind == slotDynamic && sl.child != nil {
-			sl.child.Dispose()
+			caught = append(caught, runFuncSafely(sl.child.Dispose)...)
 		}
 		if sl.kind == slotBranch && sl.ctrl != nil {
-			sl.ctrl.Dispose()
+			caught = append(caught, runFuncSafely(sl.ctrl.Dispose)...)
 		}
 		if sl.kind == slotRef {
 			// 卸载语义：先标记句柄失效，再回调 nil（与建树时的一次性回调对称）。
@@ -1560,14 +1564,15 @@ func (i *Instance) Dispose() {
 			}
 			switch fn := sl.refCb.(type) {
 			case func(*Element):
-				fn(nil)
+				caught = append(caught, runFuncSafely(func() { fn(nil) })...)
 			case func(any):
-				fn(nil)
+				caught = append(caught, runFuncSafely(func() { fn(nil) })...)
 			}
 			sl.refCb = nil
 			sl.refElem = nil
 		}
 	}
+	repanicDisposeErrors(caught)
 }
 
 // ---------- 文本渲染工具（非后端协议） ----------

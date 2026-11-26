@@ -9,7 +9,11 @@
 // 投递进 UI Runtime 后才能触碰响应式系统。
 package signal
 
-import "sync"
+import (
+	"fmt"
+	"strings"
+	"sync"
+)
 
 // ownerStack 是当前 Owner 栈（栈顶为最内层作用域）。单线程唯一实例。
 var ownerStack []*Owner
@@ -90,14 +94,65 @@ func (h *handle) Dispose() {
 	if h == nil {
 		return
 	}
-	h.once.Do(func() { disposeNode(h.n) })
+	h.once.Do(func() {
+		if caught := disposeNode(h.n); len(caught) > 0 {
+			repanicDisposeErrors(caught) // 销毁语义：资源已全部释放后统一上报
+		}
+	})
+}
+
+// ---------- 销毁期异常隔离（评审 P1-01）----------
+//
+// 销毁语义与重跑语义不同：重跑时 cleanup panic 原样传播（withObserver 的明确
+// 规则，剩余 fn 不执行、下次重跑重来）；销毁只有一次，某个用户 cleanup panic
+// 绝不允许阻断其余资源的释放——被跳过的 effect 不会被再次销毁、被跳过的子
+// Owner 清单已从父上摘除，中断即永久泄漏。因此销毁路径全面采用「单点捕获、
+// 尽力释放、末尾统一上报」：单个 panic 被捕获收集，全部资源释放完毕后按
+// 「单异常保真、多异常汇总」re-panic，异常不静默丢失。
+
+// runFuncSafely 执行 fn 并捕获其 panic，返回收集到的 panic 值（通常 0 或 1 个）。
+func runFuncSafely(fn func()) (caught []any) {
+	defer func() {
+		if r := recover(); r != nil {
+			caught = append(caught, r)
+		}
+	}()
+	fn()
+	return nil
+}
+
+// repanicDisposeErrors 按销毁语义上报收集到的异常：单个异常原样 re-panic
+// （保留类型与值，调用方的 errors.As/类型断言可用），多个异常包装成
+// disposeErrors 汇总。caught 为空时 no-op。
+func repanicDisposeErrors(caught []any) {
+	switch len(caught) {
+	case 0:
+		return
+	case 1:
+		panic(caught[0])
+	default:
+		panic(disposeErrors(caught))
+	}
+}
+
+// disposeErrors 是 Owner/handle 销毁期间多个 cleanup panic 的汇总载体。
+type disposeErrors []any
+
+func (e disposeErrors) Error() string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "dispose: %d 个 cleanup panic", len(e))
+	for i, p := range e {
+		fmt.Fprintf(&b, "\n  [%d] %v", i, p)
+	}
+	return b.String()
 }
 
 // disposeNode 把一个计算节点从依赖图中彻底摘除：断开所有上下游边，
-// 标记 disposed，使后续调度不再执行它。
-func disposeNode(n *node) {
+// 标记 disposed，使后续调度不再执行它。返回销毁期间 cleanup 收集到的
+// panic（资源释放不受单个 cleanup 异常影响）；调用方决定是否/如何上报。
+func disposeNode(n *node) (caught []any) {
 	if n == nil || n.disposed {
-		return
+		return nil
 	}
 	checkUIThread("disposeNode") // 摘依赖边：必须 UI 线程
 	n.disposed = true
@@ -111,9 +166,11 @@ func disposeNode(n *node) {
 	clear(n.subs)
 	cleanups := n.runCleanups
 	n.runCleanups = nil
+	// 逆序执行，单个 panic 捕获收集、不阻断其余 cleanup。
 	for _, c := range cleanups {
-		c()
+		caught = append(caught, runFuncSafely(c)...)
 	}
+	return caught
 }
 
 // CreateRoot 创建一个独立的响应式根作用域，f 内创建的 Effect/Computed 都归属它。
@@ -244,6 +301,12 @@ func runMounts(o *Owner) {
 }
 
 // Dispose 销毁该 Owner：先销毁其下所有计算（含子 Owner），再逆序执行 cleanup。幂等。
+//
+// 销毁期异常隔离（评审 P1-01）：三个阶段（computation、子 Owner、cleanup）全部
+// 单点捕获收集——任何用户 cleanup panic 都不会阻断其余资源的释放。全部释放完毕
+// 后统一上报：单个 panic 原样 re-panic，多个包装成 disposeErrors。此前的实现是
+// 首个 panic 直接中断，而 comps/children/cleanups 清单已从 Owner 上摘除，中断即
+// 永久泄漏（再次 Dispose 也无法补做）。
 func (o *Owner) Dispose() {
 	if o == nil {
 		return
@@ -263,15 +326,22 @@ func (o *Owner) Dispose() {
 	o.mounts = nil
 	o.mu.Unlock()
 
+	var caught []any
+	// 阶段 1：销毁所有 computation。disposeNode 已隔离单个 cleanup panic。
 	for _, n := range comps {
-		disposeNode(n)
+		caught = append(caught, disposeNode(n)...)
 	}
+	// 阶段 2：销毁子 Owner。子 Dispose 自身会隔离并汇总上报——父在此捕获，
+	// 作为一条记录并入本层汇总，保证兄弟子树不受影响。
 	for _, ch := range children {
-		ch.Dispose()
+		caught = append(caught, runFuncSafely(ch.Dispose)...)
 	}
+	// 阶段 3：逆序执行 Owner 级 cleanup，单点捕获。
 	for i := len(cleanups) - 1; i >= 0; i-- {
-		cleanups[i]()
+		caught = append(caught, runFuncSafely(cleanups[i])...)
 	}
+	// 阶段 4：全部资源已释放，统一上报。
+	repanicDisposeErrors(caught)
 }
 
 // attachToOwner 把新建计算节点登记到当前 Owner，供其销毁时级联清理。

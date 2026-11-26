@@ -458,6 +458,11 @@ func (a *App) Render(build func() any) (err error) {
 // onCleanup（用户代码，可能写 signal 触发嵌套 effect），且 inst.Dispose 释放结构
 // 插槽；这些操作不能与正在进行的 Draw/Scene Mutation 并发。gate 可重入，故从
 // 已持 gate 的 Render/Close 调用不会自锁。
+//
+// 销毁期异常隔离（评审 P1-02）：owner.Dispose（用户 cleanup，可能 panic）与
+// inst.Dispose（结构插槽释放）分阶段单点捕获——owner 清理异常不得阻断场景树
+// 插槽释放。全部释放完毕后统一上报（单异常保真 re-panic），调用方决定记录或
+// 继续传播。
 func (a *App) teardownTree() {
 	a.commit.lock()
 	defer a.commit.unlock()
@@ -466,14 +471,20 @@ func (a *App) teardownTree() {
 		a.unFlush = nil
 	}
 	a.drawPending.Store(false)
+	var caught []any
 	if a.owner != nil {
-		a.owner.Dispose() // 级联销毁组件内 effect/computed、Bind 建立的订阅，执行 onCleanup
+		caught = append(caught, runFuncSafely(func() {
+			a.owner.Dispose() // 级联销毁组件内 effect/computed、Bind 建立的订阅，执行 onCleanup
+		})...)
 		a.owner = nil
 	}
 	if a.inst != nil {
-		a.inst.Dispose() // 结构插槽 controller / 元素 Owner
+		caught = append(caught, runFuncSafely(func() {
+			a.inst.Dispose() // 结构插槽 controller / 元素 Owner
+		})...)
 		a.inst = nil
 	}
+	repanicDisposeErrors(caught)
 }
 
 // bindReactive 把 signal 接到整棵场景树，负责精确更新与窗口重绘（T1.1/T1.2）：
@@ -609,25 +620,44 @@ func (a *App) Run() error {
 // 评审 P2：底层 win.Close() 的错误不再被吞掉，而是保存到 closeErr 并返回。
 // sync.Once 保证首次执行的写入对后续所有 Do 调用可见（Go 内存模型），因此并发/
 // 重复的 Close 调用会得到一致的结果，而不是时而 error 时而 nil。
+//
+// 销毁期异常隔离（评审 P1-02）：closeOnce 与 panic 的组合曾是最危险的生命周期
+// 风险——teardownTree 里某个用户 cleanup panic 会让 Do 的首次执行中断，且 Once
+// 已标记完成，dispatcher / 窗口永远不会再被关闭，closeErr 也不会记录。现在四个
+// 阶段（Runtime/租约、响应式树、派发器、窗口）各自单点捕获收集，窗口关闭是最终
+// 兜底动作，任何前置阶段 panic 都不阻断它；全部资源释放完毕后统一上报：closeErr
+// 记录 win.Close 的原生错误，收集到的 panic 按单异常保真 / 多异常汇总 re-panic。
 func (a *App) Close() error {
 	a.closeOnce.Do(func() {
 		a.closed.Store(true)
-		// 先关闭本 App 的 UI 任务投递：此后后台 goroutine 的 app.Dispatch 更新
-		// 一律被拒绝，不会在已销毁的响应式树 / 窗口上执行闭包。仅关闭本 App 的
-		// Runtime，其它 App 的投递不受影响（评审 P0：多 App 隔离）。兼容桥接租约
-		// 同时释放，只有最后一个 App 关闭才关闭默认 Runtime。
-		a.runtime.Close()
-		if a.globalLease != nil {
-			a.globalLease.Release()
-			a.globalLease = nil
-		}
-		// 先销毁整棵响应式树：停订阅、执行组件 onCleanup，避免关闭过程中 signal 写入
-		// 触发已关闭窗口的重绘。
-		a.teardownTree()
-		if a.dispatcher != nil {
-			a.dispatcher.Close()
-		}
-		a.closeErr = a.win.Close()
+		var caught []any
+		// 阶段 1：关闭本 App 的 UI 任务投递。此后后台 goroutine 的 app.Dispatch
+		// 更新一律被拒绝，不会在已销毁的响应式树 / 窗口上执行闭包。仅关闭本 App
+		// 的 Runtime，其它 App 的投递不受影响（评审 P0：多 App 隔离）。兼容桥接
+		// 租约同时释放，只有最后一个 App 关闭才关闭默认 Runtime。
+		caught = append(caught, runFuncSafely(func() {
+			a.runtime.Close()
+			if a.globalLease != nil {
+				a.globalLease.Release()
+				a.globalLease = nil
+			}
+		})...)
+		// 阶段 2：先销毁整棵响应式树：停订阅、执行组件 onCleanup，避免关闭过程中
+		// signal 写入触发已关闭窗口的重绘。内部已隔离 owner/inst 两段，这里整体
+		// 再捕获一层，保证 panic 不跳过阶段 3/4。
+		caught = append(caught, runFuncSafely(a.teardownTree)...)
+		// 阶段 3：关闭派发器。
+		caught = append(caught, runFuncSafely(func() {
+			if a.dispatcher != nil {
+				a.dispatcher.Close()
+			}
+		})...)
+		// 阶段 4：窗口关闭兜底——必须最后执行，任何前置 panic 都不阻断。
+		caught = append(caught, runFuncSafely(func() {
+			a.closeErr = a.win.Close()
+		})...)
+		// 全部资源已释放，统一上报收集到的 panic（win.Close 的原生错误走 closeErr）。
+		repanicDisposeErrors(caught)
 	})
 	return a.closeErr
 }
