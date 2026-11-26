@@ -68,6 +68,21 @@ const (
 	propRowGap       = "row-gap"
 	propColumnGap    = "column-gap"
 
+	// flex 弹性与尺寸约束
+	propFlexGrow   = "flex-grow"
+	propFlexShrink = "flex-shrink"
+	propMinWidth   = "min-width"
+	propMaxWidth   = "max-width"
+	propMinHeight  = "min-height"
+	propMaxHeight  = "max-height"
+
+	// 外边距（四边单独 + 1~4 值简写）
+	propMargin       = "margin"
+	propMarginTop    = "margin-top"
+	propMarginRight  = "margin-right"
+	propMarginBottom = "margin-bottom"
+	propMarginLeft   = "margin-left"
+
 	// 定位
 	propPosition = "position"
 	propTop      = "top"
@@ -234,6 +249,17 @@ type style struct {
 	gap          float32
 	rowGap       float32
 	columnGap    float32
+
+	// flex 弹性与尺寸约束（NaN=未设置；未设置的属性沿用 Yoga 默认值，
+	// 与"只透传显式样式、不改历史行为"的原则一致）。
+	flexGrow   float32
+	flexShrink float32
+	minWidth   float32
+	maxWidth   float32
+	minHeight  float32
+	maxHeight  float32
+	// 四边外边距 [top,right,bottom,left]，0=未设置（负外边距不支持）。
+	margin edges
 }
 
 func defaultStyle() style {
@@ -290,6 +316,48 @@ func parseStyle(props map[string]any) style {
 			}
 			s.padding = edges(sides)
 		}
+	}
+	// flex 弹性与 min/max 约束：数值或 px 字符串；缺省 NaN 表示未设置。
+	if v, ok := propNum(props[propFlexGrow]); ok {
+		s.flexGrow = float32(v)
+	}
+	if v, ok := propNum(props[propFlexShrink]); ok {
+		s.flexShrink = float32(v)
+	}
+	if v, ok := propNum(props[propMinWidth]); ok {
+		s.minWidth = float32(v)
+	}
+	if v, ok := propNum(props[propMaxWidth]); ok {
+		s.maxWidth = float32(v)
+	}
+	if v, ok := propNum(props[propMinHeight]); ok {
+		s.minHeight = float32(v)
+	}
+	if v, ok := propNum(props[propMaxHeight]); ok {
+		s.maxHeight = float32(v)
+	}
+	// 外边距：1~4 值简写 + 四边单独覆盖（与 CSS 级联顺序一致）。负值裁剪到 0。
+	if v, ok := propString(props[propMargin]); ok {
+		if sides, ok := cssbox.Float32s(v); ok {
+			for i := range sides {
+				if sides[i] < 0 {
+					sides[i] = 0
+				}
+			}
+			s.margin = edges(sides)
+		}
+	}
+	if v, ok := propNum(props[propMarginTop]); ok && v > 0 {
+		s.margin[0] = float32(v)
+	}
+	if v, ok := propNum(props[propMarginRight]); ok && v > 0 {
+		s.margin[1] = float32(v)
+	}
+	if v, ok := propNum(props[propMarginBottom]); ok && v > 0 {
+		s.margin[2] = float32(v)
+	}
+	if v, ok := propNum(props[propMarginLeft]); ok && v > 0 {
+		s.margin[3] = float32(v)
 	}
 	if v, ok := propString(props[propWeight]); ok {
 		s.bold = strings.EqualFold(v, "bold") || v == "700"

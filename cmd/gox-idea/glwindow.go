@@ -157,7 +157,8 @@ func (g *glWindow) Open(cfg gxapp.WindowConfig) error {
 	}
 	glfw.SwapInterval(0)
 	gl.Enable(gl.BLEND)
-	gl.Enable(gl.FRAMEBUFFER_SRGB)
+	// 不开 FRAMEBUFFER_SRGB：CPU 光栅画布输出的已是 sRGB 编码像素，
+	// 再经 sRGB 帧缓冲写入转换会二次提亮（暗色 #1e1e1e 被抬成灰 #606060）。
 	gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
 
 	g.win = win

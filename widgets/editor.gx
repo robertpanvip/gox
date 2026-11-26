@@ -48,6 +48,7 @@ type EditorState struct {
     sig focused       bool
     sig lineCount     int
     sig scrollTop     float64 // 受控滚动偏移（虚拟滚动的窗口起点）
+    sig viewH         int     // 视口高度（px），默认 editorViewportHeight；宿主可运行时调整（IDE 布局随终端伸缩）
     scrollTopVal  float64     // scrollTop 的非响应式镜像：供 effect 读而不订阅（避免跟随回环）
     sig charWidth     float64
     sig wideWidth     float64
@@ -81,6 +82,7 @@ func NewEditorState(source string) *EditorState {
         focused:       false,
         lineCount:     lc,
         scrollTop:     0.0,
+        viewH:         editorViewportHeight,
         charWidth:     7.83,
         wideWidth:     13.02,
         caretSettled:  true,
@@ -541,10 +543,12 @@ func (s *EditorState) Move(dln int, dcol int) {
         if s.HasSelection() {
             fl, fc := s.selFrom(); tl, tc := s.selTo()
             if dln < 0 || (dln == 0 && dcol < 0) { s.cursorLine = fl; s.cursorCol = fc } else { s.cursorLine = tl; s.cursorCol = tc }
-            s.selAnchorLine = s.cursorLine; s.selAnchorCol = s.cursorCol
+            s.selAnchorLine = s.cursorLine
+            s.selAnchorCol = s.cursorCol
         }
         s.moveCursorRel(dln, dcol)
-        s.selAnchorLine = s.cursorLine; s.selAnchorCol = s.cursorCol
+        s.selAnchorLine = s.cursorLine
+        s.selAnchorCol = s.cursorCol
     })
 }
 
@@ -552,7 +556,10 @@ func (s *EditorState) Move(dln int, dcol int) {
 func (s *EditorState) MoveEx(dln int, dcol int, shift bool) {
     if !shift { s.Move(dln, dcol); return }
     Signal.batch(() => {
-        if !s.HasSelection() { s.selAnchorLine = s.cursorLine; s.selAnchorCol = s.cursorCol }
+        if !s.HasSelection() {
+            s.selAnchorLine = s.cursorLine
+            s.selAnchorCol = s.cursorCol
+        }
         s.moveCursorRel(dln, dcol)
     })
 }
@@ -620,7 +627,10 @@ func firstNonSpace(rs []rune) int {
 
 // ClearSelection 折叠选区到光标处。
 func (s *EditorState) ClearSelection() {
-    Signal.batch(() => { s.selAnchorLine = s.cursorLine; s.selAnchorCol = s.cursorCol })
+    Signal.batch(() => {
+        s.selAnchorLine = s.cursorLine
+        s.selAnchorCol = s.cursorCol
+    })
 }
 
 // SetSelect 拖拽/程序式定位：锚点与光标同时落到 (ln, col)。
@@ -646,10 +656,12 @@ func (s *EditorState) MoveWord(dir int, shift bool) {
             if s.HasSelection() {
                 fl, fc := s.selFrom(); tl, tc := s.selTo()
                 if dir < 0 { s.cursorLine = fl; s.cursorCol = fc } else { s.cursorLine = tl; s.cursorCol = tc }
-                s.selAnchorLine = s.cursorLine; s.selAnchorCol = s.cursorCol
+                s.selAnchorLine = s.cursorLine
+                s.selAnchorCol = s.cursorCol
             }
         } else if !s.HasSelection() {
-            s.selAnchorLine = s.cursorLine; s.selAnchorCol = s.cursorCol
+            s.selAnchorLine = s.cursorLine
+            s.selAnchorCol = s.cursorCol
         }
         lc := s.doc.LineCount()
         ln := s.cursorLine
@@ -665,29 +677,44 @@ func (s *EditorState) MoveWord(dir int, shift bool) {
             for c > 0 && isWordRune(rs[c-1]) { c = c - 1 }
         }
         s.cursorCol = c
-        if !shift { s.selAnchorLine = s.cursorLine; s.selAnchorCol = s.cursorCol }
+        if !shift {
+            s.selAnchorLine = s.cursorLine
+            s.selAnchorCol = s.cursorCol
+        }
     })
 }
 
 // KeyHome Home 键：光标到首非空白、再到纯行首（两段式）；shift 扩展选区。
 func (s *EditorState) KeyHome(shift bool) {
     Signal.batch(() => {
-        if shift && !s.HasSelection() { s.selAnchorLine = s.cursorLine; s.selAnchorCol = s.cursorCol }
+        if shift && !s.HasSelection() {
+            s.selAnchorLine = s.cursorLine
+            s.selAnchorCol = s.cursorCol
+        }
         rs := []rune(s.lineText(s.cursorLine))
         target := 0
         fns := firstNonSpace(rs)
         if s.cursorCol > fns { target = fns }
         s.cursorCol = target
-        if !shift { s.selAnchorLine = s.cursorLine; s.selAnchorCol = s.cursorCol }
+        if !shift {
+            s.selAnchorLine = s.cursorLine
+            s.selAnchorCol = s.cursorCol
+        }
     })
 }
 
 // KeyEnd End 键：光标到行尾；shift 扩展选区。
 func (s *EditorState) KeyEnd(shift bool) {
     Signal.batch(() => {
-        if shift && !s.HasSelection() { s.selAnchorLine = s.cursorLine; s.selAnchorCol = s.cursorCol }
+        if shift && !s.HasSelection() {
+            s.selAnchorLine = s.cursorLine
+            s.selAnchorCol = s.cursorCol
+        }
         s.cursorCol = len([]rune(s.lineText(s.cursorLine)))
-        if !shift { s.selAnchorLine = s.cursorLine; s.selAnchorCol = s.cursorCol }
+        if !shift {
+            s.selAnchorLine = s.cursorLine
+            s.selAnchorCol = s.cursorCol
+        }
     })
 }
 
@@ -819,6 +846,17 @@ func (s *EditorState) SetScrollTop(v float64) {
     Signal.batch(() => { s.scrollTop = v })
 }
 
+// SetViewportHeight 设置编辑器视口高度（px）。外层容器高 = 视口 + 上下 padding 12。
+// 默认 editorViewportHeight(470)。宿主（如 IDE 三区布局）可在运行时随布局信号调整，
+// 建树期订阅 viewH，增量帧会随高度变化重排。
+func (s *EditorState) SetViewportHeight(h int) {
+    if h < editorRowHeight { h = editorRowHeight }
+    Signal.batch(() => { s.viewH = h })
+}
+
+// ViewportHeight 读回当前视口高度（宿主布局对齐用）。
+func (s *EditorState) ViewportHeight() int { return s.viewH }
+
 // ScrollBy 相对滚动（滚轮事件用：delta 为行数像素，向下为正）。
 func (s *EditorState) ScrollBy(delta float64) {
     s.SetScrollTop(s.scrollTopVal + delta)
@@ -836,7 +874,7 @@ func (s *EditorState) ensureCursorVisible() {
     top := float64(s.cursorLine * editorRowHeight)
     bottom := top + editorRowHeight
     st := s.scrollTopVal
-    view := float64(editorViewportHeight)
+    view := float64(s.viewH) // 跟随视口高度信号：光标可见性按实际视口计算
     if top < st {
         s.SetScrollTop(top)
     } else if bottom > st+view {
@@ -1275,7 +1313,7 @@ func Editor(st *EditorState) *gxscene.Instance {
     list := VirtualList(gxscene.Props{
         "count":           func() any { return st.lineCount },
         "item-height":     editorRowHeight,
-        "viewport-height": editorViewportHeight,
+        "viewport-height": func() any { return st.viewH },
         "scroll-top":      func() any { return st.scrollTop },
         "render-item":     func(i int) *gxscene.Instance { return st.lineView(i) },
         "on-scroll":       func(v any) { if f, ok := v.(float64); ok { st.SetScrollTop(f) } },
@@ -1290,7 +1328,7 @@ func Editor(st *EditorState) *gxscene.Instance {
         padding="6"
         flex-direction="column"
         gap="0"
-        height="482"
+        height={strconv.Itoa(st.viewH + 12)}
         position="relative"
     >
         {list}

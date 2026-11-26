@@ -324,3 +324,77 @@ func TestInputNaturalHeight(t *testing.T) {
 		t.Errorf("Input 高度 = %.1f，应在 26~32（macOS HIG 28pt）", box.H)
 	}
 }
+
+// TestFlexGrowFillsRemainingSpace：flex-grow 让子节点吃掉主轴剩余空间，
+// 另一个 fixed 子节点保持原宽（IDE 左树固定 + 右编辑区撑满的场景）。
+func TestFlexGrowFillsRemainingSpace(t *testing.T) {
+	root := boxNode("div", map[string]any{
+		"flex-direction": "row", "width": 800,
+	},
+		boxNode("fixed", map[string]any{"width": 300, "height": 100}),
+		boxNode("grow", map[string]any{"flex-grow": 1, "height": 100}),
+	)
+	cache := computeLayout(root, 800, 200, fixedMeasure)
+	// 根节点默认 padding 4，内容区 800-8=792，grow = 792-300 = 492。
+	grow := cache[root.Children[1]]
+	if !near(grow.W, 492, 0.5) {
+		t.Errorf("flex-grow 子节点宽 = %.1f, want 492 (792-300)", grow.W)
+	}
+	if !near(grow.X, 304, 0.5) {
+		t.Errorf("flex-grow 子节点 X = %.1f, want 304", grow.X)
+	}
+}
+
+// TestFlexShrinkZeroPreventsShrink：flex-shrink=0 的子节点在空间不足时不被压缩。
+func TestFlexShrinkZeroPreventsShrink(t *testing.T) {
+	root := boxNode("div", map[string]any{
+		"flex-direction": "row", "width": 500,
+	},
+		boxNode("fixed", map[string]any{"width": 400, "height": 100, "flex-shrink": 0}),
+		boxNode("shrinkable", map[string]any{"width": 400, "height": 100, "flex-shrink": 1}),
+	)
+	cache := computeLayout(root, 500, 200, fixedMeasure)
+	fixed, shrink := cache[root.Children[0]], cache[root.Children[1]]
+	if !near(fixed.W, 400, 0.5) {
+		t.Errorf("flex-shrink=0 子节点应保持 400, got %.1f", fixed.W)
+	}
+	// 根默认 padding 4：内容区 492，fixed=400，shrinkable 压缩到 92。
+	if !near(shrink.W, 92, 0.5) {
+		t.Errorf("flex-shrink=1 子节点应压缩到 92, got %.1f", shrink.W)
+	}
+}
+
+// TestMinHeightConstrainsShrink：min-height 限制子节点压缩下限。
+func TestMinHeightConstrainsShrink(t *testing.T) {
+	root := boxNode("div", map[string]any{
+		"flex-direction": "column", "height": 200,
+	},
+		boxNode("big", map[string]any{"height": 400, "min-height": 150, "flex-shrink": 1}),
+		boxNode("filler", map[string]any{"height": 100, "flex-shrink": 0}),
+		boxNode("other", map[string]any{"height": 100}),
+	)
+	cache := computeLayout(root, 500, 200, fixedMeasure)
+	big := cache[root.Children[0]]
+	if !near(big.H, 150, 0.5) {
+		t.Errorf("min-height 应把压缩下限控制在 150, got %.1f", big.H)
+	}
+	filler := cache[root.Children[1]]
+	if !near(filler.H, 100, 0.5) {
+		t.Errorf("flex-shrink=0 子节点应保持 100, got %.1f", filler.H)
+	}
+}
+
+// TestMarginAppliesToLayout：margin 参与布局（子节点间产生外边距间隔）。
+func TestMarginAppliesToLayout(t *testing.T) {
+	root := boxNode("div", map[string]any{
+		"flex-direction": "row", "width": 600,
+	},
+		boxNode("a", map[string]any{"width": 100, "height": 40, "margin-right": 20}),
+		boxNode("b", map[string]any{"width": 100, "height": 40}),
+	)
+	cache := computeLayout(root, 600, 200, fixedMeasure)
+	a, b := cache[root.Children[0]], cache[root.Children[1]]
+	if !near(b.X, a.X+a.W+20, 0.5) {
+		t.Errorf("margin-right 应产生 20 间距: got %.1f", b.X-a.X-a.W)
+	}
+}

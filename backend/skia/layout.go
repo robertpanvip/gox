@@ -19,10 +19,10 @@ import (
 // X/Y 已包含祖先 overflow 容器的滚动偏移（子节点坐标 = 原坐标 - scroll）。
 // Clip* 是继承到的最近 overflow 裁剪矩形，HasClip=false 表示不裁剪。
 type layoutBox struct {
-	X, Y, W, H         float32
-	ClipX, ClipY       float32
-	ClipW, ClipH       float32
-	HasClip            bool
+	X, Y, W, H   float32
+	ClipX, ClipY float32
+	ClipW, ClipH float32
+	HasClip      bool
 }
 
 // layoutCache 把一次布局的结果按节点缓存，供 painter 绘制时 O(1) 查询。
@@ -249,6 +249,39 @@ func buildYogaTree(n *gxscene.Node, measure fontMeasurer, inherited textStyle) (
 		}
 		if s.columnGap > 0 {
 			yn.SetGap(yoga.GutterColumn, s.columnGap)
+		}
+
+		// flex 弹性与尺寸约束（仅透传显式值；0/未设置沿用 Yoga 默认）。
+		if s.flexGrow > 0 {
+			yn.SetFlexGrow(s.flexGrow)
+		}
+		if s.flexShrink != 0 {
+			yn.SetFlexShrink(s.flexShrink)
+		}
+		if s.minWidth > 0 {
+			yn.SetMinWidth(s.minWidth)
+		}
+		if s.maxWidth > 0 {
+			yn.SetMaxWidth(s.maxWidth)
+		}
+		if s.minHeight > 0 {
+			yn.SetMinHeight(s.minHeight)
+		}
+		if s.maxHeight > 0 {
+			yn.SetMaxHeight(s.maxHeight)
+		}
+		// 四边外边距。
+		if s.margin[0] > 0 {
+			yn.SetMargin(yoga.EdgeTop, s.margin[0])
+		}
+		if s.margin[1] > 0 {
+			yn.SetMargin(yoga.EdgeRight, s.margin[1])
+		}
+		if s.margin[2] > 0 {
+			yn.SetMargin(yoga.EdgeBottom, s.margin[2])
+		}
+		if s.margin[3] > 0 {
+			yn.SetMargin(yoga.EdgeLeft, s.margin[3])
 		}
 
 		for i, c := range n.Children {

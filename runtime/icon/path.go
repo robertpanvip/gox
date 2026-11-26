@@ -25,7 +25,7 @@ type pt struct{ x, y float32 }
 
 // transform 是烘焙进坐标的仿射变换：p' = p*s + t（等比缩放 + 平移）。
 type transform struct {
-	s    float32
+	s      float32
 	tx, ty float32
 }
 
@@ -45,9 +45,9 @@ type pathCmd struct {
 func parsePath(d string) ([]pathCmd, error) {
 	p := &dParser{s: d}
 	var cmds []pathCmd
-	var cur pt    // 当前点
-	var start pt  // 子路径起点（Z 用）
-	var prev byte // 上一条命令（用于 S/T 的反射控制点）
+	var cur pt           // 当前点
+	var start pt         // 子路径起点（Z 用）
+	var prev byte        // 上一条命令（用于 S/T 的反射控制点）
 	var cx1, cy1 float32 // 上一条 C/Q 的第二控制点（用于 S/T 反射）
 
 	for {
@@ -282,9 +282,12 @@ func arcToCubics(p0 pt, rx, ry, rotDeg float32, laf, sf bool, p1 pt) [][]pt {
 		rxA, ryA = s*rxA, s*ryA
 	}
 
-	sign := 1.0
+	// SVG 1.1 F.6.5.5：大弧标志与小弧标志不同 → 取正平方根；相同 → 取负。
+	// 写反会选中弦另一侧的圆心，把 90° 短弧画成 270° 长弧绕远路
+	// （表现为 refresh/link/location 等 A 命令图标渲染成乱圈）。
+	sign := -1.0
 	if laf != sf {
-		sign = -1
+		sign = 1.0
 	}
 	num := rxA*rxA*ryA*ryA - rxA*rxA*y1p*y1p - ryA*ryA*x1p*x1p
 	den := rxA*rxA*y1p*y1p + ryA*ryA*x1p*x1p
@@ -299,7 +302,7 @@ func arcToCubics(p0 pt, rx, ry, rotDeg float32, laf, sf bool, p1 pt) [][]pt {
 
 	angle := func(ux, uy, vx, vy float64) float64 {
 		d := ux*vx + uy*vy
-		l := math.Sqrt((ux*ux+uy*uy)*(vx*vx+vy*vy))
+		l := math.Sqrt((ux*ux + uy*uy) * (vx*vx + vy*vy))
 		if l == 0 {
 			return 0
 		}
@@ -382,10 +385,10 @@ type dParser struct {
 	i int
 }
 
-func (p *dParser) eof() bool       { return p.i >= len(p.s) }
-func (p *dParser) peek() byte      { return p.s[p.i] }
-func (p *dParser) next()           { p.i++ }
-func (p *dParser) rest() string    { return p.s[p.i:] }
+func (p *dParser) eof() bool    { return p.i >= len(p.s) }
+func (p *dParser) peek() byte   { return p.s[p.i] }
+func (p *dParser) next()        { p.i++ }
+func (p *dParser) rest() string { return p.s[p.i:] }
 func (p *dParser) errf(c byte) error {
 	return fmt.Errorf("icon: 命令 %c 参数不足: %q", c, p.rest())
 }

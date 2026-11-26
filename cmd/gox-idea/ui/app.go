@@ -25,7 +25,12 @@ var editorState = widgets.NewEditorState("")
 func Ed() *widgets.EditorState { return editorState }
 
 // Editor 构造编辑器视图（替代原 ui.Editor()）。
-func Editor() *gxscene.Instance { return widgets.Editor(editorState) }
+// 建树期先把视口高度对齐到当前布局（编辑区高 - 容器上下 padding 12），
+// 拖动水平分隔条后 widgets.Editor 的 viewH 信号驱动编辑器伸缩填满编辑区。
+func Editor() *gxscene.Instance {
+	editorState.SetViewportHeight(768 - 32 - 6 - 26 - LayoutTerminalH() - 12)
+	return widgets.Editor(editorState)
+}
 
 // Indices 生成 [0,n) 索引切片（<For> 逐行/逐项渲染用）。
 func Indices(n int) []int {
