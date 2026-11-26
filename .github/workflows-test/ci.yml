@@ -1,11 +1,13 @@
-# GX 编译器 CI：按功能 E2E 测试 + Windows exe 自动构建。
+# GX 编译器 CI：Linux + Windows 双平台测试 + Windows exe 自动构建。
 #
-# test job：全量 Go 测试 → 构建 playground web 产物 → Playwright 按功能用例
-#           （用例清单见 scripts/e2e/playground_features.py 的 CASES）。
-# build-windows job：测试通过后在 windows runner 编译自包含 exe
-#           （yoga Windows 静态库从源码编译，全流程脚本化，见
-#           scripts/build-windows-msys2.sh 与 docs/windows-build.md），
-#           上传 artifact；打 tag（v*）时额外创建 GitHub Release。
+# test job（矩阵 ubuntu + windows）：
+#   - 全量 Go 测试（Windows 下先装 mingw，cgo 包才能编译）
+#   - Playground 按功能 E2E（Playwright + Chromium，用例清单见
+#     scripts/e2e/playground_features.py 的 CASES；Windows 侧先允许失败，
+#     稳定后去掉 continue-on-error 转为硬门禁）
+# build-windows job：测试通过后编译自包含 exe（yoga Windows 静态库从源码
+#   编译，见 scripts/build-windows-msys2.sh 与 docs/windows-build.md），
+#   上传 artifact；打 tag（v*）时额外创建 GitHub Release。
 name: CI
 # 注意：本文件暂存于 workflows-test/（推送凭证缺 workflow scope）。
 # 启用方式：把目录改名为 .github/workflows/ 即可，其余内容不用动。
@@ -19,8 +21,12 @@ on:
 
 jobs:
   test:
-    name: Go 测试 + 按功能 E2E
-    runs-on: ubuntu-latest
+    name: Go 测试 + 按功能 E2E（${{ matrix.os }}）
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
     steps:
       - uses: actions/checkout@v4
 
@@ -28,22 +34,47 @@ jobs:
         with:
           go-version-file: go.mod
 
+      # Windows：cgo（desktop/yoga 绑定）需要 mingw 工具链，Go 测试前先装好。
+      - name: 安装 MSYS2 / mingw-w64 工具链
+        if: runner.os == 'Windows'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: false
+          install: git mingw-w64-x86_64-gcc mingw-w64-x86_64-binutils
+
       - name: 全量 Go 测试
+        if: runner.os == 'Linux'
         run: go test ./... -count=1
 
-      - name: 安装 Playwright（Python）
+      - name: 全量 Go 测试
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: go test ./... -count=1
+
+      - name: 安装 Playwright（Python，Linux）
+        if: runner.os == 'Linux'
         run: |
           pip install playwright
           playwright install --with-deps chromium
 
-      - name: 按功能 E2E（构建 wasm + 起服务 + 跑用例）
+      - name: 安装 Playwright（Python，Windows）
+        if: runner.os == 'Windows'
+        run: |
+          pip install playwright
+          playwright install chromium
+
+      # 按功能 E2E（构建 wasm + 起服务 + 跑用例），脚本已做跨平台适配
+      # （python3/python 自动探测）。Windows 侧先允许失败观察，稳定后转硬门禁。
+      - name: 按功能 E2E
+        continue-on-error: ${{ runner.os == 'Windows' }}
         run: bash scripts/e2e/run_playground_e2e.sh
 
       - name: 失败时上传截图
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: e2e-failure-logs
+          name: e2e-failure-logs-${{ matrix.os }}
           path: |
             /tmp/pg_final.png
             examples/playground/web/build.log

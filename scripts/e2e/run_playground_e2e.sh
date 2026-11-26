@@ -7,6 +7,9 @@ REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 WEB_DIR="$REPO_ROOT/examples/playground/web"
 PORT="${PORT:-8081}"
 URL="http://127.0.0.1:$PORT/index.html"
+# Python 命令探测：Windows Git Bash 通常只有 python。
+PY="${PYTHON:-python3}"
+command -v "$PY" >/dev/null 2>&1 || PY=python
 
 cd "$REPO_ROOT"
 
@@ -32,4 +35,4 @@ for i in $(seq 1 30); do
 done
 
 echo "[4/4] 运行按功能 E2E 用例..."
-python3 "$REPO_ROOT/scripts/e2e/playground_features.py" --url "$URL"
+"$PY" "$REPO_ROOT/scripts/e2e/playground_features.py" --url "$URL"

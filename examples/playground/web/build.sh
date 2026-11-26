@@ -5,6 +5,9 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 GOTOOLCHAIN="${GOTOOLCHAIN:-go1.27.4}"
+# Python 命令探测：Linux/macOS 为 python3，Windows Git Bash 通常只有 python。
+PY="${PYTHON:-python3}"
+command -v "$PY" >/dev/null 2>&1 || PY=python
 GOPROXY="${GOPROXY:-https://goproxy.cn,direct}"
 export GOTOOLCHAIN GOPROXY
 
@@ -18,7 +21,7 @@ if [ ! -x "$GOX_BIN" ] && ! command -v "$GOX_BIN" >/dev/null 2>&1; then
   (cd "$(dirname "$0")/../../.." && GOTOOLCHAIN="$GOTOOLCHAIN" GOPROXY="$GOPROXY" go build -o /tmp/gox ./cmd/gox)
   GOX_BIN=/tmp/gox
 fi
-GOX="$GOX_BIN" python3 "$UI_DIR/gen_samples.py"
+GOX="$GOX_BIN" "$PY" "$UI_DIR/gen_samples.py"
 
 echo "[1/6] 前端严格类型检查 + 编译（TypeScript 7）..."
 if [ ! -x node_modules/.bin/tsc ]; then
@@ -41,7 +44,7 @@ cp "$GOROOT/lib/wasm/wasm_exec.js" ./wasm_exec.js
 echo "[4/6] 编辑器样式已全部迁入 GX prop（animation/pointer-events/selection/font-family），无需宿主 CSS 同步。"
 
 echo "[5/6] 打包单文件 playground.html（file:// 双击即开，无需服务器）..."
-python3 pack.py
+"$PY" pack.py
 
 echo "[6/6] 完成。两种打开方式："
 echo "    A) 直接双击 $(pwd)/playground.html （已内联 wasm，无需服务器）"
