@@ -211,3 +211,38 @@ func TestLineLeftOfCursor(t *testing.T) {
 		t.Fatalf("定位后左侧 = %q", got)
 	}
 }
+
+func TestSelectedText(t *testing.T) {
+	s := New(20, 3)
+	s.Write([]byte("hello world\r\n中文测试\r\nthird line"))
+	// 选第一行 "hello world" 的一部分：列 0..4 → "hello"
+	s.SetSelection(true, 0, 0, 4, 0)
+	if got := s.SelectedText(); got != "hello" {
+		t.Fatalf("SelectedText = %q, want hello", got)
+	}
+	// 跨行第 0 行到 1 行
+	s.SetSelection(true, 6, 0, 3, 1)
+	if got := s.SelectedText(); got != "world\n中文" {
+		t.Fatalf("跨行 SelectedText = %q, want 'world\\n中文'", got)
+	}
+	// 反向拖拽（head 在左上）
+	s.SetSelection(true, 4, 0, 0, 0)
+	if got := s.SelectedText(); got != "hello" {
+		t.Fatalf("反向选区 = %q, want hello", got)
+	}
+	s.SetSelection(false, 0, 0, 0, 0)
+	if got := s.SelectedText(); got != "" {
+		t.Fatalf("清除后应为空，得到 %q", got)
+	}
+}
+
+func TestSelectionHighlight(t *testing.T) {
+	s := New(10, 1)
+	s.Write([]byte("abcdefghij"))
+	s.SetSelection(true, 2, 0, 4, 0)
+	line := s.RenderWindow(0, 1)[0]
+	// 选区通过反显(ESC[7m)标记：整行应含反显序列，且不止光标处。
+	if !strings.Contains(line, "7m") {
+		t.Fatalf("选区行应含反显序列: %q", line)
+	}
+}

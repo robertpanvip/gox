@@ -31,8 +31,60 @@ func (m *Model) View() string {
 	// 浮层覆盖在最上层。
 	if m.ov != ovNone {
 		view = m.overlayView(view)
+	} else if m.compOpen {
+		view = m.compOverlayView(view)
 	}
 	return view
+}
+
+// compOverlayView 把补全候选框锚定到光标行下方，叠在编辑区上。
+func (m *Model) compOverlayView(base string) string {
+	t := m.theme
+	panelW := minInt(56, m.width-8)
+	if panelW < 20 {
+		return base // 太窄不画
+	}
+	inner := panelW - 2
+	var lines []string
+	show := minInt(len(m.compCands), 8)
+	for i := 0; i < show; i++ {
+		c := m.compCands[i]
+		label := truncate(c.Label, inner-8)
+		row := " " + c.Kind.Mark() + " " + label
+		detail := truncate(c.Detail, inner-lipgloss.Width(row)-1)
+		if detail != "" {
+			row += strings.Repeat(" ", maxInt(1, inner-lipgloss.Width(row)-lipgloss.Width(detail))) + detail
+		}
+		style := t.OverlayItem
+		if i == m.compSel {
+			style = t.OverlayActive
+		}
+		lines = append(lines, style.Width(inner).Render(row))
+	}
+	panel := t.OverlayBox.Width(panelW).Height(show + 2).Render(strings.Join(lines, "\n"))
+
+	// 锚定行：光标行在 body 中的相对位置 + 标题栏(1) + 边框(1) + 1。
+	ln, _ := m.Current().Cursor()
+	relY := ln - m.scrollLn
+	startY := relY + 3
+	if startY < 1 {
+		startY = 1
+	}
+	// 面板放不下时上移。
+	baseLines := strings.Split(base, "\n")
+	if startY+show+2 > len(baseLines) {
+		startY = maxInt(1, len(baseLines)-show-3)
+	}
+	// 水平位置：编辑区在右侧，留出左侧文件树宽度。
+	treeW := (m.width - 2) * 25 / 100
+	if treeW < 16 {
+		treeW = 16
+	}
+	if treeW > 42 {
+		treeW = 42
+	}
+	startX := 1 + treeW + 1 // 边框 + 文件树 + 分隔线
+	return placeOverlayAt(base, panel, startX, startY)
 }
 
 // viewTitleBar 渲染 macOS 风格标题栏：红黄绿点 + 居中标题 + 多标签。
@@ -288,6 +340,23 @@ func placeOverlay(base, panel string) string {
 			suffix = strings.Repeat(" ", remain)
 		}
 		lines[yi] = prefix + row + suffix
+	}
+	return strings.Join(lines, "\n")
+}
+
+// placeOverlayAt 把 panel 叠到 base 的 (startX, startY) 处（字符列/行，0 基）。
+// 用 ANSI 安全的宽度处理，避免 CJK 造成错位。
+func placeOverlayAt(base, panel string, startX, startY int) string {
+	lines := strings.Split(base, "\n")
+	pl := strings.Split(panel, "\n")
+	for i, row := range pl {
+		yi := startY + i
+		if yi < 0 || yi >= len(lines) {
+			continue
+		}
+		baseLine := lines[yi]
+		left := truncateWidth(baseLine, maxInt(0, startX))
+		lines[yi] = left + row
 	}
 	return strings.Join(lines, "\n")
 }

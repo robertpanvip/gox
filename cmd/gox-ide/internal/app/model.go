@@ -9,6 +9,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/robertpanvip/gox-ide/internal/complete"
 	"github.com/robertpanvip/gox-ide/internal/editor"
 	"github.com/robertpanvip/gox-ide/internal/theme"
 )
@@ -49,6 +50,14 @@ type Model struct {
 
 	// 退出确认
 	quitConfirm bool
+
+	// 代码补全状态：输入标识符时弹候选，Tab/Enter 采纳替换当前 token。
+	compEngine *complete.Engine
+	compOpen   bool
+	compCands  []complete.Candidate
+	compSel    int
+	compSeq    int    // 延迟查询序号，丢弃过期定时器
+	compToken  string // 当前正在补全的 token（采纳时据此回退）
 }
 
 // New 构建 Model。root 为空时退化为内存草稿。
@@ -58,6 +67,7 @@ func New(root string, dark bool, files []string) *Model {
 		root:  root,
 		focus: 1,
 	}
+	m.compEngine = complete.NewEngine(root)
 	if root != "" {
 		m.tree = newFileTree(root)
 	}
@@ -149,6 +159,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyMsg:
 		return m.handleKey(msg)
+
+	case completionTickMsg:
+		m.refreshCompletion(msg.seq)
+		return m, nil
 	}
 	return m, nil
 }
@@ -245,13 +259,30 @@ func (m *Model) handleEditorKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	b := m.Current()
 	key := msg.String()
 
+	// 补全浮层打开时，导航/采纳键优先归补全使用。
+	if m.compOpen {
+		switch key {
+		case "up":
+			m.moveCompSel(-1)
+			return m, nil
+		case "down":
+			m.moveCompSel(1)
+			return m, nil
+		case "tab", "enter":
+			return m, m.acceptComp()
+		case "esc":
+			m.closeComp()
+			return m, nil
+		}
+	}
+
 	// 文本输入（单 rune）。
 	if len(key) == 1 || (len(key) > 0 && strings.HasPrefix(key, "runes:")) {
 		for _, r := range msg.Runes {
 			b.InsertRune(r)
 		}
 		m.ensureCursorVisible()
-		return m, nil
+		return m, m.bumpComp()
 	}
 
 	switch key {
@@ -293,6 +324,10 @@ func (m *Model) handleEditorKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		b.SetCursor(b.LineCount()-1, col)
 	}
 	m.ensureCursorVisible()
+	if key == "backspace" || key == "delete" || key == "ctrl+d" {
+		return m, m.bumpComp()
+	}
+	m.closeComp() // 光标移动/换行等：关闭补全
 	return m, nil
 }
 

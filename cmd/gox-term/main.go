@@ -37,7 +37,7 @@ func main() {
 
 	dark := themeFlag != "light"
 	m := app.New(dark, shellFlag)
-	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
+	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseAllMotion())
 	m.BindProgram(p)
 
 	if _, err := p.Run(); err != nil {

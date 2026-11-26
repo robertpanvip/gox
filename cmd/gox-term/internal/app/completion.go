@@ -2,12 +2,15 @@ package app
 
 import (
 	"fmt"
+	"os"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/robertpanvip/gox-term/internal/clipboard"
 	"github.com/robertpanvip/gox-term/internal/complete"
 )
 
@@ -143,7 +146,20 @@ func (m *Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		m.closeCompletion()
 		return m, nil
 	}
-	if msg.Type != tea.MouseLeft {
+
+	// 正在拖拽选区：Motion 更新 head，Release 提交文本到剪贴板。
+	if m.selecting && msg.Action == tea.MouseActionMotion {
+		ix, iy := msg.X-1, msg.Y-1
+		m.selHead.x = clampInt(ix, 0, m.cols-1)
+		m.selHead.y = clampInt(iy-3, 0, m.rows-1)
+		m.syncSelectionToScreen()
+		return m, nil
+	}
+	if m.selecting && (msg.Action == tea.MouseActionRelease || msg.Type == tea.MouseRelease) {
+		return m, m.finishSelection()
+	}
+
+	if msg.Type != tea.MouseLeft || msg.Action != tea.MouseActionPress {
 		return m, nil
 	}
 
@@ -157,6 +173,7 @@ func (m *Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	if iy == 1 {
 		for _, r := range m.tabRanges() {
 			if ix >= r.lo && ix <= r.hi {
+				m.clearSelection()
 				if r.idx == len(m.sessions) {
 					m.newSession() // 点 "+"
 				} else if r.idx >= 0 && r.idx < len(m.sessions) {
@@ -172,8 +189,7 @@ func (m *Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 
 	// 补全浮层：内容第 3 行起是终端区，浮层首行记录在 compStart。
 	if m.compOpen {
-		bodyTop := 3
-		row := iy - bodyTop
+		row := iy - 3
 		if row >= m.compStart && row < m.compStart+1+len(m.compCands) {
 			idx := row - m.compStart - 1 // 第 0 行是提示头
 			if idx >= 0 && idx < len(m.compCands) {
@@ -183,14 +199,79 @@ func (m *Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	// 终端区其它位置：关闭浮层、回到实时视图。鼠标无法移动 shell 光标，
-	// 但点击聚焦/滚动复位是自然的交互。
+	// 终端区：开始拖拽选区（支持鼠标选中文本复制）。
 	if iy >= 3 {
+		m.closeCompletion()
 		m.scrollBack = 0
 		m.autoScroll = true
-		m.closeCompletion()
+		m.selecting = true
+		m.selAnchor.x = clampInt(ix, 0, m.cols-1)
+		m.selAnchor.y = clampInt(iy-3, 0, m.rows-1)
+		m.selHead = m.selAnchor
+		m.syncSelectionToScreen()
 	}
 	return m, nil
+}
+
+// syncSelectionToScreen 把当前选区写进活动会话的屏幕模拟器以渲染反显高亮。
+func (m *Model) syncSelectionToScreen() {
+	s := m.current()
+	if s == nil {
+		return
+	}
+	if sc := m.screens[s.ID]; sc != nil {
+		sc.SetSelection(true, m.selAnchor.x, m.selAnchor.y, m.selHead.x, m.selHead.y)
+	}
+}
+
+// clearSelection 清除选区高亮与状态。
+func (m *Model) clearSelection() {
+	m.selecting = false
+	if s := m.current(); s != nil {
+		if sc := m.screens[s.ID]; sc != nil {
+			sc.SetSelection(false, 0, 0, 0, 0)
+		}
+	}
+}
+
+// finishSelection 提交选区：从屏幕网格提取文本写入剪贴板（本地工具 + OSC52 双写），
+// 保留高亮一会儿让用户看到选了什么。返回执行写入的 tea.Cmd。
+func (m *Model) finishSelection() tea.Cmd {
+	m.selecting = false
+	s := m.current()
+	if s == nil {
+		return nil
+	}
+	sc := m.screens[s.ID]
+	if sc == nil {
+		return nil
+	}
+	text := sc.SelectedText()
+	if text == "" {
+		m.clearSelection()
+		return nil
+	}
+	// 双写：本地剪贴板工具（xclip/pbcopy，供其它 App 用）+ OSC52（供终端自身用）。
+	clipboard.WriteLocal(text)
+	m.statusMsg = "已复制 " + strconv.Itoa(utf8.RuneCountInString(text)) + " 字符"
+	seq := clipboard.OSC52(text)
+	return func() tea.Msg {
+		_, _ = os.Stdout.Write([]byte(seq))
+		return nil
+	}
+}
+
+func clampInt(v, lo, hi int) int {
+	if hi < lo {
+		return lo
+	}
+	if v < lo {
+		return lo
+	}
+	if v > hi {
+		return hi
+	}
+	return v
 }
 
 type tabRange struct {

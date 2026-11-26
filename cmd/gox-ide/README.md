@@ -38,7 +38,19 @@ go build -o gox-ide ./cmd/gox-ide
 | `Home / End` | 跳到行首 / 行尾 |
 | `PgUp / PgDn` | 上下翻页 |
 | `Ctrl+← / →` | 按词移动 |
-| `Esc` | 退出浮层 / 文件树焦点时回到编辑区 / 退出程序 |
+| `↑ ↓`（补全时） | 在候选间移动 |
+| `Tab / Enter`（补全时） | 采纳当前候选（替换正在输入的 token） |
+| `Esc` | 关闭补全 / 退出浮层 / 文件树焦点时回到编辑区 / 退出程序 |
+
+## 代码补全 ✨
+
+在编辑区输入标识符时**光标旁弹出候选**，无需记 API：
+
+- **GX/Go 关键字与片段**：`sig`/`func`/`view`/`for`… 及常用代码块。
+- **本文件 / 项目符号**：从当前文档与项目源码里抽取 `func`/`type`/`sig`/`var` 等声明。
+- **LSP 代码符号**：PATH 里有 `gopls`/`gox-lsp` 时异步拉取 `workspace/symbol`，装了全局语言服务器就自动多一路候选（没装则静默降级）。
+
+四类来源走可插拔 Provider，统一打分（前缀 > 子串 > 子序列）、去重、限流；LSP 异步预热，`Provide` 永不阻塞 UI。采纳时按字符数回退当前 token 再插入候选，光标与 Rope 文本保持同步。
 
 ## 架构
 
@@ -49,11 +61,19 @@ cmd/gox-ide/                  独立 Go module（replace gox => ../..）
 │   ├── theme/theme.go        macOS 双主题色板与全部 lipgloss 样式（构建时一次成型）
 │   ├── syntax/highlight.go   轻量语法分词（移植自 widgets/editor.go，语义 token 名同源）
 │   ├── editor/buffer.go      文本缓冲（复用 gox/runtime/rope 作为文本权威）
+│   ├── complete/             代码补全引擎（纯标准库，可插拔 Provider）
+│   │   ├── complete.go       引擎：打分/去重/排序、token 提取
+│   │   ├── keyword.go        GX/Go 关键字与片段
+│   │   ├── buffer.go         本文件符号
+│   │   ├── project.go        项目符号扫描（带缓存）
+│   │   ├── symbols.go        声明符号抽取
+│   │   └── lsp.go            可选 LSP workspace/symbol（异步预热）
 │   └── app/                  bubbletea 主 Model
 │       ├── model.go          状态、Update、全局快捷键
 │       ├── filetree.go       可折叠文件树
 │       ├── overlay.go        搜索 / 快速打开浮层逻辑
-│       └── view.go           分层渲染（标题栏/主体/状态栏/浮层）
+│       ├── completion.go     补全触发/采纳状态机
+│       └── view.go           分层渲染（标题栏/主体/状态栏/浮层/补全框）
 ```
 
 ### 设计取舍
@@ -69,4 +89,4 @@ cmd/gox-ide/                  独立 Go module（replace gox => ../..）
 go test ./cmd/gox-ide/...
 ```
 
-覆盖高亮"拼回原文不变"契约、关键字/字符串/注释着色、Rope 插入删除/跨行退格/中文光标、20000 行定位等。
+覆盖高亮"拼回原文不变"契约、关键字/字符串/注释着色、Rope 插入删除/跨行退格/中文光标、20000 行定位等；补全引擎的打分/去重/排序、token 与成员前缀提取、符号抽取、关键字过滤；补全市集的 token 替换、选中环绕、状态清理等。

@@ -100,6 +100,82 @@ type Screen struct {
 
 	// 默认前景/背景（主题色），用于 ColorDefault 的渲染。
 	defFg, defBg Color
+
+	// 鼠标文本选区（网格坐标，0 基，含端点）。active=false 时渲染忽略。
+	sel selection
+}
+
+// selection 是一块矩形文本选区：anchor 是按下点，head 是当前拖动点。
+type selection struct {
+	active bool
+	ax, ay int // anchor
+	hx, hy int // head
+}
+
+// SetSelection 设置选区（网格坐标）。传 active=false 清除。
+func (s *Screen) SetSelection(active bool, ax, ay, hx, hy int) {
+	s.sel.active = active
+	s.sel.ax, s.sel.ay = ax, ay
+	s.sel.hx, s.sel.hy = hx, hy
+}
+
+func (s *Screen) hasSelection() bool { return s.sel.active }
+
+// inSelection 判断网格坐标 (x,y) 是否在选区矩形内（含端点）。
+func (s *Screen) inSelection(x, y int) bool {
+	if !s.sel.active {
+		return false
+	}
+	x0, x1 := s.sel.ax, s.sel.hx
+	if x0 > x1 {
+		x0, x1 = x1, x0
+	}
+	y0, y1 := s.sel.ay, s.sel.hy
+	if y0 > y1 {
+		y0, y1 = y1, y0
+	}
+	return y >= y0 && y <= y1 && x >= x0 && x <= x1
+}
+
+// SelectedText 返回选区覆盖的纯文本。按"流式"语义：起点行从 anchor.x 到行尾，
+// 中间行取整行，终点行从行首到 head.x；反向拖拽自动交换。跳过宽字符占位格，
+// 行尾去空白，多行以 \n 连接。
+func (s *Screen) SelectedText() string {
+	if !s.sel.active {
+		return ""
+	}
+	// 按行方向归一化：firstX 是起点行的起始列，lastX 是终点行的结束列。
+	y0, y1 := s.sel.ay, s.sel.hy
+	firstX, lastX := s.sel.ax, s.sel.hx
+	if y0 > y1 || (y0 == y1 && firstX > lastX) {
+		y0, y1 = y1, y0
+		firstX, lastX = lastX, firstX
+	}
+	var lines []string
+	for y := y0; y <= y1 && y < len(s.buf); y++ {
+		row := s.buf[y]
+		lo, hi := 0, s.Cols-1
+		if y == y0 {
+			lo = firstX
+		}
+		if y == y1 {
+			hi = lastX
+		}
+		var b strings.Builder
+		for x := lo; x <= hi && x < len(row); x++ {
+			c := row[x]
+			if c.Cont {
+				continue
+			}
+			if c.Ch != 0 && c.Ch >= 0x20 {
+				b.WriteRune(c.Ch)
+			} else {
+				b.WriteByte(' ')
+			}
+		}
+		lines = append(lines, strings.TrimRight(b.String(), " "))
+	}
+	return strings.Join(lines, "\n")
 }
 
 // New 创建一块 cols×rows 的屏幕。
@@ -916,22 +992,23 @@ func (s *Screen) RenderWindow(scrollBack, height int) []string {
 	atBottom := end == total
 	for i := start; i < end && len(lines) < height; i++ {
 		if i < len(s.history) {
-			lines = append(lines, s.renderCells(s.history[i], -1, false))
+			lines = append(lines, s.renderCells(s.history[i], -1, false, -1))
 		} else {
 			cx := -1
 			if atBottom && i == total-1 && s.showCursor {
 				cx = s.x
 			}
-			lines = append(lines, s.renderCells(s.buf[i-len(s.history)], cx, cx >= 0))
+			gy := i - len(s.history) // 当前缓冲区的网格行号
+			lines = append(lines, s.renderCells(s.buf[gy], cx, cx >= 0, gy))
 		}
 	}
 	for len(lines) < height {
-		lines = append(lines, s.renderCells(make([]Cell, s.Cols), -1, false))
+		lines = append(lines, s.renderCells(make([]Cell, s.Cols), -1, false, -1))
 	}
 	return lines
 }
 
-func (s *Screen) renderCells(row []Cell, cursorX int, showCursor bool) string {
+func (s *Screen) renderCells(row []Cell, cursorX int, showCursor bool, gridY int) string {
 	var b strings.Builder
 	// 初始状态：主题默认前景/背景。
 	base := s.stateSeq(Color{}, Color{}, 0)
@@ -948,6 +1025,9 @@ func (s *Screen) renderCells(row []Cell, cursorX int, showCursor bool) string {
 		at := c.Attr
 		if showCursor && x == cursorX {
 			at ^= attrReverse // 反显模拟光标块
+		}
+		if gridY >= 0 && s.inSelection(x, gridY) {
+			at |= attrReverse // 选区反显高亮
 		}
 		seq := s.stateSeq(c.Fg, c.Bg, at)
 		if seq != cur {

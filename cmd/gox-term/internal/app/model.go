@@ -41,6 +41,11 @@ type Model struct {
 	compSeq    int    // 延迟查询序号，丢弃过期定时器
 	compStart  int    // 浮层在终端可见行的起始行（-1 表示未显示）
 	homeDir    string // 补全取不到 shell cwd 时的兜底目录
+
+	// 鼠标文本选区（网格坐标，0 基）。selecting 表示正在拖拽。
+	selecting bool
+	selAnchor struct{ x, y int }
+	selHead   struct{ x, y int }
 }
 
 // New 构建 Model（不立即建会话，等 Init 拿到 prog 后建）。
@@ -183,6 +188,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// bracketed paste：bubbletea 把整段粘贴文本放进 Runes，用 bracketed-paste
+	// 序列包裹后整体写入 PTY，让 shell/readline 当作一次粘贴（vim 里也不会逐字符执行）。
+	if msg.Paste && len(msg.Runes) > 0 {
+		m.pasteToShell(string(msg.Runes))
+		return m, nil
+	}
+
 	key := msg.String()
 
 	// 补全浮层打开时，导航/采纳键优先归补全使用。
@@ -212,6 +224,11 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	// 全局控制键（在转发给 shell 之前拦截）。
 	switch key {
+	case "alt+v", "f9":
+		// 兜底粘贴：从本地剪贴板读取（系统原生 Cmd/Ctrl+Shift+V 走 Paste 路径）。
+		// Alt+V 在部分 xterm 下被编码成 UTF-8 meta 字符，故同时提供 F9。
+		m.pasteFromClipboard()
+		return m, nil
 	case "ctrl+t":
 		m.newSession()
 		return m, nil

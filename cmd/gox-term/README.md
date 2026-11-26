@@ -45,14 +45,22 @@ $ git st
 
 设计上补全**不接管 shell 的行编辑**：按键照常进 PTY、shell 负责回显与历史；引擎从 VT 屏幕网格读出当前光标行做查询，采纳时回发等长退格 + 候选文本，行编辑始终由 shell 掌控。因此 **vim/htop 等全屏 TUI（交替屏幕）下补全自动禁用**，绝不会糊到 TUI 上。
 
+## 复制与粘贴
+
+- **复制**：在终端区**按住鼠标左键拖拽**选中文本，松开即复制到系统剪贴板（反显高亮选区）。双通道写入：本地剪贴板工具（`pbcopy`/`wl-copy`/`xclip`/`xsel`，供其它 App 用）+ OSC 52（供终端自身用），不依赖任何外部工具也能工作。
+- **粘贴**：系统原生粘贴（`Cmd+V` / `Ctrl+Shift+V`，由终端发 bracketed-paste）会把整段文本一次性写入 shell，vim 里也不会逐字符执行。若终端不支持 bracketed paste，可用 `Alt+V` 从本地剪贴板读取粘贴。
+
+> 多行复制/粘贴按流式语义处理（起点行从锚点、终点行到光标），CJK 宽字符正确对齐，行尾空白自动去除。
+
 ## 鼠标操作
 
 | 操作 | 功能 |
 |---|---|
+| 左键拖拽终端区 | 选中文本，松开复制到剪贴板 |
 | 点击标签 | 切换会话；点 `+` 新建会话 |
 | 点击补全候选 | 直接采纳该候选并填入命令行 |
 | 滚轮 ↑ / ↓ | 回滚 / 回到实时输出 |
-| 点击终端区 | 回到实时视图并关闭补全浮层 |
+| `Alt+V` | 从本地剪贴板粘贴 |
 
 ## 快捷键
 
@@ -66,6 +74,7 @@ $ git st
 | 补全时 `Tab / Enter / Ctrl+Y` | 采纳当前候选 |
 | 补全时 `1`–`9` | 数字快选对应候选 |
 | 补全时 `Esc` | 关闭补全浮层 |
+| `Alt+V` | 从剪贴板粘贴（bracketed-paste 整体写入） |
 | 普通按键 | 直接转发给 shell（命令、Ctrl+C 中断、方向键历史等全部可用） |
 
 > `Ctrl+Tab` 也可用作切换，但 xterm 等终端会把它退化成普通 Tab，故推荐 `Ctrl+N`。
@@ -82,6 +91,7 @@ $ git st
 - **会话隔离**：每个标签一个独立 PTY + 屏幕模拟器，输出与历史互不串扰。
 - **旁路补全引擎**（`internal/complete`）：纯标准库、可插拔 Provider 架构。统一打分（前缀 > 子串 > 子序列）、去重、排序、限流；PATH 与项目符号带磁盘缓存，LSP 走异步预热 + 内存缓存，`Provide` 永不阻塞 UI。上下文子命令（`git st` → `status`）命中时自动屏蔽同前缀的系统命令噪声。
 - **补全与 TUI 共存**：浮层只在常规屏幕且未回滚时渲染；`Screen.LineLeftOfCursor()` 提供光标左侧文本作查询；采纳时按字符数回发退格，与 shell readline 保持同步。
+- **文本选区与剪贴板**（`internal/clipboard` + `screen.selection`）：鼠标拖拽在 VT 网格上形成选区，渲染层用反显高亮；`SelectedText()` 按流式语义提取（跳过 CJK 占位格、去行尾空白）。复制走"本地工具 + OSC 52"双写；粘贴复用 bubbletea 的 bracketed paste，`wrapBracketedPaste` 整体包裹避免 shell 逐字符处理。
 - **独立 module**：bubbletea / lipgloss / creack/pty 依赖留在 `cmd/gox-term` 子模块，不污染 gox 主库依赖树。
 
 ## 测试
@@ -92,6 +102,7 @@ go test ./cmd/gox-term/...
 
 - `internal/screen`：光标寻址、局部擦除、滚动与历史、SGR 颜色、反显、交替屏幕、CJK 宽字符、vim 典型会话序列、CJK 回滚、`LineLeftOfCursor` 等单测。
 - `internal/complete`：打分/去重/排序、空查询、`TokenBefore`/`BeforeTokens`、关键字与项目符号抽取、上下文子命令等单测。
-- `internal/app`：布局单行、标签命中、浮层整行宽度（含 CJK）、选中环绕、鼠标点选候选/标签/滚轮等单测。
+- `internal/app`：布局单行、标签命中、浮层整行宽度（含 CJK）、选中环绕、鼠标点选候选/标签/滚轮、拖拽选区坐标、bracketed-paste 包裹与粘贴消息等单测。
+- `internal/clipboard`：OSC 52 序列格式与 base64 编解码、写出等单测。
 
-实测（xvfb + xterm）：`echo`/`ls`/`git`/ANSI 彩色输出、vim 全屏编辑并保存退出、htop 实时刷新与功能键栏、交替屏幕退出恢复、明暗双主题渲染均正常；`git`/`git st` 补全浮层弹出、Tab 采纳退格对齐正确、vim 插入模式下不误弹补全。
+实测（xvfb + xterm）：`echo`/`ls`/`git`/ANSI 彩色输出、vim 全屏编辑并保存退出、htop 实时刷新与功能键栏、交替屏幕退出恢复、明暗双主题渲染均正常；`git`/`git st` 补全浮层弹出、Tab 采纳退格对齐正确、vim 插入模式下不误弹补全、鼠标拖拽选区复制到 xclip 剪贴板、bracketed-paste 整体粘贴。
