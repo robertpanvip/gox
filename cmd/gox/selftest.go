@@ -56,7 +56,10 @@ pub func f(){ h.newRequest("GET","/",nil) }`, []string{"h.NewRequest"}, nil},
 		{"裸内置不误改", "package main\npub func f(){ println(\"x\"); len(\"a\") }", []string{`println("x")`, "len(\"a\")"}, []string{`Println("x")`}},
 
 		// ---- 集合链式与提升（4）----
-		{"切片提升", "package main\npub func f(){ xs := []int{1,2}; _ = xs }", []string{"list.List[int]"}, nil},
+		// 提升是按需的（见 collections.go hasChainMethodCalls）：文件里出现
+		// .map/.filter/.reduce 链式调用才把 []T 提升为 list.List[T]，否则原样保留。
+		{"切片按需提升", "package main\npub func f(){ xs := []int{1,2}; ys := xs.map(fn); _ = ys }\nfunc fn(x int)int{return x}", []string{"list.List[int]", "xs.Map(fn)"}, nil},
+		{"无链式不提升", "package main\npub func f(){ xs := []int{1,2}; _ = xs }", []string{"[]int{1,2}"}, []string{"list.List"}},
 		// 相邻 .map(f).filter(g) 由 fuseMapFilter 融合为单次遍历的 MapFilter
 		// （见 compiler_test.go TestMapFilterFusion 与 runtime/list.MapFilter）。
 		{"链式换型", "package main\npub func f(){ xs:=[]int{1}; ys:=xs.map(fn).filter(g) }\nfunc fn(x int)int{return x}\nfunc g(x int)bool{return true}", []string{"xs.MapFilter(fn, g)"}, []string{"xs.Map(fn)", ".Filter(g)"}},

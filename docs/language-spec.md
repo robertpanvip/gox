@@ -325,7 +325,7 @@ GX 来源规则：
 
 ## 5. 集合链式调用
 
-所有切片类型 `[]T` **全局提升**为 `list.List[T]`，获得链式方法（Go 1.27 泛型方法，Map/Reduce 可换型）：
+切片类型 `[]T` **按需提升**为 `list.List[T]`，获得链式方法（Go 1.27 泛型方法，Map/Reduce 可换型）：
 
 ```gx
 nums := []int{1, 2, 3}
@@ -334,6 +334,7 @@ labels := nums.map(fn).filter(keep).reduce(0, add)
 
 - `List[T]` 与 `[]T` 底层相同，双向可直接赋值/传参。
 - **仅匹配空方括号 `[]` 紧跟类型**（切片类型独有形态），故不误伤：数组 `[3]T`、索引 `a[i]`、切片表达式 `a[1:2]`、`map[K]V`、`Foo[T]`。
+- **按需提升**：同一文件出现 `.map` / `.filter` / `.reduce` 链式调用时才提升为 `list.List[T]`；无链式调用的文件 `[]T` 原样保留（避免污染函数签名/类型断言、凭空引入 runtime/list 依赖）。文件级注释 `gx:nocollections` 可强制跳过集合变换。
 - 只有实际发生提升时才注入 `<module>/runtime/list` import；`-module` 指定 module 路径。
 
 ## 6. 模板字符串
