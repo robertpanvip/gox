@@ -73,6 +73,7 @@ func Popover(props gxscene.Props) *gxscene.Instance {
 	stateGet := gxscene.get[*PopoverState](props, "state")
 	openGet := gxscene.get[bool](props, "open")
 	placement := gxscene.get[string](props, "placement")
+	noScrim := gxscene.get[bool](props, "noScrim")
 	offset := gxscene.get[string](props, "offset")
 	width := gxscene.get[string](props, "width")
 	triggerGet := gxscene.get[any](props, "trigger")
@@ -160,26 +161,32 @@ func Popover(props gxscene.Props) *gxscene.Instance {
 			if v := offset(); v != "" {
 				off = v
 			}
-			floatOps := []gxscene.Op{
-				// 遮罩：全屏，点击关闭
-				{Code: gxscene.opElem, Arg: "div"},
-				{Code: gxscene.opAttr, Key: "gx-role", Arg: "scrim"},
-				{Code: gxscene.opEvent, Key: "onClick", Slot: 0},
-				{Code: gxscene.opClose},
-				// 浮层内容
-				{Code: gxscene.opElem, Arg: "div"},
-				{Code: gxscene.opAttr, Key: "gx-role", Arg: "popover"},
-				{Code: gxscene.opAttr, Key: "gx-anchor", Arg: uid},
-				{Code: gxscene.opAttr, Key: "gx-placement", Arg: p},
-				{Code: gxscene.opAttr, Key: "gx-offset", Arg: off},
-				{Code: gxscene.opAttr, Key: "bg", Arg: ThemeMaterial},
-				{Code: gxscene.opAttr, Key: "border-radius", Arg: RadiusCard},
-				{Code: gxscene.opAttr, Key: "border", Arg: ThemeHairline},
-				{Code: gxscene.opAttr, Key: "border-width", Arg: HairlineWidth},
-				{Code: gxscene.opAttr, Key: "box-shadow", Arg: ShadowFloat},
-				{Code: gxscene.opAttr, Key: "flex-direction", Arg: "column"},
-				{Code: gxscene.opAttr, Key: "padding", Arg: "6"},
+			var floatOps []gxscene.Op
+			if !noScrim() {
+				// 遮罩：全屏，点击关闭（noScrim 模式跳过——顶部菜单条场景用
+				// 全局点击收起，不挡住相邻顶级菜单的点击切换，桌面语义）。
+				floatOps = append(floatOps,
+					gxscene.Op{Code: gxscene.opElem, Arg: "div"},
+					gxscene.Op{Code: gxscene.opAttr, Key: "gx-role", Arg: "scrim"},
+					gxscene.Op{Code: gxscene.opEvent, Key: "onClick", Slot: 0},
+					gxscene.Op{Code: gxscene.opClose},
+				)
 			}
+			// 浮层内容
+			floatOps = append(floatOps,
+				gxscene.Op{Code: gxscene.opElem, Arg: "div"},
+				gxscene.Op{Code: gxscene.opAttr, Key: "gx-role", Arg: "popover"},
+				gxscene.Op{Code: gxscene.opAttr, Key: "gx-anchor", Arg: uid},
+				gxscene.Op{Code: gxscene.opAttr, Key: "gx-placement", Arg: p},
+				gxscene.Op{Code: gxscene.opAttr, Key: "gx-offset", Arg: off},
+				gxscene.Op{Code: gxscene.opAttr, Key: "bg", Arg: ThemeMaterial},
+				gxscene.Op{Code: gxscene.opAttr, Key: "border-radius", Arg: RadiusCard},
+				gxscene.Op{Code: gxscene.opAttr, Key: "border", Arg: ThemeHairline},
+				gxscene.Op{Code: gxscene.opAttr, Key: "border-width", Arg: HairlineWidth},
+				gxscene.Op{Code: gxscene.opAttr, Key: "box-shadow", Arg: ShadowFloat},
+				gxscene.Op{Code: gxscene.opAttr, Key: "flex-direction", Arg: "column"},
+				gxscene.Op{Code: gxscene.opAttr, Key: "padding", Arg: "6"},
+			)
 			if w := width(); w != "" {
 				floatOps = append(floatOps, gxscene.Op{Code: gxscene.opAttr, Key: "width", Arg: w})
 			}

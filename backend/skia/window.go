@@ -170,6 +170,18 @@ func (w *Window) Frames() int {
 	return w.frames
 }
 
+// Pixels 返回最近一帧画布的 RGBA8888 字节（观测面：测试/诊断做像素级断言，
+// 与 DrawLog/Hits 同性质，不属于 host 协议）。无光栅画布时返回 nil。
+func (w *Window) Pixels() []byte {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	pm := w.canvas.Pixmap()
+	if pm == nil {
+		return nil
+	}
+	return pm.RGBA8888Bytes()
+}
+
 // DrawLog 返回最近一帧的绘制指令记录（观测面，非 host 协议）。
 // 调用方拿到的是副本，可安全读取。
 func (w *Window) DrawLog() DrawLog {

@@ -901,6 +901,7 @@ func menuRow(label string, fn func()) *gxscene.Instance {
 
 func menuBox(inner func() any) *gxscene.Instance {
     return <div
+        onClick={func(e gxscene.EventContext) { if e.Synthetic != nil { e.Synthetic.StopPropagation() } }}
         style={{ flexDirection: "column", background: widgets.UseToken("elevated")(), borderRadius: widgets.RadiusSmall, borderWidth: widgets.HairlineWidth, border: borderColor(), padding: "4 0" }}
     >
         {inner()}
@@ -914,6 +915,7 @@ func menuPopup(label string, name string, content func() *gxscene.Instance) *gxs
         "onOpenChange": func(v bool) { if v { openMenu = name } else { openMenu = "" } },
         "placement":    "bottom-start",
         "offset":       "2",
+        "noScrim":      false,
         "width":        "200",
         "trigger":      func() any { return menuTrigger(label, name) },
         "content":      func() any { return content() },
@@ -924,7 +926,7 @@ func menuTrigger(label string, name string) *gxscene.Instance {
     tone := "muted"
     if openMenu == name { tone = "text" }
     return <div
-        onClick={() => SetMenu(name)}
+        onClick={func(e gxscene.EventContext) { if e.Synthetic != nil { e.Synthetic.StopPropagation() }; SetMenu(name) }}
         style={{ padding: "3 8", cursor: "pointer", borderRadius: widgets.RadiusSmall, background: widgets.UseToken("panelalt")(), hover: { background: widgets.UseToken("panelalt")() } }}
     >
         {widgets.Text(gxscene.Props{"value": label, "size": widgets.FontFootnote, "tone": tone})}
@@ -984,6 +986,7 @@ func menuBar() *gxscene.Instance {
 func iconButton(name string, fn func()) *gxscene.Instance {
     return <div
         onClick={() => fn()}
+        testid={"btn-" + name}
         style={{ width: 28, height: 26, alignItems: "center", justifyContent: "center", borderRadius: widgets.RadiusSmall, cursor: "pointer", hover: { background: widgets.UseToken("panelalt")() } }}
     >
         {widgets.Icon(gxscene.Props{"name": name, "size": 16, "tone": "muted"})}
@@ -1076,6 +1079,7 @@ func stripeButton(name string, active bool) *gxscene.Instance {
     tone := "muted"
     if active { bg = widgets.UseToken("panelalt")(); tone = "blue" }
     return <div
+        testid={"stripe-" + name}
         style={{ width: 34, height: 34, alignItems: "center", justifyContent: "center", borderRadius: widgets.RadiusSmall, background: bg, cursor: "pointer", hover: { background: widgets.UseToken("panelalt")() } }}
     >
         {widgets.Icon(gxscene.Props{"name": name, "size": 18, "tone": tone})}
@@ -1115,6 +1119,7 @@ func statusBar() *gxscene.Instance {
 
 pub func Playground() *gxscene.Instance {
     return <div
+        onClick={func(e gxscene.EventContext) { openMenu = "" }}
         style={{
             background: canvasBg(),
             color: textColor(),

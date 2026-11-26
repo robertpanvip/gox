@@ -75,6 +75,7 @@ func Popover(props gxscene.Props) *gxscene.Instance {
 	stateGet := gxscene.Get[*PopoverState](props, "state")
 	openGet := gxscene.Get[bool](props, "open")
 	placement := gxscene.Get[string](props, "placement")
+	noScrim := gxscene.Get[bool](props, "noScrim")
 	offset := gxscene.Get[string](props, "offset")
 	width := gxscene.Get[string](props, "width")
 	triggerGet := gxscene.Get[any](props, "trigger")
@@ -162,13 +163,19 @@ func Popover(props gxscene.Props) *gxscene.Instance {
 			if v := offset(); v != "" {
 				off = v
 			}
-			floatOps := []gxscene.Op{
-				// 遮罩：全屏，点击关闭
-				gxscene.Op{Code: gxscene.OpElem, Arg: "div"},
-				gxscene.Op{Code: gxscene.OpAttr, Key: "gx-role", Arg: "scrim"},
-				gxscene.Op{Code: gxscene.OpEvent, Key: "onClick", Slot: 0},
-				gxscene.Op{Code: gxscene.OpClose},
-				// 浮层内容
+			var floatOps []gxscene.Op
+			if !noScrim() {
+				// 遮罩：全屏，点击关闭（noScrim 模式跳过——顶部菜单条场景用
+				// 全局点击收起，不挡住相邻顶级菜单的点击切换，桌面语义）。
+				floatOps = append(floatOps,
+					gxscene.Op{Code: gxscene.OpElem, Arg: "div"},
+					gxscene.Op{Code: gxscene.OpAttr, Key: "gx-role", Arg: "scrim"},
+					gxscene.Op{Code: gxscene.OpEvent, Key: "onClick", Slot: 0},
+					gxscene.Op{Code: gxscene.OpClose},
+				)
+			}
+			// 浮层内容
+			floatOps = append(floatOps,
 				gxscene.Op{Code: gxscene.OpElem, Arg: "div"},
 				gxscene.Op{Code: gxscene.OpAttr, Key: "gx-role", Arg: "popover"},
 				gxscene.Op{Code: gxscene.OpAttr, Key: "gx-anchor", Arg: uid},
@@ -181,7 +188,7 @@ func Popover(props gxscene.Props) *gxscene.Instance {
 				gxscene.Op{Code: gxscene.OpAttr, Key: "box-shadow", Arg: ShadowFloat},
 				gxscene.Op{Code: gxscene.OpAttr, Key: "flex-direction", Arg: "column"},
 				gxscene.Op{Code: gxscene.OpAttr, Key: "padding", Arg: "6"},
-			}
+			)
 			if w := width(); w != "" {
 				floatOps = append(floatOps, gxscene.Op{Code: gxscene.OpAttr, Key: "width", Arg: w})
 			}

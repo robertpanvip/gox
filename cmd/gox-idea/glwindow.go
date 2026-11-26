@@ -597,15 +597,15 @@ func (g *glWindow) onMouseButton(w *glfw.Window, button glfw.MouseButton, action
 	if root == nil {
 		return
 	}
-	// 命中"面积最小"的框：最内层/最具体的元素（如按钮）优先于外层容器。
-	bestIdx, bestArea := -1, float32(0)
-	for i := range hits {
-		if !hits[i].Contains(px, py) {
-			continue
-		}
-		area := hits[i].W * hits[i].H
-		if bestIdx < 0 || area < bestArea {
-			bestIdx, bestArea = i, area
+	// 命中选取：登记序倒序取第一个包含点的框。skia 绘制序=父先子后、浮层最后，
+	// 因此倒序即浏览器语义的"顶绘制层优先 + 同层最内层优先"——浮层（popover/
+	// scrim）压在最上时点得到浮层，点空白命中 scrim 收起菜单；旧"面积最小"
+	// 启发式会让点击穿透遮罩，打不开也关不掉浮层。
+	bestIdx := -1
+	for i := len(hits) - 1; i >= 0; i-- {
+		if hits[i].Contains(px, py) {
+			bestIdx = i
+			break
 		}
 	}
 	if bestIdx >= 0 {
