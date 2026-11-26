@@ -353,6 +353,26 @@ func (a *App) FrameVersion() uint64 {
 	return a.frameVersion
 }
 
+// DebugDumpStructural dump 当前场景树全部结构插槽的接线状态（E2E 诊断用）。
+func (a *App) DebugDumpStructural() string {
+	a.stateMu.Lock()
+	defer a.stateMu.Unlock()
+	if a.inst == nil {
+		return "inst=nil"
+	}
+	return a.inst.DebugDumpStructural(0)
+}
+
+// DebugRootSinkID 返回根实例变更 sink 的 id（E2E 诊断：与孤立 sink id 对比）。
+func (a *App) DebugRootSinkID() int64 {
+	a.stateMu.Lock()
+	defer a.stateMu.Unlock()
+	if a.inst == nil {
+		return -1
+	}
+	return a.inst.DebugRootSinkID()
+}
+
 // SetErrorHandler 设置 Draw 错误回调（T2.2）。err 为 nil 时不调用。
 func (a *App) SetErrorHandler(fn func(error)) {
 	a.stateMu.Lock()

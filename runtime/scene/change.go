@@ -92,6 +92,7 @@ type ChildDiffer func(parent *Node, old, next []*Node, emit func(Change))
 type changeSink struct {
 	mu      sync.Mutex
 	enabled bool
+	id      int64 // E2E 诊断：sink 身份，用于发现孤立 sink
 	changes []Change
 	differ  ChildDiffer // nil 表示使用 host 内建 LIS diff
 
@@ -340,7 +341,7 @@ func (s *changeSink) measureHook() func(NodeID, func(w, h float32)) {
 	return fn
 }
 
-func newChangeSink() *changeSink { return &changeSink{} }
+func newChangeSink() *changeSink { return &changeSink{id: dbgNextSinkID.Add(1)} }
 
 // setDiffer 注入/清除子节点 diff 策略（nil 恢复内建）。作用于整棵共享 sink。
 func (s *changeSink) setDiffer(d ChildDiffer) {
@@ -363,12 +364,55 @@ func (s *changeSink) enable() {
 }
 
 func (s *changeSink) add(c Change) {
-	if s == nil || !s.enabled {
+	if s == nil {
+		return
+	}
+	if c.Kind == ChangeSetAttr || c.Kind == ChangeSetText || c.Kind == ChangeSetHandler {
+		if s.enabled {
+			dbgLeafAdds.Add(1)
+		}
+	} else {
+		// 结构类变更（InsertBefore/RemoveChild/MoveChild/ReplaceChildren）：
+		// E2E 诊断——不管 sink 是否 enable 都计数，用于发现「变更写进孤立 sink」。
+		dbgStructAdds.Add(1)
+		if s.enabled {
+			dbgStructAddsEnabled.Add(1)
+		} else {
+			dbgOrphanSinkID.Store(s.id)
+			dbgOrphanLastKind.Store(int64(c.Kind))
+		}
+	}
+	if !s.enabled {
 		return
 	}
 	s.mu.Lock()
 	s.changes = append(s.changes, c)
 	s.mu.Unlock()
+}
+
+// E2E 诊断计数：全进程 sink.add 的叶子/结构变更量，以及结构变更中落入
+// enabled sink 的数量。structural > structuralEnabled 说明存在孤立 sink。
+var (
+	dbgLeafAdds          atomic.Int64
+	dbgStructAdds        atomic.Int64
+	dbgStructAddsEnabled atomic.Int64
+	dbgOrphanSinkID      atomic.Int64
+	dbgOrphanLastKind    atomic.Int64
+	dbgNextSinkID        atomic.Int64
+)
+
+// DebugSinkStats 返回 sink.add 的全局统计（E2E 诊断用）。
+func DebugSinkStats() (leaf, structural, structuralEnabled, orphanSinkID, orphanKind int64) {
+	return dbgLeafAdds.Load(), dbgStructAdds.Load(), dbgStructAddsEnabled.Load(),
+		dbgOrphanSinkID.Load(), dbgOrphanLastKind.Load()
+}
+
+// DebugRootSinkID 返回实例根 sink 的 id（与 orphanSinkID 对比判断是否孤立）。
+func (i *Instance) DebugRootSinkID() int64 {
+	if i == nil || i.changes == nil {
+		return -1
+	}
+	return i.changes.id
 }
 
 // take 取走并清空当前所有变更，保持顺序。

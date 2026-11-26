@@ -63,17 +63,24 @@ func newJSDriver(root js.Value) *jsDriver {
 	return d
 }
 
-// postRAF 把 fn 排进下一帧。回调只注册一次，避免每帧创建/释放 js.Func。
+// postRAF 把 fn 排进下一帧。
+//
+// 去重说明（rafScheduled）：早期实现用「同帧只注册一次 RAF」去重。但 Go 1.27
+// 栈切换（pause/PAUSE）事件机存在「pause 后第一个事件仅复位 PAUSE、回调不执行」
+// 的行为：首个 RAF 回调被吃掉后 runRAF 永不执行，rafScheduled 永久卡 true，
+// 队列无限积压——表现为 web 端 UI 冻结在首帧（playground 全部交互失效的根因）。
+// 改为每次 post 都注册 RAF：runRAF 幂等（空队列空跑），浏览器同帧合并回调，
+// 即使个别回调被事件机吃掉，后续注册仍会驱动队列消费。
 func (d *jsDriver) postRAF(fn func()) {
 	if fn == nil {
 		return
 	}
 	d.mu.Lock()
 	d.rafQueue = append(d.rafQueue, fn)
-	if !d.rafScheduled {
-		d.rafScheduled = true
-		d.win.Call("requestAnimationFrame", d.rafOnce)
-	}
+	d.rafScheduled = true
+	d.win.Call("requestAnimationFrame", d.rafOnce)
+	// 诊断通道：把回调暴露到 window，供 E2E 手动驱动/验证注册链。
+	js.Global().Set("__gxRAF", d.rafOnce)
 	d.mu.Unlock()
 }
 
@@ -133,6 +140,11 @@ func (d *jsDriver) Create(kind string, id gxscene.NodeID) ElemID {
 			tag = "div"
 		}
 		v = d.doc.Call("createElement", tag)
+		if tag == "button" {
+			// 原生 button 的默认光标是 default，可点击控件统一 pointer。
+			// 之后 GX 的 cursor 样式属性（isStyleKey）仍可覆盖此默认值。
+			v.Get("style").Call("setProperty", "cursor", "pointer")
+		}
 	}
 	e := &jsElem{id: d.next, nodeID: id, v: v, kind: kind, listeners: map[string]js.Func{}}
 	d.elements[e.id] = e
@@ -272,6 +284,18 @@ func (d *jsDriver) SetAttr(e ElemID, key, value string) {
 		} else {
 			d.injectAnimationCSSLocked()
 			el.v.Get("style").Call("setProperty", "animation", css)
+		}
+		return
+	}
+	// scroll-top / scroll-left 是元素滚动位置（el.scrollTop），不是 CSS 属性。
+	// 此前被当 style.setProperty("scrollTop") 写入——setProperty 只认 CSS 属性名，
+	// 静默无效，虚拟列表滚轮/受控滚动在 web 端从未生效过。
+	if key == "scroll-top" || key == "scroll-left" {
+		if value == "" {
+			return
+		}
+		if f, err := strconv.ParseFloat(strings.TrimSpace(strings.TrimSuffix(value, "px")), 64); err == nil {
+			el.v.Set(cssName(key), f)
 		}
 		return
 	}

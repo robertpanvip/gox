@@ -13,6 +13,9 @@ func parseFloat(s string) (float64, error) {
 	return strconv.parseFloat(strings.trimSuffix(strings.trimSpace(s), "px"), 64)
 }
 
+// debugLastWindow 记录最近一次窗口计算的输入（E2E 诊断用）。
+var debugLastWindow = ""
+
 // VirtualList 虚拟滚动列表。核心性能约定：无论数据总量多大，场景树里只存在
 // 当前视口可见的项（+ overscan 缓冲），节点数与数据量解耦——这才是"虚拟滚动"。
 //
@@ -198,6 +201,7 @@ func VirtualList(props gxscene.Props) *gxscene.Instance {
 			return 0, 0, 0
 		}
 		st := effectiveScroll()
+		debugLastWindow = "st=" + strconv.formatFloat(st, 'f', 1, 64) + " count=" + strconv.itoa(count) + " vp=" + strconv.formatFloat(viewportHeight, 'f', 0, 64)
 		off := buildOffsets(count)
 		first = firstIndexAt(off, st) - overscan
 		if first < 0 {

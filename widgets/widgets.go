@@ -192,6 +192,8 @@ func Button(props gxscene.Props) *gxscene.Instance {
 		attr("flex-direction", "row"), attr("gap", "5"),
 		attr("align-items", "center"), attr("justify-content", "center"),
 		attr("height", ControlHeight),
+		// 可点击控件统一 pointer 光标（Web 原生 button 默认是 default）。
+		attr("cursor", "pointer"),
 		dynAttr("bg", bgSlot), dynAttr("color", colorSlot), dynAttr("border", borderSlot),
 	}
 	n := 5

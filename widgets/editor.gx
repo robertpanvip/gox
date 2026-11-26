@@ -1233,6 +1233,9 @@ func (s *EditorState) lineRowBg(idx int) string {
 }
 func (s *EditorState) lineGutterColor(idx int) string { return s.lineRowBg(idx) }
 func (s *EditorState) lineNumber(idx int) string { return strconv.itoa(idx + 1) }
+// lineAttr 是行节点的真实文档行号（0 基），供前端点击换算读取。
+// 虚拟滚动下 DOM 顺序只是可见窗口的序号，不能当行号用——滚动后点击
+// 若按 DOM 索引换算，光标会被错误地送到文档顶部。
 func (s *EditorState) rowHeight(idx int) int {
     if idx < s.lineCount { return 22 }
     return 0
@@ -1245,6 +1248,7 @@ var editorRowIDs = indices(24)
 func (s *EditorState) lineView(idx int) *gxscene.Instance {
     return <div
         class="gx-editor-row"
+        data-line={strconv.itoa(idx)}
         bg={s.lineRowBg(idx)}
         height={s.rowHeight(idx)}
         overflow="hidden"
@@ -1323,6 +1327,8 @@ func Editor(st *EditorState) *gxscene.Instance {
     // 光标跟随：建树期订阅光标行/行数，移出视口时自动滚动（见 ensureCursorVisible）。
     st.installCursorFollow()
     return <div
+        class="gx-editor"
+        cursor="text"
         bg={st.color("bg")}
         border-radius="8"
         padding="6"
@@ -1354,6 +1360,17 @@ func (s *EditorState) Status() string {
          "  |  " + strconv.itoa(s.lineCount) + " lines"
     if s.HasSelection() { v = v + "  |  " + strconv.itoa(runeLen(s.SelectedText())) + " selected" }
     return v
+}
+
+// DebugInfo 返回内部响应式状态快照，供 E2E 诊断内部值与 UI 显示的差异。
+func (s *EditorState) DebugInfo() string {
+    return "lineCount=" + strconv.itoa(s.lineCount) +
+        " docLines=" + strconv.itoa(s.doc.LineCount()) +
+        " cacheLen=" + strconv.itoa(len(s.lineTextCache)) +
+        " cursorLine=" + strconv.itoa(s.cursorLine) +
+        " scrollTopVal=" + strconv.formatFloat(s.scrollTopVal, 'f', 1, 64) +
+        " lcSubs=" + debugLockedSubsStr("sf:lc:3353") +
+        " srcSubs=" + debugLockedSubsStr("sf:source:3146")
 }
 
 // LineText 导出给装配层诊断/集成用：读第 idx 行第 slot 个 token 文本。

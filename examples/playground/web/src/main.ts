@@ -134,7 +134,11 @@ const HANDLED_KEYS: ReadonlySet<string> = new Set<string>([
  * 整行（行号槽 + 代码 + 行尾空白）都带 .gx-editor-row，点击空行或文字之后的
  * 空白处也能命中——此前只认 .gx-code-line，空行 span 宽度为 0，点到空白直接
  * 返回 null，所以"有字的行能点、没字的行点不了"。列换算仍用行内代码 span 的
- * 左缘：空行的 span 没有内容但左缘位置是准确的，pickColumn 会算出列 0。 */
+ * 左缘：空行的 span 没有内容但左缘位置是准确的，pickColumn 会算出列 0。
+ *
+ * 行号必须读行节点上的 data-line（真实文档行号）：编辑器走虚拟滚动，DOM 里
+ * 只挂可见窗口的行，DOM 顺序只是窗口序号——滚动后按 DOM 索引换算会把光标
+ * 错误地送到文档顶部。data-line 缺失时才退回 DOM 顺序（非虚拟渲染兜底）。 */
 function lineAt(app: HTMLElement, ev: MouseEvent): { el: HTMLElement; line: number } | null {
   const target: EventTarget | null = ev.target;
   if (!(target instanceof HTMLElement)) {
@@ -145,7 +149,11 @@ function lineAt(app: HTMLElement, ev: MouseEvent): { el: HTMLElement; line: numb
     return null;
   }
   const rows: HTMLElement[] = Array.from(app.querySelectorAll<HTMLElement>(".gx-editor-row"));
-  const line: number = rows.indexOf(row);
+  const attrLine: string | null = row.getAttribute("data-line");
+  let line: number = attrLine !== null && attrLine !== "" ? Number(attrLine) : rows.indexOf(row);
+  if (!Number.isInteger(line) || line < 0) {
+    line = rows.indexOf(row);
+  }
   if (line < 0) {
     return null;
   }
@@ -575,9 +583,17 @@ function bindKeyboard(elements: Elements, api: GoxPlaygroundAPI): void {
   // 用时间戳标记「刚刚发生过触摸」，在合成的 mousedown 上阻止其默认聚焦行为。
   // 不在 pointerdown 上 preventDefault：那会破坏 iOS 的触摸焦点链，反而让键盘收起。
   let lastTouchAt: number = 0;
-  // 滚轮 → 虚拟滚动窗口移动。deltaMode=0 为像素、1 为行、2 为页，统一折算成行数；
-  // preventDefault 阻止浏览器原生滚动（overflow 容器由 VirtualList 受控 scrollTop 管理）。
+  // 滚轮 → 虚拟滚动窗口移动。仅当事件落在编辑器内（.gx-editor）才拦截：
+  // 之前对整个 app preventDefault 并一律转成编辑器 scrollLines，导致示例列表
+  // 与实时预览的 overflow:auto 容器永远滚不动。其余区域放行浏览器原生滚动。
+  // deltaMode=0 为像素、1 为行、2 为页，统一折算成行数。
   app.addEventListener("wheel", (ev: WheelEvent): void => {
+    const target: EventTarget | null = ev.target;
+    const inEditor: boolean = target instanceof HTMLElement
+      && target.closest(".gx-editor") !== null;
+    if (!inEditor) {
+      return;
+    }
     const px: number = ev.deltaMode === 1 ? ev.deltaY * 22
       : ev.deltaMode === 2 ? ev.deltaY * 470
       : ev.deltaY;
@@ -837,6 +853,8 @@ async function boot(elements: Elements): Promise<void> {
   const result: WebAssembly.WebAssemblyInstantiatedSource = await instantiateWasm(go);
   elements.loading.remove();
   void go.run(result.instance);
+  // 诊断通道：暴露 wasm_exec 实例供 E2E 深度探查事件机（PAUSE/事件派发）。
+  (window as unknown as Record<string, unknown>)['__GO_INST__'] = go;
   const api: GoxPlaygroundAPI = await waitForGox();
   bindKeyboard(elements, api);
   bindMobileInput(elements, api);

@@ -167,6 +167,11 @@ func (b *Branch) adoptSinkDeep(s *changeSink) {
 // 同时对首帧已命中的分支子树补接（同 For：首帧独立 effect 缺 app 帧边界回调）。
 func (b *Branch) adoptBind(ctx *bindCtx) {
 	b.bctx = ctx
+	// 统一 sink：与 For.adoptBind 对称。首帧建树时 b.sink 指向创建期临时 sink，
+	// 后续 Resolve 新分支子树的变更会写进孤立 sink 而丢失。
+	if ctx.sink != nil && b.sink != ctx.sink {
+		b.adoptSinkDeep(ctx.sink)
+	}
 	b.mu.Lock()
 	cur := b.cur
 	b.mu.Unlock()

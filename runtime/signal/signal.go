@@ -223,17 +223,13 @@ func NewWithEquals[T any](v T, equals func(a, b T) bool) Signal[T] {
 // 编译器为 struct 的 signal 字段生成的 getter 读写的是捕获的普通变量，
 // 并非核心响应式节点。保留实例级锁仅为兼容这类「跟随普通变量」的写法，
 // 使经由该 getter 的访问串行化（用户代码在别处直接读写同一变量需自行同步）。
-// 需要完整响应式请改用 New/Computed 创建的真 signal 源。
+//
+// 响应式契约（修复）：值虽跟随外部变量，但经由该 Signal 的**读会登记依赖、
+// 写会通知订阅者**——内部持有一个信号源节点，track/dispatch 照常走。
+// 否则 `sig 字段` 的写（如编辑器 SetText 写 lineCount）对 UI 完全静默，
+// 虚拟窗口不扩展、状态栏不刷新（playground 实测缺陷的根因）。
 func LockedGetter[T any](get func() T, set func(T)) Signal[T] {
-	var mu sync.Mutex
-	return func(args ...T) T {
-		mu.Lock()
-		defer mu.Unlock()
-		if len(args) > 0 {
-			set(args[0])
-		}
-		return get()
-	}
+	return lockedGetterImpl("", new(sync.Mutex), get, set)
 }
 
 // lockedMuRegistry 让「跟随同一变量」的多个 getter 复用同一把互斥锁。
@@ -241,15 +237,62 @@ func LockedGetter[T any](get func() T, set func(T)) Signal[T] {
 // 变量时访问互斥。
 var lockedMuRegistry sync.Map // map[string]*sync.Mutex
 
+// lockedNodeRegistry 按 key 记录 LockedGetter/Shared 的信号节点，供 E2E 诊断
+// 订阅链（DebugLockedSubs）。
+var lockedNodeRegistry sync.Map // map[string]*node
+
+// DebugLockedSubs 返回指定 key 的 LockedGetter 信号节点的订阅者统计。
+// 返回 total/disposed 两项：disposed>0 表示有 effect 订阅过但已被销毁。
+func DebugLockedSubs(key string) (total, disposed int) {
+	v, ok := lockedNodeRegistry.Load(key)
+	if !ok {
+		return -1, -1
+	}
+	n := v.(*node)
+	for sub := range n.subs {
+		total++
+		if sub.disposed {
+			disposed++
+		}
+	}
+	return total, disposed
+}
+
 // LockedGetterShared 与 LockedGetter 语义相同，但按 key 共享互斥锁。
 func LockedGetterShared[T any](key string, get func() T, set func(T)) Signal[T] {
 	muAny, _ := lockedMuRegistry.LoadOrStore(key, new(sync.Mutex))
 	mu := muAny.(*sync.Mutex)
+	return lockedGetterImpl(key, mu, get, set)
+}
+
+// lockedGetterImpl 是 LockedGetter/Shared 的共同实现：互斥锁保护下的
+// 「跟随变量读写 + 真信号源订阅/通知」。相等写入短路（与 New 一致），
+// 不做无谓的下游重跑。
+func lockedGetterImpl[T any](key string, mu *sync.Mutex, get func() T, set func(T)) Signal[T] {
+	nd := newNode(false)
+	if key != "" {
+		lockedNodeRegistry.Store(key, nd)
+	}
+	nd.equals = func(a, b any) bool {
+		av, aok := a.(T)
+		bv, bok := b.(T)
+		if !aok || !bok {
+			return false
+		}
+		return defaultEquals(av, bv)
+	}
 	return func(args ...T) T {
 		mu.Lock()
 		defer mu.Unlock()
 		if len(args) > 0 {
-			set(args[0])
+			next := args[0]
+			if !nd.equals(any(get()), any(next)) {
+				set(next)
+				dispatchEffects(collectDirty(nd))
+			}
+		}
+		if len(observers) > 0 {
+			track(nd)
 		}
 		return get()
 	}

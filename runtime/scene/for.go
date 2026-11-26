@@ -217,6 +217,12 @@ func ForGetterOf[T any](each func() []T, key func(T) any, render func(T) *Instan
 
 // Resolve 在响应式 Effect 上下文中被调用：求值 each（登记依赖），做 keyed diff，
 // 返回嫁接用的根子树（把所有元素节点挂在 #frag 容器下）。
+// debugResolveCount 是 For.Resolve 的全局调用计数（E2E 诊断用）。
+var debugResolveCount int64
+
+// DebugForResolveCount 返回自进程启动以来 For.Resolve 的调用总次数。
+func DebugForResolveCount() int64 { return debugResolveCount }
+
 func (f *For) Resolve() *Instance {
 	if f == nil {
 		return nil
@@ -226,6 +232,7 @@ func (f *For) Resolve() *Instance {
 		f.mu.Unlock()
 		return nil
 	}
+	debugResolveCount++
 	items := f.each()
 	f.mu.Unlock()
 
@@ -458,6 +465,13 @@ func (f *For) adoptSinkDeep(s *changeSink) {
 // onDirty 帧边界），不补接会导致项内叶子变化时增量后端收不到重绘请求。
 func (f *For) adoptBind(ctx *bindCtx) {
 	f.bctx = ctx
+	// 统一 sink：首帧建树时 f.sink 指向 For 创建期实例的临时 sink，从未跟随
+	// 上层换到根实例的共享 sink。不修的话，后续 Resolve 产生的增删项结构变更
+	// （InsertBefore/RemoveChild）全部写进孤立 sink，增量后端永远收不到
+	// （playground 虚拟滚动实测缺陷根因）。与 Branch.adoptBind 对称。
+	if ctx.sink != nil && f.sink != ctx.sink {
+		f.adoptSinkDeep(ctx.sink)
+	}
 	f.mu.Lock()
 	entries := make([]*forEntry, 0, len(f.entries))
 	for _, e := range f.entries {

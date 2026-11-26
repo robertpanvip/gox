@@ -29,6 +29,37 @@ type Window struct {
 	nodes map[gxscene.NodeID]*mirrorNode
 	elems map[ElemID]*mirrorNode
 	root  ElemID
+
+	// 帧诊断（E2E 用）：最近一次 Present 的增量长度 / 全量标志 / 应用条数。
+	lastChangesLen int
+	lastFullSync   bool
+	lastApplied    int
+	// lastChangeSample：最近一帧前 5 条 Change 的摘要（Kind/NodeID/Key），
+	// 以及镜像未命中（m==nil 被跳过）的条数。
+	lastChangeSample []string
+	lastSkipped      int
+	lastKinds        map[string]any
+}
+
+// ProbeFrame 返回最近一次 Present 的帧诊断信息。
+// 注意：js.ValueOf 只接受 []any 不接受 []string、不接受 uint64——字段须用这些类型。
+func (w *Window) ProbeFrame() map[string]any {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	sample := make([]any, 0, len(w.lastChangeSample))
+	for _, s := range w.lastChangeSample {
+		sample = append(sample, s)
+	}
+	return map[string]any{
+		"lastChangesLen": w.lastChangesLen,
+		"lastFullSync":   w.lastFullSync,
+		"lastApplied":    w.lastApplied,
+		"frames":         int64(w.frames),
+		"mirrorNodes":    len(w.nodes),
+		"sample":         sample,
+		"skipped":        w.lastSkipped,
+		"kinds":          w.lastKinds,
+	}
 }
 
 // mirrorNode 记录一个场景节点在 DOM 侧的镜像状态。
@@ -154,6 +185,23 @@ func (w *Window) Draw(root *gxscene.Node) error {
 // FireEvent 回投到场景树。
 func (w *Window) Run() error { return nil }
 
+// ProbeRAF 诊断 RAF 投递链状态：scheduled=是否已注册浏览器回调、
+// queueLen=排队未执行的任务数。scheduled=true 且 queueLen>0 说明浏览器
+// 没有回调 rafOnce（投递链断在浏览器侧）；scheduled=false 且 queueLen>0
+// 说明注册被复位但队列未消费（异常路径）。
+func (w *Window) ProbeRAF() map[string]any {
+	d, ok := w.driver.(*jsDriver)
+	if !ok {
+		return nil
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return map[string]any{
+		"scheduled": d.rafScheduled,
+		"queueLen":  len(d.rafQueue),
+	}
+}
+
 func (w *Window) Close() error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -205,7 +253,33 @@ func (w *Window) Present(frame *gxapp.Frame) error {
 	}
 	if frame.FullSync || len(w.nodes) == 0 {
 		w.rebuildLocked(frame.Root)
+		w.lastChangesLen = len(frame.Changes)
+		w.lastFullSync = true
+		w.lastApplied = len(w.nodes)
+		w.lastChangeSample = nil
+		w.lastKinds = map[string]any{}
+		w.lastSkipped = 0
 	} else {
+		w.lastChangesLen = len(frame.Changes)
+		w.lastFullSync = false
+		w.lastSkipped = 0
+		w.lastChangeSample = make([]string, 0, 5)
+		kinds := map[string]any{}
+		counts := map[string]int{}
+		for i, c := range frame.Changes {
+			counts[c.Kind.String()]++
+			if i < 40 {
+				w.lastChangeSample = append(w.lastChangeSample,
+					fmt.Sprintf("%s id=%s key=%s hit=%v", c.Kind, c.NodeID, c.Key, w.nodes[gxscene.ParseNodeID(c.NodeID)] != nil))
+			}
+			if w.nodes[gxscene.ParseNodeID(c.NodeID)] == nil {
+				w.lastSkipped++
+			}
+		}
+		for k, v := range counts {
+			kinds[k] = int64(v)
+		}
+		w.lastKinds = kinds
 		w.applyChangesLocked(frame.Changes, frame.Root)
 	}
 	w.frames++

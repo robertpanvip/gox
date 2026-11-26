@@ -324,7 +324,7 @@ pub func Playground() *gxscene.Instance {
                     })}
                 </div>
                 <div
-                    style={{ background: appBg(), padding: 12, borderRadius: widgets.RadiusSmall, minHeight: 400, borderWidth: widgets.HairlineWidth, border: borderColor() }}
+                    style={{ background: appBg(), padding: 12, borderRadius: widgets.RadiusSmall, minHeight: 400, overflow: "auto", borderWidth: widgets.HairlineWidth, border: borderColor() }}
                 >
                     {demoPreview()}
                 </div>

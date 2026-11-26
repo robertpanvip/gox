@@ -62,6 +62,23 @@
     #loading { position: fixed; inset: 0; display: grid; place-items: center;
                font-size: 14px; color: #94a3b8; background: #020617; z-index: 10; }
     #loading[data-state="error"] { color: #f87171; }
+
+    /* ---- 滚动条样式（GX 场景树的 overflow:auto/scroll 容器全部生效） ----
+       深色主题：细条半透明滑块；浅色主题跟随 body[data-theme=light] 换色。
+       Firefox 用 scrollbar-width/color 两个标准属性，其余浏览器走 webkit 伪元素。 */
+    #app ::-webkit-scrollbar { width: 10px; height: 10px; }
+    #app ::-webkit-scrollbar-thumb {
+      background: rgba(100,116,139,.38); border-radius: 6px;
+      border: 2px solid transparent; background-clip: content-box;
+    }
+    #app ::-webkit-scrollbar-thumb:hover { background-color: rgba(100,116,139,.6); }
+    #app ::-webkit-scrollbar-track, #app ::-webkit-scrollbar-corner { background: transparent; }
+    #app * { scrollbar-width: thin; scrollbar-color: rgba(100,116,139,.38) transparent; }
+    body[data-theme="light"] #app ::-webkit-scrollbar-thumb {
+      background: rgba(100,116,139,.35); background-clip: content-box;
+    }
+    body[data-theme="light"] #app ::-webkit-scrollbar-thumb:hover { background-color: rgba(100,116,139,.55); }
+    body[data-theme="light"] #app * { scrollbar-color: rgba(100,116,139,.35) transparent; }
   </style>
 </head>
 <body>

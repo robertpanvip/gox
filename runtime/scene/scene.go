@@ -290,6 +290,53 @@ func (s *slot) stableChildComp() *Instance {
 	return nil
 }
 
+// DebugDumpStructural 递归 dump 整棵实例树的结构插槽接线状态（E2E 诊断用）。
+// 每行格式：<kind> slot=N wired=bool ctrl=bool get=bool evals=N child=bool。
+// 用于定位「结构插槽 effect 未建立/被销毁」类缺陷。
+func (i *Instance) DebugDumpStructural(depth int) string {
+	if i == nil {
+		return ""
+	}
+	var b strings.Builder
+	for s, sl := range i.slots {
+		if sl.kind != slotBranch && sl.kind != slotDynamic {
+			continue
+		}
+		fmt.Fprintf(&b, "%sbranch slot=%d wired=%v ctrl=%v get=%v evals=%d child=%v tpl=%s\n",
+			strings.Repeat("  ", depth), s, sl.wired, sl.ctrl != nil, sl.get != nil, sl.evals,
+			sl.child != nil, shortTplKey(i.tpl))
+		if f, ok := sl.ctrl.(*For); ok {
+			f.mu.Lock()
+			n := len(f.order)
+			fb := f.bctx != nil
+			fx := f.bctx != nil && f.bctx.effect != nil
+			f.mu.Unlock()
+			fmt.Fprintf(&b, "%s  FOR n=%d bctx=%v effect=%v\n",
+				strings.Repeat("  ", depth), n, fb, fx)
+		}
+		if sl.child != nil {
+			b.WriteString(sl.child.DebugDumpStructural(depth + 1))
+		}
+	}
+	// 递归稳定组件子树（slotComp/slotChild 承载的子实例）。
+	for s, sl := range i.slots {
+		if ch := sl.stableChildComp(); ch != nil {
+			fmt.Fprintf(&b, "%scomp slot=%d kind=%d tpl=%s\n", strings.Repeat("  ", depth), s, int(sl.kind), shortTplKey(ch.tpl))
+			b.WriteString(ch.DebugDumpStructural(depth + 1))
+		}
+	}
+	return b.String()
+}
+
+// shortTplKey 返回模板键的极短摘要（前 12 字符），供 dump 行内识别实例身份。
+func shortTplKey(t Template) string {
+	k := templateKey(t)
+	if len(k) > 12 {
+		k = k[:12]
+	}
+	return k
+}
+
 // dynamicCompKey 返回动态组件插槽当前承载实例的「场景模板身份」。
 // 用模板结构（templateKey）而非实例指针作身份：同一组件每次 Render 会 new 出
 // 不同 *Instance，但模板相同即视为同一组件（复用旧子树、只 Update 保局部状态）；
@@ -1470,6 +1517,15 @@ func (i *Instance) BindStructural(effect func(func()) Computation, onDirty ...fu
 func (i *Instance) bindStructure(ctx *bindCtx) {
 	if i == nil || ctx == nil {
 		return
+	}
+	// 深灌统一 sink：本实例首帧 Render 时内部组件 adopt 的是创建期临时 sink，
+	// 上层换共享 sink 时只 adopt 了一层（embedValue/mountComp），嵌套组件的
+	// changes 仍指向孤立 sink——结构变更（For 增删项的 InsertBefore 等）会写进
+	// 无人消费的缓冲，增量后端永远收不到（playground 虚拟滚动实测缺陷根因）。
+	// bindStructure 递归访问所有实例，入口处统一把 i 换到根 sink；控制器内部
+	// （For entries / Branch cur）由各自 adoptBind 下推。
+	if ctx.sink != nil && i.changes != ctx.sink {
+		i.changes = ctx.sink
 	}
 	i.bctx = ctx
 	for s, sl := range i.slots {
