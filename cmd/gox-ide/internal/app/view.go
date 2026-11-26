@@ -164,16 +164,8 @@ func (m *Model) viewTree(w, h int) string {
 			break
 		}
 		indent := strings.Repeat("  ", n.Depth)
-		icon := "  "
-		if n.Dir {
-			if n.Open {
-				icon = "▾ "
-			} else {
-				icon = "▸ "
-			}
-		} else {
-			icon = "  "
-		}
+		glyph, styleKey := glyphFor(n)
+		icon := t.TreeIcon[styleKey].Render(glyph) + " "
 		label := indent + icon + n.Name
 		style := t.TreeItem
 		if i == m.treeSel {

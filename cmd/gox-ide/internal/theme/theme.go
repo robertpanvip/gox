@@ -43,6 +43,10 @@ type Palette struct {
 
 	// 语法 token 色
 	SynKeyword lipgloss.Color
+	SynFn      lipgloss.Color
+	SynType    lipgloss.Color
+	SynParam   lipgloss.Color
+	SynBracket lipgloss.Color
 	SynStr     lipgloss.Color
 	SynComment lipgloss.Color
 	SynNumber  lipgloss.Color
@@ -50,6 +54,16 @@ type Palette struct {
 	SynAttr    lipgloss.Color
 	SynPunct   lipgloss.Color
 	SynText    lipgloss.Color
+
+	// 文件树图标色
+	IconFolder lipgloss.Color
+	IconGo     lipgloss.Color
+	IconTest   lipgloss.Color
+	IconGX     lipgloss.Color
+	IconMD     lipgloss.Color
+	IconConf   lipgloss.Color
+	IconScript lipgloss.Color
+	IconFile   lipgloss.Color
 }
 
 // Apple 官方系统色（深色 / 浅色）。
@@ -60,9 +74,13 @@ func paletteFor(m Mode) Palette {
 			TitleBar: "#2b2b2e", Surface: "#323235", Border: "#3a3a3d",
 			Text: "#e6e6e8", Muted: "#8e8e93", Accent: "#0a84ff", AccentFG: "#ffffff",
 			Close: "#ff5f57", Minimize: "#febc2e", Zoom: "#28c840",
-			SynKeyword: "#ff7ab2", SynStr: "#ffd580", SynComment: "#7f848e",
-			SynNumber: "#b4cee8", SynTag: "#ff7ab2", SynAttr: "#a5d6ff",
-			SynPunct: "#9aa0a6", SynText: "#e6e6e8",
+			SynKeyword: "#ff7ab2", SynFn: "#82aaff", SynType: "#c3e88d",
+			SynParam: "#ffcb6b", SynBracket: "#89ddff", SynStr: "#ffd580",
+			SynComment: "#7f848e", SynNumber: "#f78c6c", SynTag: "#ff7ab2",
+			SynAttr: "#a5d6ff", SynPunct: "#9aa0a6", SynText: "#e6e6e8",
+			IconFolder: "#ffcb6b", IconGo: "#79c0ff", IconTest: "#c3e88d",
+			IconGX: "#82aaff", IconMD: "#89ddff", IconConf: "#ff9e64",
+			IconScript: "#f07178", IconFile: "#9aa0a6",
 		}
 	}
 	return Palette{
@@ -70,9 +88,13 @@ func paletteFor(m Mode) Palette {
 		TitleBar: "#e8e8ed", Surface: "#ffffff", Border: "#d1d1d6",
 		Text: "#1d1d1f", Muted: "#86868b", Accent: "#007aff", AccentFG: "#ffffff",
 		Close: "#ff5f57", Minimize: "#febc2e", Zoom: "#28c840",
-		SynKeyword: "#ad3da4", SynStr: "#a67f00", SynComment: "#8e8e93",
-		SynNumber: "#2563c9", SynTag: "#ad3da4", SynAttr: "#2b6cb0",
-		SynPunct: "#6e6e73", SynText: "#1d1d1f",
+		SynKeyword: "#ad3da4", SynFn: "#1b6fc4", SynType: "#2f8f46",
+		SynParam: "#b26a00", SynBracket: "#0a7b86", SynStr: "#a67f00",
+		SynComment: "#8e8e93", SynNumber: "#c0392b", SynTag: "#ad3da4",
+		SynAttr: "#2b6cb0", SynPunct: "#6e6e73", SynText: "#1d1d1f",
+		IconFolder: "#b26a00", IconGo: "#1b6fc4", IconTest: "#2f8f46",
+		IconGX: "#3b5bdb", IconMD: "#0a7b86", IconConf: "#b3591f",
+		IconScript: "#c0392b", IconFile: "#6e6e73",
 	}
 }
 
@@ -99,6 +121,7 @@ type Theme struct {
 	TreeItem   lipgloss.Style
 	TreeActive lipgloss.Style
 	TreeFolder lipgloss.Style
+	TreeIcon   map[string]lipgloss.Style // folder/go/test/gx/md/conf/script/file
 
 	// 编辑区
 	LineNo     lipgloss.Style
@@ -176,6 +199,16 @@ func New(m Mode) *Theme {
 	t.TreeActive = lipgloss.NewStyle().
 		Foreground(p.AccentFG).Background(p.Accent).Padding(0, 1)
 	t.TreeFolder = lipgloss.NewStyle().Foreground(p.Muted).Bold(true).Padding(0, 1)
+	t.TreeIcon = map[string]lipgloss.Style{
+		"folder": lipgloss.NewStyle().Foreground(p.IconFolder).Bold(true),
+		"go":     lipgloss.NewStyle().Foreground(p.IconGo).Bold(true),
+		"test":   lipgloss.NewStyle().Foreground(p.IconTest),
+		"gx":     lipgloss.NewStyle().Foreground(p.IconGX).Bold(true),
+		"md":     lipgloss.NewStyle().Foreground(p.IconMD),
+		"conf":   lipgloss.NewStyle().Foreground(p.IconConf),
+		"script": lipgloss.NewStyle().Foreground(p.IconScript),
+		"file":   lipgloss.NewStyle().Foreground(p.IconFile),
+	}
 
 	t.LineNo = lipgloss.NewStyle().Foreground(p.Muted)
 	t.CursorLine = lipgloss.NewStyle().Background(p.Surface)
@@ -186,6 +219,10 @@ func New(m Mode) *Theme {
 
 	t.Syn = map[string]lipgloss.Style{
 		"keyword": lipgloss.NewStyle().Foreground(p.SynKeyword).Bold(true),
+		"fn":      lipgloss.NewStyle().Foreground(p.SynFn),
+		"type":    lipgloss.NewStyle().Foreground(p.SynType),
+		"param":   lipgloss.NewStyle().Foreground(p.SynParam),
+		"bracket": lipgloss.NewStyle().Foreground(p.SynBracket),
 		"str":     lipgloss.NewStyle().Foreground(p.SynStr),
 		"comment": lipgloss.NewStyle().Foreground(p.SynComment).Italic(true),
 		"number":  lipgloss.NewStyle().Foreground(p.SynNumber),

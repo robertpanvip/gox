@@ -137,6 +137,34 @@ func (m *Model) wordSpanAt(line, col int) *wordSpan {
 //     因此在 xterm 下提供等价兼容路径：先 Ctrl+悬停使单词出现下划线，再普通左键
 //     点击该单词即可跳转。下划线本身就是"此处可导航"的可视提示，语义自然。
 func (m *Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+	// 文件树交互：普通左键点击即可（xterm 对无修饰点击正常上报）。
+	// 浮层打开时不响应，避免与浮层键盘交互冲突。
+	if m.ov == ovNone && m.inTreeX(msg.X) {
+		idx, ok := m.nodeAt(msg.Y)
+		if ok {
+			if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
+				nodes := m.tree.nodes()
+				n := nodes[idx]
+				m.treeSel = idx
+				if n.Dir {
+					m.tree.toggle(n.Path) // 目录：展开/折叠
+					m.focus = 0
+				} else {
+					m.openFile(n.Path) // 文件：打开为标签并切到编辑区
+					m.closeComp()
+					m.focus = 1
+				}
+				m.clearNavHover()
+				return m, nil
+			}
+			if msg.Action == tea.MouseActionMotion {
+				// 悬停高亮：仅更新选中行，不改变焦点、不打开文件。
+				m.treeSel = idx
+				return m, nil
+			}
+		}
+	}
+
 	// 只在"编辑区可导航"状态下激活：无浮层、焦点在编辑区、非只读标签。
 	usable := m.ov == ovNone && m.focus == 1 && !m.readOnly[m.active]
 	if !usable {
