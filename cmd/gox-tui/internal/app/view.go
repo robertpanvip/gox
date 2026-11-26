@@ -239,7 +239,14 @@ func (m *Model) viewEditor(w, h int) string {
 	for i := start; i < end; i++ {
 		no := padLeft(itoa(i+1), noWidth-1) + " "
 		us, ue, hasHover := m.underlineSpan(i)
-		code := m.renderHighlightedHover(b.Line(i), codeW, us, ue, hasHover)
+		// 渲染净化：CRLF 行尾残留的 \r 会把终端光标拉回行首（整行重叠），
+		// tab 在终端按制表位展开而 lipgloss 计宽按 1 列（缩进错位）。
+		// 净化只作用于显示，缓冲与保存保持原文。
+		line, colMap := sanitizeLine(b.Line(i))
+		if hasHover && colMap != nil {
+			us, ue = mapSpan(colMap, us, ue)
+		}
+		code := m.renderHighlightedHover(line, codeW, us, ue, hasHover)
 		row := t.LineNo.Render(no) + code
 		if i == ln {
 			// 当前行高亮：整行铺底色。
@@ -307,7 +314,7 @@ func (m *Model) viewStatusBar(w int) string {
 	left := t.StatusKey.Render("  ") + " " +
 		t.StatusKey.Render(m.Current().Name) + "  " +
 		t.StatusVal.Render(m.Current().CursorInfo()) + "  " +
-		t.StatusKey.Render("UTF-8") + "  " +
+		t.StatusKey.Render(m.Current().Encoding) + "  " +
 		t.StatusKey.Render(itoa(m.Current().LineCount())+" lines")
 	if m.Current().Dirty {
 		left += "  " + t.StatusKey.Render("● 未保存")
@@ -506,3 +513,45 @@ func truncateAnsi(s string, max int) string {
 }
 
 func runningWidth(s string) int { return lipgloss.Width(s) }
+
+// sanitizeLine 渲染净化：tab 展开 4 空格、丢弃 CR 残留。返回净化文本与
+// 列映射 src[j] = 净化行第 j 个 rune 来自原行的 rune 下标；未发生变化时
+// 返回 (原文, nil)。
+func sanitizeLine(line string) (string, []int) {
+	if !strings.ContainsAny(line, "\t\r") {
+		return line, nil
+	}
+	var b strings.Builder
+	var src []int
+	ri := 0
+	for _, r := range line {
+		switch r {
+		case '\t':
+			for k := 0; k < 4; k++ {
+				b.WriteByte(' ')
+				src = append(src, ri)
+			}
+		case '\r':
+			// CR 残留会让终端把光标拉回行首，后面的内容覆盖前面——丢弃。
+		default:
+			b.WriteRune(r)
+			src = append(src, ri)
+		}
+		ri++
+	}
+	return b.String(), src
+}
+
+// mapSpan 把原行 rune 区间 [us,ue) 映射为净化行 rune 区间。
+func mapSpan(src []int, us, ue int) (int, int) {
+	lo, hi := len(src), len(src)
+	for j, s := range src {
+		if s >= us && j < lo {
+			lo = j
+		}
+		if s >= ue && j < hi {
+			hi = j
+		}
+	}
+	return lo, hi
+}
