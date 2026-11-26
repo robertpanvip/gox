@@ -1336,6 +1336,7 @@ func Editor(st *EditorState) *gxscene.Instance {
         gap="0"
         height={strconv.Itoa(st.viewH + 12)}
         position="relative"
+        overflow="hidden"
     >
         {list}
         <div

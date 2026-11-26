@@ -5,7 +5,7 @@ import (
 	"math"
 	"os"
 	"runtime"
-	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -69,6 +69,9 @@ type glWindow struct {
 	clickX     float64
 	clickY     float64
 	clickCount int
+
+	// 系统光标形状缓存：updateCursorShape 只在形状变化时调 SetCursor。
+	cursorShape glfw.StandardCursor
 
 	// UI Loop（提案 P2）：桌面主循环接入的任务队列与监测器；
 	// openGL() 创建、Run() drain、Close() 停止。
@@ -254,20 +257,39 @@ func (g *glWindow) Open(cfg gxapp.WindowConfig) error {
 		ui.EditorInsert(string(ch))
 	})
 	win.SetMouseButtonCallback(g.onMouseButton)
-	// 滚轮 → 虚拟滚动窗口移动。GLFW yoff 正为向上滚，因此取负号转成"向下为正行数"。
-	// 编辑器的受控 scrollTop 由 ui.EditorScrollLines 写入，光标跟随 effect 不参与。
+	// 滚轮路由：光标在编辑器内 → 编辑器虚拟滚动；否则沿祖先链找光标下的
+	// overflow:auto/scroll 容器（示例列表、预览区、终端）滚动其 scroll-top。
+	// GLFW yoff 正为向上滚，取负号转成"向下为正"。
 	win.SetScrollCallback(func(w *glfw.Window, xoff, yoff float64) {
-		ui.EditorScrollLines(-yoff * 3)
+		cx, cy := w.GetCursorPos()
+		px, py := float32(cx), float32(cy)
+		delta := float32(-yoff) * scrollDeltaPerLine
+		g.mu.Lock()
+		if g.overEditorClass(px, py) {
+			g.mu.Unlock()
+			ui.EditorScrollLines(-yoff * 3)
+		} else if g.wheelScrollAt(px, py, delta) {
+			g.mu.Unlock()
+		} else {
+			g.mu.Unlock()
+		}
 		g.markDirty()
 	})
-	// 拖动选择：左键按住移动时持续扩展选区（与 web 端 pointermove 同语义）。
+	// 拖动选择：左键按住移动时持续扩展选区（与 web 端 pointermove 同语义）；
+	// 非拖拽移动时按悬停节点的 cursor 属性切换系统光标形状（按钮小手等）。
 	win.SetCursorPosCallback(func(w *glfw.Window, x, y float64) {
-		if !g.dragging || w.GetMouseButton(glfw.MouseButtonLeft) != glfw.Press {
+		px, py := float32(x), float32(y)
+		g.mu.Lock()
+		hits := append([]skia.HitBox(nil), g.hits...)
+		dragging := g.dragging && w.GetMouseButton(glfw.MouseButtonLeft) == glfw.Press
+		g.mu.Unlock()
+		if dragging {
+			if line, col, ok := g.editorHit(px, py); ok {
+				ui.EditorExtendTo(line, col)
+			}
 			return
 		}
-		if line, col, ok := g.editorHit(float32(x), float32(y)); ok {
-			ui.EditorExtendTo(line, col)
-		}
+		g.updateCursorShape(hits, px, py)
 	})
 	win.SetFramebufferSizeCallback(func(w *glfw.Window, width, height int) {
 		g.resizeToWindow()
@@ -501,35 +523,172 @@ func (g *glWindow) onMouseButton(w *glfw.Window, button glfw.MouseButton, action
 	}
 }
 
-// editorHit 把屏幕点换算成编辑器 (行, 列)。行取 .gx-editor-row 命中框（可见行
-// 按 y 排序后序号即文档行号——固定 24 行里超出内容高度的行高为 0，天然不参与命中）；
+// editorHit 把屏幕点换算成编辑器 (行, 列)。行号取行节点上的 data-line 属性
+// （真实文档行号，0 基）——虚拟滚动下可见行只是文档的一个窗口，DOM 顺序索引
+// 不等于行号，滚动后必须按 data-line 换算，否则点击会把光标送到文档顶部。
 // 列换算交给 ui.PickColumn，与 caret 渲染共用同一套字符度量。行内前 50 逻辑点是
 // 行号槽（42）+ 间距（8），点击行号区等价列 0（PickColumn 对负数返回 0）。
 func (g *glWindow) editorHit(px, py float32) (int, int, bool) {
 	g.mu.Lock()
 	hits := append([]skia.HitBox(nil), g.hits...)
 	g.mu.Unlock()
-	var rows []skia.HitBox
 	for i := range hits {
 		h := hits[i]
 		if h.Node == nil || h.Node.Props == nil || h.H <= 0 {
 			continue
 		}
-		if cls, _ := h.Node.Props["class"].(string); strings.Contains(cls, "gx-editor-row") {
-			rows = append(rows, h)
+		if cls, _ := h.Node.Props["class"].(string); !strings.Contains(cls, "gx-editor-row") {
+			continue
 		}
-	}
-	if len(rows) == 0 {
-		return 0, 0, false
-	}
-	sort.Slice(rows, func(a, b int) bool { return rows[a].Y < rows[b].Y })
-	for idx, r := range rows {
-		if py >= r.Y && py < r.Y+22 {
-			relX := float64(px) - (float64(r.X) + 50)
-			return idx, ui.PickColumn(idx, relX), true
+		if py < h.Y || py >= h.Y+h.H || px < h.X {
+			continue
 		}
+		line := 0
+		if s, ok := h.Node.Props["data-line"].(string); ok {
+			if n, err := strconv.Atoi(s); err == nil {
+				line = n
+			}
+		}
+		relX := float64(px) - (float64(h.X) + 50)
+		return line, ui.PickColumn(line, relX), true
 	}
 	return 0, 0, false
+}
+
+// overEditorClass 报告屏幕点是否落在编辑器区域内（含滚动行、行号、caret）。
+func (g *glWindow) overEditorClass(px, py float32) bool {
+	for _, h := range g.hits {
+		if h.Node == nil || h.Node.Props == nil || !h.Contains(px, py) {
+			continue
+		}
+		if cls, _ := h.Node.Props["class"].(string); strings.Contains(cls, "gx-editor") {
+			return true
+		}
+	}
+	return false
+}
+
+// scrollDeltaPerLine 是滚轮一格对应的像素滚动量（对齐浏览器 ~40px/格）。
+const scrollDeltaPerLine = 40.0
+
+// wheelScrollAt 把滚轮事件路由到光标下的 overflow:auto/scroll 容器：
+// 沿命中节点祖先链找最近的可滚动容器，把 scroll-top 属性夹紧后写回
+// （桌面端 scroll-top 是绘制器直接消费的表现层属性，每帧布局重读）。
+// 返回是否找到并滚动了容器。delta>0 表示内容向下滚（滚轮向下）。
+func (g *glWindow) wheelScrollAt(px, py, delta float32) bool {
+	var target *gxscene.Node
+	var box skia.HitBox
+	for i := range g.hits {
+		h := g.hits[i]
+		if h.Node == nil || !h.Contains(px, py) {
+			continue
+		}
+		for n := h.Node; n != nil; n = n.Parent() {
+			ov, _ := n.Props["overflow"].(string)
+			ov = strings.ToLower(strings.TrimSpace(ov))
+			if ov != "auto" && ov != "scroll" {
+				continue
+			}
+			// 编辑器滚轮走 EditorScrollLines（编辑逻辑层），不在此处理。
+			if cls, _ := n.Props["class"].(string); strings.Contains(cls, "gx-editor") {
+				continue
+			}
+			target, box = n, h
+			break
+		}
+		if target != nil {
+			break
+		}
+	}
+	if target == nil {
+		return false
+	}
+	cur := propFloat(target.Props["scroll-top"])
+	maxScroll := g.contentSize(target, box) - box.H
+	next := cur + delta
+	if next < 0 {
+		next = 0
+	}
+	if next > maxScroll {
+		next = maxScroll
+	}
+	if next == cur {
+		return true
+	}
+	target.Props["scroll-top"] = float64(next)
+	return true
+}
+
+// contentSize 估算容器的内容总高度：取该容器子树内所有命中框的最大底边
+// （命中框坐标已含当前 scroll 偏移，加回 curScroll 得内容高度）。
+func (g *glWindow) contentSize(container *gxscene.Node, box skia.HitBox) float32 {
+	sub := map[*gxscene.Node]bool{}
+	var walk func(*gxscene.Node)
+	walk = func(n *gxscene.Node) {
+		sub[n] = true
+		for _, c := range n.Children {
+			walk(c)
+		}
+	}
+	walk(container)
+	cur := propFloat(container.Props["scroll-top"])
+	maxBottom := box.Y + box.H
+	for _, h := range g.hits {
+		if h.Node != nil && sub[h.Node] && h.Y+h.H > maxBottom {
+			maxBottom = h.Y + h.H
+		}
+	}
+	return maxBottom - box.Y + cur
+}
+
+// propFloat 从节点属性读数值（scroll-top 可能是 float64/int/string）。
+func propFloat(v any) float32 {
+	switch x := v.(type) {
+	case float64:
+		return float32(x)
+	case float32:
+		return x
+	case int:
+		return float32(x)
+	case int64:
+		return float32(x)
+	case string:
+		if f, err := strconv.ParseFloat(strings.TrimSpace(x), 32); err == nil {
+			return float32(f)
+		}
+	}
+	return 0
+}
+
+// updateCursorShape 按悬停节点的 cursor 属性切换系统光标形状
+// （pointer→小手、其余→箭头）。桌面端没有浏览器代劳，必须自己把 GX 的
+// cursor 属性落到平台光标上。hits 是绘制线程的命中快照。
+func (g *glWindow) updateCursorShape(hits []skia.HitBox, px, py float32) {
+	if g.win == nil {
+		return
+	}
+	shape := glfw.ArrowCursor
+	for i := len(hits) - 1; i >= 0; i-- {
+		h := hits[i]
+		if h.Node == nil || h.Node.Props == nil || !h.Contains(px, py) {
+			continue
+		}
+		// 最内层命中节点沿祖先链找 cursor 声明（子元素继承容器的 pointer 语义）。
+		for n := h.Node; n != nil; n = n.Parent() {
+			if n.Props == nil {
+				continue
+			}
+			if v, _ := n.Props["cursor"].(string); strings.TrimSpace(v) == "pointer" {
+				shape = glfw.HandCursor
+				break
+			}
+		}
+		break
+	}
+	if shape != g.cursorShape {
+		g.cursorShape = shape
+		g.win.SetCursor(glfw.CreateStandardCursor(shape))
+	}
 }
 
 // drainLoop：提案 §4.1 宿主节奏——每执行一个宏任务即过一次微任务检查点；

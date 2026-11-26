@@ -1075,6 +1075,15 @@ func (n *Node) Handler(name string) any {
 	return n.Handlers[name]
 }
 
+// Parent 返回父节点（根节点返回 nil）。供后端在命中测试后沿祖先链查找
+// 滚动容器等场景使用——parent 是 host 私有字段，此处是唯一只读出口。
+func (n *Node) Parent() *Node {
+	if n == nil {
+		return nil
+	}
+	return n.parent
+}
+
 // Dispatch 是便利派发方法：按 name 对应 handler 的实际签名调用之——
 //   - func(EventContext)（含 Handler 别名）：传入 ctx；
 //   - func()：无参调用；

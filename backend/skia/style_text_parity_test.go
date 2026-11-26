@@ -89,8 +89,8 @@ func TestCollapseWhitespace(t *testing.T) {
 	if got := collapseWhitespace("  a \t b\nc  "); got != "a b c" {
 		t.Errorf("collapseWhitespace = %q, want %q", got, "a b c")
 	}
-	if whiteSpaceCollapses("") || whiteSpaceCollapses("pre") || whiteSpaceCollapses("pre-wrap") {
-		t.Error("默认/pre/pre-wrap 不折叠（编辑器缩进依赖原样空格）")
+	if !whiteSpaceCollapses("") || whiteSpaceCollapses("pre") || whiteSpaceCollapses("pre-wrap") || !whiteSpaceCollapses("nowrap") {
+		t.Error("CSS 语义：默认/normal/nowrap 折叠，pre/pre-wrap 保留（需原样空白的组件须显式声明 pre）")
 	}
 }
 
@@ -141,7 +141,8 @@ func TestWhiteSpaceCollapsePaint(t *testing.T) {
 	if _, ok := firstTextOp(w.log, "a b"); !ok {
 		t.Fatal("white-space:normal 未折叠空格")
 	}
-	// 默认（未设置 white-space）保持逐字节渲染：连续空格原样保留（编辑器缩进依赖）。
+	// 默认（未设置 white-space）与浏览器 CSS 语义一致：折叠空白。需要原样空白的
+	// 组件（编辑器代码行、终端）必须显式声明 white-space="pre"。
 	root2 := boxNode("div", nil, txtNode("a   b", nil))
 	w2 := NewWindow()
 	if err := w2.Open(gxTestConfig(120, 40)); err != nil {
@@ -151,11 +152,30 @@ func TestWhiteSpaceCollapsePaint(t *testing.T) {
 	if err := w2.Draw(root2); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := firstTextOp(w2.log, "a   b"); !ok {
-		t.Error("默认应原样渲染空格（pre 语义）")
+	if _, ok := firstTextOp(w2.log, "a b"); !ok {
+		t.Error("默认应折叠空格（CSS normal 语义）")
 	}
-	if _, ok := firstTextOp(w2.log, "a b"); ok {
-		t.Error("默认不应折叠空格")
+	if _, ok := firstTextOp(w2.log, "a   b"); ok {
+		t.Error("默认不应保留连续空格")
+	}
+	// pre 显式声明时逐字节保留（含换行；绘制端按 \n 拆行落笔，测量端按行计高）。
+	root3 := boxNode("div", map[string]any{"white-space": "pre"}, txtNode("a\tb\ncd", nil))
+	w3 := NewWindow()
+	if err := w3.Open(gxTestConfig(120, 80)); err != nil {
+		t.Fatal(err)
+	}
+	defer w3.Close()
+	if err := w3.Draw(root3); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := firstTextOp(w3.log, "a\tb\ncd"); !ok {
+		t.Error("pre 应逐字节保留文本（含换行符）")
+	}
+	// 文本盒高度应为两行（测量端按行数 × 行高计高）。
+	cache3 := computeLayout(root3, 120, 80, fixedMeasure)
+	tb3 := cache3[root3.Children[0]]
+	if !near(tb3.H, 2*defaultTextStyle().lineH(), 1.0) {
+		t.Errorf("pre 两行文本盒高度 = %.1f, want ≈%.1f", tb3.H, 2*defaultTextStyle().lineH())
 	}
 }
 

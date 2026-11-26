@@ -612,35 +612,55 @@ func (p *painter) paintText(n *gxscene.Node, box layoutBox, st textStyle) {
 		lineH := st.lineH()
 		baseline := box.Y + float32(st.fontSize) + (lineH-float32(st.fontSize)*1.3)/2
 
-		// selection 标量协议（三端统一）：纯文本节点可挂 selection-range="s:e"，
-		// 配合 &::selection 子表对 [s,e) rune 区间画背景、覆盖前景色。
-		selRange := gxscene.SelectionRangeFromProps(n.Props)
-		sel := gxscene.SelectionFromProps(n.Props)
-		var selBg, selFg uint32
-		hasSelBg, hasSelFg := false, false
-		if selRange.Valid() {
-			if sel.Bg != "" {
-				if c, ok := parseColor(sel.Bg); ok { selBg, hasSelBg = c, true }
-			}
-			if sel.Color != "" {
-				if c, ok := parseColor(sel.Color); ok { selFg, hasSelFg = c, true }
-			}
+		// white-space:pre 文本可能含换行（终端输出、多行文本）：按 \n 逐行落笔，
+		// 行距 lineH。测量端（skiaMeasureFunc）以同样的行数 × 行高计高。
+		lines := []string{text}
+		if !whiteSpaceCollapses(st.whiteSpace) && strings.Contains(text, "\n") {
+			lines = strings.Split(text, "\n")
 		}
 
-		// 按字体分段绘制：go-skia 不做自动字体回退，中文等缺字需用 CJK fallback 字体。
-		// 先量出每段的 x 范围与 rune 区间，供选区背景定位；再落笔文字。
-		type seg struct {
-			text string
-			font sk.Font
-			x0   float32
-			w    float32
-			r0   int
-			r1   int
+	// selection 标量协议（三端统一）：纯文本节点可挂 selection-range="s:e"，
+	// 配合 &::selection 子表对 [s,e) rune 区间画背景、覆盖前景色。
+	selRange := gxscene.SelectionRangeFromProps(n.Props)
+	sel := gxscene.SelectionFromProps(n.Props)
+	var selBg, selFg uint32
+	hasSelBg, hasSelFg := false, false
+	if selRange.Valid() {
+		if sel.Bg != "" {
+			if c, ok := parseColor(sel.Bg); ok { selBg, hasSelBg = c, true }
 		}
+		if sel.Color != "" {
+			if c, ok := parseColor(sel.Color); ok { selFg, hasSelFg = c, true }
+		}
+	}
+
+	// 按字体分段绘制：go-skia 不做自动字体回退，中文等缺字需用 CJK fallback 字体。
+	// 先量出每段的 x 范围与 rune 区间，供选区背景定位；再落笔文字。
+	type seg struct {
+		text string
+		font sk.Font
+		x0   float32
+		w    float32
+		r0   int
+		r1   int
+	}
+	// text-align：盒宽大于内容宽时按 center/right 平移全部段（含选区背景）。
+	contentW := float32(0)
+	for _, lineText := range lines {
+		if lw := textRunWidth(lineText, st); lw > contentW {
+			contentW = lw
+		}
+	}
+	dx = alignOffset(st.align, box.W, contentW)
+
+	// 逐行落笔：每行独立切 run；选区 rune 区间按全文本累计（编辑器行是单行，
+	// 多行时按行内 rune 数顺延，与 selection-range 的全文本 rune 语义一致）。
+	runePos := 0
+	for li, lineText := range lines {
+		lineBaseline := baseline + float32(li)*lineH
 		var segs []seg
 		x := box.X
-		runePos := 0
-		for _, r := range splitRuns(text, st.fontSize, st.bold, st.family) {
+		for _, r := range splitRuns(lineText, st.fontSize, st.bold, st.family) {
 			if r.text == "" || r.font.IsNil() {
 				runePos += utf8.RuneCountInString(r.text)
 				continue
@@ -650,8 +670,6 @@ func (p *painter) paintText(n *gxscene.Node, box layoutBox, st textStyle) {
 			x += w
 			runePos += utf8.RuneCountInString(r.text)
 		}
-		// text-align：盒宽大于内容宽时按 center/right 平移全部段（含选区背景）。
-		dx = alignOffset(st.align, box.W, x-box.X)
 
 		// 选区背景（先画，被文字覆盖）。
 		if hasSelBg {
@@ -666,9 +684,9 @@ func (p *painter) paintText(n *gxscene.Node, box layoutBox, st textStyle) {
 				bgPaint := sk.NewPaint()
 				bgPaint.SetColor(sk.Color(selBg))
 				bgPaint.SetAntiAlias(true)
-				p.canvas.DrawRect(sk.RectMakeXYWH(rx, box.Y, rw, lineH), bgPaint)
+				p.canvas.DrawRect(sk.RectMakeXYWH(rx, box.Y+float32(li)*lineH, rw, lineH), bgPaint)
 				bgPaint.Delete()
-				*p.log = append(*p.log, DrawOp{Kind: "selection", Name: text[b0Bytes(text, b0):b0Bytes(text, b1)], X: rx, Y: box.Y, W: rw, H: lineH, ARGB: selBg})
+				*p.log = append(*p.log, DrawOp{Kind: "selection", Name: text[b0Bytes(text, b0):b0Bytes(text, b1)], X: rx, Y: box.Y + float32(li)*lineH, W: rw, H: lineH, ARGB: selBg})
 			}
 		}
 		// 文字：与选区区间相交的 run 用选区前景色，其余用继承色。
@@ -680,10 +698,11 @@ func (p *painter) paintText(n *gxscene.Node, box layoutBox, st textStyle) {
 			} else {
 				paint.SetColor(sk.Color(st.color))
 			}
-			p.canvas.DrawString(s.text, s.x0+dx, baseline, s.font, paint)
+			p.canvas.DrawString(s.text, s.x0+dx, lineBaseline, s.font, paint)
 		}
-		paint.Delete()
 	}
+	paint.Delete()
+}
 
 	lineH := box.H
 	if lineH <= 0 {
@@ -696,6 +715,18 @@ func (p *painter) paintText(n *gxscene.Node, box layoutBox, st textStyle) {
 
 func maxInt(a, b int) int { if a > b { return a }; return b }
 func minInt(a, b int) int { if a < b { return a }; return b }
+
+// textRunWidth 按 splitRuns 分段累加一行文本的绘制宽度（与 paintText 落笔同口径）。
+func textRunWidth(text string, st textStyle) float32 {
+	var w float32
+	for _, r := range splitRuns(text, st.fontSize, st.bold, st.family) {
+		if r.text == "" || r.font.IsNil() {
+			continue
+		}
+		w += r.font.MeasureText([]byte(r.text), uint32(len(r.text)), sk.TextEncodingUTF8, nil)
+	}
+	return w
+}
 
 // b0Bytes 把 rune 索引换算成字节索引，用于切片与日志文本。
 func b0Bytes(s string, runeIdx int) int {

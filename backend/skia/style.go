@@ -937,19 +937,22 @@ func lineHeightOf(v string) (factor, px float32) {
 }
 
 // collapseWhitespace 按 CSS white-space:normal 语义折叠空白：连续空白折叠成
-// 单个空格，并去掉首尾空白。仅当节点显式声明 white-space:normal/nowrap 时应用，
-// 默认（未设置/pre/pre-wrap）保持逐字节渲染——编辑器代码行的缩进与对齐依赖它。
+// 单个空格，并去掉首尾空白。折叠语义是 CSS 的默认值（normal）——JSX 源码里
+// 元素间的缩进换行在浏览器端天然不可见，桌面端也必须同样折叠，否则换行符
+// 会被当作缺字形的可见字符画成方块。编辑器/终端等需要原样空白的组件显式
+// 声明 white-space="pre"，不受影响。
 func collapseWhitespace(text string) string {
 	return strings.Join(strings.Fields(text), " ")
 }
 
 // whiteSpaceCollapses 报告 white-space 值是否启用空白折叠语义。
+// CSS 语义：默认（未设置）与 normal/nowrap 折叠；pre/pre-wrap/break-spaces 保留。
 func whiteSpaceCollapses(v string) bool {
 	switch strings.ToLower(strings.TrimSpace(v)) {
-	case "normal", "nowrap":
-		return true
-	default:
+	case "pre", "pre-wrap", "break-spaces":
 		return false
+	default:
+		return true
 	}
 }
 

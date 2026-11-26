@@ -1,6 +1,8 @@
 package skia
 
 import (
+	"strings"
+
 	yoga "github.com/ahati/yoga-go-binding"
 	sk "github.com/robertpanvip/gox-skia/compat"
 	gxscene "github.com/robertpanvip/gox/runtime/scene"
@@ -66,11 +68,23 @@ type fontMeasurer func(text string, fontSize int, bold bool, family string) (wid
 // Yoga 在 measure 时可能传入可用宽度（AtMost/Exactly），这里文本不换行，直接返回固有尺寸。
 // lineHeight 是折算后的行盒高度（像素，0=默认 1.3 倍字号），必须与绘制端 paintText
 // 的 st.lineH() 同口径，否则布局高度与绘制基线错位。
+// skiaMeasureFunc 构造 Yoga 文本 measure：返回文本的自然宽高。
+// white-space:pre 文本可能含换行（如终端输出）：宽度取最宽行，高度 = 行数 × 行高，
+// 与绘制端 paintText 的逐行落笔口径一致，否则多行文本只算一行高、内容溢出容器。
 func skiaMeasureFunc(text string, fontSize int, bold bool, family string, lineHeight float32, measure fontMeasurer) yoga.MeasureFunc {
-	w := measure(text, fontSize, bold, family)
 	h := lineHeight
 	if h <= 0 {
 		h = float32(fontSize) * 1.3
+	}
+	w := measure(text, fontSize, bold, family)
+	if strings.Contains(text, "\n") {
+		w = 0
+		for _, line := range strings.Split(text, "\n") {
+			if lw := measure(line, fontSize, bold, family); lw > w {
+				w = lw
+			}
+		}
+		h = h * float32(strings.Count(text, "\n")+1)
 	}
 	return func(node *yoga.Node, width float32, widthMode yoga.MeasureMode,
 		height float32, heightMode yoga.MeasureMode) yoga.Size {
