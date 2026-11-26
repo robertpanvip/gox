@@ -24,6 +24,16 @@ func Highlight(line string) []Token {
 // JoinLines 用 \n 拼接若干行。
 func JoinLines(ls []string) string { return joinLines(ls) }
 
+// EditorCodeFont 返回代码行的等宽字体栈（三端统一）。
+// 装配层用它做本端字符宽度实测后注入 SetCharWidth/SetWideWidth：
+// Web 端用 JS canvas 实测（playground/web/main.go），桌面端用
+// skia.MeasureEditorAdvances 实测（cmd/gox-idea、playground/desktop）。
+func EditorCodeFont() string { return editorCodeFont }
+
+// EditorCodeFontSize 是代码行的字号（px），与 editor.gx 里 .gx-code-line
+// 的 font-size 一致——字符宽度实测必须用同一字号才有意义。
+const EditorCodeFontSize = 13
+
 // InsertText 在 (ln,col) 插入 ins，返回新文本与新列（纯函数，rune 计列）。
 func InsertText(v string, ln int, col int, ins string) (string, int) {
 	return insertText(v, ln, col, ins)

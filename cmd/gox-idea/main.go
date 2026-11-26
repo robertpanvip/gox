@@ -14,6 +14,7 @@ import (
 
 	"github.com/robertpanvip/gox-idea/ui"
 	"github.com/robertpanvip/gox-idea/ui/interp"
+	skia "github.com/robertpanvip/gox-backend-skia"
 	gxapp "github.com/robertpanvip/gox/runtime/app"
 	"github.com/robertpanvip/gox/widgets"
 )
@@ -67,6 +68,14 @@ func main() {
 		}
 		return string(b)
 	})
+
+	// 字符宽度实测注入：编辑器的点击换算（PickColumn）与光标渲染（PrefixWidth）
+	// 依赖字符宽度，默认值 7.83 与桌面 Skia 实际渲染的等宽族（Windows 上 Consolas
+	// 13px ≈ 7.15）不符，不注入会导致点击定位随列号累计偏移、插入位置错位。
+	// 与 Web 端 playground/web/main.go 的 JS canvas 实测注入同源。
+	narrow, wide := skia.MeasureEditorAdvances(widgets.EditorCodeFont(), widgets.EditorCodeFontSize)
+	ui.SetCharWidth(narrow)
+	ui.SetWideWidth(wide)
 
 	// 桌面端 Run 与网页端同源：解释当前编辑器源码生成场景树，替换预览后重渲染。
 	ui.SetRunHandler(func() {

@@ -8,6 +8,7 @@ package main
 import (
 	"github.com/robertpanvip/gox-playground/ui"
 	"github.com/robertpanvip/gox-playground/ui/interp"
+	skia "github.com/robertpanvip/gox-backend-skia"
 	gxapp "github.com/robertpanvip/gox/runtime/app"
 	"github.com/robertpanvip/gox/widgets"
 )
@@ -29,6 +30,13 @@ func main() {
 	// 帧请求、后台 Dispatch、微任务全部进入共享 Loop 队列，由 Run() 在
 	// GLFW 线程 drain 执行；不启动第二个事件循环。
 	app.SetUIExecutor(win)
+
+	// 字符宽度实测注入：编辑器点击换算/光标渲染依赖字符宽度，默认值 7.83 与
+	// 桌面 Skia 实际等宽族（Windows 上 Consolas 13px ≈ 7.15）不符，不注入会导致
+	// 点击定位随列号累计偏移。与 Web 端 playground/web/main.go 同源。
+	narrow, wide := skia.MeasureEditorAdvances(widgets.EditorCodeFont(), widgets.EditorCodeFontSize)
+	ui.SetCharWidth(narrow)
+	ui.SetWideWidth(wide)
 
 	// 桌面端 Run 与网页端同源：解释当前编辑器源码生成场景树，替换预览后
 	// 重渲染整棵树。源码在包级 sig 中，重建不丢编辑内容。

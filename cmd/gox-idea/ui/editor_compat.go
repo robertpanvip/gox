@@ -8,6 +8,7 @@ import "github.com/robertpanvip/gox/widgets"
 func PrefixWidth(s string, col int) float64              { return editorState.PrefixWidth(s, col) }
 func HasSelection() bool                                 { return editorState.HasSelection() }
 func setSource(text string)                              { editorState.SetSource(text) }
+func EditorSetSource(text string)                        { editorState.SetSource(text) }
 func rowVersion(idx int) int                             { return editorState.RowVersion(idx) }
 func clearHistory()                                      { editorState.ClearHistory() }
 func InsertText(v string, ln, col int, ins string) (string, int) { return widgets.InsertText(v, ln, col, ins) }
