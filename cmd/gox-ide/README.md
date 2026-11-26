@@ -40,7 +40,9 @@ go build -o gox-ide ./cmd/gox-ide
 | `Ctrl+← / →` | 按词移动 |
 | `↑ ↓`（补全时） | 在候选间移动 |
 | `Tab / Enter`（补全时） | 采纳当前候选（替换正在输入的 token） |
-| `Esc` | 关闭补全 / 退出浮层 / 文件树焦点时回到编辑区 / 退出程序 |
+| `F12` | 跳到光标下符号的定义（本地符号直接跳行；std 符号弹速览，速览内再按 F12/Enter 打开只读源码全文） |
+| `Ctrl+K` | hover 光标下符号：弹类型/函数签名与来源位置 |
+| `Esc` | 关闭补全 / 速览 / 浮层 / 文件树焦点时回到编辑区 / 退出程序 |
 
 ## 代码补全 ✨
 
@@ -54,6 +56,17 @@ go build -o gox-ide ./cmd/gox-ide
 五类来源走可插拔 Provider，统一打分（前缀 > 子串 > 子序列）、去重、限流。点号上下文**只走成员补全**，避免关键字/符号噪声淹没成员；其余上下文跳过成员 provider。成员/LSP 异步预热，`Provide` 永不阻塞 UI。采纳时按字符数回退当前 token 再插入候选，光标与 Rope 文本保持同步。
 
 > 成员补全由主仓库公共包 `pkg/gxcomplete` 提供（gox-ide 是独立 module，无法 import `internal/typecheck`，故经此门面复用），依赖 GOROOT 源码；无 GOROOT 时静默降级到符号补全。
+
+## 跳转定义与签名速览 🧭
+
+同样走 go/types（与补全共用类型图，零额外预热）：
+
+- **`F12` 跳转定义**：
+  - 本地符号 → 光标跳到 `.gx` 里的声明行并居中；
+  - 标准库符号 → 弹**定义速览**：godoc 注释 + 签名片段 + `包/文件:行号` + 本机源码绝对路径；速览内再按 `F12`/`Enter` 打开**只读源码全文标签**（自动定位到声明行，可翻页但不能编辑，避免误改 GOROOT）。
+- **`Ctrl+K` 签名速览**：弹光标下符号的真实类型/函数签名与来源位置，例如 `Replace` → `func(s string) string` · `strings/replace.go:95`。
+
+GX 光标经 `SourceMap` 双向映射到生成 Go 再查类型图；符号不存在、无 GOROOT、光标不在标识符上等情形一律静默降级（状态栏提示），不影响编辑。
 
 ## 架构
 
@@ -77,6 +90,7 @@ cmd/gox-ide/                  独立 Go module（replace gox => ../..）
 │       ├── filetree.go       可折叠文件树
 │       ├── overlay.go        搜索 / 快速打开浮层逻辑
 │       ├── completion.go     补全触发/采纳状态机
+│       ├── navigate.go       F12 跳转定义 / Ctrl+K hover / 只读源码标签
 │       └── view.go           分层渲染（标题栏/主体/状态栏/浮层/补全框）
 ```
 
@@ -97,4 +111,6 @@ go test ./cmd/gox-ide/...
 
 类型感知成员补全的核心断言在 `gox/pkg/gxcomplete`（空/非空前缀、局部变量、GX sig 声明、非点号回退、CJK 行列换算），gox-ide 侧另有真实 go/types 集成断言、点号分流与 Tab 采纳（补全打开时 Tab 优先采纳而非切焦点）测试。
 
-实测（xvfb + xterm）：打开含 `import "strings"` 的 GX 文件，输入 `b.R` 弹出 `Replace`/`WriteString` 两个 Replacer 成员（含完整函数签名），Tab 采纳后成为 `b.Replace`，浮层关闭、无重复插入。
+导航断言：`gxcomplete.Definition` 本地符号 GoToGx 回投行号、std 符号解析出包/文件/签名片段、`Hover` 签名、非标识符回退、`StdSource` 全文；gox-ide 侧覆盖本地跳转定位、std 弹 peek、hover 浮层、只读标签拒绝编辑。
+
+实测（xvfb + xterm）：打开含 `import "strings"` 的 GX 文件，输入 `b.R` 弹出 `Replace`/`WriteString` 两个 Replacer 成员（含完整函数签名），Tab 采纳后成为 `b.Replace`；在 `strings.NewReplacer` 上按 F12 弹出定义速览（godoc + `func NewReplacer(...)` + `strings/replace.go:32`），速览内再按 F12 打开只读全文并定位到第 32 行；在 `b.Replace` 上按 Ctrl+K 弹出 `func(s string) string` · `strings/replace.go:95`。

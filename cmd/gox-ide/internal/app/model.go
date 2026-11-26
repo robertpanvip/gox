@@ -12,6 +12,7 @@ import (
 	"github.com/robertpanvip/gox-ide/internal/complete"
 	"github.com/robertpanvip/gox-ide/internal/editor"
 	"github.com/robertpanvip/gox-ide/internal/theme"
+	"github.com/robertpanvip/gox/pkg/gxcomplete"
 )
 
 // overlay 是当前的浮层模式。
@@ -21,6 +22,8 @@ const (
 	ovNone   overlay = iota
 	ovSearch         // Ctrl+F 搜索
 	ovOpen           // Ctrl+P 快速打开
+	ovPeek           // F12 定义速览（std 符号）
+	ovHover          // Ctrl+K 签名速览
 )
 
 // Model 是整个 IDE 的状态。
@@ -58,16 +61,25 @@ type Model struct {
 	compSel    int
 	compSeq    int    // 延迟查询序号，丢弃过期定时器
 	compToken  string // 当前正在补全的 token（采纳时据此回退）
+
+	// 类型感知导航：F12 跳转定义、Ctrl+K hover 签名。
+	nav       *gxcomplete.Session
+	peekDef   gxcomplete.Def       // peek 中的定义（std 符号）
+	hoverInfo gxcomplete.HoverInfo // hover 签名信息
+	readOnly  map[int]bool         // 只读标签（std 全文视图），按 buffer 索引
 }
 
 // New 构建 Model。root 为空时退化为内存草稿。
 func New(root string, dark bool, files []string) *Model {
 	m := &Model{
-		theme: theme.New(toMode(dark)),
-		root:  root,
-		focus: 1,
+		theme:    theme.New(toMode(dark)),
+		root:     root,
+		focus:    1,
+		readOnly: map[int]bool{},
 	}
 	m.compEngine = complete.NewEngine(root)
+	m.nav = gxcomplete.New()
+	m.nav.Warm() // 与补全共用类型图，异步预热
 	if root != "" {
 		m.tree = newFileTree(root)
 	}
@@ -171,6 +183,12 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	key := msg.String()
 
 	// 浮层优先处理。
+	if m.ov == ovPeek {
+		return m.handlePeekKey(key)
+	}
+	if m.ov == ovHover {
+		return m.handleHoverKey(key)
+	}
 	if m.ov != ovNone {
 		return m.handleOverlayKey(key)
 	}
@@ -203,6 +221,12 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "ctrl+w":
 		m.closeActive()
+		return m, nil
+	case "f12":
+		m.gotoDefinition()
+		return m, nil
+	case "ctrl+k":
+		m.openHover()
 		return m, nil
 	case "tab":
 		// 补全浮层打开且焦点在编辑区时，Tab 用于采纳候选（优先级高于切换焦点）。
@@ -262,6 +286,32 @@ func (m *Model) handleTreeKey(key string) (tea.Model, tea.Cmd) {
 func (m *Model) handleEditorKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	b := m.Current()
 	key := msg.String()
+
+	// 只读标签（std 源码视图）：只允许光标移动与滚动，禁止一切编辑。
+	if m.readOnly[m.active] {
+		switch key {
+		case "up":
+			b.MoveUp()
+		case "down":
+			b.MoveDown()
+		case "left":
+			b.MoveLeft()
+		case "right":
+			b.MoveRight()
+		case "home", "ctrl+a":
+			b.LineStart()
+		case "end", "ctrl+e":
+			b.LineEnd()
+		case "pgup":
+			ln, col := b.Cursor()
+			b.SetCursor(ln-10, col)
+		case "pgdown":
+			ln, col := b.Cursor()
+			b.SetCursor(ln+10, col)
+		}
+		m.ensureCursorVisible()
+		return m, nil
+	}
 
 	// 补全浮层打开时，导航/采纳键优先归补全使用。
 	if m.compOpen {

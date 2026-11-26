@@ -161,3 +161,122 @@ func TestRuneOffsetCJK(t *testing.T) {
 		t.Fatalf("中文 rune 列换算应指向 'd', off=%d byte=%q", off, src[off])
 	}
 }
+
+// markLineCol 返回 src 中 '|' 的 0 基行、0 基 rune 列，并去掉标记。
+func markLineCol(src string) (string, int, int) {
+	i := strings.IndexByte(src, '|')
+	if i < 0 {
+		return src, -1, -1
+	}
+	before := src[:i]
+	line := strings.Count(before, "\n")
+	lastNL := strings.LastIndexByte(before, '\n')
+	col := len([]rune(before[lastNL+1:]))
+	return src[:i] + src[i+1:], line, col
+}
+
+func TestDefinitionLocal(t *testing.T) {
+	stdAvailable(t)
+	// 光标放在使用处 "loc|al" 中间，定义是本文件第 4 行（0 基）的局部变量。
+	src, line, col := markLineCol(`package main
+
+func f() {
+    local := 1
+    x := loc|al
+    _ = x
+}
+`)
+	s := New()
+	d, ok := s.Definition(src, line, col)
+	if !ok {
+		t.Fatal("本地符号应能求定义")
+	}
+	if !d.Local {
+		t.Fatalf("应识别为本地符号, got %+v", d)
+	}
+	if d.GxLine != 3 {
+		t.Errorf("应跳到 local 声明行(0基 3), got %d", d.GxLine)
+	}
+}
+
+func TestDefinitionStd(t *testing.T) {
+	stdAvailable(t)
+	// 光标在 strings.NewReplacer 的 Replacer 末尾。
+	src, line, col := markLineCol(`package main
+
+import "strings"
+
+func f() {
+    b := strings.NewRepla|cer("a", "x")
+    _ = b
+}
+`)
+	s := New()
+	d, ok := s.Definition(src, line, col)
+	if !ok {
+		t.Fatal("std 符号应能求定义")
+	}
+	if d.Local || d.Pkg != "strings" || d.File == "" || d.Line <= 0 {
+		t.Fatalf("应解析为 strings 包声明, got %+v", d)
+	}
+	if d.Snippet == "" {
+		t.Error("std 定义应带声明片段")
+	}
+}
+
+func TestHoverSignature(t *testing.T) {
+	stdAvailable(t)
+	src, line, col := markLineCol(`package main
+
+import "strings"
+
+func f() {
+    b := strings.NewReplacer("a", "x")
+    r := b.Replace|("x", "y")
+    _ = r
+}
+`)
+	s := New()
+	h, ok := s.Hover(src, line, col)
+	if !ok {
+		t.Fatal("应能 hover 到签名")
+	}
+	if h.Expr != "Replace" {
+		t.Errorf("标识符应为 Replace, got %q", h.Expr)
+	}
+	if !strings.Contains(h.Sig, "func(") || !strings.Contains(h.Sig, "string") {
+		t.Errorf("签名应是函数签名, got %q", h.Sig)
+	}
+}
+
+func TestHoverNonIdent(t *testing.T) {
+	stdAvailable(t)
+	// 光标落在空格之后（非标识符），应返回 false。
+	src := "package main\n\nfunc f() { x := 1 } \n"
+	// 第 2 行末尾空格后：col = rune 数（含末尾空格），前一字符是空格
+	lines := strings.Split(src, "\n")
+	col := len([]rune(lines[2]))
+	if _, ok := New().Hover(src, 2, col); ok {
+		t.Error("空格后不应有 hover")
+	}
+}
+
+func TestStdSource(t *testing.T) {
+	stdAvailable(t)
+	s := New()
+	d, ok := s.Definition(`package main
+
+import "strings"
+
+func f() {
+    _ = strings.NewReplac|er()
+}
+`, 5, len([]rune("    _ = strings.NewReplacer()"))-len("er()")+2)
+	_ = d
+	_ = ok
+	// 直接按已知包/文件取全文更稳：strings 包必有 strings.go
+	src, ok := s.StdSource("strings", "strings.go")
+	if !ok || len(src) < 100 {
+		t.Fatalf("StdSource(strings,strings.go) 应返回源码全文")
+	}
+}

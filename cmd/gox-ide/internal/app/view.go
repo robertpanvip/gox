@@ -29,10 +29,17 @@ func (m *Model) View() string {
 	view := t.App.Width(m.width - 2).Height(m.height - 2).Render(content)
 
 	// 浮层覆盖在最上层。
-	if m.ov != ovNone {
+	switch m.ov {
+	case ovPeek:
+		view = m.peekOverlayView(view)
+	case ovHover:
+		view = m.hoverOverlayView(view)
+	case ovNone:
+		if m.compOpen {
+			view = m.compOverlayView(view)
+		}
+	default:
 		view = m.overlayView(view)
-	} else if m.compOpen {
-		view = m.compOverlayView(view)
 	}
 	return view
 }
