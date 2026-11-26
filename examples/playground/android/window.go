@@ -37,6 +37,21 @@ var _ gxapp.Window = (*androidWindow)(nil)
 var _ gxapp.FramePresenter = (*androidWindow)(nil)
 var _ gxapp.UIExecutor = (*androidWindow)(nil)
 
+// wakePaint 由 main.go 注入（a.Send(paint.Event{})）：Present/Post 置脏后
+// 唤醒 paint 循环。桌面端由 GLFW/GTK 的事件循环天然驱动；Android 的
+// app.Main 阻塞在事件 channel 上，停帧后必须显式 Send 才能继续渲染。
+var wakePaint func()
+
+func androidSetWake(fn func()) { wakePaint = fn }
+
+// wakeIfDirtyLocked 在 dirty 由 false→true 转变时发出 paint 请求，
+// 避免重复 Send 堆积事件（paintNow 对非脏帧会短路，但仍有开销）。
+func (w *androidWindow) wakeIfDirtyLocked(prev bool) {
+	if !prev && w.dirty && wakePaint != nil {
+		go wakePaint()
+	}
+}
+
 type androidWindow struct {
 	mu     sync.Mutex
 	cfg    gxapp.WindowConfig
@@ -68,7 +83,13 @@ type androidWindow struct {
 
 func newAndroidWindow() *androidWindow {
 	return &androidWindow{
-		uiLoop: loop.New(loop.Config{Wake: func() { /* Android 下由 paint 循环 drain，无需跨线程唤醒 */ }}),
+		uiLoop: loop.New(loop.Config{Wake: func() {
+			// UIExecutor.Post 排队后唤醒 paint 循环去 drain，否则停帧期间
+			// 排队的 UI 任务永远没人执行。
+			if wakePaint != nil {
+				go wakePaint()
+			}
+		}}),
 	}
 }
 
@@ -126,7 +147,10 @@ func (w *androidWindow) resize(e size.Event) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.physW, w.physH = e.WidthPx, e.HeightPx
-	w.dpr = e.PixelsPerPt
+	// x/mobile 的 PixelsPerPt 以 72dpi 为基准（pt 语义）；GX/桌面/网页统一 CSS
+	// px 语义（160dpi 基准，即 Android densityDpi/160）。换算保证布局密度与
+	// 桌面端一致：440dpi 设备上 PixelsPerPt=6.11 → dpr=2.75。
+	w.dpr = e.PixelsPerPt * 72 / 160
 	if w.dpr <= 0 {
 		w.dpr = 1
 	}
@@ -185,8 +209,10 @@ func (w *androidWindow) suspendGL() {
 // Draw 实现 gxapp.Window（兼容路径，App 实际走 Present）。
 func (w *androidWindow) Draw(root *gxscene.Node) error {
 	w.mu.Lock()
+	prev := w.dirty
 	w.root = root
 	w.dirty = true
+	w.wakeIfDirtyLocked(prev)
 	w.mu.Unlock()
 	return nil
 }
@@ -197,12 +223,14 @@ func (w *androidWindow) Present(frame *gxapp.Frame) error {
 		return w.Draw(nil)
 	}
 	w.mu.Lock()
+	prev := w.dirty
 	w.root = frame.Root
 	if !w.painted || frame.FullSync || len(frame.Changes) > 0 {
 		if frame.FullSync {
 			w.frameCache = skia.FrameCache{}
 		}
 		w.dirty = true
+		w.wakeIfDirtyLocked(prev)
 	}
 	w.mu.Unlock()
 	return nil
@@ -236,7 +264,18 @@ func (w *androidWindow) hasPendingPaint() bool {
 
 // onTouch 把触摸事件映射为桌面端等价的交互：点按 = 鼠标左键点击（命中矩形
 // 冒泡派发 onClick + 编辑器定位），编辑器内拖动 = 虚拟滚动。
+//
+// 坐标契约：x/mobile 的 touch 事件是物理像素，而 hitbox/编辑器命中都是逻辑
+// 坐标（PaintToCachedScaled 在 Scale(dpr) 内生成）——必须先除以 dpr，与桌面端
+// GLFW 的窗口逻辑坐标一致。
 func (w *androidWindow) onTouch(e touch.Event) {
+	w.mu.Lock()
+	dpr := w.dpr
+	if dpr <= 0 {
+		dpr = 1
+	}
+	w.mu.Unlock()
+	e.X, e.Y = e.X/dpr, e.Y/dpr
 	switch e.Type {
 	case touch.TypeBegin:
 		w.mu.Lock()
@@ -262,9 +301,19 @@ func (w *androidWindow) onTouch(e touch.Event) {
 		}
 	case touch.TypeEnd:
 		w.mu.Lock()
+		startPos := w.touchStart
+		wasActive := w.touchActive
 		w.touchActive = false
 		w.mu.Unlock()
-		w.onTap(e.X, e.Y)
+		if wasActive {
+			// 明显的拖动手势（>20 逻辑点）视为滚动，结束时不做点击定位，
+			// 否则 EditorSetSelect 会把拖动滚出来的视口又拉回去。
+			dy := e.Y - startPos.Y
+			if dy < -20 || dy > 20 {
+				return
+			}
+			w.onTap(e.X, e.Y)
+		}
 	}
 }
 

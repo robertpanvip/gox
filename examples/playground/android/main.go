@@ -31,10 +31,16 @@ var (
 	gxApp   *gxapp.App
 	setUp   bool
 	glReady bool
+	// lastSize 记录最近的窗口尺寸：size 事件可能早于 gxWin 创建（setupGX
+	// 在首个 paint 事件才执行），若不暂存，画布尺寸永远是 0。
+	lastSize size.Event
 )
 
 func main() {
 	app.Main(func(a app.App) {
+		// 渲染唤醒：停帧后 Present/Post 置脏必须能再次触发 paint 事件
+		//（a.Send 可从任意 goroutine 调用）。
+		androidSetWake(func() { a.Send(paint.Event{}) })
 		var glctx gl.Context
 		for e := range a.Events() {
 			switch e := a.Filter(e).(type) {
@@ -66,6 +72,7 @@ func main() {
 					return
 				}
 			case size.Event:
+				lastSize = e
 				if gxWin != nil {
 					gxWin.resize(e)
 				}
@@ -74,6 +81,14 @@ func main() {
 					setUp = true
 					if err := setupGX(); err != nil {
 						log.Fatalf("GX 装配失败: %v", err)
+					}
+					// gxWin 在 setupGX 里才创建：首个 lifecycle.CrossOn 到达时
+					// 它还不存在，ensureGL 被跳过——必须在首个 paint 前补做，
+					// 否则 visible=false、blit=nil，paintNow 永远早退（黑屏）。
+					if glctx != nil && gxWin != nil {
+						if err := gxWin.ensureGL(glctx); err != nil {
+							log.Fatalf("GLES blit 初始化: %v", err)
+						}
 					}
 				}
 				if gxWin == nil {
@@ -100,6 +115,10 @@ func main() {
 // 示例加载全部与桌面/网页共用。
 func setupGX() error {
 	win := newAndroidWindow()
+	// 补放启动阶段（gxWin 尚不存在时）收到的尺寸事件。
+	if lastSize.WidthPx > 0 {
+		win.resize(lastSize)
+	}
 	gxWin = win
 	// GL 显示端已在 lifecycle.CrossOn 里初始化（ensureGL）。
 
@@ -150,8 +169,14 @@ func setupGX() error {
 	// 注入实测字宽（必须在首帧 Render 前，否则点击/光标错位）。
 	injectEditorCharWidth()
 
-	// 初始化第一个示例，让编辑器有内容。
+	// 初始化第一个示例，让编辑器有内容（Render 前写 signal，首帧即正确）。
 	ui.LoadSample(0)
+
+	// 初始渲染（与桌面端 main.go 同款）：Render 建立场景树并产出首帧。
+	// 漏掉这一步会导致树永远不建立、屏幕全黑。
+	if rerr := gxApp2.Render(func() any { return ui.Playground() }); rerr != nil {
+		return fmt.Errorf("初始渲染: %w", rerr)
+	}
 
 	// gxapp.Run → win.Run：androidWindow.Run 阻塞等待生命周期退出，
 	// 事件循环已由 app.Main 驱动，放独立 goroutine 即可。
