@@ -3,8 +3,8 @@ package main
 import (
 	"testing"
 
-	gxscene "github.com/robertpanvip/gox/runtime/scene"
 	skia "github.com/robertpanvip/gox-backend-skia"
+	gxscene "github.com/robertpanvip/gox/runtime/scene"
 )
 
 func hbox(x, y, w, h float32, cursor string, late bool) skia.HitBox {
@@ -19,7 +19,7 @@ func hbox(x, y, w, h float32, cursor string, late bool) skia.HitBox {
 func TestHoverCursorTopmostFirst(t *testing.T) {
 	// 后登记的 resize 分隔条（顶层），与大面积容器重叠点在 (300,300)
 	hits := []skia.HitBox{
-		hbox(0, 0, 1400, 860, "default", false),   // 根容器（先登记）
+		hbox(0, 0, 1400, 860, "default", false),     // 根容器（先登记）
 		hbox(250, 50, 100, 700, "col-resize", true), // 分隔条（后登记=更顶层）
 	}
 	got := hoverCursorFor(hits, 300, 300)
