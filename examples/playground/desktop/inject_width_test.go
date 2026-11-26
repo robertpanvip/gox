@@ -5,22 +5,22 @@ package main
 // 表现为点击 <div> 落点偏移、拖选到视觉行尾却只复制到前面一部分文本。
 
 import (
-	"math"
 	"testing"
 
 	"github.com/robertpanvip/gox-playground/ui"
 )
 
-// TestEditorWidthsMeasuredNotDefault 验证实测宽度确实来自 Skia，
-// 且与编辑器的硬编码默认值不同——这正是需要注入的原因。
+// TestEditorWidthsMeasuredNotDefault 验证实测宽度确实来自 Skia 的等宽字体，
+// 处于合理范围。回归背景：MeasureTextWidth 曾漏掉 pickFontFamily，用默认字体
+// 测出 7.41（且 i/M/空格宽度各异），注入后 caret 与点击/拖选全面错位。
 func TestEditorWidthsMeasuredNotDefault(t *testing.T) {
 	w := measureEditorFontWidths()
 	if w.Narrow <= 0 || w.Wide <= 0 {
 		t.Fatalf("实测宽度应 > 0, got narrow=%v wide=%v", w.Narrow, w.Wide)
 	}
-	// 若实测恰好等于默认值，说明注入是多此一举；测试前提失效。
-	if math.Abs(w.Narrow-7.83) < 1e-6 {
-		t.Errorf("实测窄字符宽度与编辑器默认值 7.83 相同，bug 前提不成立；请复核测量口径")
+	// 修复后等宽字体单格约 7.83；若落回 7.41 附近说明漏了 pickFontFamily。
+	if w.Narrow < 7.6 || w.Narrow > 9 {
+		t.Errorf("实测窄字符宽度 %v 异常（等宽字体应约 7.83，7.41 是漏 pickFontFamily 的错误值）", w.Narrow)
 	}
 }
 

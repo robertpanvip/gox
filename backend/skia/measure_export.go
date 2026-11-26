@@ -15,5 +15,11 @@ package skia
 //
 // fontSize 单位为逻辑像素（CSS px），与编辑器/场景树里的 font-size 一致。
 func MeasureTextWidth(text string, fontSize int, bold bool, family string) float32 {
-	return skiaFontMeasurer()(text, fontSize, bold, family)
+	// 必须与绘制端 textStyle.family 的取值口径一致：paint.go 在解析节点样式时
+	// 先把 CSS font-family 栈经 pickFontFamily 解析成实际可用族名，再传给
+	// splitRuns。若这里把原始栈字符串直接交给 splitRuns，getFont 会用整串
+	// "ui-monospace, ..." 当单个族名匹配，MatchFamilyStyle 失败后落到默认
+	// 字体，测出的字宽（Windows 上 7.41）与绘制端真实等宽字宽（7.83）不符，
+	// 注入编辑器后导致 caret 与点击/拖选的列换算错位。
+	return skiaFontMeasurer()(text, fontSize, bold, pickFontFamily(family))
 }

@@ -10,11 +10,15 @@ const editorMonoStack = "ui-monospace, SFMono-Regular, Menlo, Consolas, monospac
 
 // TestMeasureTextWidthMatchesDrawPath 验证导出 API 与绘制端分段测宽口径一致：
 // 混排（ASCII + CJK）总宽等于各段宽度之和。
+// 关键：绘制端 paint.go 先把 CSS 字体栈经 pickFontFamily 解析成实际族名再测宽；
+// 本测试复刻这一口径，防止 MeasureTextWidth 漏掉 pickFontFamily（该疏漏曾导致
+// 注入字宽 7.41 与绘制端真实等宽字宽 7.83 不符，点击/拖选全套错位）。
 func TestMeasureTextWidthMatchesDrawPath(t *testing.T) {
 	text := "Hi中A"
 	got := MeasureTextWidth(text, 13, false, editorMonoStack)
+	picked := pickFontFamily(editorMonoStack)
 	var sum float32
-	for _, r := range splitRuns(text, 13, false, editorMonoStack) {
+	for _, r := range splitRuns(text, 13, false, picked) {
 		if r.text == "" || r.font.IsNil() {
 			continue
 		}
@@ -22,6 +26,24 @@ func TestMeasureTextWidthMatchesDrawPath(t *testing.T) {
 	}
 	if diff := got - sum; diff < -0.01 || diff > 0.01 {
 		t.Errorf("MeasureTextWidth = %v, 绘制端分段和 = %v, 差 = %v", got, sum, diff)
+	}
+}
+
+// TestCodeFontIsMonospaced 锁定根因：编辑器代码字体必须是真正等宽的——
+// '0'/'i'/'M'/空格 的 advance 完全一致。MeasureTextWidth 若漏掉 pickFontFamily，
+// 会用默认字体测出 i=3.5/M=10.5 的变宽值，编辑器按恒定字宽反推列就会错位。
+func TestCodeFontIsMonospaced(t *testing.T) {
+	for _, s := range []string{"0000000000", "iiiiiiiiii", "MMMMMMMMMM", "        "} {
+		w := MeasureTextWidth(s, 13, false, editorMonoStack) / float32(len([]rune(s)))
+		if w < 7 || w > 9 {
+			t.Errorf("等宽字体 %q 单格宽 %.4f 超出合理范围 [7,9]", s, w)
+		}
+	}
+	// 三种差异极大的字符单格宽必须一致（等宽本质）。
+	a := MeasureTextWidth("0000000000", 13, false, editorMonoStack) / 10
+	b := MeasureTextWidth("iiiiiiiiii", 13, false, editorMonoStack) / 10
+	if diff := a - b; diff < -0.01 || diff > 0.01 {
+		t.Errorf("等宽字体但 '0'(%.4f) 与 'i'(%.4f) 宽度不同，差=%v", a, b, diff)
 	}
 }
 
