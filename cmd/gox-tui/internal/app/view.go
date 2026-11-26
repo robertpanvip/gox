@@ -129,7 +129,9 @@ func (m *Model) viewTitleBar(w int) string {
 		spacer = 1
 	}
 	line := left + strings.Repeat(" ", spacer) + tabStr
-	return t.TitleBar.Width(w).MaxWidth(w).Render(truncateWidth(line, w))
+	// TitleBar 自带 Padding(0,1)：内容区是 w-2，按 w 截断会让贴边的标签页
+	// 挤超内容区被 lipgloss 折行（与文件树同源的问题）。
+	return t.TitleBar.Width(w).MaxWidth(w).Render(truncateWidth(line, w-2))
 }
 
 // viewBody 渲染主体：左侧文件树 + 竖线 + 右侧编辑区。
@@ -152,6 +154,15 @@ func (m *Model) viewBody(w, h int) string {
 
 func (m *Model) viewTree(w, h int) string {
 	t := m.theme
+	// 宽度口径：Sidebar 带 Padding(1,1)，TreeItem/TreeActive 带 Padding(0,1)。
+	// lipgloss 的 Width() 把 padding 算进块宽，所以 Sidebar 内容区只剩 w-2，
+	// 行样式的内容区再减 2。行宽若不按这个口径截断，长文件名一挤超内容区
+	// 就会被 lipgloss 折行，整棵树从此往下错位（右侧分隔线/编辑区对不上）。
+	avail := w - 2
+	if avail < 8 {
+		avail = 8
+	}
+	rowW := avail - 2
 	nodes := m.tree.nodes()
 	var lines []string
 	header := t.TreeFolder.Render("📂 PROJECT")
@@ -159,8 +170,10 @@ func (m *Model) viewTree(w, h int) string {
 
 	start := m.scrollLn // 文件树跟随编辑区滚动意义不大，这里从 0 开始
 	_ = start
+	// Sidebar 的 Padding(1,1) 纵向也占 2 行：Height(h) 的内容区是 h-2，
+	// 内容行数按 h-2 供给，避免底部行被裁掉。
 	for i, n := range nodes {
-		if i >= h-1 {
+		if i >= h-3 {
 			break
 		}
 		indent := strings.Repeat("  ", n.Depth)
@@ -168,17 +181,17 @@ func (m *Model) viewTree(w, h int) string {
 		if i == m.treeSel {
 			// 选中行整行反显：图标与文件名统一用强调前景色，保证在强调背景上可读。
 			label := indent + glyph + " " + n.Name
-			lines = append(lines, t.TreeActive.Width(w).Render(truncateWidth(label, w-1)))
+			lines = append(lines, t.TreeActive.Width(avail).Render(truncate(label, rowW)))
 			continue
 		}
 		// 未选中行按文件类型着色：emoji 自带颜色，文件名用同语义色区分高亮。
 		icon := t.TreeIcon[styleKey].Render(glyph) + " "
 		name := t.TreeName[styleKey].Render(n.Name)
 		label := indent + icon + name
-		lines = append(lines, t.TreeItem.Width(w).Render(truncateWidth(label, w-1)))
+		lines = append(lines, t.TreeItem.Width(avail).Render(truncate(label, rowW)))
 	}
-	for len(lines) < h {
-		lines = append(lines, strings.Repeat(" ", w))
+	for len(lines) < h-2 {
+		lines = append(lines, strings.Repeat(" ", avail))
 	}
 	block := strings.Join(lines, "\n")
 	return t.Sidebar.Width(w).Height(h).Render(block)
@@ -294,7 +307,8 @@ func (m *Model) viewStatusBar(w int) string {
 	if spacer < 1 {
 		spacer = 1
 	}
-	return t.Status.Width(w).Render(truncateWidth(left+strings.Repeat(" ", spacer)+right, w))
+	// Status 自带 Padding(0,1)：内容区是 w-2，按 w 截断同理有折行隐患。
+	return t.Status.Width(w).Render(truncateWidth(left+strings.Repeat(" ", spacer)+right, w-2))
 }
 
 // overlayView 在主体中间叠一个浮层面板。

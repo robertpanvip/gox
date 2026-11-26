@@ -200,3 +200,46 @@ func TestTreeNamePerTypeHighlight(t *testing.T) {
 		t.Error("选中行 TreeActive 应带背景色反显")
 	}
 }
+
+// TestViewTreeNoWrapOnLongNames 回归：文件名过长时 PROJECT 面板不得折行错位。
+//
+// 根因：Sidebar 带 Padding(1,1)、TreeItem/TreeActive 带 Padding(0,1)，lipgloss
+// 的 Width() 把 padding 算进块宽——Sidebar 内容区只有 w-2，行样式内容区再减 2。
+// 旧代码按 w-1 截断，长文件名挤超内容区后被 lipgloss 折行，整棵树从此往下
+// 错位（分隔线/编辑区对不上）。修复后行宽按 avail=w-2、rowW=avail-2 截断。
+func TestViewTreeNoWrapOnLongNames(t *testing.T) {
+	old := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	defer lipgloss.SetColorProfile(old)
+
+	for _, width := range []int{40, 60, 100} {
+		m := treeTestModel(t)
+		m.width = width
+		m.height = 30
+		// 在夹具根目录放一个超长 ASCII 名与一个超长 CJK 名文件。
+		longASCII := "a-really-long-file-name-that-should-not-break-the-panel-layout.go"
+		longCJK := "中文超长文件名用来验证面板宽度截断而不折行.go"
+		for _, name := range []string{longASCII, longCJK} {
+			if err := os.WriteFile(filepath.Join(m.tree.root, name), []byte("package main\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+
+		w := m.treeWidth()
+		h := m.height - 4 // 与 View() 一致：innerH-2
+		tree := m.viewTree(w, h)
+		if lines := strings.Split(strings.TrimRight(tree, "\n"), "\n"); len(lines) > h {
+			t.Fatalf("宽=%d：文件树渲染出 %d 行（超过 %d），存在折行错位", w, len(lines), h)
+		}
+		// 每行显示宽度不得超过面板宽 w（超宽行同样会引发折行）。
+		for i, line := range strings.Split(tree, "\n") {
+			if lw := lipgloss.Width(line); lw > w {
+				t.Errorf("宽=%d：第 %d 行显示宽度 %d > %d", w, i, lw, w)
+			}
+		}
+		// 长名文件应出现（截断）在树里，且不产生换行。
+		if !strings.Contains(tree, "…") && !strings.Contains(tree, "a-really-long-file-name") {
+			t.Errorf("宽=%d：超长文件名未出现在树中", w)
+		}
+	}
+}
