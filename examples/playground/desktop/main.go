@@ -61,6 +61,10 @@ func main() {
 		}
 	})
 
+	// 注入实测字宽：让编辑器的列↔像素换算与 Skia 绘制端一致。
+	// 必须在首帧 Render 前完成，否则 caret 与点击命中会用默认字宽而错位。
+	injectEditorCharWidth()
+
 	// 初始化第一个示例，让编辑器有内容（Render 前写 signal，首帧即正确）。
 	ui.LoadSample(0)
 
