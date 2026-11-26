@@ -199,6 +199,9 @@ func (s *Server) definition(body []byte) (any, *RPCError) {
 	if !ok {
 		return nil, nil
 	}
+	if loc, ok := s.typedDefinition(d.Text, p.Position.Line, p.Position.Character); ok {
+		return loc, nil
+	}
 	sm := s.symbolMap(d)
 	lines := strings.Split(d.Text, "\n")
 	sym := sm.At(lines, p.Position.Line, p.Position.Character)
@@ -228,6 +231,9 @@ func (s *Server) hover(body []byte) (any, *RPCError) {
 	lines := strings.Split(d.Text, "\n")
 	sym := sm.At(lines, p.Position.Line, p.Position.Character)
 	if sym == nil {
+		if hv, ok := s.typedHover(d.Text, p.Position.Line, p.Position.Character); ok {
+			return hv, nil
+		}
 		return nil, nil
 	}
 	value := fmt.Sprintf("**%s** — %s\n\n`%s`", sym.Name, sym.Doc, sym.Detail)
@@ -242,6 +248,12 @@ func (s *Server) completion(body []byte) (any, *RPCError) {
 	d, ok := s.docForURI(p.TextDocument.URI)
 	if !ok {
 		return CompletionList{}, nil
+	}
+	// import 路径补全：光标在 import 字符串内（源码半截也能给清单）
+	if prefix, ok := typecheck.ImportContext(d.Text, p.Position.Line, p.Position.Character); ok {
+		if items := navImportItems(prefix); len(items) > 0 {
+			return CompletionList{IsIncomplete: false, Items: items}, nil
+		}
 	}
 	// 类型感知优先：点号上下文命中成员则直接返回（非点号/无类型层/映射失败
 	// 时 typedCompletion 自返回 ok=false，行为回退到符号表，零回归）

@@ -71,3 +71,31 @@ gox-lsp / CLI `gox check -check`。
 `{"ok":true,"label":"Sprintf(format string, a ...any) string"}`——括号后与逗号后的
 active 分别为 0/1，非调用位置返回 null；单测红→绿对照见
 `internal/typecheck/signature_test.go`。
+
+## 类型化导航（definition / import 路径补全 / 类型化 hover）
+
+三类能力共用 internal/typecheck 的同一持久类型图（与签名提示同址），零新依赖：
+
+- **声明跳转**：`Importer.Definition`（navigation.go）定位光标标识符的
+  `types.Object` → 声明位置。用户文件内符号 → Kind=local，宿主经 SourceMap
+  GoToGx 回投 .gx 光标；std 符号 → Kind=std，带 Pkg/File/Line/Snippet/Doc
+  （声明片段与上方紧邻注释直接从虚拟 FS 取回）。内建函数（append/len 等）
+  在 go/types 没有源码面，按无提示降级——不猜。
+- **浏览器 UX（两段式）**：`Gox.lspDefinition(line,col)` 与 `Gox.stdSource(pkg,file)`；
+  playground 前端 `Ctrl/Cmd + /` 触发——本地符号直接落光标，std 符号弹右侧
+  速览浮卡（位置+doc+签名），卡内"打开完整文件"渲染内嵌源只读浮层。
+- **桌面 UX（原生）**：`textDocument/definition` 对 std 符号返回
+  `file://$GOROOT/src/<pkg>/<file>` 真实 URI，任何 LSP 编辑器天然就是
+  "开新标签页跳到声明"；本地符号走原符号表路径，零回归。
+- **import 路径补全**：importctx.go `ImportContext` 纯语法判定单行式与括号块
+  （源码半截、编译不过也能用）；浏览器清单来自 `embedstd.Packages()`（内嵌
+  闭包全目录，internal/testdata 整支剔除），桌面清单来自本机 GOROOT/src 顶层。
+- **类型化 hover**：符号表缺席时用 `Importer.TypeInfo` 给真实签名+声明位置提示；
+  本地命中符号表时行为不变。
+
+实测（headless Chrome 158，`node scripts/selfcheck.js nav playground.html`）：
+八项检查全 true——`{"okDef":true,"okHov":true,"okLocal":true,"okFull":true,
+"okImp":true,"okPop":true,"okView":true}`（后两项为真实按键派发驱动的前端浮层与
+只读全文视图）。回归：sig/comp/gsyntax/stacking 四探针全绿，全仓 25 包 ok、
+race 通过。已知边界：gox 组件包（widgets 等）在桌面端没有磁盘路径可跳，
+统一降级；浏览器端可跳（内嵌源含 gox 闭包）。

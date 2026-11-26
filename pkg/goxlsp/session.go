@@ -141,6 +141,9 @@ func (s *Session) Diagnostics() []Diagnostic {
 func (s *Session) HoverAt(line, col int) *Hover {
 	sym := s.symbolMap().At(s.lines(), line, col)
 	if sym == nil {
+		if hv, ok := s.typedHover(line, col); ok {
+			return hv
+		}
 		return nil
 	}
 	value := fmt.Sprintf("**%s** — %s\n\n`%s`", sym.Name, sym.Doc, sym.Detail)
@@ -170,6 +173,10 @@ func (s *Session) CompleteAt(line, col int) CompletionList {
 	sm := s.symbolMap()
 	items := make([]CompletionItem, 0)
 	seen := map[string]bool{}
+	// import 路径补全：光标在 import 字符串字面量内（源码可以还没编译通过）
+	if list, ok := s.importPathCompletion(line, col); ok {
+		return list
+	}
 	// 类型感知分支：光标紧跟点号 → 只列成员（不掺全局符号/关键字，避免噪音）
 	if list, ok := s.typedCompletion(line, col); ok {
 		return list
@@ -302,8 +309,8 @@ func (s *Session) CompleteJSON(line, col int) string { return marshal(s.Complete
 // HoverJSON 返回 hover JSON（无符号时为 "null"）。
 func (s *Session) HoverJSON(line, col int) string { return marshal(s.HoverAt(line, col)) }
 
-// DefinitionJSON 返回定义位置 JSON（无符号时为 "null"）。
-func (s *Session) DefinitionJSON(line, col int) string { return marshal(s.DefinitionAt(line, col)) }
+// DefinitionJSON 返回跳转结果 JSON：local=同文档光标移动；std=内嵌源速览；不适用 null。
+func (s *Session) DefinitionJSON(line, col int) string { return marshal(s.DefinitionInfo(line, col)) }
 
 // DocumentSymbolsJSON 返回文档符号 JSON。
 func (s *Session) DocumentSymbolsJSON() string { return marshal(s.DocumentSymbols()) }
@@ -379,3 +386,129 @@ func (s *Session) SignatureAt(line, col int) *SignatureHelp {
 
 // SignatureJSON 返回签名帮助 JSON；不适用时为 null（客户端按空处理）。
 func (s *Session) SignatureJSON(line, col int) string { return marshal(s.SignatureAt(line, col)) }
+
+// identByteOK 判断字节是否为标识符成员（与 typecheck 同口径的 ASCII 近似）。
+func identByteOK(b byte) bool {
+	return b == '_' || (b >= '0' && b <= '9') || (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || b >= 0x80
+}
+
+// typedCursorPos 把 .gx (line, col-1 指向光标前一字符) 映射到生成 Go 的字节偏移。
+// 要求光标前一字符是标识符成员（跳转/悬停语义：正在指着某个符号）。
+func (s *Session) typedCursorPos(line, col int) (int, bool) {
+	if s.timp == nil || s.goSrc == "" || s.smap == nil {
+		return 0, false
+	}
+	ls := s.lines()
+	if line < 0 || line >= len(ls) || col <= 0 || col > len(ls[line]) || !identByteOK(ls[line][col-1]) {
+		return 0, false
+	}
+	gp, ok := s.smap.GxToGo(line+1, col)
+	if !ok {
+		return 0, false
+	}
+	off := goByteOffset(s.goSrc, gp.Line, gp.Column)
+	if off < 0 || off >= len(s.goSrc) || !identByteOK(s.goSrc[off]) {
+		return 0, false
+	}
+	return off, true
+}
+
+// typedDefinition 类型层跳转：std 符号给内嵌源速览；本地符号回投 .gx 位置。
+func (s *Session) typedDefinition(line, col int) (*DefinitionResult, bool) {
+	off, ok := s.typedCursorPos(line, col)
+	if !ok {
+		return nil, false
+	}
+	d, ok := s.timp.Definition(s.goSrc, off+1)
+	if !ok {
+		return nil, false
+	}
+	if d.Pkg != "" {
+		return &DefinitionResult{Kind: "std", Pkg: d.Pkg, File: d.File, Line: d.Line, Snippet: d.Snippet, Doc: d.Doc}, true
+	}
+	gpos, ok := s.smap.GoToGx(d.Line, d.Col)
+	if !ok {
+		return nil, false
+	}
+	r := Range{
+		Start: Position{Line: gpos.Line - 1, Character: gpos.Column - 1},
+		End:   Position{Line: gpos.Line - 1, Character: gpos.Column - 1},
+	}
+	return &DefinitionResult{Kind: "local", Range: &r}, true
+}
+
+// DefinitionInfo 组合入口：类型层优先，符号表兜底（行为与旧 DefinitionAt 一致）。
+func (s *Session) DefinitionInfo(line, col int) *DefinitionResult {
+	if r, ok := s.typedDefinition(line, col); ok {
+		return r
+	}
+	if loc := s.DefinitionAt(line, col); loc != nil {
+		return &DefinitionResult{Kind: "local", Range: &loc.Range}
+	}
+	return nil
+}
+
+// typedHover 类型层 hover：真实签名 + 声明位置提示；缺席则不动作。
+func (s *Session) typedHover(line, col int) (*Hover, bool) {
+	off, ok := s.typedCursorPos(line, col)
+	if !ok {
+		return nil, false
+	}
+	sig, where, ok := s.timp.TypeInfo(s.goSrc, off+1)
+	if !ok || sig == "" {
+		return nil, false
+	}
+	start := off
+	for start > 0 && identByteOK(s.goSrc[start-1]) {
+		start--
+	}
+	name := s.goSrc[start : off+1]
+	value := "**" + name + "** — `" + sig + "`"
+	if where != "" {
+		value += "\n\n_" + where + "_"
+	}
+	return &Hover{Contents: struct {
+		Kind  string `json:"kind"`
+		Value string `json:"value"`
+	}{Kind: "markdown", Value: value}}, true
+}
+
+// importPathCompletion import 路径前缀补全：数据源是 embedstd 的清单；
+// 未生成（清单为空）则返回 false 回退原路径，零行为变化。
+func (s *Session) importPathCompletion(line, col int) (CompletionList, bool) {
+	prefix, ok := typecheck.ImportContext(s.src, line, col)
+	if !ok {
+		return CompletionList{}, false
+	}
+	pkgs := embedstd.Packages()
+	if len(pkgs) == 0 {
+		return CompletionList{}, false
+	}
+	items := make([]CompletionItem, 0, 16)
+	for _, p := range pkgs {
+		if !strings.HasPrefix(p, prefix) {
+			continue
+		}
+		detail := "std"
+		if strings.HasPrefix(p, "github.com/robertpanvip/gox/") {
+			detail = "gox"
+		}
+		items = append(items, CompletionItem{Label: p, Kind: 9, Detail: detail})
+		if len(items) >= 60 {
+			break
+		}
+	}
+	return CompletionList{IsIncomplete: false, Items: items}, true
+}
+
+// StdSourceJSON 内嵌 std 源文件全文（只读视图）。不可达返回 "null"。
+func (s *Session) StdSourceJSON(pkg, file string) string {
+	if s.timp == nil {
+		return "null"
+	}
+	src, ok := s.timp.StdSource(pkg, file)
+	if !ok {
+		return "null"
+	}
+	return marshal(map[string]string{"text": src})
+}

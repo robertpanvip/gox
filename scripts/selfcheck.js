@@ -142,6 +142,59 @@ const SIG_EXPR = `
   return JSON.stringify({ ok: !!(ok1 && ok2 && s3 === null), label });
 })()`;
 
+// 探针 F：导航链——lspDefinition(std快览+local回跳)/lspHover真实签名/lspComplete import 路径/stdSource 全文。
+const NAV_EXPR = `
+(async () => {
+  const wait = ms => new Promise(r => setTimeout(r, ms));
+  const deadline = Date.now() + 40000;
+  while (!(window.Gox && window.Gox.setSource && window.Gox.lspDiagnostics)) {
+    if (Date.now() > deadline) return JSON.stringify({ err: "Gox 超时未就绪" });
+    await wait(250);
+  }
+  await wait(600);
+  if (typeof Gox.lspDefinition !== "function") return JSON.stringify({ err: "no-lspDefinition" });
+  const src = 'package main\\n\\nimport "fmt"\\n\\nfunc main() {\\n\\ts := fmt.Sprintf("%d", "x")\\n\\t_ = s\\n}\\n';
+  Gox.setSource(src);
+  await wait(900);
+  const d = JSON.parse(Gox.lspDefinition(5, 16));
+  const okDef = !!(d && d.kind === "std" && d.pkg === "fmt" && String(d.snippet).indexOf("func Sprintf") >= 0);
+  const h = JSON.parse(Gox.lspHover(5, 16));
+  const okHov = !!(h && h.contents && String(h.contents.value).indexOf("func(") >= 0);
+  const dl = JSON.parse(Gox.lspDefinition(5, 2));
+  const okLocal = !!(dl && dl.kind === "local");
+  let okFull = false;
+  if (okDef && typeof Gox.stdSource === "function") {
+    const full = JSON.parse(Gox.stdSource(d.pkg, d.file));
+    okFull = !!(full && String(full.text).length > 500 && String(full.text).indexOf("func Sprintf") >= 0);
+  }
+  Gox.setSource('package main\\n\\nimport "str\\n');
+  await wait(400);
+  const imp = JSON.parse(Gox.lspComplete(2, 11));
+  const okImp = !!(((imp && imp.items) || []).find(i => i.label === "strings"));
+  Gox.setSource(src);
+  await wait(700);
+  Gox.setCursor(5, 16);
+  await wait(150);
+  const appEl = document.getElementById("app") || document.body;
+  appEl.dispatchEvent(new KeyboardEvent("keydown", { key: "/", ctrlKey: true, bubbles: true, cancelable: true }));
+  await wait(500);
+  const pop = document.getElementById("gx-defpop");
+  const okPop = !!(pop && String(pop.textContent).indexOf("print.go") >= 0);
+  let okView = false;
+  if (okPop) {
+    const btns = [...pop.querySelectorAll("button")];
+    const full = btns.find((b) => String(b.textContent).indexOf("完整文件") >= 0);
+    if (full !== undefined) {
+      full.click();
+      await wait(700);
+      const v = document.getElementById("gx-defview");
+      okView = !!(v && String(v.textContent).indexOf("func Sprintf") >= 0);
+    }
+  }
+  return JSON.stringify({ ok: okDef && okHov && okLocal && okFull && okImp && okPop && okView,
+    okDef, okHov, okLocal, okFull, okImp, okPop, okView });
+})()`;
+
 const PROVIDER_EXPR = `
 (async () => {
   const wait = ms => new Promise(r => setTimeout(r, ms));
@@ -165,9 +218,9 @@ const PROVIDER_EXPR = `
 })()`;
 
 (async () => {
-  const expr = mode === "stacking" ? STACKING_EXPR : (mode === "gsyntax" ? GSYNTAX_EXPR : (mode === "comp" ? COMP_EXPR : (mode === "sig" ? SIG_EXPR : PROVIDER_EXPR)));
+  const expr = mode === "stacking" ? STACKING_EXPR : (mode === "gsyntax" ? GSYNTAX_EXPR : (mode === "comp" ? COMP_EXPR : (mode === "sig" ? SIG_EXPR : (mode === "nav" ? NAV_EXPR : PROVIDER_EXPR))));
   let url;
-  if (mode === "stacking" || mode === "gsyntax" || mode === "comp" || mode === "sig") {
+  if (mode === "stacking" || mode === "gsyntax" || mode === "comp" || mode === "sig" || mode === "nav") {
     url = "file://" + target;
   } else {
     server = http.createServer((q, s) => {
@@ -223,7 +276,9 @@ const PROVIDER_EXPR = `
   if (pageErrs.length) console.log("PAGE_ERRORS", JSON.stringify(pageErrs.slice(0, 3)));
   let v = {};
   try { v = JSON.parse(String(out)); } catch {}
-  const pass = mode === "sig"
+  const pass = mode === "nav"
+    ? !v.err && v.ok === true
+    : mode === "sig"
     ? !v.err && v.ok === true
     : mode === "comp"
     ? !v.err && v.typeHit === true && v.kind === 2 && v.fallbackItems > 0

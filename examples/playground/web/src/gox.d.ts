@@ -64,6 +64,8 @@ export interface GoxPlaygroundAPI {
   lspComplete(line: number, col: number): string;
   lspHover(line: number, col: number): string;
   lspDefinition(line: number, col: number): string;
+  /** 内嵌 std 源文件全文（定义速览的"打开完整文件"用）；不适用返回 "null"。 */
+  stdSource(pkg: string, file: string): string;
   lspSymbols(): string;
   lspFormat(): string;
 }

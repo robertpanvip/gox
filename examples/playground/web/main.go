@@ -290,6 +290,13 @@ func main() {
 		}
 		return lsp.HoverJSON(line, col)
 	}))
+	g.Set("stdSource", js.FuncOf(func(this js.Value, args []js.Value) any {
+		pkg, file := "", ""
+		if len(args) >= 2 {
+			pkg, file = args[0].String(), args[1].String()
+		}
+		return lsp.StdSourceJSON(pkg, file)
+	}))
 	g.Set("lspDefinition", js.FuncOf(func(this js.Value, args []js.Value) any {
 		line, col := 0, 0
 		if len(args) >= 2 {

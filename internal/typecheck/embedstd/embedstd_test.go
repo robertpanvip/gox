@@ -35,3 +35,28 @@ func TestEmbeddedStdResolves(t *testing.T) {
 		t.Fatalf("embed 虚拟 FS 类型检查失败: %v", diags)
 	}
 }
+
+// TestPackagesList 内嵌 import 路径清单：含 std 与 gox 闭包，不得混入 internal。
+func TestPackagesList(t *testing.T) {
+	if Version() == "" {
+		t.Skip("embedstd 未生成")
+	}
+	var hasFmt, hasStr, hasGox bool
+	for _, p := range Packages() {
+		if p == "fmt" {
+			hasFmt = true
+		}
+		if p == "strings" {
+			hasStr = true
+		}
+		if p == "github.com/robertpanvip/gox/widgets" {
+			hasGox = true
+		}
+		if len(p) >= 8 && p[:8] == "internal" {
+			t.Fatalf("internal 不应出现在可导入清单: %s", p)
+		}
+	}
+	if !hasFmt || !hasStr || !hasGox {
+		t.Fatalf("fmt=%v strings=%v gox-widgets=%v", hasFmt, hasStr, hasGox)
+	}
+}

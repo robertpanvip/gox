@@ -371,6 +371,114 @@ function showHover(api: GoxPlaygroundAPI, elements: Elements, ev: MouseEvent): v
   elements.hover.hidden = false;
 }
 
+// ---- 定义跳转（Ctrl/Cmd + /）----
+//
+// 两段式体验：本地符号直接落光标；std 符号先弹右侧速览卡（声明位置+doc+签名），
+// 卡内可"打开完整文件"——用内嵌 std 源渲染的只读浮层，等价编辑器开新 Tab 跳声明。
+
+interface DefinitionResult {
+  readonly kind: string; // "local" | "std"
+  readonly range?: Range;
+  readonly pkg?: string;
+  readonly file?: string;
+  readonly line?: number;
+  readonly snippet?: string;
+  readonly doc?: string;
+}
+
+interface StdSourceResult { readonly text?: string }
+
+const DEF_POP_ID: string = "gx-defpop";
+const DEF_VIEW_ID: string = "gx-defview";
+
+function makePanel(id: string, top: string): HTMLElement {
+  const old: HTMLElement | null = document.getElementById(id);
+  if (old !== null) {
+    old.remove();
+  }
+  const box: HTMLElement = document.createElement("div");
+  box.id = id;
+  box.style.position = "fixed";
+  box.style.zIndex = "60";
+  box.style.right = "18px";
+  box.style.top = top;
+  box.style.maxWidth = "560px";
+  box.style.maxHeight = "72vh";
+  box.style.overflow = "auto";
+  box.style.background = "#1e1e1e";
+  box.style.color = "#d4d4d4";
+  box.style.border = "1px solid #3c3c3c";
+  box.style.borderRadius = "8px";
+  box.style.padding = "10px 12px";
+  box.style.boxShadow = "0 8px 24px rgba(0,0,0,.45)";
+  box.style.fontFamily = "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
+  box.style.fontSize = "12px";
+  document.body.appendChild(box);
+  return box;
+}
+
+function makeCloseButton(box: HTMLElement): HTMLButtonElement {
+  const btn: HTMLButtonElement = document.createElement("button");
+  btn.textContent = "关闭 ✕";
+  btn.style.marginLeft = "8px";
+  btn.onclick = (): void => {
+    box.remove();
+  };
+  return btn;
+}
+
+function showDefinition(api: GoxPlaygroundAPI, line: number, col: number): void {
+  const res: DefinitionResult | null = parseJSON<DefinitionResult | null>(api.lspDefinition(line, col));
+  if (res === null || res.kind === undefined) {
+    return; // 无定义信息：保持现状，不打扰
+  }
+  if (res.kind === "local" && res.range !== undefined) {
+    api.setCursor(res.range.start.line, res.range.start.character);
+    api.focus();
+    return;
+  }
+  if (res.kind !== "std") {
+    return;
+  }
+  const pop: HTMLElement = makePanel(DEF_POP_ID, "64px");
+  const head: HTMLElement = document.createElement("div");
+  head.textContent = `${res.pkg ?? ""}/${res.file ?? ""}:${res.line ?? 0}`;
+  head.appendChild(makeCloseButton(pop));
+  pop.appendChild(head);
+  if (res.doc !== undefined && res.doc !== "") {
+    const doc: HTMLElement = document.createElement("div");
+    doc.style.marginTop = "6px";
+    doc.style.color = "#9cdcfe";
+    doc.style.whiteSpace = "pre-wrap";
+    doc.textContent = res.doc;
+    pop.appendChild(doc);
+  }
+  const body: HTMLElement = document.createElement("pre");
+  body.style.margin = "8px 0 0";
+  body.style.whiteSpace = "pre-wrap";
+  body.textContent = res.snippet ?? "";
+  pop.appendChild(body);
+  const full: HTMLButtonElement = document.createElement("button");
+  full.textContent = "打开完整文件（只读）";
+  full.style.marginTop = "8px";
+  full.onclick = (): void => {
+    const src: StdSourceResult | null = parseJSON<StdSourceResult | null>(api.stdSource(res.pkg ?? "", res.file ?? ""));
+    if (src === null || src.text === undefined) {
+      return;
+    }
+    const view: HTMLElement = makePanel(DEF_VIEW_ID, "48px");
+    const vhead: HTMLElement = document.createElement("div");
+    vhead.textContent = `${res.pkg ?? ""}/${res.file ?? ""} — 只读（内嵌 std 源）`;
+    vhead.appendChild(makeCloseButton(view));
+    view.appendChild(vhead);
+    const pre: HTMLElement = document.createElement("pre");
+    pre.style.margin = "8px 0 0";
+    pre.textContent = src.text;
+    view.appendChild(pre);
+  };
+  pop.appendChild(full);
+}
+
 // ---- 移动端软键盘代理 ----
 //
 // 编辑器是 GX 场景树渲染的 div，本身不可聚焦输入；桌面有物理键盘，keydown 转发即可，
@@ -618,6 +726,13 @@ function bindKeyboard(elements: Elements, api: GoxPlaygroundAPI): void {
       ev.preventDefault();
       const cursor: Cursor = api.cursor();
       showCompletion(api, elements, cursor);
+      return;
+    }
+    // Ctrl/Cmd + /：定义跳转（本地落光标；std 弹速览、可开只读全文）。
+    if ((ev.ctrlKey || ev.metaKey) && ev.key === "/") {
+      ev.preventDefault();
+      const cursor: Cursor = api.cursor();
+      showDefinition(api, cursor.line, cursor.col);
       return;
     }
     if (ev.shiftKey && ev.altKey && ev.key.toLowerCase() === "f") {

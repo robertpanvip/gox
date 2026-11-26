@@ -189,3 +189,51 @@ func TestSignatureAtTyped(t *testing.T) {
 		t.Fatalf("非调用上下文应返回 nil: %+v", h3)
 	}
 }
+
+// TestDefinitionInfoStd 浏览器 std 跳转：fmt.Sprintf → std + 快览片段；本地符号 → local。
+func TestDefinitionInfoStd(t *testing.T) {
+	if embedstd.Lookup() == nil {
+		t.Skip("embedstd 未生成，类型层缺席（预期行为）")
+	}
+	s := New()
+	s.SetSource("package main\n\nimport \"fmt\"\n\nfunc main() {\n\ts := fmt.Sprintf(\"%d\", 1)\n\t_ = s\n}\n")
+	d := s.DefinitionInfo(5, 16)
+	if d == nil || d.Kind != "std" || d.Pkg != "fmt" {
+		t.Fatalf("std 跳转: %+v", d)
+	}
+	if !strings.Contains(d.Snippet, "func Sprintf") {
+		t.Fatalf("snippet=%q", d.Snippet)
+	}
+	if dl := s.DefinitionInfo(5, 2); dl == nil || dl.Kind != "local" {
+		t.Fatalf("本地跳转: %+v", dl)
+	}
+}
+
+// TestHoverTypedStd 类型化 hover：std 符号必须给出真实函数签名。
+func TestHoverTypedStd(t *testing.T) {
+	if embedstd.Lookup() == nil {
+		t.Skip("embedstd 未生成")
+	}
+	s := New()
+	s.SetSource("package main\n\nimport \"fmt\"\n\nfunc main() {\n\ts := fmt.Sprintf(\"%d\", 1)\n\t_ = s\n}\n")
+	h := s.HoverAt(5, 16)
+	if h == nil || !strings.Contains(h.Contents.Value, "func(") {
+		t.Fatalf("类型化 hover: %+v", h)
+	}
+}
+
+// TestImportPathCompletion import 路径补全：纯词法，源码半截也能给清单。
+func TestImportPathCompletion(t *testing.T) {
+	if embedstd.Lookup() == nil {
+		t.Skip("embedstd 未生成")
+	}
+	s := New()
+	s.SetSource("package main\n\nimport \"str\n")
+	list := s.CompleteAt(2, 11)
+	for _, it := range list.Items {
+		if it.Label == "strings" {
+			return
+		}
+	}
+	t.Fatalf("import 补全应含 strings，got %d items", len(list.Items))
+}

@@ -67,3 +67,16 @@ type SignatureHelp struct {
 	ActiveSignature int                    `json:"activeSignature"`
 	ActiveParameter int                    `json:"activeParameter"`
 }
+
+// DefinitionResult 跳转结果。Kind=local：Range 为 .gx 位置（0 基），宿主移动光标即可；
+// Kind=std：Pkg/File/Line 指向内嵌 std 源，Snippet/Doc 为声明速览（弹窗），
+// 需要全文再走 StdSourceJSON 开只读视图。
+type DefinitionResult struct {
+	Kind    string `json:"kind"`
+	Range   *Range `json:"range,omitempty"`
+	Pkg     string `json:"pkg,omitempty"`
+	File    string `json:"file,omitempty"`
+	Line    int    `json:"line,omitempty"`
+	Snippet string `json:"snippet,omitempty"`
+	Doc     string `json:"doc,omitempty"`
+}
