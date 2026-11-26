@@ -21,17 +21,18 @@
 | completionItem/resolve | ✅ 本轮落地：候选携带 Data=pkg.Name；桌面 completionItem/resolve 从 GOROOT/embed 源取 doc 首段；浏览器等价面 Gox.lspResolveDoc(pkg,name) |
 | typeDefinition | ✅ 本轮落地：光标符号类型→声明（指针解引用、别名展开；universe/匿名类型如实缺席）；桌面 `textDocument/typeDefinition` + 浏览器 `Gox.lspTypeDefinition` |
 | implementation | ✅ 本轮落地：接口类型名/接口方法→本源内满足实现的命名类型（对象同一性判定）；桌面 `textDocument/implementation` + 浏览器 `Gox.lspImplementation`。跨包全闭包反查在 roadmap |
+| implementation（跨包·窄口径） | ✅ 本轮落地：接口反查除用户文件外，同时扫描本文件 import 声明直接引用的包（`file.Imports` + `info.PkgNameOf`，不依赖高版本 Info 字段）——导出、非接口、非泛型的命名类型，值或指针满足都计入，对象同一性去重；全闭包扫描仍留在 roadmap |
 | organizeImports | ✅ 已具备：`typecheck.OrganizeImports` 纯词法——连续单行 import（≥2）合并为括号块；块内按空行分子组，std 段在前、非 std 在后、段间空行、路径升序；别名/点导入与 `import "C"` 保留；含注释的块保守跳过；幂等（有序即不动）。桌面 `codeAction` 常驻 `source.organizeImports`（`CodeActionProvider` 升级为 kinds 列表声明），浏览器 `lspCodeActions` 同步带区域替换编辑（TextEdit `endLine`，0 基 end-exclusive） |
 | pull diagnostics | ✅ 已具备：3.17 `textDocument/diagnostic`，复用 publishDiagnostics 同一 compileAndCheck 管线，返回 `DiagnosticReport{kind:"full",items}`；`diagnosticProvider` 已声明，interFileDependencies/workspaceDiagnostics 如实置 false——能力声明与实现严格对齐 |
 | rename（跨文件） | ✅ 本轮落地：同包多文件一次 types 检查 + Uses/Defs 对象同一性定位，WorkspaceEdit 按文档分发（局部遮蔽免疫，red 有专项用例）；任一文档编译不过整体回退旧单文件符号表路径，零回归。`workspace/willRenameFiles` 仍在 roadmap |
+| workspace 文件重命名 | ✅ 本轮落地：`workspace/willRenameFiles`（目标 URI 被占用时报错，不静默覆盖）+ `workspace/didRenameFiles`（文档表迁移、符号缓存标脏、旧 URI 清空诊断、新 URI 换发）；gox 文件包语义独立故无跨文件编辑，能力声明 filters=`**/*.gx` 与实际一致 |
 | inlayHints | ✅ 本轮落地：具名形参 + 字符串字面量实参提示（可变参数不提示）；坐标经 SourceMap 回投 .gx；桌面 textDocument/inlayHints + 浏览器 Gox.lspInlayHints |
 | rename / formatting | 单文档 rename；compiler.Format |
 
 ## 缺口（建议顺序）
 
 ### P1 —— 剩余
-1. **workspace/willRenameFiles**：文件移动/重命名时同步 import 与引用。
-2. **implementation 跨包反查**：全闭包扫描成本高，可先按已导入包做窄口径扩展。
+（本轮清零。下一优先级直接进入 P2。）
 
 ### P2 —— 锦上添花
 5. **foldingRange / selectionRange**：折叠与智能扩选；selectionRange 和我们的选区引擎天然契合。

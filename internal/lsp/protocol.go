@@ -80,6 +80,7 @@ type ServerCapabilities struct {
 	WorkspaceSymbolProvider    bool                   `json:"workspaceSymbolProvider,omitempty"`
 	TypeDefinitionProvider     bool                   `json:"typeDefinitionProvider,omitempty"`
 	ImplementationProvider     bool                   `json:"implementationProvider,omitempty"`
+	Workspace                  *WorkspaceOptions      `json:"workspace,omitempty"`
 }
 
 type CompletionOptions struct {
@@ -283,4 +284,38 @@ type DiagnosticReport struct {
 	Kind     string       `json:"kind"` // full | unchanged
 	ResultID string       `json:"resultId,omitempty"`
 	Items    []Diagnostic `json:"items"`
+}
+
+// ---- workspace 文件重命名（LSP 文件操作）----
+
+// FileRename 一条 old→new 重命名。
+type FileRename struct {
+	OldURI string `json:"oldUri"`
+	NewURI string `json:"newUri"`
+}
+
+// WorkspaceRenameFilesParams will/didRenameFiles 入参。
+type WorkspaceRenameFilesParams struct {
+	Files []FileRename `json:"files"`
+}
+
+// WorkspaceOptions 顶层 workspace 能力。
+type WorkspaceOptions struct {
+	FileOperations *FileOperationOptions `json:"fileOperations,omitempty"`
+}
+
+// FileOperationOptions 文件操作能力（v1 只做 rename 两拍）。
+type FileOperationOptions struct {
+	WillRenameFiles *FileOperationRegistrationOptions `json:"willRename,omitempty"`
+	DidRenameFiles  *FileOperationRegistrationOptions `json:"didRename,omitempty"`
+}
+
+// FileOperationRegistrationOptions 过滤器声明。
+type FileOperationRegistrationOptions struct {
+	Filters []DocumentFilter `json:"filters,omitempty"`
+}
+
+// DocumentFilter v1 仅 glob。
+type DocumentFilter struct {
+	Pattern string `json:"pattern,omitempty"`
 }

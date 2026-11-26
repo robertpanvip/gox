@@ -107,6 +107,10 @@ func (s *Server) handleRequest(req *RequestMessage, body []byte) (any, *RPCError
 				CodeActionProvider:         &CodeActionOptions{CodeActionKinds: []string{"quickfix", "source.organizeImports"}},
 				DiagnosticProvider:         &DiagnosticOptions{},
 				WorkspaceSymbolProvider:    true,
+				Workspace: &WorkspaceOptions{FileOperations: &FileOperationOptions{
+					WillRenameFiles: &FileOperationRegistrationOptions{Filters: []DocumentFilter{{Pattern: "**/*.gx"}}},
+					DidRenameFiles:  &FileOperationRegistrationOptions{Filters: []DocumentFilter{{Pattern: "**/*.gx"}}},
+				}},
 			},
 			ServerInfo: ServerInfo{Name: "gox-lsp", Version: "0.1.0"},
 		}, nil
@@ -134,6 +138,8 @@ func (s *Server) handleRequest(req *RequestMessage, body []byte) (any, *RPCError
 		return s.completionResolve(body)
 	case "textDocument/diagnostic":
 		return s.pullDiagnostic(body)
+	case "workspace/willRenameFiles":
+		return s.willRenameFiles(body)
 	case "workspace/symbol":
 		return s.workspaceSymbol(body)
 	case "textDocument/signatureHelp":
@@ -171,6 +177,8 @@ func (s *Server) handleNotification(req *RequestMessage, body []byte, w *bufio.W
 				s.publishDiagnostics(p.TextDocument.URI, w)
 			}
 		}
+	case "workspace/didRenameFiles":
+		s.didRenameFiles(body, w)
 	case "textDocument/didClose":
 		var p DidCloseParams
 		if json.Unmarshal(body, &p) == nil {

@@ -300,7 +300,16 @@ const NAV3_EXPR = `
     await wait(900);
     const impl = JSON.parse(Gox.lspImplementation(2, 7));
     const okImpl = !!(impl && impl.length === 1 && impl[0].name === 'Dog');
-    return JSON.stringify({ ok: okTD && okImpl, okTD, okImpl });
+  const QQ = String.fromCharCode(34);
+  const NL = String.fromCharCode(10);
+  const srcC = ['package main', '', 'import (', '    "io"', '    "strings"', ')', '', 'func main() {',
+    '    var _ io.Reader = strings.NewReader(' + QQ + 'x' + QQ + ')', '}'].join(NL);
+  Gox.setSource(srcC);
+  await wait(900);
+  const li = 8; const l8 = srcC.split(NL)[li]; const j = l8.indexOf('io.Reader');
+  const impl2 = JSON.parse(Gox.lspImplementation(li, j + 4));
+  const okImplX = !!(impl2 && impl2.some(r => r.pkg === 'strings' && r.name === 'Reader'));
+    return JSON.stringify({ ok: okTD && okImpl && okImplX, okTD, okImpl, okImplX });
   } catch (e) {
     return JSON.stringify({ err: String(e && e.message ? e.message : e) });
   }

@@ -174,3 +174,21 @@ race 通过。已知边界：gox 组件包（widgets 等）在桌面端没有磁
 （无实现）如实报 `{"err":"no-organize-action"}`。三层单测红→绿（合并/分组排序/
 幂等、桌面 organize 动作、pull 诊断 cannot use 命中、浏览器动作），其余八探针
 零回归；全仓 26 包 ok、race 通过、gofmt/vet 干净。
+
+## 跨包实现反查 / 文件重命名同步（导航五期）
+
+- `Implementations` 窄口径扩展（internal/typecheck/p2.go）：除用户文件外，扫描本文件
+  `file.Imports` 直接导入的包（`info.PkgNameOf` 取包句柄，版本无关；不依赖 Info.Imports
+  这类新字段）。只计导出、非接口、非泛型的命名类型；值或指针满足都算；对象同一性去重、
+  按 Pkg/Line 稳定排序。测试同时钉住反向用例——未导入的包不得凭空混入、局部遮蔽不牵连。
+- 桌面 `workspace/willRenameFiles` + `workspace/didRenameFiles`（internal/lsp/fileops.go）：
+  gox 文件包语义独立、互不引用文件名，故重命名无跨文件编辑——价值在服务器状态跟随：
+  文档表按新 URI 迁移、符号缓存标脏、旧 URI 清空诊断、新 URI 换发诊断；willRename 对
+  目标 URI 已被占用情况返回明确错误，不静默覆盖。initialize 的
+  `workspace.fileOperations`（filters `**/*.gx`）与实现严格对齐。
+
+实测：`node scripts/selfcheck.js nav3 playground.html` →
+`{"ok":true,"okTD":true,"okImpl":true,"okImplX":true}`；基线（无跨包反查）如实报
+`{"ok":false,"okTD":true,"okImpl":true,"okImplX":false}`——特性红精确定位新能力。
+桌面 rename 两条 RPC 单测（迁移+换发/冲突拒绝）、核心反查三条红→绿；九探针全绿、
+全仓零 FAIL、race 三包通过、gofmt/vet 干净。

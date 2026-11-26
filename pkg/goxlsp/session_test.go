@@ -436,3 +436,19 @@ func TestCodeActionsOrganize(t *testing.T) {
 	}
 	t.Fatalf("缺 organize 动作: %+v", acts)
 }
+
+// TestImplementationsCrossPackageStd 跨包反查的浏览器面：io.Reader 应查到 strings.Reader。
+func TestImplementationsCrossPackageStd(t *testing.T) {
+	if embedstd.Lookup() == nil {
+		t.Skip("embedstd 未生成")
+	}
+	s := New()
+	s.SetSource("package main\n\nimport (\n\t\"io\"\n\t\"strings\"\n)\n\nfunc main() {\n\tvar r io.Reader = strings.NewReader(\"x\")\n\t_ = r\n}\n")
+	ds := s.ImplementationsAt(8, 11)
+	for _, d := range ds {
+		if d.Pkg == "strings" && d.Name == "Reader" {
+			return
+		}
+	}
+	t.Fatalf("应含 strings.Reader: %+v", ds)
+}

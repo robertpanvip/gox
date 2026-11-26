@@ -85,3 +85,32 @@ func TestMultiRenameNoCrossTalk(t *testing.T) {
 		t.Fatalf("b.go 局部 v 不得被牵连: %+v", edits)
 	}
 }
+
+// TestImplementationsDirectImportedPkg 窄口径跨包反查：用户文件只 import io，
+// io.Reader 的实现应命中同被 import 的 strings.Reader；未被 import 的包不参与。
+func TestImplementationsDirectImportedPkg(t *testing.T) {
+	lookup := func(path string) ([]File, bool) {
+		switch path {
+		case "io":
+			return []File{{Name: "io.go", Src: "package io\n\n// Reader is the interface.\ntype Reader interface { Read(p []byte) (n int, err error) }\n"}}, true
+		case "str":
+			return []File{{Name: "s.go", Src: "package str\n\n// Reader 是测试实现类型。\ntype Reader struct{ s string }\n\nfunc (r *Reader) Read(p []byte) (int, error) { return 0, nil }\n"}}, true
+		}
+		return nil, false
+	}
+	// 导入 str 的文件：io.Reader 应查到 str.Reader
+	src := "package main\n\nimport (\n\t\"io\"\n\t\"str\"\n)\n\nfunc main() {\n\tvar r io.Reader = &str.Reader{}\n\t_ = r\n}\n"
+	decls, ok := Implementations(src, strings.Index(src, "io.Reader")+4, lookup)
+	if !ok || len(decls) != 1 {
+		t.Fatalf("应命中 1 个跨包实现: ok=%v %+v", ok, decls)
+	}
+	if decls[0].Pkg != "str" || decls[0].Name != "Reader" {
+		t.Fatalf("实现定位: %+v", decls[0])
+	}
+	// 未导入 str 的文件：不得凭空出现
+	src2 := "package main\n\nimport \"io\"\n\nfunc main() {\n\tvar r io.Reader\n\t_ = r\n}\n"
+	d2, ok2 := Implementations(src2, strings.Index(src2, "io.Reader")+4, lookup)
+	if ok2 && len(d2) != 0 {
+		t.Fatalf("未导入包不得混入: %+v", d2)
+	}
+}

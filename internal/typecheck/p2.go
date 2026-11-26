@@ -89,8 +89,9 @@ func ifaceOf(obj types.Object) *types.Interface {
 	return nil
 }
 
-// Implementations 返回被检源（用户文件）内满足光标接口的命名类型声明；
-// 接口自身与其它接口不计入。跨包实现扫描在 roadmap（需全闭包解析），此处如实不承诺。
+// Implementations 返回满足光标接口的命名类型：用户文件 + 本文件直接导入的包
+// （窄口径：只扫 info.Imports 里已加载的包作用域，导出、非接口、非泛型；值或
+// 指针满足都计入，对象同一性去重）。全闭包反查成本高，不在本层承诺。
 func (in *Importer) Implementations(src string, cursor int) ([]Decl, bool) {
 	obj, ok := in.objectAt(src, cursor)
 	if !ok {
@@ -100,24 +101,67 @@ func (in *Importer) Implementations(src string, cursor int) ([]Decl, bool) {
 	if iface == nil {
 		return nil, false
 	}
-	_, info, _, ok := in.checkWithInfo(src)
-	if !ok {
+	_, info, file, ok := in.checkWithInfo(src)
+	if !ok || file == nil {
 		return nil, false
 	}
+	seen := map[types.Object]bool{}
 	decls := []Decl{}
+	collect := func(tn *types.TypeName) {
+		if tn == nil || seen[tn] {
+			return
+		}
+		t := types.Unalias(tn.Type())
+		named, is := t.(*types.Named)
+		if !is {
+			return
+		}
+		if _, self := named.Underlying().(*types.Interface); self {
+			return
+		}
+		if named.TypeParams().Len() > 0 {
+			return // 泛型未实例化，v1 跳过
+		}
+		seen[tn] = true
+		if types.Implements(t, iface) || types.Implements(types.NewPointer(t), iface) {
+			decls = append(decls, in.declOf(tn))
+		}
+	}
 	for id, o := range info.Defs {
 		tn, is := o.(*types.TypeName)
 		if !is || id == nil || tn.Pkg() == nil || tn.Pkg().Path() != userPkgPath {
 			continue
 		}
-		if _, self := types.Unalias(tn.Type()).Underlying().(*types.Interface); self {
+		collect(tn)
+	}
+	// 窄口径跨包：本文件 import 声明直接引用的包（PkgNameOf 走 Defs/Implicits，
+	// 不依赖 Info 的高版本字段）；只扫包级作用域的导出命名类型。
+	for _, spec := range file.Imports {
+		pn := info.PkgNameOf(spec)
+		if pn == nil {
 			continue
 		}
-		if types.Implements(tn.Type(), iface) {
-			decls = append(decls, in.declOf(tn))
+		pkg := pn.Imported()
+		if pkg == nil || pkg.Path() == userPkgPath || pkg.Scope() == nil {
+			continue
+		}
+		for _, name := range pkg.Scope().Names() {
+			if name == "" || name[0] < 'A' || name[0] > 'Z' {
+				continue
+			}
+			tn, is := pkg.Scope().Lookup(name).(*types.TypeName)
+			if !is {
+				continue
+			}
+			collect(tn)
 		}
 	}
-	sort.SliceStable(decls, func(i, j int) bool { return decls[i].Line < decls[j].Line })
+	sort.SliceStable(decls, func(i, j int) bool {
+		if decls[i].Pkg != decls[j].Pkg {
+			return decls[i].Pkg < decls[j].Pkg
+		}
+		return decls[i].Line < decls[j].Line
+	})
 	return decls, true
 }
 
