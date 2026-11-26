@@ -22,6 +22,9 @@ type Decl struct {
 	Col     int    // 1 基
 	Snippet string // 声明签名行（到首个 '{' 或 4 行为止），可能为空
 	Doc     string // 紧贴声明上方的 // 注释，可能为空
+
+	// Name 为符号名（typeDefinition/implementation 展示与跨度计算用）。
+	Name string
 }
 
 // objectAt 返回光标（字节偏移，指向最后输入字符之后）所覆盖标识符的类型对象。

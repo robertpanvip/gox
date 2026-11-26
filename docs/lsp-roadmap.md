@@ -19,16 +19,19 @@
 | workspaceSymbol | 已打开文档聚合（v1） |
 | semanticTokens/full | ✅ 本轮落地：语法级分类（keyword/string/comment/number/namespace/type/function/variable/constant/operator…），双端同源 typecheck.Tokens+EncodeTokens；initialize 已声明 legend（12 类，Full=true）——原悬空字段就此转正 |
 | completionItem/resolve | ✅ 本轮落地：候选携带 Data=pkg.Name；桌面 completionItem/resolve 从 GOROOT/embed 源取 doc 首段；浏览器等价面 Gox.lspResolveDoc(pkg,name) |
+| typeDefinition | ✅ 本轮落地：光标符号类型→声明（指针解引用、别名展开；universe/匿名类型如实缺席）；桌面 `textDocument/typeDefinition` + 浏览器 `Gox.lspTypeDefinition` |
+| implementation | ✅ 本轮落地：接口类型名/接口方法→本源内满足实现的命名类型（对象同一性判定）；桌面 `textDocument/implementation` + 浏览器 `Gox.lspImplementation`。跨包全闭包反查在 roadmap |
+| rename（跨文件） | ✅ 本轮落地：同包多文件一次 types 检查 + Uses/Defs 对象同一性定位，WorkspaceEdit 按文档分发（局部遮蔽免疫，red 有专项用例）；任一文档编译不过整体回退旧单文件符号表路径，零回归。`workspace/willRenameFiles` 仍在 roadmap |
 | inlayHints | ✅ 本轮落地：具名形参 + 字符串字面量实参提示（可变参数不提示）；坐标经 SourceMap 回投 .gx；桌面 textDocument/inlayHints + 浏览器 Gox.lspInlayHints |
 | rename / formatting | 单文档 rename；compiler.Format |
 
 ## 缺口（建议顺序）
 
 ### P1 —— 剩余
-1. **typeDefinition / declaration / implementation**：接口→实现需要类型图反查（go/types 全程序扫描），中等成本。
-2. **跨文件 rename + workspace/willRenameFiles**：当前 rename 单文档。
-3. **organizeImports**（codeAction source 组）：需要先建 import 全量解析。
-4. **diagnostics 主动刷新（pull/refresh，LSP 3.17）**。
+1. **organizeImports**（codeAction source 组）：需要先建 import 全量解析。
+2. **diagnostics 主动刷新（pull/refresh，LSP 3.17）**。
+3. **workspace/willRenameFiles**：文件移动/重命名时同步 import 与引用。
+4. **implementation 跨包反查**：全闭包扫描成本高，可先按已导入包做窄口径扩展。
 
 ### P2 —— 锦上添花
 5. **foldingRange / selectionRange**：折叠与智能扩选；selectionRange 和我们的选区引擎天然契合。

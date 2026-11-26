@@ -98,6 +98,8 @@ func (s *Server) handleRequest(req *RequestMessage, body []byte) (any, *RPCError
 				CompletionProvider:         &CompletionOptions{TriggerCharacters: []string{"."}, ResolveProvider: true},
 				SignatureHelpProvider:      &SignatureHelpOptions{TriggerCharacters: []string{"(", ","}},
 				DocumentSymbolProvider:     true,
+				TypeDefinitionProvider:     true,
+				ImplementationProvider:     true,
 				RenameProvider:             true,
 				DocumentFormattingProvider: true,
 				ReferencesProvider:         true,
@@ -113,6 +115,10 @@ func (s *Server) handleRequest(req *RequestMessage, body []byte) (any, *RPCError
 		return s.definition(body)
 	case "textDocument/hover":
 		return s.hover(body)
+	case "textDocument/typeDefinition":
+		return s.typeDefinition(body)
+	case "textDocument/implementation":
+		return s.implementation(body)
 	case "textDocument/references":
 		return s.references(body)
 	case "textDocument/documentHighlight":
@@ -406,6 +412,9 @@ func (s *Server) rename(body []byte) (any, *RPCError) {
 	d, ok := s.docForURI(p.TextDocument.URI)
 	if !ok {
 		return nil, &RPCError{Code: -32602, Message: "document not opened"}
+	}
+	if we, ok := s.workspaceRename(p); ok {
+		return we, nil
 	}
 	lines := splitLines(d.Text)
 	sm := s.symbolMap(d)

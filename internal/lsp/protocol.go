@@ -77,6 +77,8 @@ type ServerCapabilities struct {
 	DocumentHighlightProvider  bool                   `json:"documentHighlightProvider,omitempty"`
 	CodeActionProvider         bool                   `json:"codeActionProvider,omitempty"`
 	WorkspaceSymbolProvider    bool                   `json:"workspaceSymbolProvider,omitempty"`
+	TypeDefinitionProvider     bool                   `json:"typeDefinitionProvider,omitempty"`
+	ImplementationProvider     bool                   `json:"implementationProvider,omitempty"`
 }
 
 type CompletionOptions struct {

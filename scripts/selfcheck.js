@@ -272,6 +272,40 @@ const P1_EXPR = `
   return JSON.stringify({ ok: okTok && okHint && okDoc, okTok, okHint, okDoc });
 })()`;
 
+// 探针 L：typeDefinition / implementation 浏览器闭环（跨文件 rename 属工作台能力，桌面链路单测覆盖）。
+// 探针自身用 try/catch 包裹并以引号安全方式构造源码，保证红一定是特性红而不是探针炸。
+const NAV3_EXPR = `
+(async () => {
+  const wait = ms => new Promise(r => setTimeout(r, ms));
+  try {
+    const deadline = Date.now() + 40000;
+    while (!(window.Gox && window.Gox.setSource && window.Gox.lspDiagnostics)) {
+      if (Date.now() > deadline) return JSON.stringify({ err: 'Gox 超时未就绪' });
+      await wait(250);
+    }
+    await wait(600);
+    if (typeof Gox.lspTypeDefinition !== 'function' || typeof Gox.lspImplementation !== 'function') {
+      return JSON.stringify({ err: 'no-nav3-exports' });
+    }
+    const q = String.fromCharCode(34);
+    const srcA = ['package main', '', 'import ' + q + 'strings' + q, '', 'func main() {',
+      '    r := strings.NewReader(' + q + 'x' + q + ')', '    _ = r', '}'].join(String.fromCharCode(10));
+    Gox.setSource(srcA);
+    await wait(900);
+    const td = JSON.parse(Gox.lspTypeDefinition(5, 5));
+    const okTD = !!(td && td.kind === 'std' && td.pkg === 'strings' && td.file === 'reader.go');
+    const srcB = ['package main', '', 'type Speaker interface{ Speak() string }', '',
+      'type Dog struct{}', '', 'func (d Dog) Speak() string { return ' + q + 'w' + q + ' }'].join(String.fromCharCode(10));
+    Gox.setSource(srcB);
+    await wait(900);
+    const impl = JSON.parse(Gox.lspImplementation(2, 7));
+    const okImpl = !!(impl && impl.length === 1 && impl[0].name === 'Dog');
+    return JSON.stringify({ ok: okTD && okImpl, okTD, okImpl });
+  } catch (e) {
+    return JSON.stringify({ err: String(e && e.message ? e.message : e) });
+  }
+})()`;
+
 const PROVIDER_EXPR = `
 (async () => {
   const wait = ms => new Promise(r => setTimeout(r, ms));
@@ -295,9 +329,9 @@ const PROVIDER_EXPR = `
 })()`;
 
 (async () => {
-  const expr = mode === "stacking" ? STACKING_EXPR : (mode === "gsyntax" ? GSYNTAX_EXPR : (mode === "comp" ? COMP_EXPR : (mode === "sig" ? SIG_EXPR : (mode === "nav" ? NAV_EXPR : (mode === "nav2" ? NAV2_EXPR : (mode === "p1" ? P1_EXPR : PROVIDER_EXPR))))));
+  const expr = mode === "stacking" ? STACKING_EXPR : (mode === "gsyntax" ? GSYNTAX_EXPR : (mode === "comp" ? COMP_EXPR : (mode === "sig" ? SIG_EXPR : (mode === "nav" ? NAV_EXPR : (mode === "nav2" ? NAV2_EXPR : (mode === "p1" ? P1_EXPR : (mode === "nav3" ? NAV3_EXPR : PROVIDER_EXPR)))))));
   let url;
-  if (mode === "stacking" || mode === "gsyntax" || mode === "comp" || mode === "sig" || mode === "nav" || mode === "nav2" || mode === "p1") {
+  if (mode === "stacking" || mode === "gsyntax" || mode === "comp" || mode === "sig" || mode === "nav" || mode === "nav2" || mode === "p1" || mode === "nav3") {
     url = "file://" + target;
   } else {
     server = http.createServer((q, s) => {
@@ -353,7 +387,9 @@ const PROVIDER_EXPR = `
   if (pageErrs.length) console.log("PAGE_ERRORS", JSON.stringify(pageErrs.slice(0, 3)));
   let v = {};
   try { v = JSON.parse(String(out)); } catch {}
-  const pass = mode === "p1"
+  const pass = mode === "nav3"
+    ? !v.err && v.ok === true
+    : mode === "p1"
     ? !v.err && v.ok === true
     : mode === "nav2"
     ? !v.err && v.ok === true

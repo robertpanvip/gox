@@ -134,3 +134,23 @@ race 通过。已知边界：gox 组件包（widgets 等）在桌面端没有磁
 `{"ok":true,"okTok":true,"okHint":true,"okDoc":true}`；基线（无实现）如实报
 `no-p1-exports`。nav2 浏览器闭环里 import 补全候选已达 60 项上限（前缀过滤后），
 证明 import 语境判定在真实键入流生效。
+
+## typeDefinition / implementation / 跨文件 rename（导航二期）
+
+同一持久类型图上的第二波增量（internal/typecheck/p2.go）：
+
+- **TypeDecl**：光标符号 → obj.Type() → 解指针/展开别名 → 命名类型声明。universe
+  类型（string/error）与匿名结构没有源码可跳，如实返回 false；宿主隐藏提示即可。
+- **Implementations**：接口类型名或接口方法 → 本源内满足该接口的命名类型列表。
+  判定走 types.Implements + 对象同一性，不是文本匹配；跨包全闭包反查在 roadmap。
+- **MultiRename**：把同包多文件一次性交给 types 检查（files 自包含，无需 lookup），
+  按 Uses/Defs 对象同一性收集每个文件的全部出现——局部变量遮蔽天然免疫
+  （红测试 TestMultiRenameNoCrossTalk 专门钉这条）。桌面 rename 采取保守接入：
+  所有打开文档都能编译且确凿命中才走强类型 WorkspaceEdit，否则整体回退旧
+  符号表单文件路径（含枚举成员特殊形态），零行为回归。
+- 桌面 `textDocument/typeDefinition`、`textDocument/implementation`；浏览器
+  `Gox.lspTypeDefinition`、`Gox.lspImplementation`；能力位已在 initialize 声明。
+
+实测（headless Chrome 158，`node scripts/selfcheck.js nav3 playground.html`）：
+`{"ok":true,"okTD":true,"okImpl":true}`；基线（无实现）如实报 `no-nav3-exports`。
+全探针回归 nav2/nav/sig/comp/gsyntax/stacking/p1 全绿，race 四包通过。

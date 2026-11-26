@@ -72,6 +72,12 @@ export interface GoxPlaygroundAPI {
   /** QuickFix 列表（补/删 import）；无诊断返回 "null"。 */
   lspCodeActions(): string;
 
+  /** 光标表达式类型的声明位置；形态同 lspDefinition，不适用返回 "null"。 */
+  lspTypeDefinition(line: number, col: number): string;
+
+  /** 接口的实现列表（name + .gx 0 基坐标；外部实现带 pkg/file）。 */
+  lspImplementation(line: number, col: number): string;
+
   /** 语义 token（LSP 编码数组）：{"data":[...]}。 */
   lspSemanticTokens(): string;
 

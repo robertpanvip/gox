@@ -397,3 +397,29 @@ func atoi(s string) (int, bool) {
 	}
 	return n, true
 }
+
+// TestTypeDefinitionStdJSON 浏览器 typeDefinition：*strings.Reader → std 声明定位。
+func TestTypeDefinitionStdJSON(t *testing.T) {
+	if embedstd.Lookup() == nil {
+		t.Skip("embedstd 未生成")
+	}
+	s := New()
+	s.SetSource("package main\n\nimport \"strings\"\n\nfunc main() {\n\tr := strings.NewReader(\"x\")\n\t_ = r\n}\n")
+	d := s.TypeDefinitionAt(5, 2)
+	if d == nil || d.Kind != "std" || d.Pkg != "strings" {
+		t.Fatalf("typeDefinition: %+v", d)
+	}
+}
+
+// TestImplementationLocalJSON 浏览器 implementation：本地接口 → 实现列表。
+func TestImplementationLocalJSON(t *testing.T) {
+	if embedstd.Lookup() == nil {
+		t.Skip("embedstd 未生成，类型层缺席（预期行为）")
+	}
+	s := New()
+	s.SetSource("package main\n\ntype Speaker interface{ Speak() string }\n\ntype Dog struct{}\n\nfunc (d Dog) Speak() string { return \"w\" }\n")
+	ds := s.ImplementationsAt(2, 7)
+	if len(ds) != 1 || ds[0].Name != "Dog" {
+		t.Fatalf("implementations: %+v", ds)
+	}
+}

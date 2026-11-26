@@ -318,6 +318,20 @@ func main() {
 	g.Set("lspCodeActions", js.FuncOf(func(this js.Value, args []js.Value) any {
 		return lsp.CodeActionsJSON()
 	}))
+	g.Set("lspTypeDefinition", js.FuncOf(func(this js.Value, args []js.Value) any {
+		line, col := 0, 0
+		if len(args) >= 2 {
+			line, col = args[0].Int(), args[1].Int()
+		}
+		return lsp.TypeDefinitionJSON(line, col)
+	}))
+	g.Set("lspImplementation", js.FuncOf(func(this js.Value, args []js.Value) any {
+		line, col := 0, 0
+		if len(args) >= 2 {
+			line, col = args[0].Int(), args[1].Int()
+		}
+		return lsp.ImplementationsJSON(line, col)
+	}))
 	g.Set("lspSemanticTokens", js.FuncOf(func(this js.Value, args []js.Value) any {
 		return lsp.SemanticTokensJSON()
 	}))

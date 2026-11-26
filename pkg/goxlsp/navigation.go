@@ -61,3 +61,71 @@ func (s *Session) CodeActions() []CodeAction {
 
 // CodeActionsJSON 返回 QuickFix 列表 JSON（无修复时 null）。
 func (s *Session) CodeActionsJSON() string { return marshal(s.CodeActions()) }
+
+// TypeDefinitionAt 光标表达式类型的声明位置（外部=内嵌源快览；本地=.gx 0 基回投）。
+func (s *Session) TypeDefinitionAt(line, col int) *DefinitionResult {
+	off, ok := s.typedCursorPos(line, col)
+	if !ok {
+		return nil
+	}
+	d, ok := s.timp.TypeDecl(s.goSrc, off+1)
+	if !ok {
+		return nil
+	}
+	if d.Pkg != "" {
+		return &DefinitionResult{Kind: "std", Pkg: d.Pkg, File: d.File, Line: d.Line, Snippet: d.Snippet, Doc: d.Doc}
+	}
+	gx, ok := s.smap.GoToGx(d.Line, d.Col)
+	if !ok {
+		return nil
+	}
+	r := Range{
+		Start: Position{Line: gx.Line - 1, Character: gx.Column - 1},
+		End:   Position{Line: gx.Line - 1, Character: gx.Column - 1},
+	}
+	return &DefinitionResult{Kind: "local", Range: &r}
+}
+
+// SymbolRef 实现列表项：本地实现为 .gx 0 基坐标；外部实现带 pkg/file。
+type SymbolRef struct {
+	Name string `json:"name"`
+	Pkg  string `json:"pkg,omitempty"`
+	File string `json:"file,omitempty"`
+	Line int    `json:"line"`
+	Col  int    `json:"col"`
+}
+
+// ImplementationsAt 光标接口（类型名或接口方法）→ 本源内实现类型列表。
+func (s *Session) ImplementationsAt(line, col int) []SymbolRef {
+	off, ok := s.typedCursorPos(line, col)
+	if !ok {
+		return nil
+	}
+	decls, ok := s.timp.Implementations(s.goSrc, off+1)
+	if !ok {
+		return nil
+	}
+	out := make([]SymbolRef, 0, len(decls))
+	for _, d := range decls {
+		if d.Pkg != "" {
+			out = append(out, SymbolRef{Name: d.Name, Pkg: d.Pkg, File: d.File, Line: d.Line - 1, Col: d.Col - 1})
+			continue
+		}
+		gx, ok := s.smap.GoToGx(d.Line, d.Col)
+		if !ok {
+			continue
+		}
+		out = append(out, SymbolRef{Name: d.Name, Line: gx.Line - 1, Col: gx.Column - 1})
+	}
+	return out
+}
+
+// TypeDefinitionJSON 返回 typeDefinition JSON（不适用 null）。
+func (s *Session) TypeDefinitionJSON(line, col int) string {
+	return marshal(s.TypeDefinitionAt(line, col))
+}
+
+// ImplementationsJSON 返回实现列表 JSON（不适用 null）。
+func (s *Session) ImplementationsJSON(line, col int) string {
+	return marshal(s.ImplementationsAt(line, col))
+}
