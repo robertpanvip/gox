@@ -76,34 +76,36 @@ func (t *fileTree) toggle(path string) {
 	}
 }
 
-// glyphFor 返回节点图标（等宽终端安全的 Unicode 符号）与主题里的样式 key。
-// 目录用 ▾/▸ 表达展开/折叠，文件按扩展名/用途分类， IDEA 风格一眼可辨。
+// glyphFor 返回节点图标（emoji）与主题里的样式 key。
+// 目录用 📂/📁 表达展开/折叠，文件按扩展名/用途分类， IDEA 风格一眼可辨。
+// 注意：emoji 通常是双宽字符（lipgloss.Width==2），view.go 的 truncateWidth
+// 已按显示宽度截断，缩进也按列计算，故不影响文件树对齐与点击命中。
 func glyphFor(n treeNode) (glyph, styleKey string) {
 	if n.Dir {
 		if n.Open {
-			return "▾", "folder"
+			return "📂", "folder"
 		}
-		return "▸", "folder"
+		return "📁", "folder"
 	}
 	name := strings.ToLower(n.Name)
 	ext := filepath.Ext(name)
 	switch {
 	case strings.HasSuffix(name, "_test.go"):
-		return "◈", "test"
+		return "🧪", "test"
 	case ext == ".go":
-		return "◆", "go"
+		return "🐹", "go"
 	case ext == ".gx":
-		return "◇", "gx"
+		return "⚡", "gx"
 	case ext == ".md" || ext == ".markdown":
-		return "▤", "md"
+		return "📝", "md"
 	case ext == ".json" || ext == ".yaml" || ext == ".yml" || ext == ".toml" ||
 		ext == ".ini" || ext == ".xml" || ext == ".conf" || ext == ".mod" ||
 		ext == ".sum" || ext == ".lock":
-		return "◇", "conf"
+		return "📋", "conf"
 	case ext == ".sh" || ext == ".bash" || ext == ".zsh" || ext == ".bat":
-		return "▪", "script"
+		return "🔧", "script"
 	default:
-		return "·", "file"
+		return "📄", "file"
 	}
 }
 

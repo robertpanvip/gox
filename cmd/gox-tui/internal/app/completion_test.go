@@ -5,8 +5,8 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/robertpanvip/gox-ide/internal/complete"
-	"github.com/robertpanvip/gox-ide/internal/editor"
+	"github.com/robertpanvip/gox-tui/internal/complete"
+	"github.com/robertpanvip/gox-tui/internal/editor"
 )
 
 func TestAcceptCompReplacesToken(t *testing.T) {

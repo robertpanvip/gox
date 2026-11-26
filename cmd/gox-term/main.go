@@ -2,7 +2,7 @@
 //
 // 命令行启动即进入一个真实 shell（默认 $SHELL），带红黄绿点缀、圆角边框、
 // 多会话标签。键盘输入转发到 PTY、shell 输出渲染回界面——执行的是真命令，
-// 不是模拟。视觉用 lipgloss 实现苹果风格，与 gox-ide 同源配色。
+// 不是模拟。视觉用 lipgloss 实现苹果风格，与 gox-tui 同源配色。
 package main
 
 import (

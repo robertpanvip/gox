@@ -1,4 +1,4 @@
-// Package app 是 gox-ide 的 bubbletea 应用：一个终端里全屏运行的 IDE。
+// Package app 是 gox-tui 的 bubbletea 应用：一个终端里全屏运行的 IDE。
 package app
 
 import (
@@ -9,9 +9,9 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/robertpanvip/gox-ide/internal/complete"
-	"github.com/robertpanvip/gox-ide/internal/editor"
-	"github.com/robertpanvip/gox-ide/internal/theme"
+	"github.com/robertpanvip/gox-tui/internal/complete"
+	"github.com/robertpanvip/gox-tui/internal/editor"
+	"github.com/robertpanvip/gox-tui/internal/theme"
 	"github.com/robertpanvip/gox/pkg/gxcomplete"
 )
 
@@ -105,7 +105,7 @@ func toMode(dark bool) theme.Mode {
 }
 
 // 默认欢迎内容：展示语法高亮的例子。
-const welcomeSource = `// 欢迎使用 gox-ide —— 终端里的 macOS 风格 IDE
+const welcomeSource = `// 欢迎使用 gox-tui —— 终端里的 macOS 风格 IDE
 // 快捷键：Ctrl+P 打开文件 · Ctrl+F 搜索 · Ctrl+T 切换主题 · Ctrl+S 保存
 sig count = 0
 

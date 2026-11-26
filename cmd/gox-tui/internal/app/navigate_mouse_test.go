@@ -7,7 +7,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/muesli/termenv"
-	"github.com/robertpanvip/gox-ide/internal/editor"
+	"github.com/robertpanvip/gox-tui/internal/editor"
 )
 
 func mouseModel(src string) *Model {

@@ -1,4 +1,4 @@
-// Package editor 是 gox-ide 的文本缓冲层，直接复用 gox 的 Rope 作为文本权威。
+// Package editor 是 gox-tui 的文本缓冲层，直接复用 gox 的 Rope 作为文本权威。
 // 大文件插入/删除走 O(log N)，行列换算也是 O(log N)，与 playground 编辑器同源。
 package editor
 

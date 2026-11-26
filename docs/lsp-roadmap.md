@@ -33,7 +33,7 @@
 ### P2 —— 锦上添花
 5. **foldingRange / selectionRange**：折叠与智能扩选；selectionRange 和我们的选区引擎天然契合。
 6. **callHierarchy / typeHierarchy**：调用链分析。
-7. **增量同步（textDocumentSync=2）**：playground 有 Rope 提速不敏感，但 gox-ide/外部编辑器大文档收益明显。
+7. **增量同步（textDocumentSync=2）**：playground 有 Rope 提速不敏感，但 gox-tui/外部编辑器大文档收益明显。
 8. **window/workDoneProgress**：首次类型图构建较长，可上报进度。
 9. **gox 组件包桌面跳转**：桌面磁盘上 github.com/robertpanvip/gox/… 无路径可解（当前诚实跳过）；需要 rootUri→module 映射或直接把 embedstd 清单复用到桌面。
 10. **协议一致性测试**：用真实客户端（VS Code/gopls 行为规格）跑 golden 场景，替代目前"单测 + CDP 探针"的组合。

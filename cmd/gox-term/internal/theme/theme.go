@@ -1,5 +1,5 @@
-// Package theme 提供 gox-term 的 macOS 风格视觉（精简版，独立于 gox-ide）。
-// 配色与 gox-ide 同源：Apple 深浅双主题 + 圆角边框 + 红黄绿窗口点缀。
+// Package theme 提供 gox-term 的 macOS 风格视觉（精简版，独立于 gox-tui）。
+// 配色与 gox-tui 同源：Apple 深浅双主题 + 圆角边框 + 红黄绿窗口点缀。
 package theme
 
 import "github.com/charmbracelet/lipgloss"

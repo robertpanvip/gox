@@ -5,7 +5,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/charmbracelet/lipgloss"
-	"github.com/robertpanvip/gox-ide/internal/syntax"
+	"github.com/robertpanvip/gox-tui/internal/syntax"
 )
 
 // View 实现 tea.Model：渲染一整帧。
@@ -100,7 +100,7 @@ func (m *Model) viewTitleBar(w int) string {
 	t := m.theme
 	dots := t.Dots[0].Render() + " " + t.Dots[1].Render() + " " + t.Dots[2].Render()
 
-	title := "gox-ide"
+	title := "gox-tui"
 	left := dots + "   " + t.TitleText.Render(title)
 
 	// 标签页。
@@ -154,7 +154,7 @@ func (m *Model) viewTree(w, h int) string {
 	t := m.theme
 	nodes := m.tree.nodes()
 	var lines []string
-	header := t.TreeFolder.Render("▾ PROJECT")
+	header := t.TreeFolder.Render("📂 PROJECT")
 	lines = append(lines, header)
 
 	start := m.scrollLn // 文件树跟随编辑区滚动意义不大，这里从 0 开始
@@ -165,13 +165,17 @@ func (m *Model) viewTree(w, h int) string {
 		}
 		indent := strings.Repeat("  ", n.Depth)
 		glyph, styleKey := glyphFor(n)
-		icon := t.TreeIcon[styleKey].Render(glyph) + " "
-		label := indent + icon + n.Name
-		style := t.TreeItem
 		if i == m.treeSel {
-			style = t.TreeActive
+			// 选中行整行反显：图标与文件名统一用强调前景色，保证在强调背景上可读。
+			label := indent + glyph + " " + n.Name
+			lines = append(lines, t.TreeActive.Width(w).Render(truncateWidth(label, w-1)))
+			continue
 		}
-		lines = append(lines, style.Width(w).Render(truncateWidth(label, w-1)))
+		// 未选中行按文件类型着色：emoji 自带颜色，文件名用同语义色区分高亮。
+		icon := t.TreeIcon[styleKey].Render(glyph) + " "
+		name := t.TreeName[styleKey].Render(n.Name)
+		label := indent + icon + name
+		lines = append(lines, t.TreeItem.Width(w).Render(truncateWidth(label, w-1)))
 	}
 	for len(lines) < h {
 		lines = append(lines, strings.Repeat(" ", w))

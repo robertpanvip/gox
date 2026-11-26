@@ -10,7 +10,7 @@ import (
 )
 
 func treeTestModel() *Model {
-	m := New("/workspace/gox/cmd/gox-ide", true, nil)
+	m := New("/workspace/gox/cmd/gox-tui", true, nil)
 	m.width = 100
 	m.height = 30
 	m.focus = 1
@@ -23,15 +23,15 @@ func TestGlyphFor(t *testing.T) {
 		glyph    string
 		styleKey string
 	}{
-		{treeNode{Name: "internal", Dir: true, Open: true}, "▾", "folder"},
-		{treeNode{Name: "internal", Dir: true, Open: false}, "▸", "folder"},
-		{treeNode{Name: "main.go"}, "◆", "go"},
-		{treeNode{Name: "model_test.go"}, "◈", "test"},
-		{treeNode{Name: "app.gx"}, "◇", "gx"},
-		{treeNode{Name: "README.md"}, "▤", "md"},
-		{treeNode{Name: "go.mod"}, "◇", "conf"},
-		{treeNode{Name: "build.sh"}, "▪", "script"},
-		{treeNode{Name: "LICENSE"}, "·", "file"},
+		{treeNode{Name: "internal", Dir: true, Open: true}, "📂", "folder"},
+		{treeNode{Name: "internal", Dir: true, Open: false}, "📁", "folder"},
+		{treeNode{Name: "main.go"}, "🐹", "go"},
+		{treeNode{Name: "model_test.go"}, "🧪", "test"},
+		{treeNode{Name: "app.gx"}, "⚡", "gx"},
+		{treeNode{Name: "README.md"}, "📝", "md"},
+		{treeNode{Name: "go.mod"}, "📋", "conf"},
+		{treeNode{Name: "build.sh"}, "🔧", "script"},
+		{treeNode{Name: "LICENSE"}, "📄", "file"},
 	}
 	for _, c := range cases {
 		g, k := glyphFor(c.n)
@@ -65,7 +65,7 @@ func TestNodeAtAndInTreeX(t *testing.T) {
 func TestTreeClickTogglesDir(t *testing.T) {
 	m := treeTestModel()
 	nodes := m.tree.nodes()
-	// node[0] 是根目录 gox-ide（dir，展开）。点它应折叠。
+	// node[0] 是根目录 gox-tui（dir，展开）。点它应折叠。
 	clickY := 4
 	wasOpen := nodes[0].Open
 	m.handleMouse(tea.MouseMsg{Button: tea.MouseButtonLeft, Action: tea.MouseActionPress, X: 5, Y: clickY})
@@ -132,12 +132,56 @@ func TestTreeIconsRendered(t *testing.T) {
 	m := treeTestModel()
 	v := m.View()
 	// 强制彩色后，图标应带 SGR 前景色；且目录展开箭头与 go 文件图标应出现。
-	for _, g := range []string{"▾", "◆"} {
+	for _, g := range []string{"📂", "🐹"} {
 		if !strings.Contains(v, g) {
 			t.Errorf("渲染结果缺少图标 %q", g)
 		}
 	}
 	if !strings.Contains(v, "\x1b[38;2;") && !strings.Contains(v, "\x1b[38;5;") {
 		t.Error("图标应带彩色 SGR，渲染结果无前景色序列")
+	}
+}
+
+// TestEmojiIconsAreDoubleWidth 固化所有文件树 emoji 的显示宽度为 2，
+// 保证 truncateWidth/lipgloss.Width 按显示宽度截断时布局对齐不被双宽字符破坏。
+func TestEmojiIconsAreDoubleWidth(t *testing.T) {
+	for _, g := range []string{"📂", "📁", "🧪", "🐹", "⚡", "📝", "📋", "🔧", "📄"} {
+		if w := lipgloss.Width(g); w != 2 {
+			t.Errorf("图标 %q 显示宽度=%d，期望 2", g, w)
+		}
+	}
+	// 旧的几何单宽符号不应再出现在文件树图标集合中。
+	if g, _ := glyphFor(treeNode{Name: "main.go"}); g == "◆" {
+		t.Error("go 文件图标仍为旧的几何符号")
+	}
+}
+
+// TestTreeNamePerTypeHighlight 验证文件名按类型着色：不同扩展名应产生
+// 不同的 SGR 前景色，且选中行带强调背景色（反显）。
+func TestTreeNamePerTypeHighlight(t *testing.T) {
+	old := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	defer lipgloss.SetColorProfile(old)
+	m := treeTestModel()
+	th := m.theme
+
+	// 不同类型文件名的着色必须不同（go / md / conf 三种语义色）。
+	goName := th.TreeName["go"].Render("main.go")
+	mdName := th.TreeName["md"].Render("README.md")
+	confName := th.TreeName["conf"].Render("go.mod")
+	if goName == mdName || mdName == confName || goName == confName {
+		t.Error("不同文件类型的文件名着色应不同")
+	}
+	// 着色结果必须含前景色 SGR（可能带 Bold 前缀，如 \x1b[1;38;2;...）。
+	for _, s := range []string{goName, mdName, confName} {
+		if !strings.Contains(s, "38;2;") && !strings.Contains(s, "38;5;") {
+			t.Errorf("文件名着色缺少前景色 SGR: %q", s)
+		}
+	}
+
+	// 选中行应带背景色（强调反显）。
+	sel := th.TreeActive.Render("selected")
+	if !strings.Contains(sel, "\x1b[48;2;") && !strings.Contains(sel, "\x1b[48;5;") && !strings.Contains(sel, "\x1b[41m") {
+		t.Error("选中行 TreeActive 应带背景色反显")
 	}
 }

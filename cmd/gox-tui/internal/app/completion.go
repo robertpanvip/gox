@@ -5,7 +5,7 @@ import (
 	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/robertpanvip/gox-ide/internal/complete"
+	"github.com/robertpanvip/gox-tui/internal/complete"
 )
 
 // completionTickMsg 是输入后延迟查询的定时器消息（等 buffer 更新后再取 token）。

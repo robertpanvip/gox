@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/robertpanvip/gox-ide/internal/editor"
+	"github.com/robertpanvip/gox-tui/internal/editor"
 )
 
 func TestGotoDefinitionLocal(t *testing.T) {

@@ -1,4 +1,4 @@
-// Package complete 提供 gox-ide 的代码补全引擎（独立于 gox-term 子模块）。
+// Package complete 提供 gox-tui 的代码补全引擎（独立于 gox-term 子模块）。
 //
 // 设计要点：
 //   - 纯标准库，不把 skia/cgo 拖进终端程序；

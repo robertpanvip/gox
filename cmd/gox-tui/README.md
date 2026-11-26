@@ -1,22 +1,22 @@
-# gox-ide
+# gox-tui
 
 终端里全屏运行的 **macOS 风格 IDE**。命令行一键启动，左侧文件树、顶部多标签、语法高亮编辑、搜索、快速打开、明暗双主题——观感走苹果的柔和配色、圆角边框、红黄绿窗口点缀，而不是传统终端的朴素黑白。
 
-文本引擎**直接复用 gox 的 Rope**（与 playground 编辑器同源，大文件编辑/行列换算 O(log N)）；视觉层用 lipgloss 实现，UI 代码独立在 `cmd/gox-ide` 子 module，**不把 bubbletea 依赖带进 gox 主库**。
+文本引擎**直接复用 gox 的 Rope**（与 playground 编辑器同源，大文件编辑/行列换算 O(log N)）；视觉层用 lipgloss 实现，UI 代码独立在 `cmd/gox-tui` 子 module，**不把 bubbletea 依赖带进 gox 主库**。
 
 ## 运行
 
 ```bash
 # 从仓库根目录
-go run ./cmd/gox-ide                          # 打开当前目录，深色主题
-go run ./cmd/gox-ide --path /path/to/project  # 指定项目目录
-go run ./cmd/gox-ide --path main.go           # 直接打开文件
-go run ./cmd/gox-ide --theme light            # 浅色主题
-go run ./cmd/gox-ide --version
+go run ./cmd/gox-tui                          # 打开当前目录，深色主题
+go run ./cmd/gox-tui --path /path/to/project  # 指定项目目录
+go run ./cmd/gox-tui --path main.go           # 直接打开文件
+go run ./cmd/gox-tui --theme light            # 浅色主题
+go run ./cmd/gox-tui --version
 
 # 或构建成单个二进制
-go build -o gox-ide ./cmd/gox-ide
-./gox-ide --path .
+go build -o gox-tui ./cmd/gox-tui
+./gox-tui --path .
 ```
 
 > **终端要求**：建议使用支持 256 色/真彩的终端（iTerm2、macOS Terminal、Windows Terminal、Alacritty、Kitty 等），
@@ -55,7 +55,7 @@ go build -o gox-ide ./cmd/gox-ide
 
 五类来源走可插拔 Provider，统一打分（前缀 > 子串 > 子序列）、去重、限流。点号上下文**只走成员补全**，避免关键字/符号噪声淹没成员；其余上下文跳过成员 provider。成员/LSP 异步预热，`Provide` 永不阻塞 UI。采纳时按字符数回退当前 token 再插入候选，光标与 Rope 文本保持同步。
 
-> 成员补全由主仓库公共包 `pkg/gxcomplete` 提供（gox-ide 是独立 module，无法 import `internal/typecheck`，故经此门面复用），依赖 GOROOT 源码；无 GOROOT 时静默降级到符号补全。
+> 成员补全由主仓库公共包 `pkg/gxcomplete` 提供（gox-tui 是独立 module，无法 import `internal/typecheck`，故经此门面复用），依赖 GOROOT 源码；无 GOROOT 时静默降级到符号补全。
 
 ## 跳转定义与签名速览 🧭
 
@@ -71,7 +71,7 @@ GX 光标经 `SourceMap` 双向映射到生成 Go 再查类型图；符号不存
 ## 架构
 
 ```
-cmd/gox-ide/                  独立 Go module（replace gox => ../..）
+cmd/gox-tui/                  独立 Go module（replace gox => ../..）
 ├── main.go                   CLI 入口（flag 解析、tea.NewProgram）
 ├── internal/
 │   ├── theme/theme.go        macOS 双主题色板与全部 lipgloss 样式（构建时一次成型）
@@ -104,13 +104,13 @@ cmd/gox-ide/                  独立 Go module（replace gox => ../..）
 ## 测试
 
 ```bash
-go test ./cmd/gox-ide/...
+go test ./cmd/gox-tui/...
 ```
 
 覆盖高亮"拼回原文不变"契约、关键字/字符串/注释着色、Rope 插入删除/跨行退格/中文光标、20000 行定位等；补全引擎的打分/去重/排序、token 与成员前缀提取、符号抽取、关键字过滤；补全市集的 token 替换、选中环绕、状态清理等。
 
-类型感知成员补全的核心断言在 `gox/pkg/gxcomplete`（空/非空前缀、局部变量、GX sig 声明、非点号回退、CJK 行列换算），gox-ide 侧另有真实 go/types 集成断言、点号分流与 Tab 采纳（补全打开时 Tab 优先采纳而非切焦点）测试。
+类型感知成员补全的核心断言在 `gox/pkg/gxcomplete`（空/非空前缀、局部变量、GX sig 声明、非点号回退、CJK 行列换算），gox-tui 侧另有真实 go/types 集成断言、点号分流与 Tab 采纳（补全打开时 Tab 优先采纳而非切焦点）测试。
 
-导航断言：`gxcomplete.Definition` 本地符号 GoToGx 回投行号、std 符号解析出包/文件/签名片段、`Hover` 签名、非标识符回退、`StdSource` 全文；gox-ide 侧覆盖本地跳转定位、std 弹 peek、hover 浮层、只读标签拒绝编辑。
+导航断言：`gxcomplete.Definition` 本地符号 GoToGx 回投行号、std 符号解析出包/文件/签名片段、`Hover` 签名、非标识符回退、`StdSource` 全文；gox-tui 侧覆盖本地跳转定位、std 弹 peek、hover 浮层、只读标签拒绝编辑。
 
 实测（xvfb + xterm）：打开含 `import "strings"` 的 GX 文件，输入 `b.R` 弹出 `Replace`/`WriteString` 两个 Replacer 成员（含完整函数签名），Tab 采纳后成为 `b.Replace`；在 `strings.NewReplacer` 上按 F12 弹出定义速览（godoc + `func NewReplacer(...)` + `strings/replace.go:32`），速览内再按 F12 打开只读全文并定位到第 32 行；在 `b.Replace` 上按 Ctrl+K 弹出 `func(s string) string` · `strings/replace.go:95`。

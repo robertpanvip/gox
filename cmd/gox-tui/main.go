@@ -1,4 +1,4 @@
-// gox-ide —— 终端里全屏运行的 macOS 风格 IDE。
+// gox-tui —— 终端里全屏运行的 macOS 风格 IDE。
 //
 // 命令行一键启动，左侧文件树 + 顶部多标签 + 语法高亮编辑 + 搜索 + 明暗主题。
 // 文本引擎复用 gox 的 Rope（大文件 O(log N) 编辑），视觉用 lipgloss 实现
@@ -13,7 +13,7 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/robertpanvip/gox-ide/internal/app"
+	"github.com/robertpanvip/gox-tui/internal/app"
 )
 
 var (
@@ -33,7 +33,7 @@ func main() {
 	flag.Parse()
 
 	if showVer {
-		fmt.Printf("gox-ide %s (%s)\n", version, commit)
+		fmt.Printf("gox-tui %s (%s)\n", version, commit)
 		return
 	}
 
@@ -60,7 +60,7 @@ func main() {
 		tea.WithMouseAllMotion(), // 全鼠标移动：Ctrl+ hovering 单词即可显示下划线
 	)
 	if _, err := p.Run(); err != nil {
-		fmt.Fprintln(os.Stderr, "gox-ide 启动失败:", err)
+		fmt.Fprintln(os.Stderr, "gox-tui 启动失败:", err)
 		os.Exit(1)
 	}
 }

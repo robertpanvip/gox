@@ -1,6 +1,6 @@
 // Package gxcomplete 提供面向编辑器的类型感知点号成员补全（如 `obj.` / `strings.`）。
 //
-// 它是 internal/typecheck 的公共门面：独立 module（例如 cmd/gox-ide）无法 import
+// 它是 internal/typecheck 的公共门面：独立 module（例如 cmd/gox-tui）无法 import
 // internal/*，但可以 import 本包。核心链路复用 typecheck.Importer.Complete ——
 // 在点号后插入占位标识符使未完成表达式可类型检查，再从类型化 AST 枚举成员。
 //

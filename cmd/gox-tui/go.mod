@@ -1,4 +1,4 @@
-module github.com/robertpanvip/gox-ide
+module github.com/robertpanvip/gox-tui
 
 go 1.27
 

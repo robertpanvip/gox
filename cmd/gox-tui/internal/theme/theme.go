@@ -1,4 +1,4 @@
-// Package theme 提供 gox-ide 的 macOS 风格视觉系统。
+// Package theme 提供 gox-tui 的 macOS 风格视觉系统。
 //
 // 设计目标：让终端里跑的 IDE 看起来像一台 Mac 上的原生应用——
 //   - 深色/浅色双主题，配色取自 Apple Developer 文档与 Xcode 的柔和色调；
@@ -122,6 +122,7 @@ type Theme struct {
 	TreeActive lipgloss.Style
 	TreeFolder lipgloss.Style
 	TreeIcon   map[string]lipgloss.Style // folder/go/test/gx/md/conf/script/file
+	TreeName   map[string]lipgloss.Style // 文件名按类型着色（emoji 自带颜色，文件名仍需区分高亮）
 
 	// 编辑区
 	LineNo     lipgloss.Style
@@ -200,6 +201,17 @@ func New(m Mode) *Theme {
 		Foreground(p.AccentFG).Background(p.Accent).Padding(0, 1)
 	t.TreeFolder = lipgloss.NewStyle().Foreground(p.Muted).Bold(true).Padding(0, 1)
 	t.TreeIcon = map[string]lipgloss.Style{
+		"folder": lipgloss.NewStyle().Foreground(p.IconFolder).Bold(true),
+		"go":     lipgloss.NewStyle().Foreground(p.IconGo).Bold(true),
+		"test":   lipgloss.NewStyle().Foreground(p.IconTest),
+		"gx":     lipgloss.NewStyle().Foreground(p.IconGX).Bold(true),
+		"md":     lipgloss.NewStyle().Foreground(p.IconMD),
+		"conf":   lipgloss.NewStyle().Foreground(p.IconConf),
+		"script": lipgloss.NewStyle().Foreground(p.IconScript),
+		"file":   lipgloss.NewStyle().Foreground(p.IconFile),
+	}
+	// 文件名沿用图标的语义色：目录加粗、go/gx 加粗，其余按类型着色。
+	t.TreeName = map[string]lipgloss.Style{
 		"folder": lipgloss.NewStyle().Foreground(p.IconFolder).Bold(true),
 		"go":     lipgloss.NewStyle().Foreground(p.IconGo).Bold(true),
 		"test":   lipgloss.NewStyle().Foreground(p.IconTest),

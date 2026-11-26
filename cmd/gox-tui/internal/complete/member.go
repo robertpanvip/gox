@@ -7,7 +7,7 @@ import (
 )
 
 // MemberProvider 用 go/types 做点号成员补全（obj. / pkg. 弹成员）。
-// 数据源是主仓库的 gxcomplete 公共包（gox-ide 是独立 module，无法 import internal/*）。
+// 数据源是主仓库的 gxcomplete 公共包（gox-tui 是独立 module，无法 import internal/*）。
 // 会话惰性构建、异步预热，Provide 不会因首次类型检查而长时间卡 UI。
 type MemberProvider struct {
 	once sync.Once
