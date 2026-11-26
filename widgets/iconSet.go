@@ -15,6 +15,9 @@ const (
 	svgChevronRight = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5 L16 12 L9 19"/></svg>`
 	svgChevronUp = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M5 15 L12 8 L19 15"/></svg>`
 	svgChevronDown = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M5 9 L12 16 L19 9"/></svg>`
+	svgExpandAll = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M7 10 L12 5 L17 10"/><path d="M7 14 L12 19 L17 14"/></svg>`
+	svgCollapseAll = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M7 5 L12 10 L17 5"/><path d="M7 19 L12 14 L17 19"/></svg>`
+	svgLocate = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><line x1="2" x2="5" y1="12" y2="12"/><line x1="19" x2="22" y1="12" y2="12"/><line x1="12" x2="12" y1="2" y2="5"/><line x1="12" x2="12" y1="19" y2="22"/><circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="3"/></svg>`
 	svgArrowLeft = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12 L4 12 M10 6 L4 12 L10 18"/></svg>`
 	svgArrowRight = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12 L20 12 M14 6 L20 12 L14 18"/></svg>`
 	svgArrowUp = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20 L12 4 M6 10 L12 4 L18 10"/></svg>`
@@ -133,6 +136,21 @@ const (
 // IconChevronDown chevron-down 图标。size 默认 20；color/tone 决定颜色；stroke-width 默认 1.8。
  func IconChevronDown(props gxscene.Props) *gxscene.Instance {
 	return iconFromSVG(svgChevronDown, props)
+}
+
+// IconExpandAll expand-all 图标（全部展开：两个 chevron 向外张开）。size 默认 20；color/tone 决定颜色；stroke-width 默认 1.8。
+ func IconExpandAll(props gxscene.Props) *gxscene.Instance {
+	return iconFromSVG(svgExpandAll, props)
+}
+
+// IconCollapseAll collapse-all 图标（全部折叠：两个 chevron 向中间合拢）。size 默认 20；color/tone 决定颜色；stroke-width 默认 1.8。
+ func IconCollapseAll(props gxscene.Props) *gxscene.Instance {
+	return iconFromSVG(svgCollapseAll, props)
+}
+
+// IconLocate locate 图标（十字准星定位）。size 默认 20；color/tone 决定颜色；stroke-width 默认 1.8。
+ func IconLocate(props gxscene.Props) *gxscene.Instance {
+	return iconFromSVG(svgLocate, props)
 }
 
 // IconArrowLeft arrow-left 图标。size 默认 20；color/tone 决定颜色；stroke-width 默认 1.8。

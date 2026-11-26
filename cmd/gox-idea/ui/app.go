@@ -478,6 +478,58 @@ func projectGroups() []string {
     return out
 }
 
+// projectScrollTop Project 树容器的受控纵向滚动偏移（scroll-top），由
+// locateCurrentFile 写入，把当前打开文件的行滚进视口。
+var projectScrollTop = Signal.New(0)
+
+// projectRowPitch 单个可见行的占位高度：内容 15（图标）+ 上下 padding 3×2
+// + marginBottom 2，与 projectRow 的样式约定一致。
+func projectRowPitch() int { return 25 }
+
+// locateCurrentFile 定位当前打开的文件（WebStorm「Locate」语义）：
+// 展开目标所在分组/父目录链，并把目标行滚动到树视口上部。
+// 没有打开的文件时不动作。
+func locateCurrentFile() {
+    nodes := projectAllNodes()
+    target := -1
+    if projectRoot != "" {
+        if ProjectFileSelected() == "" { return }
+        for i := 0; i < len(nodes); i = i + 1 {
+            if !nodes[i].IsDir && nodes[i].Path == ProjectFileSelected() { target = i }
+        }
+    } else {
+        for i := 0; i < len(nodes); i = i + 1 {
+            if nodes[i].Sample == SampleIndex() { target = i }
+        }
+    }
+    if target < 0 { return }
+    Signal.Batch(func() {
+        // 展开目标的祖先目录：示例模式是单层分组；磁盘模式沿绝对路径逐级向上。
+        keys := []string{}
+        for i := 0; i < len(ProjectExpanded()); i = i + 1 { keys = append(keys, ProjectExpanded()[i]) }
+        if projectRoot != "" {
+            p := nodes[target].Parent
+            for p != "" && p != projectRoot {
+                if !containsStr(keys, p) { keys = append(keys, p) }
+                p = filepath.Dir(p)
+            }
+            if !containsStr(keys, projectRoot) { keys = append(keys, projectRoot) }
+        } else {
+            g := nodes[target].Parent
+            if !containsStr(keys, g) { keys = append(keys, g) }
+        }
+        ProjectExpanded(keys)
+        // 目标行在新展开态下的可见序号（目录恒可见；文件看父目录是否展开）。
+        idx := 0
+        for i := 0; i < target; i = i + 1 {
+            if nodes[i].IsDir || containsStr(keys, nodes[i].Parent) { idx = idx + 1 }
+        }
+        v := idx * projectRowPitch() - 50
+        if v < 0 { v = 0 }
+        projectScrollTop(v)
+    })
+}
+
 func expandAllGroups() {
     if projectRoot != "" {
         keys := []string{}
@@ -699,7 +751,9 @@ func projectPanel() *gxscene.Instance {
     for i := 0; i < len(nodes); i = i + 1 {
         if !nodes[i].IsDir { cnt = cnt + 1 }
     }
-    return gxscene.Render(gxscene.Template{Ops:[]gxscene.Op{gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:0,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:1,},gxscene.Op{Code:gxscene.OpDynChild,Slot:2,},gxscene.Op{Code:gxscene.OpDynChild,Slot:3,},gxscene.Op{Code:gxscene.OpDynChild,Slot:4,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:5,},gxscene.Op{Code:gxscene.OpElem,Arg:"button",},gxscene.Op{Code:gxscene.OpEvent,Key:"onClick",Slot:6,},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:7,},gxscene.Op{Code:gxscene.OpDynChild,Slot:8,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpElem,Arg:"button",},gxscene.Op{Code:gxscene.OpEvent,Key:"onClick",Slot:9,},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:10,},gxscene.Op{Code:gxscene.OpDynChild,Slot:11,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpFor,Slot:12,},gxscene.Op{Code:gxscene.OpClose,},},N:13,}, func() any{ return gxscene.Style{FlexDirection:"column",Gap:"0",Height:"500",Overflow:"auto",} }, func() any{ return gxscene.Style{FlexDirection:"row",AlignItems:"center",Gap:"6",MarginBottom:"6",} }, func() any{ return widgets.Icon(gxscene.Props{"name": "folder", "size": 14, "color": accentColor()}) }, func() any{ return widgets.Text(gxscene.Props{"value": "PROJECT", "size": widgets.FontFootnote, "weight": "bold", "tone": "muted"}) }, func() any{ return widgets.Text(gxscene.Props{"value": "· " + strconv.Itoa(cnt) + " files", "size": widgets.FontFootnote, "tone": "muted"}) }, func() any{ return gxscene.Style{FlexDirection:"row",Gap:"4",Padding:"2 0",MarginBottom:"8",} }, func() any{ return expandAllGroups }, func() any{ return gxscene.Style{Padding:"3 8",BorderRadius:widgets.RadiusSmall,Cursor:"pointer",Background:widgets.UseToken("panelalt")(),BorderWidth:widgets.HairlineWidth,Border:borderColor(),} }, func() any{ return widgets.Icon(gxscene.Props{"name": "chevron-down", "size": 12, "tone": "muted"}) }, func() any{ return collapseAllGroups }, func() any{ return gxscene.Style{Padding:"3 8",BorderRadius:widgets.RadiusSmall,Cursor:"pointer",Background:widgets.UseToken("panelalt")(),BorderWidth:widgets.HairlineWidth,Border:borderColor(),} }, func() any{ return widgets.Icon(gxscene.Props{"name": "chevron-right", "size": 12, "tone": "muted"}) }, gxscene.ForGetterOfSignal[int](func() []int { return Indices(len(nodes)) },nil,func(i func() int) *gxscene.Instance { return projectRow(nodes[i()]) }))
+    // 外层固定壳：标题 + 工具按钮不随定位滚动；列表单独滚动（flex-grow 撑满
+    // 剩余高度，minHeight:0 允许被压缩——否则内容高度会把列表撑出壳外）。
+    return gxscene.Render(gxscene.Template{Ops:[]gxscene.Op{gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:0,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:1,},gxscene.Op{Code:gxscene.OpDynChild,Slot:2,},gxscene.Op{Code:gxscene.OpDynChild,Slot:3,},gxscene.Op{Code:gxscene.OpDynChild,Slot:4,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:5,},gxscene.Op{Code:gxscene.OpElem,Arg:"button",},gxscene.Op{Code:gxscene.OpEvent,Key:"onClick",Slot:6,},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:7,},gxscene.Op{Code:gxscene.OpDynChild,Slot:8,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpElem,Arg:"button",},gxscene.Op{Code:gxscene.OpEvent,Key:"onClick",Slot:9,},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:10,},gxscene.Op{Code:gxscene.OpDynChild,Slot:11,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpElem,Arg:"button",},gxscene.Op{Code:gxscene.OpEvent,Key:"onClick",Slot:12,},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:13,},gxscene.Op{Code:gxscene.OpDynChild,Slot:14,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:15,},gxscene.Op{Code:gxscene.OpFor,Slot:16,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpClose,},},N:17,}, func() any{ return gxscene.Style{FlexDirection:"column",Gap:"0",Height:"500",} }, func() any{ return gxscene.Style{FlexDirection:"row",AlignItems:"center",Gap:"6",MarginBottom:"6",} }, func() any{ return widgets.Icon(gxscene.Props{"name": "folder", "size": 14, "color": accentColor()}) }, func() any{ return widgets.Text(gxscene.Props{"value": "PROJECT", "size": widgets.FontFootnote, "weight": "bold", "tone": "muted"}) }, func() any{ return widgets.Text(gxscene.Props{"value": "· " + strconv.Itoa(cnt) + " files", "size": widgets.FontFootnote, "tone": "muted"}) }, func() any{ return gxscene.Style{FlexDirection:"row",Gap:"4",Padding:"2 0",MarginBottom:"8",} }, func() any{ return expandAllGroups }, func() any{ return gxscene.Style{Padding:"3 8",BorderRadius:widgets.RadiusSmall,Cursor:"pointer",Background:widgets.UseToken("panelalt")(),BorderWidth:widgets.HairlineWidth,Border:borderColor(),} }, func() any{ return widgets.Icon(gxscene.Props{"name": "expand-all", "size": 12, "tone": "muted"}) }, func() any{ return collapseAllGroups }, func() any{ return gxscene.Style{Padding:"3 8",BorderRadius:widgets.RadiusSmall,Cursor:"pointer",Background:widgets.UseToken("panelalt")(),BorderWidth:widgets.HairlineWidth,Border:borderColor(),} }, func() any{ return widgets.Icon(gxscene.Props{"name": "collapse-all", "size": 12, "tone": "muted"}) }, func() any{ return locateCurrentFile }, func() any{ return gxscene.Style{Padding:"3 8",BorderRadius:widgets.RadiusSmall,Cursor:"pointer",Background:widgets.UseToken("panelalt")(),BorderWidth:widgets.HairlineWidth,Border:borderColor(),} }, func() any{ return widgets.Icon(gxscene.Props{"name": "locate", "size": 12, "tone": "muted"}) }, func() any{ return gxscene.Style{FlexGrow:"1",MinHeight:"0",Overflow:"auto",ScrollTop:strconv.Itoa(projectScrollTop()),} }, gxscene.ForGetterOfSignal[int](func() []int { return Indices(len(nodes)) },nil,func(i func() int) *gxscene.Instance { return projectRow(nodes[i()]) }))
 }
 
 // ---- WebStorm 风格 IDE 外壳（菜单栏 / 工具栏 / 编辑器标签 / 状态栏）----

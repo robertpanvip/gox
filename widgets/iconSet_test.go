@@ -150,6 +150,7 @@ func TestNamedIcon_SVGMatchBuiltin(t *testing.T) {
 var allNamedIcons = map[string]func(gxscene.Props) *gxscene.Instance{
 	"house": IconHouse, "chevron-left": IconChevronLeft, "chevron-right": IconChevronRight,
 	"chevron-up": IconChevronUp, "chevron-down": IconChevronDown,
+	"expand-all": IconExpandAll, "collapse-all": IconCollapseAll, "locate": IconLocate,
 	"arrow-left": IconArrowLeft, "arrow-right": IconArrowRight, "arrow-up": IconArrowUp, "arrow-down": IconArrowDown,
 	"plus": IconPlus, "minus": IconMinus, "close": IconClose, "check": IconCheck, "edit": IconEdit,
 	"trash": IconTrash, "search": IconSearch, "share": IconShare, "download": IconDownload,

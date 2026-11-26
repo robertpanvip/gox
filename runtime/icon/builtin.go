@@ -13,32 +13,38 @@ package icon
 // Builtin 是内置图标注册表：name → SVG 文本。
 var Builtin = map[string]string{
 	// ---- 导航 ----
-	"house": `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10.5 L12 3 L21 10.5 M5.5 9 L5.5 20 L18.5 20 L18.5 9 M10 20 L10 14 L14 14 L14 20"/></svg>`,
+	"house":         `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10.5 L12 3 L21 10.5 M5.5 9 L5.5 20 L18.5 20 L18.5 9 M10 20 L10 14 L14 14 L14 20"/></svg>`,
 	"chevron-left":  `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5 L8 12 L15 19"/></svg>`,
 	"chevron-right": `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5 L16 12 L9 19"/></svg>`,
 	"chevron-up":    `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M5 15 L12 8 L19 15"/></svg>`,
 	"chevron-down":  `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M5 9 L12 16 L19 9"/></svg>`,
+	// 全部展开/全部折叠：unfold 风格（两个 chevron 张开=铺开全部，合拢=收起全部），
+	// 比"双层左右箭头"更直观，也不是左右方向的误导。
+	"expand-all":   `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M7 10 L12 5 L17 10"/><path d="M7 14 L12 19 L17 14"/></svg>`,
+	"collapse-all": `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M7 5 L12 10 L17 5"/><path d="M7 19 L12 14 L17 19"/></svg>`,
+	// locate：十字准星定位（WebStorm「在 Project 中定位当前文件」语义）。
+	"locate":      `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><line x1="2" x2="5" y1="12" y2="12"/><line x1="19" x2="22" y1="12" y2="12"/><line x1="12" x2="12" y1="2" y2="5"/><line x1="12" x2="12" y1="19" y2="22"/><circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="3"/></svg>`,
 	"arrow-left":  `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12 L4 12 M10 6 L4 12 L10 18"/></svg>`,
 	"arrow-right": `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12 L20 12 M14 6 L20 12 L14 18"/></svg>`,
 	"arrow-up":    `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20 L12 4 M6 10 L12 4 L18 10"/></svg>`,
 	"arrow-down":  `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4 L12 20 M6 14 L12 20 L18 14"/></svg>`,
 
 	// ---- 操作 ----
-	"plus":   `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"><path d="M12 4 L12 20 M4 12 L20 12"/></svg>`,
-	"minus":  `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"><path d="M4 12 L20 12"/></svg>`,
-	"close":  `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"><path d="M5 5 L19 19 M19 5 L5 19"/></svg>`,
-	"check":  `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12 L9 17 L20 6"/></svg>`,
-	"edit":   `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20 L4 16 L16 4 L20 8 L8 20 L4 20 Z M14 6 L18 10"/></svg>`,
-	"trash":  `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6 L20 6 M9 6 L9 4 L15 4 L15 6 M6 6 L7 21 L17 21 L18 6 M10 10 L10 17 M14 10 L14 17"/></svg>`,
-	"search": `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5 L21 21"/></svg>`,
-	"share":  `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16 L12 3 M8 7 L12 3 L16 7 M5 13 L5 20 L19 20 L19 13"/></svg>`,
+	"plus":     `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"><path d="M12 4 L12 20 M4 12 L20 12"/></svg>`,
+	"minus":    `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"><path d="M4 12 L20 12"/></svg>`,
+	"close":    `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"><path d="M5 5 L19 19 M19 5 L5 19"/></svg>`,
+	"check":    `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12 L9 17 L20 6"/></svg>`,
+	"edit":     `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20 L4 16 L16 4 L20 8 L8 20 L4 20 Z M14 6 L18 10"/></svg>`,
+	"trash":    `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6 L20 6 M9 6 L9 4 L15 4 L15 6 M6 6 L7 21 L17 21 L18 6 M10 10 L10 17 M14 10 L14 17"/></svg>`,
+	"search":   `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5 L21 21"/></svg>`,
+	"share":    `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16 L12 3 M8 7 L12 3 L16 7 M5 13 L5 20 L19 20 L19 13"/></svg>`,
 	"download": `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 L12 16 M7 11 L12 16 L17 11 M4 20 L20 20"/></svg>`,
 	"upload":   `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16 L12 3 M7 8 L12 3 L17 8 M4 20 L20 20"/></svg>`,
-	"link": `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M10 14 A5 5 0 0 0 17 14 L19 12 A5 5 0 0 0 12 5 L10 7 M14 10 A5 5 0 0 0 7 10 L5 12 A5 5 0 0 0 12 19 L14 17"/></svg>`,
+	"link":     `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M10 14 A5 5 0 0 0 17 14 L19 12 A5 5 0 0 0 12 5 L10 7 M14 10 A5 5 0 0 0 7 10 L5 12 A5 5 0 0 0 12 19 L14 17"/></svg>`,
 
 	// ---- 媒体 ----
-	"play":  `<svg viewBox="0 0 24 24"><path fill="currentColor" d="M7 4 L20 12 L7 20 Z"/></svg>`,
-	"pause": `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="3"><path d="M8 4 L8 20 M16 4 L16 20"/></svg>`,
+	"play":   `<svg viewBox="0 0 24 24"><path fill="currentColor" d="M7 4 L20 12 L7 20 Z"/></svg>`,
+	"pause":  `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="3"><path d="M8 4 L8 20 M16 4 L16 20"/></svg>`,
 	"camera": `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8 L7 8 L9 5 L15 5 L17 8 L21 8 L21 19 L3 19 Z"/><circle cx="12" cy="13" r="4"/></svg>`,
 	"photo":  `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8.5" cy="9.5" r="1.5"/><path d="M21 16 L16 11 L5 21"/></svg>`,
 
@@ -57,11 +63,11 @@ var Builtin = map[string]string{
 	"location": `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22 C12 22 5 15 5 10 A7 7 0 0 1 19 10 C19 15 12 22 12 22 Z"/><circle cx="12" cy="10" r="2.5"/></svg>`,
 
 	// ---- 状态 ----
-	"info":     `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 11 L12 17"/><circle cx="12" cy="7.5" r="0.6" fill="currentColor" stroke="none"/></svg>`,
-	"warning":  `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 L22 20 L2 20 Z M12 9 L12 14 M12 17 L12 17.2"/></svg>`,
-	"cloud":    `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M7 18 A4 4 0 0 1 7 10 A5 5 0 0 1 17 11 A3.5 3.5 0 0 1 17 18 Z"/></svg>`,
-	"sun":      `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2 L12 5 M12 19 L12 22 M2 12 L5 12 M19 12 L22 12 M4.9 4.9 L7 7 M17 17 L19.1 19.1 M4.9 19.1 L7 17 M17 7 L19.1 4.9"/></svg>`,
-	"moon":     `<svg viewBox="0 0 24 24"><path fill="currentColor" d="M20 14 A8 8 0 1 1 10 4 A6 6 0 0 0 20 14 Z"/></svg>`,
+	"info":    `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 11 L12 17"/><circle cx="12" cy="7.5" r="0.6" fill="currentColor" stroke="none"/></svg>`,
+	"warning": `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 L22 20 L2 20 Z M12 9 L12 14 M12 17 L12 17.2"/></svg>`,
+	"cloud":   `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M7 18 A4 4 0 0 1 7 10 A5 5 0 0 1 17 11 A3.5 3.5 0 0 1 17 18 Z"/></svg>`,
+	"sun":     `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2 L12 5 M12 19 L12 22 M2 12 L5 12 M19 12 L22 12 M4.9 4.9 L7 7 M17 17 L19.1 19.1 M4.9 19.1 L7 17 M17 7 L19.1 4.9"/></svg>`,
+	"moon":    `<svg viewBox="0 0 24 24"><path fill="currentColor" d="M20 14 A8 8 0 1 1 10 4 A6 6 0 0 0 20 14 Z"/></svg>`,
 
 	// ---- 视图 ----
 	"grid": `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>`,
@@ -86,12 +92,12 @@ var Builtin = map[string]string{
 	"mic":       `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 11 A7 7 0 0 0 19 11 M12 18 L12 22 M8 22 L16 22"/></svg>`,
 
 	// ---- 设备与状态 ----
-	"wifi":     `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"><path d="M2 8 A15 15 0 0 1 22 8 M5.5 12 A10 10 0 0 1 18.5 12 M9 16 A5 5 0 0 1 15 16"/><circle cx="12" cy="20" r="1.2" fill="currentColor" stroke="none"/></svg>`,
-	"battery":  `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="7" width="18" height="10" rx="2"/><path d="M22 10 L22 14"/><path d="M6 10 L6 14 M10 10 L10 14 M14 10 L14 14"/></svg>`,
-	"bolt":     `<svg viewBox="0 0 24 24"><path fill="currentColor" d="M13 2 L4 14 L11 14 L10 22 L20 9 L13 9 Z"/></svg>`,
-	"power":    `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"><path d="M12 3 L12 12 M6.5 6 A8 8 0 1 0 17.5 6"/></svg>`,
-	"logout":   `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M10 4 L5 4 A2 2 0 0 0 3 6 L3 18 A2 2 0 0 0 5 20 L10 20 M14 16 L18 12 L14 8 M18 12 L8 12"/></svg>`,
-	"login":    `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4 L19 4 A2 2 0 0 1 21 6 L21 18 A2 2 0 0 1 19 20 L14 20 M10 8 L6 12 L10 16 M6 12 L16 12"/></svg>`,
+	"wifi":    `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"><path d="M2 8 A15 15 0 0 1 22 8 M5.5 12 A10 10 0 0 1 18.5 12 M9 16 A5 5 0 0 1 15 16"/><circle cx="12" cy="20" r="1.2" fill="currentColor" stroke="none"/></svg>`,
+	"battery": `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="7" width="18" height="10" rx="2"/><path d="M22 10 L22 14"/><path d="M6 10 L6 14 M10 10 L10 14 M14 10 L14 14"/></svg>`,
+	"bolt":    `<svg viewBox="0 0 24 24"><path fill="currentColor" d="M13 2 L4 14 L11 14 L10 22 L20 9 L13 9 Z"/></svg>`,
+	"power":   `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"><path d="M12 3 L12 12 M6.5 6 A8 8 0 1 0 17.5 6"/></svg>`,
+	"logout":  `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M10 4 L5 4 A2 2 0 0 0 3 6 L3 18 A2 2 0 0 0 5 20 L10 20 M14 16 L18 12 L14 8 M18 12 L8 12"/></svg>`,
+	"login":   `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4 L19 4 A2 2 0 0 1 21 6 L21 18 A2 2 0 0 1 19 20 L14 20 M10 8 L6 12 L10 16 M6 12 L16 12"/></svg>`,
 
 	// ---- 对象与数据 ----
 	"tag":      `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M20 13 L13 20 A2 2 0 0 1 10 20 L4 14 A2 2 0 0 1 4 11 L11 4 A2 2 0 0 1 14 4 L20 10 A2 2 0 0 1 20 13 Z"/><circle cx="16" cy="8" r="1.3"/></svg>`,
@@ -104,22 +110,22 @@ var Builtin = map[string]string{
 	"zoom-out": `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5 L21 21 M7.5 10.5 L13.5 10.5"/></svg>`,
 
 	// ---- 表单与编辑 ----
-	"text-field": `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="18" height="12" rx="2"/><path d="M7 10 L7 14 M7 12 L11 12"/></svg>`,
-	"textarea":   `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9 L17 9 M7 13 L17 13 M7 17 L13 17"/></svg>`,
-	"checkbox":   `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M8 12 L11 15 L16 9"/></svg>`,
+	"text-field":   `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="18" height="12" rx="2"/><path d="M7 10 L7 14 M7 12 L11 12"/></svg>`,
+	"textarea":     `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9 L17 9 M7 13 L17 13 M7 17 L13 17"/></svg>`,
+	"checkbox":     `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M8 12 L11 15 L16 9"/></svg>`,
 	"check-square": `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M8 12 L11 15 L16 9"/></svg>`,
-	"radio":      `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4" fill="currentColor" stroke="none"/></svg>`,
-	"select":     `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="18" height="12" rx="2"/><path d="M15 11 L17.5 13.5 L20 11"/></svg>`,
-	"stepper":    `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="7" width="16" height="10" rx="2"/><path d="M14 9.5 L16.5 9.5 M15.25 8.25 L15.25 10.75 M14 14.5 L16.5 14.5"/></svg>`,
-	"toggle":     `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="2" y="7" width="20" height="10" rx="5"/><circle cx="16" cy="12" r="3" fill="currentColor" stroke="none"/></svg>`,
-	"slider":     `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"><path d="M4 12 L20 12"/><circle cx="9" cy="12" r="3"/><path d="M9 4 L9 7 M9 17 L9 20"/></svg>`,
-	"sidebar":    `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4 L9 20 M5.5 8 L6.5 8 M5.5 12 L6.5 12"/></svg>`,
-	"tab":        `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8 A2 2 0 0 1 5 6 L10 6 L12 9 L20 9 A2 2 0 0 1 22 11 L22 18 A2 2 0 0 1 20 20 L5 20 A2 2 0 0 1 3 18 Z"/></svg>`,
-	"toolbar":    `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="5" width="20" height="6" rx="1.5"/><path d="M6 8 L8 8 M11 8 L13 8 M16 8 L18 8"/></svg>`,
-	"pencil":     `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20 L4 16 L16 4 L20 8 L8 20 L4 20 Z M14 6 L18 10"/></svg>`,
-	"eraser":     `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M8 20 L4 16 A2 2 0 0 1 4 13 L13 4 A2 2 0 0 1 16 4 L20 8 A2 2 0 0 1 20 11 L12 20 Z M8 20 L20 20 M9 9 L15 15"/></svg>`,
-	"cursor":     `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M5 3 L5 19 L10 14 L13.5 21 L16.5 19.5 L13 13 L20 12 Z"/></svg>`,
-	"command":    `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M9 7 A2 2 0 1 0 7 5 L7 19 A2 2 0 1 0 9 17 L15 17 A2 2 0 1 0 17 19 L17 5 A2 2 0 1 0 15 7 Z"/></svg>`,
+	"radio":        `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4" fill="currentColor" stroke="none"/></svg>`,
+	"select":       `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="18" height="12" rx="2"/><path d="M15 11 L17.5 13.5 L20 11"/></svg>`,
+	"stepper":      `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="7" width="16" height="10" rx="2"/><path d="M14 9.5 L16.5 9.5 M15.25 8.25 L15.25 10.75 M14 14.5 L16.5 14.5"/></svg>`,
+	"toggle":       `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="2" y="7" width="20" height="10" rx="5"/><circle cx="16" cy="12" r="3" fill="currentColor" stroke="none"/></svg>`,
+	"slider":       `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"><path d="M4 12 L20 12"/><circle cx="9" cy="12" r="3"/><path d="M9 4 L9 7 M9 17 L9 20"/></svg>`,
+	"sidebar":      `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4 L9 20 M5.5 8 L6.5 8 M5.5 12 L6.5 12"/></svg>`,
+	"tab":          `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8 A2 2 0 0 1 5 6 L10 6 L12 9 L20 9 A2 2 0 0 1 22 11 L22 18 A2 2 0 0 1 20 20 L5 20 A2 2 0 0 1 3 18 Z"/></svg>`,
+	"toolbar":      `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="5" width="20" height="6" rx="1.5"/><path d="M6 8 L8 8 M11 8 L13 8 M16 8 L18 8"/></svg>`,
+	"pencil":       `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20 L4 16 L16 4 L20 8 L8 20 L4 20 Z M14 6 L18 10"/></svg>`,
+	"eraser":       `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M8 20 L4 16 A2 2 0 0 1 4 13 L13 4 A2 2 0 0 1 16 4 L20 8 A2 2 0 0 1 20 11 L12 20 Z M8 20 L20 20 M9 9 L15 15"/></svg>`,
+	"cursor":       `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M5 3 L5 19 L10 14 L13.5 21 L16.5 19.5 L13 13 L20 12 Z"/></svg>`,
+	"command":      `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M9 7 A2 2 0 1 0 7 5 L7 19 A2 2 0 1 0 9 17 L15 17 A2 2 0 1 0 17 19 L17 5 A2 2 0 1 0 15 7 Z"/></svg>`,
 }
 
 // Aliases 是常见别名 → 规范名，方便业务侧用不同叫法。
@@ -130,6 +136,8 @@ var Aliases = map[string]string{
 	"alert": "warning", "exclamation": "warning", "trashcan": "trash", "delete": "trash",
 	"cancel": "close", "add": "plus", "remove": "minus", "back": "arrow-left",
 	"forward": "arrow-right", "caret-left": "chevron-left", "caret-right": "chevron-right",
+	"unfold-more": "expand-all", "unfold-less": "collapse-all",
+	"crosshair": "locate", "locate-fixed": "locate", "scroll-to-file": "locate",
 	"cog": "gear", "lock-closed": "lock", "unlock": "lock",
 	// 补充图标别名（视图/可见性/操作/通信/设备/对象）。
 	"apps": "grid", "tiles": "grid", "grid-view": "grid",
@@ -156,7 +164,7 @@ var Aliases = map[string]string{
 	"multiline": "textarea", "text-area": "textarea",
 	"tick": "checkbox", "checked": "checkbox",
 	"radio-button": "radio",
-	"dropdown": "select", "combo": "select", "picker": "select",
+	"dropdown":     "select", "combo": "select", "picker": "select",
 	"switch": "toggle", "toggle-switch": "toggle",
 	"range": "slider", "seek": "slider",
 	"panel": "sidebar", "drawer": "sidebar",

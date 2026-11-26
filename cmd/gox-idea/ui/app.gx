@@ -519,6 +519,58 @@ func projectGroups() []string {
     return out
 }
 
+// projectScrollTop Project 树容器的受控纵向滚动偏移（scroll-top），由
+// locateCurrentFile 写入，把当前打开文件的行滚进视口。
+sig projectScrollTop = 0
+
+// projectRowPitch 单个可见行的占位高度：内容 15（图标）+ 上下 padding 3×2
+// + marginBottom 2，与 projectRow 的样式约定一致。
+func projectRowPitch() int { return 25 }
+
+// locateCurrentFile 定位当前打开的文件（WebStorm「Locate」语义）：
+// 展开目标所在分组/父目录链，并把目标行滚动到树视口上部。
+// 没有打开的文件时不动作。
+func locateCurrentFile() {
+    nodes := projectAllNodes()
+    target := -1
+    if projectRoot != "" {
+        if projectFileSelected == "" { return }
+        for i := 0; i < len(nodes); i = i + 1 {
+            if !nodes[i].isDir && nodes[i].path == projectFileSelected { target = i }
+        }
+    } else {
+        for i := 0; i < len(nodes); i = i + 1 {
+            if nodes[i].sample == SampleIndex() { target = i }
+        }
+    }
+    if target < 0 { return }
+    Signal.batch(func() {
+        // 展开目标的祖先目录：示例模式是单层分组；磁盘模式沿绝对路径逐级向上。
+        keys := []string{}
+        for i := 0; i < len(projectExpanded); i = i + 1 { keys = append(keys, projectExpanded[i]) }
+        if projectRoot != "" {
+            p := nodes[target].parent
+            for p != "" && p != projectRoot {
+                if !containsStr(keys, p) { keys = append(keys, p) }
+                p = filepath.Dir(p)
+            }
+            if !containsStr(keys, projectRoot) { keys = append(keys, projectRoot) }
+        } else {
+            g := nodes[target].parent
+            if !containsStr(keys, g) { keys = append(keys, g) }
+        }
+        projectExpanded = keys
+        // 目标行在新展开态下的可见序号（目录恒可见；文件看父目录是否展开）。
+        idx := 0
+        for i := 0; i < target; i = i + 1 {
+            if nodes[i].isDir || containsStr(keys, nodes[i].parent) { idx = idx + 1 }
+        }
+        v := idx * projectRowPitch() - 50
+        if v < 0 { v = 0 }
+        projectScrollTop = v
+    })
+}
+
 func expandAllGroups() {
     if projectRoot != "" {
         keys := []string{}
@@ -766,7 +818,9 @@ func projectPanel() *gxscene.Instance {
     for i := 0; i < len(nodes); i = i + 1 {
         if !nodes[i].isDir { cnt = cnt + 1 }
     }
-    return <div style={{ flexDirection: "column", gap: 0, height: 500, overflow: "auto" }}>
+    // 外层固定壳：标题 + 工具按钮不随定位滚动；列表单独滚动（flex-grow 撑满
+    // 剩余高度，minHeight:0 允许被压缩——否则内容高度会把列表撑出壳外）。
+    return <div style={{ flexDirection: "column", gap: 0, height: 500 }}>
         <div style={{ flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 6 }}>
             {widgets.Icon(gxscene.Props{"name": "folder", "size": 14, "color": accentColor()})}
             {widgets.Text(gxscene.Props{"value": "PROJECT", "size": widgets.FontFootnote, "weight": "bold", "tone": "muted"})}
@@ -777,16 +831,26 @@ func projectPanel() *gxscene.Instance {
                 onClick={expandAllGroups}
                 style={{ padding: "3 8", borderRadius: widgets.RadiusSmall, cursor: "pointer", background: widgets.UseToken("panelalt")(), borderWidth: widgets.HairlineWidth, border: borderColor() }}
             >
-                {widgets.Icon(gxscene.Props{"name": "chevron-down", "size": 12, "tone": "muted"})}
+                {widgets.Icon(gxscene.Props{"name": "expand-all", "size": 12, "tone": "muted"})}
             </button>
             <button
                 onClick={collapseAllGroups}
                 style={{ padding: "3 8", borderRadius: widgets.RadiusSmall, cursor: "pointer", background: widgets.UseToken("panelalt")(), borderWidth: widgets.HairlineWidth, border: borderColor() }}
             >
-                {widgets.Icon(gxscene.Props{"name": "chevron-right", "size": 12, "tone": "muted"})}
+                {widgets.Icon(gxscene.Props{"name": "collapse-all", "size": 12, "tone": "muted"})}
+            </button>
+            <button
+                onClick={locateCurrentFile}
+                style={{ padding: "3 8", borderRadius: widgets.RadiusSmall, cursor: "pointer", background: widgets.UseToken("panelalt")(), borderWidth: widgets.HairlineWidth, border: borderColor() }}
+            >
+                {widgets.Icon(gxscene.Props{"name": "locate", "size": 12, "tone": "muted"})}
             </button>
         </div>
-        <For each={Indices(len(nodes))}>{(i int) => projectRow(nodes[i()])}</For>
+        <div
+            style={{ flexGrow: 1, minHeight: 0, overflow: "auto", "scroll-top": strconv.Itoa(projectScrollTop) }}
+        >
+            <For each={Indices(len(nodes))}>{(i int) => projectRow(nodes[i()])}</For>
+        </div>
     </div>
 }
 
