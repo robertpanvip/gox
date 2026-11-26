@@ -10,6 +10,8 @@
 #   - gox-idea GUI E2E（真实鼠标/键盘，78 项断言：点击/拖动/滚轮/分隔条/
 #     标签/项目树/resize/图标像素/主流程；统一入口 tests/run_gui_e2e_all.sh，
 #     跨平台驱动 tests/gui_driver.py + shims/；Linux 硬门禁，Windows 观察）
+#   - 三端一致性矩阵（Linux 硬门禁）：testdata/threeway/cases.json 共享用例
+#     经 Web/Skia/Rust 三端无头消费并断言，覆盖样式属性实现与传值正确性
 # build-windows job：测试通过后编译自包含 exe（yoga Windows 静态库从源码
 #   编译，见 scripts/build-windows-msys2.sh 与 docs/windows-build.md），
 #   上传 artifact；打 tag（v*）时额外创建 GitHub Release。
@@ -39,6 +41,18 @@ jobs:
         with:
           go-version-file: go.mod
 
+      # Linux 侧安装 Rust：Rust 渲染后端单测 + cgo 适配层所需的静态库
+      # （libgxbackend_rust）都靠它；三端一致性矩阵也依赖 cargo。
+      - name: 安装 Rust stable（Linux）
+        if: runner.os == 'Linux'
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: 缓存 Rust 构建产物
+        if: runner.os == 'Linux'
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: backend/rust/rust
+
       # Windows：cgo（desktop/yoga 绑定）需要 mingw 工具链，Go 测试前先装好。
       - name: 安装 MSYS2 / mingw-w64 工具链
         if: runner.os == 'Windows'
@@ -47,6 +61,12 @@ jobs:
           msystem: MINGW64
           update: false
           install: git mingw-w64-x86_64-gcc mingw-w64-x86_64-binutils
+
+      - name: Rust 后端单测 + 静态库（Linux）
+        if: runner.os == 'Linux'
+        run: |
+          cargo test --manifest-path backend/rust/rust/Cargo.toml
+          cargo build --release --manifest-path backend/rust/rust/Cargo.toml
 
       - name: 全量 Go 测试
         if: runner.os == 'Linux'
@@ -64,6 +84,14 @@ jobs:
       - name: 全 module 单测（Linux 硬门禁）
         if: runner.os == 'Linux'
         run: bash scripts/e2e/run_all_module_tests.sh
+
+      # 三端一致性矩阵：testdata/threeway/cases.json 的共享用例分别由
+      # Web(memDriver 透传) / Skia(Yoga 布局+DrawLog) / Rust(Taffy+绘制指令)
+      # 消费并按同一期望断言；任一端样式属性未实现 / 传值错误 / 语义漂移
+      # 都会在此失败并点名具体用例。依赖上一步编译出的 Rust 静态库。
+      - name: 三端一致性矩阵（Linux 硬门禁）
+        if: runner.os == 'Linux'
+        run: bash scripts/threeway-parity.sh
 
       - name: 全 module 单测（Windows 观察）
         if: runner.os == 'Windows'
