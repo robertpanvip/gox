@@ -14,6 +14,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 
 	skia "github.com/robertpanvip/gox-backend-skia"
@@ -396,6 +397,112 @@ var features = []Feature{
 		ui.EditorMove(2, 1) // 第 3 行第 2 列
 		h.Render()
 		return expect(h.HasText("Ln 3, Col 2"), "状态栏应显示光标位置，实际 EditorStatus="+ui.EditorStatus())
+	}},
+	// ---- 基础编辑操作（打字/滚动/选区/undo） ----
+	{"E1", "打字落点：插入出现在光标处且状态栏同步", func(h *Harness) error {
+		ui.CloseAllTabs()
+		ui.OpenTab("e.gx", "", "line1\nline2\nline3")
+		ui.EditorSetSelect(1, 2)
+		ui.EditorInsert("Q")
+		if err := expect(strings.Split(ui.EditorText(), "\n")[1] == "liQne2", "Q 应落在第2行 index2 处, got "+ui.EditorText()); err != nil {
+			return err
+		}
+		h.Render()
+		return expect(h.HasText("Ln 2, Col 4"), "插入后光标应在 Q 之后(Col 4), got "+ui.EditorStatus())
+	}},
+	{"E2", "回车换行行数增加", func(h *Harness) error {
+		ui.CloseAllTabs()
+		ui.OpenTab("e2.gx", "", "aaa\nbbb")
+		ui.EditorSetSelect(0, 3)
+		ui.EditorNewline()
+		h.Render()
+		return expect(h.HasText("3 lines"), "行数应为 3, got "+ui.EditorStatus())
+	}},
+	{"E3", "退格删字符", func(h *Harness) error {
+		ui.CloseAllTabs()
+		ui.OpenTab("e3.gx", "", "abc")
+		ui.EditorSetSelect(0, 3)
+		ui.EditorBackspace()
+		return expect(ui.EditorText() == "ab", "backspace 后应为 ab, got "+ui.EditorText())
+	}},
+	{"E4", "undo/redo 往返", func(h *Harness) error {
+		ui.CloseAllTabs()
+		ui.OpenTab("e4.gx", "", "base")
+		ui.EditorSetSelect(0, 4)
+		ui.EditorInsert("XYZ")
+		ui.EditorUndo()
+		if ui.EditorText() != "base" {
+			return fmt.Errorf("undo 后应回 base, got %q", ui.EditorText())
+		}
+		ui.EditorRedo()
+		return expect(ui.EditorText() == "baseXYZ", "redo 应恢复 baseXYZ, got "+ui.EditorText())
+	}},
+	{"E5", "宽字符中文写入与撤销", func(h *Harness) error {
+		ui.CloseAllTabs()
+		ui.OpenTab("e5.gx", "", "x")
+		ui.EditorSetSelect(0, 1)
+		ui.EditorInsert("中")
+		if !strings.Contains(ui.EditorText(), "中") {
+			return fmt.Errorf("中文应写入, got %q", ui.EditorText())
+		}
+		ui.EditorUndo()
+		return expect(ui.EditorText() == "x", "撤销后应回到 x")
+	}},
+	{"E6", "滚动改变首可见行", func(h *Harness) error {
+		ui.CloseAllTabs()
+		var sb strings.Builder
+		for i := 0; i < 60; i++ {
+			sb.WriteString("row" + strconv.Itoa(i) + "\n")
+		}
+		ui.OpenTab("e6.gx", "", sb.String())
+		ui.EditorScrollLines(-15)
+		h.Render()
+		if h.log.Find("text", "row15") < 0 {
+			return fmt.Errorf("滚动 15 行后 row15 应进入可视区")
+		}
+		ui.EditorScrollLines(15)
+		h.Render()
+		return expect(h.log.Find("text", "row0") >= 0, "滚回后 row0 应可见")
+	}},
+	{"E7", "滚动越界保护", func(h *Harness) error {
+		ui.CloseAllTabs()
+		ui.OpenTab("e7.gx", "", strings.Repeat("l\n", 40))
+		ui.EditorScrollLines(-99999)
+		h.Render()
+		ui.EditorScrollLines(99999)
+		h.Render()
+		return expect(h.HasClickable("e7.gx"), "极限滚动后视图仍正常渲染")
+	}},
+	{"E8", "shift 扩展选区可选出文本", func(h *Harness) error {
+		ui.CloseAllTabs()
+		ui.OpenTab("e8.gx", "", "hello world")
+		ui.EditorSetSelect(0, 0)
+		ui.EditorMoveEx(0, 5, true)
+		return expect(ui.EditorSelectedText() == "hello", "shift+右5 应选中 hello, got ["+ui.EditorSelectedText()+"]")
+	}},
+	{"E9", "选行覆盖整行（多行块选区含行尾换行，IDEA 同款语义）", func(h *Harness) error {
+		ui.CloseAllTabs()
+		ui.OpenTab("e9.gx", "", "one\ntwo\nthree")
+		ui.EditorSelectLine(1)
+		if ui.EditorSelectedText() != "two\n" {
+			return fmt.Errorf("选中间行应覆盖 two+行尾换行, got %q", ui.EditorSelectedText())
+		}
+		ui.EditorSelectLine(2)
+		return expect(ui.EditorSelectedText() == "three", "选末行只取内容, got ["+ui.EditorSelectedText()+"]")
+	}},
+	{"D2", "分隔条命中带 resize 光标（hover 与派发同规则）", func(h *Harness) error {
+		// 通过 hitbox 的 cursor 属性验证竖向分隔条注册了 col-resize。
+		found := ""
+		for i := range h.hits {
+			n := h.hits[i].Node
+			if n == nil || n.Props == nil {
+				continue
+			}
+			if cls, _ := n.Props["class"].(string); cls == "gx-splitter-v" {
+				found = h.hits[i].Cursor
+			}
+		}
+		return expect(found == "col-resize", "gx-splitter-v 应带 col-resize 光标, got ["+found+"]")
 	}},
 }
 

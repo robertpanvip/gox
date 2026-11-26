@@ -488,21 +488,18 @@ func (g *glWindow) updateHoverCursor(w *glfw.Window, px, py float32) {
 	g.mu.Lock()
 	hits := append([]skia.HitBox(nil), g.hits...)
 	g.mu.Unlock()
-	type cand struct {
-		shape string
-		area  float32
-	}
-	var best cand
-	for i := range hits {
-		if !hits[i].Contains(px, py) || hits[i].Cursor == "" {
-			continue
-		}
-		area := hits[i].W * hits[i].H
-		if best.shape == "" || area < best.area {
-			best = cand{hits[i].Cursor, area}
+	g.setHoverCursor(w, hoverCursorFor(hits, px, py))
+}
+
+// hoverCursorFor 与点击派发同一选取规则：登记序倒序 = 顶绘制层优先 +
+// 同层最内层优先；跳过无 cursor 属性的框继续向下层找。提取为纯函数供单测。
+func hoverCursorFor(hits []skia.HitBox, px, py float32) string {
+	for i := len(hits) - 1; i >= 0; i-- {
+		if hits[i].Cursor != "" && hits[i].Contains(px, py) {
+			return hits[i].Cursor
 		}
 	}
-	g.setHoverCursor(w, best.shape)
+	return ""
 }
 
 // setHoverCursor 切换系统光标形状（""=默认箭头）；相同形状幂等跳过。
