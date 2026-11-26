@@ -138,6 +138,9 @@ func (m *Model) openFile(path string) {
 	}
 	m.buffers = append(m.buffers, editor.New(path, string(content)))
 	m.active = len(m.buffers) - 1
+	// 打开新文件必须回到顶部：scrollLn 是全局滚动态，沿用上一个文件的
+	// 滚动位置会让新文件直接从中途（甚至旧滚动行附近）显示。
+	m.scrollLn = 0
 }
 
 // closeActive 关闭当前标签（至少保留一个）。
