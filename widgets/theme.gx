@@ -119,6 +119,7 @@ type Theme struct {
 	EditorCaret   string // 光标颜色
 	EditorSelect  string // 选区色块（8 位 hex 含 alpha，自绘矩形用）
 	EditorSelectSolid string // 选区不透明色（::selection 伪元素统一背景，三端共用）
+	EditorSelectFg string // 选中文字前景（覆盖语法色，保证深蓝底上可读，三端共用）
 }
 
 // DarkTheme 是 Apple macOS HIG 深色主题（系统色精确取值）。
@@ -146,7 +147,7 @@ var DarkTheme = Theme{
 	SyntaxNumber: "#b5cea8", SyntaxComment: "#6a9955", SyntaxTag: "#569cd6",
 	SyntaxAttr: "#9cdcfe", SyntaxPunct: "#808080",
 	EditorBg: "#1e1e1e", EditorGutter: "#858585", EditorActive: "#2a2d3a",
-	EditorCaret: "#aeafad", EditorSelect: "#264f7899", EditorSelectSolid: "#264f78",
+	EditorCaret: "#aeafad", EditorSelect: "#264f7899", EditorSelectSolid: "#264f78", EditorSelectFg: "#ffffff",
 }
 
 // LightTheme 是 Apple macOS HIG 浅色主题（系统色精确取值）。
@@ -176,7 +177,7 @@ var LightTheme = Theme{
 	SyntaxNumber: "#1c00cf", SyntaxComment: "#4b9955", SyntaxTag: "#2563c7",
 	SyntaxAttr: "#6b3fa0", SyntaxPunct: "#6e6e73",
 	EditorBg: "#ffffff", EditorGutter: "#aeaeb2", EditorActive: "#e8f0fb",
-	EditorCaret: "#1d1d1f", EditorSelect: "#b4d5fe80", EditorSelectSolid: "#b4d5fe",
+	EditorCaret: "#1d1d1f", EditorSelect: "#b4d5fe80", EditorSelectSolid: "#b4d5fe", EditorSelectFg: "#1d1d1f",
 }
 
 // themeCtx 是全应用共享的主题通道，默认深色。
@@ -419,6 +420,8 @@ func themeToken(t Theme, name string) string {
 		return t.EditorSelect
 	case "editorselectsolid":
 		return t.EditorSelectSolid
+	case "editorselectfg":
+		return t.EditorSelectFg
 	}
 	return ""
 }

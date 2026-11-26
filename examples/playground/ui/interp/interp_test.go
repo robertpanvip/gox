@@ -200,3 +200,86 @@ func view() *gxscene.Instance {
 		t.Errorf("fmt.printf 应支持格式化: %q", lines)
 	}
 }
+
+// TestInterpretComponentPropText 复现桌面/Web 端预览乱码：示例 12 里
+// <Card title={text}/> 的动态 prop 曾被存成匿名 func() any，deref 匹配不上，
+// 导致 <b>{p.title}</b> 把 getter 当值 fmt.Sprint 成 0x7ff... 指针地址。
+// 修复后应显示 sig 变量的真实字符串，且点击 change 后响应式更新。
+func TestInterpretComponentPropText(t *testing.T) {
+	src := `type cardProps struct {
+    sig title string
+}
+pub func card(p cardProps) *gxscene.Instance {
+    return <div><b>{p.title}</b></div>
+}
+sig text = "Hello"
+func change() { text = "Changed" }
+func view() *gxscene.Instance {
+    return <div>
+        <button onClick={change}>改标题</button>
+        <Card title={text}/>
+    </div>
+}`
+	res, err := Interpret(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res.Instance.BindLeafEffects(signal.Effect)
+	res.Instance.BindStructural(signal.Effect)
+	root := res.Instance.Root()
+
+	collectText := func() []string {
+		var texts []string
+		var walk func(*gxscene.Node)
+		walk = func(n *gxscene.Node) {
+			if n == nil {
+				return
+			}
+			if n.Type == gxscene.NodeText && n.Text != "" {
+				texts = append(texts, n.Text)
+			}
+			for _, c := range n.Children {
+				walk(c)
+			}
+		}
+		walk(root)
+		return texts
+	}
+
+	initial := strings.Join(collectText(), "")
+	if !strings.Contains(initial, "Hello") {
+		t.Fatalf("Card 应显示 sig 变量文本 Hello，实际: %q", initial)
+	}
+	if strings.Contains(initial, "0x") {
+		t.Fatalf("Card  prop 不应渲染成函数指针地址，实际: %q", initial)
+	}
+
+	// 找到 button 并点击，触发 sig 更新。
+	var btn *gxscene.Node
+	var find func(*gxscene.Node)
+	find = func(n *gxscene.Node) {
+		if n == nil {
+			return
+		}
+		if n.Kind == "button" {
+			btn = n
+		}
+		for _, c := range n.Children {
+			find(c)
+		}
+	}
+	find(root)
+	if btn == nil {
+		t.Fatal("找不到 button 节点")
+	}
+	if !btn.Dispatch("onClick", gxscene.EventContext{}) {
+		t.Fatal("onClick 事件派发失败")
+	}
+	after := strings.Join(collectText(), "")
+	if !strings.Contains(after, "Changed") {
+		t.Fatalf("点击后 Card 应显示 Changed，实际: %q", after)
+	}
+	if strings.Contains(after, "0x") {
+		t.Fatalf("点击后不应出现函数指针地址，实际: %q", after)
+	}
+}

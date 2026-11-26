@@ -37,6 +37,24 @@ func TestThemeToken(t *testing.T) {
 	}
 }
 
+// TestEditorSelectFgToken 验证选中文字前景 token：深色主题浅字、浅色主题深字，
+// 与选区背景（selectSolid）形成足够对比，解决"选中高亮看不清文字"。
+func TestEditorSelectFgToken(t *testing.T) {
+	dfg := themeToken(DarkTheme, "editorselectfg")
+	dbg := themeToken(DarkTheme, "editorselectsolid")
+	lfg := themeToken(LightTheme, "editorselectfg")
+	lbg := themeToken(LightTheme, "editorselectsolid")
+	if dfg != "#ffffff" || lfg != "#1d1d1f" {
+		t.Errorf("选中前景色错误: dark=%q light=%q", dfg, lfg)
+	}
+	if dfg == dbg || lfg == lbg {
+		t.Errorf("选中前景与背景不得相同: dark %q/%q light %q/%q", dfg, dbg, lfg, lbg)
+	}
+	if DarkTheme.EditorSelectFg != dfg || LightTheme.EditorSelectFg != lfg {
+		t.Error("Theme 字段与 token 映射不一致")
+	}
+}
+
 func TestUseTokenReactive(t *testing.T) {
 	// 先切到确保的初始态，避免测试间 themeCtx 全局状态串扰。
 	SetTheme(DarkTheme)

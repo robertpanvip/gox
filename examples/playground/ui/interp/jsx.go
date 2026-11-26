@@ -387,7 +387,11 @@ func (b *jsxBuilder) buildComponent(node *jsxNodeRT) {
 		a := node.attrs[name]
 		if a.kind == 1 {
 			expr := b.expr(a.value)
-			props[name] = func() any { return expr(b.env) }
+			// 动态 prop 必须存为 signalReader（具名 func() Value），对齐引擎的
+			// deref 约定。若存匿名 func() any，selectorExpr 读取 p.title 时
+			// deref 的类型断言匹配不上，会把 getter 本身当值——<b>{p.title}</b>
+			// 最终 valueText 走 fmt.Sprint(func) 打印出 0x7ff... 指针地址（乱码）。
+			props[name] = signalReader(func() Value { return expr(b.env) })
 		} else {
 			props[name] = a.value
 		}

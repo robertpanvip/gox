@@ -80,3 +80,49 @@ func TestEditorScrollMovesWindowStructural(t *testing.T) {
 	}
 	t.Fatal("ScrollLines(30) 后窗口仍从第 1 行开始——滚动未生效")
 }
+
+// TestEditorSetTextResetsScroll 复现桌面端缺陷：上一个长文档滚动到中部后
+// 切换到短文档，残留的 scrollTop 会把短文档顶部滚掉（行号从 4 开始、顶部留白）。
+// SetText 与 Home 必须把滚动偏移归零。
+func TestEditorSetTextResetsScroll(t *testing.T) {
+	st := NewEditorState(longSource(300))
+	st.ScrollLines(30) // 先滚到中部
+	if got := st.scrollTopVal; got <= 0 {
+		t.Fatalf("前置条件失败：滚动后 scrollTop 应 > 0, got %v", got)
+	}
+
+	// 切到 17 行短文档（内容 374px < 视口 470px，本不该滚动）。
+	st.SetText(shortSource(17))
+	if got := st.scrollTopVal; got != 0 {
+		t.Fatalf("SetText 后 scrollTop 应归零, got %v", got)
+	}
+}
+
+// TestEditorScrollTopClampsToContent 验证 SetScrollTop 上界夹紧：
+// 短文档（内容放得下）时任何正偏移都被夹到 0。
+func TestEditorScrollTopClampsToContent(t *testing.T) {
+	st := NewEditorState(shortSource(5)) // 5 行 × 22 = 110px << 470px 视口
+	st.SetScrollTop(600)
+	if got := st.scrollTopVal; got != 0 {
+		t.Fatalf("内容放得下时 scrollTop 应夹到 0, got %v", got)
+	}
+
+	// 长文档允许滚动，但不得超过 内容高 - 视口高。
+	st.SetText(longSource(100))
+	st.SetScrollTop(1e6)
+	maxScroll := float64(st.lineCount()*editorRowHeight - st.ViewportHeight())
+	if maxScroll <= 0 {
+		t.Fatalf("前置条件失败：长文档 maxScroll 应 > 0, got %v", maxScroll)
+	}
+	if got := st.scrollTopVal; got != maxScroll {
+		t.Fatalf("长文档 scrollTop 应夹到 maxScroll=%v, got %v", maxScroll, got)
+	}
+}
+
+func shortSource(n int) string {
+	var sb strings.Builder
+	for i := 0; i < n; i++ {
+		fmt.Fprintf(&sb, "line %d\n", i)
+	}
+	return sb.String()
+}

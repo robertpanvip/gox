@@ -134,7 +134,7 @@ type token struct { Text string; Color string } // Color 存语义 token 名，�
 
 type editorPalette struct {
     text, keyword, str, number, comment, tag, attr, punct func() string
-    bg, gutter, active, caret, sel, selSolid func() string
+    bg, gutter, active, caret, sel, selSolid, selFg func() string
 }
 
 func newEditorPalette() *editorPalette {
@@ -147,6 +147,7 @@ func newEditorPalette() *editorPalette {
         active: UseToken("editoractive"), caret: UseToken("editorcaret"),
         sel: UseToken("editorselect"),
         selSolid: UseToken("editorselectsolid"),
+        selFg: UseToken("editorselectfg"),
     }
 }
 
@@ -164,6 +165,7 @@ func defaultSyntaxColor(name string) string {
     case "caret": return "#aeafad"
     case "select": return "#264f7899"
     case "selectSolid": return "#264f78"
+    case "selectFg": return "#ffffff"
     case "bg": return "#1e1e1e"
     default: return "#d4d4d4"
     }
@@ -185,6 +187,7 @@ func (s *EditorState) color(name string) string {
         case "caret": g = s.palette.caret
         case "select": g = s.palette.sel
         case "selectSolid": g = s.palette.selSolid
+        case "selectFg": g = s.palette.selFg
         case "bg": g = s.palette.bg
         default: g = s.palette.text
         }
@@ -575,6 +578,9 @@ func (s *EditorState) SetText(v string) {
         s.setSource(v)
         l, c := s.clampLineCol(s.cursorLine(), s.cursorCol())
         s.cursorLine( l); s.cursorCol( c); s.selAnchorLine( l); s.selAnchorCol( c)
+        // 整体替换文本后滚动偏移失效：显式归零，避免旧文档残留的 scrollTop
+        // 让新文档顶部被滚掉（短文档尤其明显）。
+        s.scrollTopVal = 0; s.scrollTop( 0)
     })
 }
 
@@ -582,6 +588,7 @@ func (s *EditorState) SetText(v string) {
 func (s *EditorState) Home() {
     Signal.Batch(func() {
         s.cursorLine( 0); s.cursorCol( 0); s.selAnchorLine( 0); s.selAnchorCol( 0)
+        s.scrollTopVal = 0; s.scrollTop( 0)
     })
 }
 
@@ -843,9 +850,16 @@ func (s *EditorState) caretTop() float64  { return 6 + float64(s.cursorLine()*ed
 // 虚拟滚动下容器把子树上移了 scrollTop，绝对定位的 caret 必须同步补偿。
 func (s *EditorState) caretTopVisible() float64 { return s.caretTop() - s.scrollTop() }
 
-// SetScrollTop 写回受控滚动偏移（VirtualList on-scroll / 滚轮事件调用）。夹紧 >=0。
+// SetScrollTop 写回受控滚动偏移（VirtualList on-scroll / 滚轮事件调用）。
+// 夹紧到 [0, maxScroll]，其中 maxScroll = 内容高度 - 视口高度。
+// 关键：短文档（内容放得下）时 maxScroll=0，scrollTop 被强制归 0——否则
+// 切换示例后残留上一个长文档的滚动偏移，会让短文档顶部留白、看着像"没占满
+// 代码块就开始滚动"。
 func (s *EditorState) SetScrollTop(v float64) {
     if v < 0 { v = 0 }
+    maxScroll := float64(s.lineCount() * editorRowHeight) - float64(s.viewH())
+    if maxScroll < 0 { maxScroll = 0 }
+    if v > maxScroll { v = maxScroll }
     s.scrollTopVal = v // 先更新镜像，effect 读到的是最新值
     Signal.Batch(func() { s.scrollTop( v )})
 }
@@ -1250,7 +1264,7 @@ func (s *EditorState) rowHeight(idx int) int {
 var editorRowIDs = indices(24)
 
 func (s *EditorState) lineView(idx int) *gxscene.Instance {
-    return gxscene.Render(gxscene.Template{Ops:[]gxscene.Op{gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpAttr,Arg:"gx-editor-row",Key:"class",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"data-line",Slot:0,},gxscene.Op{Code:gxscene.OpDynAttr,Key:"bg",Slot:1,},gxscene.Op{Code:gxscene.OpDynAttr,Key:"height",Slot:2,},gxscene.Op{Code:gxscene.OpAttr,Arg:"hidden",Key:"overflow",},gxscene.Op{Code:gxscene.OpAttr,Arg:"0",Key:"flex-shrink",},gxscene.Op{Code:gxscene.OpAttr,Arg:"row",Key:"flex-direction",},gxscene.Op{Code:gxscene.OpAttr,Arg:"center",Key:"align-items",},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"bg",Slot:3,},gxscene.Op{Code:gxscene.OpDynAttr,Key:"color",Slot:4,},gxscene.Op{Code:gxscene.OpAttr,Arg:"42",Key:"width",},gxscene.Op{Code:gxscene.OpAttr,Arg:"12",Key:"font-size",},gxscene.Op{Code:gxscene.OpAttr,Arg:"22",Key:"height",},gxscene.Op{Code:gxscene.OpAttr,Arg:"22px",Key:"line-height",},gxscene.Op{Code:gxscene.OpAttr,Arg:"8",Key:"margin-right",},gxscene.Op{Code:gxscene.OpAttr,Arg:"0",Key:"flex-shrink",},gxscene.Op{Code:gxscene.OpAttr,Arg:"right",Key:"text-align",},gxscene.Op{Code:gxscene.OpDynChild,Slot:5,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpElem,Arg:"span",},gxscene.Op{Code:gxscene.OpAttr,Arg:"gx-code-line",Key:"class",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"data-code",Slot:6,},gxscene.Op{Code:gxscene.OpAttr,Arg:"1",Key:"gradient-text",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"font-family",Slot:7,},gxscene.Op{Code:gxscene.OpAttr,Arg:"pre",Key:"white-space",},gxscene.Op{Code:gxscene.OpAttr,Arg:"13",Key:"font-size",},gxscene.Op{Code:gxscene.OpAttr,Arg:"22",Key:"height",},gxscene.Op{Code:gxscene.OpAttr,Arg:"22px",Key:"line-height",},gxscene.Op{Code:gxscene.OpAttr,Arg:"0",Key:"flex-shrink",},gxscene.Op{Code:gxscene.OpAttr,Arg:"relative",Key:"position",},gxscene.Op{Code:gxscene.OpAttr,Arg:"2",Key:"z-index",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"bg",Slot:8,},gxscene.Op{Code:gxscene.OpDynAttr,Key:"rich-text",Slot:9,},gxscene.Op{Code:gxscene.OpDynAttr,Key:"selection-range",Slot:10,},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:11,},gxscene.Op{Code:gxscene.OpDynChild,Slot:12,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpClose,},},N:13,}, func() any{ return strconv.Itoa(idx) }, func() any{ return s.lineRowBg(idx) }, func() any{ return s.rowHeight(idx) }, func() any{ return s.lineGutterColor(idx) }, func() any{ return s.color("gutter") }, func() any{ return s.lineNumber(idx) }, func() any{ return s.lineText(idx) }, func() any{ return editorCodeFont }, func() any{ return s.lineCodeGradient(idx) }, func() any{ return s.lineRichText(idx) }, func() any{ return s.lineSelRange(idx) }, func() any{ return gxscene.Style{Selection:&gxscene.Style{Bg:s.color("selectSolid"),},} }, func() any{ return s.lineText(idx) })
+    return gxscene.Render(gxscene.Template{Ops:[]gxscene.Op{gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpAttr,Arg:"gx-editor-row",Key:"class",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"data-line",Slot:0,},gxscene.Op{Code:gxscene.OpDynAttr,Key:"bg",Slot:1,},gxscene.Op{Code:gxscene.OpDynAttr,Key:"height",Slot:2,},gxscene.Op{Code:gxscene.OpAttr,Arg:"hidden",Key:"overflow",},gxscene.Op{Code:gxscene.OpAttr,Arg:"0",Key:"flex-shrink",},gxscene.Op{Code:gxscene.OpAttr,Arg:"row",Key:"flex-direction",},gxscene.Op{Code:gxscene.OpAttr,Arg:"center",Key:"align-items",},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"bg",Slot:3,},gxscene.Op{Code:gxscene.OpDynAttr,Key:"color",Slot:4,},gxscene.Op{Code:gxscene.OpAttr,Arg:"42",Key:"width",},gxscene.Op{Code:gxscene.OpAttr,Arg:"12",Key:"font-size",},gxscene.Op{Code:gxscene.OpAttr,Arg:"22",Key:"height",},gxscene.Op{Code:gxscene.OpAttr,Arg:"22px",Key:"line-height",},gxscene.Op{Code:gxscene.OpAttr,Arg:"8",Key:"margin-right",},gxscene.Op{Code:gxscene.OpAttr,Arg:"0",Key:"flex-shrink",},gxscene.Op{Code:gxscene.OpAttr,Arg:"right",Key:"text-align",},gxscene.Op{Code:gxscene.OpDynChild,Slot:5,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpElem,Arg:"span",},gxscene.Op{Code:gxscene.OpAttr,Arg:"gx-code-line",Key:"class",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"data-code",Slot:6,},gxscene.Op{Code:gxscene.OpAttr,Arg:"1",Key:"gradient-text",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"font-family",Slot:7,},gxscene.Op{Code:gxscene.OpAttr,Arg:"pre",Key:"white-space",},gxscene.Op{Code:gxscene.OpAttr,Arg:"13",Key:"font-size",},gxscene.Op{Code:gxscene.OpAttr,Arg:"22",Key:"height",},gxscene.Op{Code:gxscene.OpAttr,Arg:"22px",Key:"line-height",},gxscene.Op{Code:gxscene.OpAttr,Arg:"0",Key:"flex-shrink",},gxscene.Op{Code:gxscene.OpAttr,Arg:"relative",Key:"position",},gxscene.Op{Code:gxscene.OpAttr,Arg:"2",Key:"z-index",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"bg",Slot:8,},gxscene.Op{Code:gxscene.OpDynAttr,Key:"rich-text",Slot:9,},gxscene.Op{Code:gxscene.OpDynAttr,Key:"selection-range",Slot:10,},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:11,},gxscene.Op{Code:gxscene.OpDynChild,Slot:12,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpClose,},},N:13,}, func() any{ return strconv.Itoa(idx) }, func() any{ return s.lineRowBg(idx) }, func() any{ return s.rowHeight(idx) }, func() any{ return s.lineGutterColor(idx) }, func() any{ return s.color("gutter") }, func() any{ return s.lineNumber(idx) }, func() any{ return s.lineText(idx) }, func() any{ return editorCodeFont }, func() any{ return s.lineCodeGradient(idx) }, func() any{ return s.lineRichText(idx) }, func() any{ return s.lineSelRange(idx) }, func() any{ return gxscene.Style{Selection:&gxscene.Style{Bg:s.color("selectSolid"),Color:s.color("selectFg"),},} }, func() any{ return s.lineText(idx) })
 }
 
 func (s *EditorState) selectionView(idx int) *gxscene.Instance {
