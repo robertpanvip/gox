@@ -326,11 +326,23 @@ func fieldRoots(toks []Token, si int) []int {
 	segStart := br + 1
 	for i := br + 1; i <= close; i++ {
 		if i == close || toks[i].Kind == Newline || toks[i].Text == ";" {
-			if r := oneParamRoot(toks, segStart, i); r > 0 {
+			if r := oneFieldRoot(toks, segStart, i); r > 0 {
 				roots = append(roots, r)
 			}
 			segStart = i + 1
 		}
 	}
 	return roots
+}
+
+// oneFieldRoot 解析 struct 字段段：先跳过 GX 的 pub 可见性关键字再走通用
+// 参数形态。union 阶段早于 pub 转换，`pub val int | string` 若不剥 pub，
+// oneParamRoot 的两标识符启发式会把 `val` 当类型起点，真正的联合
+// `int | string` 被跳过、擦除遗漏（产非法 Go `Val int | string`）。
+func oneFieldRoot(toks []Token, start, limit int) int {
+	first := nextSig(toks, start)
+	if first >= 0 && first < limit && toks[first].Kind == Ident && toks[first].Text == "pub" {
+		start = first + 1
+	}
+	return oneParamRoot(toks, start, limit)
 }

@@ -202,11 +202,25 @@ type NarrowFact struct {
 type Guard struct {
 	Pos          Pos     // if token 位置（GuardAt 的键、临时变量命名锚点）
 	EndPos       Pos     // 守卫块 '{' 位置（desugar 用它定位跳过点）
-	Recv         string  // 被守卫变量
+	Recv         string  // 被守卫变量（selector 守卫为整条链文本，如 "b.val"）
 	RecvPos      Pos     // 被守卫变量位置（shadow 生成复用）
 	Target       Type    // 目标类型
 	TypeToks     []Token // 目标类型原始 token（保留位置，供 emit / sourcemap）
 	ThenUsesRecv bool    // then 块内是否引用了 recv；false 时不注入 shadow 避免未使用错误
+
+	// RecvToks：被守卫者的原始 token。单一标识符时与 Recv 等价；selector 守卫
+	// （`if b.val is int`）是 `b . val` 链——comma-ok 断言目标与 then 块内收窄
+	// 改写都按链处理（块内 `b.val` 读替换为收窄临时变量）。
+	RecvToks []Token
+	// TailToks：复合条件的 `&&` 尾部原始 token（从类型之后到 '{' 之前，含 `&&`）。
+	// 简单守卫（`if v is int {`）为 nil。desugar 生成 `; ok && <tail>`，
+	// tail 内的 recv 读取替换为收窄临时变量。
+	TailToks []Token
+	// CondUsesRecv：条件整体（then 块或 && 尾部）是否用到 recv。comma-ok 的
+	// 第一个返回值据此决定绑定具名变量还是 '_'。与 ThenUsesRecv 分开：
+	// `if v is int && len(v) > 0 { println("ok") }` 的 then 块不用 recv，
+	// 不能注入块 shadow（未使用变量报错），但断言结果必须绑定。
+	CondUsesRecv bool
 }
 
 // ElseShadow 描述一个 else 分支可注入的 shadow。
@@ -870,9 +884,11 @@ func (a *Analysis) typeFromTokens(toks []Token, s, e int) Type {
 type parsedGuard struct {
 	start    int
 	end      int
-	recv     string
+	recv     string // selector 链为整条链文本（如 "b.val"）
+	recvToks []Token
 	recvPos  Pos
 	typeToks []Token
+	tailToks []Token
 	target   Type
 }
 
@@ -883,8 +899,8 @@ func parseGuardAt(toks []Token, i int) (parsedGuard, bool) {
 	}
 	return parsedGuard{
 		start: g.start, end: g.end, recv: g.recv, recvPos: g.recvPos,
-		typeToks: g.typeToks,
-		target:   typeFromTokens(g.typeToks, 0, len(g.typeToks)),
+		recvToks: g.recvToks, typeToks: g.typeToks, tailToks: g.tailToks,
+		target: typeFromTokens(g.typeToks, 0, len(g.typeToks)),
 	}, true
 }
 
@@ -960,13 +976,29 @@ func (a *Analysis) processChain(toks []Token, start int, processed map[int]bool)
 		if thenClose <= thenBrace {
 			return
 		}
+		// then 块使用检测：单标识符按名字扫；selector 链按链形态扫（块内
+		// `b.val` 是三个 token，blockUsesVar 的名字匹配命不中）。
 		thenUses := blockUsesVar(toks, thenBrace+1, thenClose, g.recv)
+		if len(g.recvToks) > 1 {
+			thenUses = chainUsedInRange(toks, thenBrace+1, thenClose, g.recvToks)
+		}
+		// 复合条件的 && 尾部也计使用：尾部 recv 读会被替换为收窄临时变量，
+		// 断言结果必须绑定（即便 then 块本身不用 recv）。
+		condUses := thenUses
+		if !condUses && len(g.tailToks) > 0 {
+			if len(g.recvToks) > 1 {
+				condUses = chainUsedInRange(g.tailToks, 0, len(g.tailToks), g.recvToks)
+			} else {
+				condUses = blockUsesVar(g.tailToks, 0, len(g.tailToks), g.recv)
+			}
+		}
 		a.addFact(g.recv, target, thenBrace+1, thenClose, true) // if 块内：有 shadow
 		a.guards[keyOf(toks[i].Pos)] = Guard{
 			Pos: toks[i].Pos, EndPos: toks[thenBrace].Pos,
 			Recv: g.recv, RecvPos: g.recvPos,
 			Target: target, TypeToks: g.typeToks,
-			ThenUsesRecv: thenUses,
+			ThenUsesRecv: thenUses, CondUsesRecv: condUses,
+			RecvToks: g.recvToks, TailToks: g.tailToks,
 		}
 
 		// 为后续 else-if / else 排除当前成员。
@@ -1042,6 +1074,29 @@ func canAssertSingle(t Type) bool {
 func blockUsesVar(toks []Token, from, to int, name string) bool {
 	for k := from; k < to; k++ {
 		if toks[k].Kind == Ident && toks[k].Text == name {
+			return true
+		}
+	}
+	return false
+}
+
+// chainUsedInRange 扫描 [from,to) 内是否出现 recv selector 链（忽略空白，
+// 读写均算使用）。selector 守卫的 then 块使用检测用。
+func chainUsedInRange(toks []Token, from, to int, recv []Token) bool {
+	for k := from; k < to; k++ {
+		i := k
+		matched := true
+		for _, rt := range recv {
+			for i < to && toks[i].Kind == Space {
+				i++
+			}
+			if i >= to || toks[i].Text != rt.Text {
+				matched = false
+				break
+			}
+			i++
+		}
+		if matched {
 			return true
 		}
 	}

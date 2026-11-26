@@ -1428,13 +1428,15 @@ func lexExprScene(expr string, base Pos, ctx *jsxSceneCtx) []Token {
 	// item 参数（信号化模式）是 func() T，读它必须写成 u() 才能让子树 getter
 	// 登记对 item sig 的依赖——这是 For item sig 根治方案在编译器的落点。
 	needRewrite := len(ctx.sigs) > 0 || ctx.forItemParam != ""
+	// effective：该 JSX 位置真正指向 sig 变量的名字集合（含 For item getter 参数）。
+	// 既驱动 sig 读补 ()，也供嵌套深写诊断复用（片段 token 是假坐标，不能按位置
+	// 查绑定，只能用这个已解析的名字集合判定链根）。
+	effective := map[string]bool{}
 	if needRewrite {
 		// 按 JSX 根位置解析绑定：被局部变量遮蔽的同名 sig 不应改写（{count}
 		// 在 count := 3 作用域内读的是局部变量）。sigs 是全局名字集合，需先按
 		// bindings+jsxPos 过滤出该位置真正指向 sig 的名字，再交回形态改写逻辑。
-		effective := ctx.sigs
 		if ctx.bindings != nil {
-			effective = make(map[string]bool, len(ctx.sigs))
 			for name := range ctx.sigs {
 				if isSignalRefAt(ctx.bindings, name, ctx.jsxPos) {
 					effective[name] = true
@@ -1442,23 +1444,28 @@ func lexExprScene(expr string, base Pos, ctx *jsxSceneCtx) []Token {
 			}
 		} else if len(ctx.sigs) > 0 && ctx.forItemParam != "" {
 			// 无绑定表但需补 item 参数：复制一份再改，避免污染全局 sigs map。
-			cp := make(map[string]bool, len(ctx.sigs)+1)
 			for name := range ctx.sigs {
-				cp[name] = true
+				effective[name] = true
 			}
-			effective = cp
 		}
 		if ctx.forItemParam != "" {
-			if effective == nil {
-				effective = map[string]bool{}
-			}
 			effective[ctx.forItemParam] = true
 		}
-		toks = rewriteJSXInterpSignals(toks, effective, &ctx.explicitSigCallErr, ctx.forItemParam)
+		if len(effective) > 0 {
+			toks = rewriteJSXInterpSignals(toks, effective, &ctx.explicitSigCallErr, ctx.forItemParam)
+		}
 	}
 	// sig 字段 selector 读写改写（读补 ()、写转调用式、显式调用报错）。
 	// 与 rewriteJSXInterpSignals 独立：后者只认全局 sig 名，不管 sig 字段。
 	toks = rewriteJSXSignalFieldSelectors(toks, ctx.bindings, ctx.signalFields, ctx.jsxPos, &ctx.explicitSigCallErr)
+	// 嵌套深写诊断（对齐主 token 流的 checkSignalValueDeepWrite）：此刻 sig 读
+	// 已是 name() 形态、扫描约定一致。此前 `p.inner.n = 5` 在事件体里生成
+	// `p().Inner.N = 5`（语法合法、类型非法、无任何提示）——补齐覆盖。
+	if len(effective) > 0 && ctx.diags != nil {
+		checkSignalValueDeepWriteFunc(toks, func(name string, _ Pos) bool {
+			return effective[name]
+		}, ctx.jsxPos, ctx.diags)
+	}
 	// 对象字面量自动推断：{ { name: "x", age: 1 } } → struct{ name string; age int }{...}。
 	// 插值片段无期望类型上下文，走匿名 struct 推断路径。
 	if converted, err := transformObjectLitExpr(toks); err == nil {

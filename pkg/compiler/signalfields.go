@@ -801,6 +801,7 @@ func containerElemTypeOnce(typeText string) string {
 //   - []T / [N]T         → T
 //   - list.List[T]       → T（GX 把 []T 提升为 runtime/list.List[T]）
 //   - *T                 → 先剥指针再判断
+//
 // 推不出（非容器、元素非具名类型）返回空串，调用方保守放弃。
 func containerElemType(typeText string) string {
 	return containerElemTypeKeepQualifier(typeText, true)
@@ -982,33 +983,58 @@ func checkSignalValueDeepWrite(toks []Token, b *Bindings, diags *[]GXDiagnostic)
 	if b == nil || diags == nil {
 		return
 	}
+	checkSignalValueDeepWriteFunc(toks, func(name string, pos Pos) bool {
+		return isSignalRefAt(b, name, pos)
+	}, Pos{}, diags)
+}
+
+// checkSignalValueDeepWriteFunc 是 checkSignalValueDeepWrite 的谓词版本：
+// isSig 判定链根标识符是否是 sig 变量读。主 token 流用 isSignalRefAt（按位置
+// 解析遮蔽）；JSX 重新词法化片段的 token 是假坐标，改用 lexExprScene 预先解析
+// 好的 effective sig 名集合。reportPos 非 NoPos 时诊断用它（片段 token 坐标
+// 是相对假坐标，须回投到 JSX 根的真实绝对位置）。
+func checkSignalValueDeepWriteFunc(toks []Token, isSig func(name string, pos Pos) bool, reportPos Pos, diags *[]GXDiagnostic) {
+	if isSig == nil || diags == nil {
+		return
+	}
 	for i := 0; i < len(toks); i++ {
 		if toks[i].Text != "." {
 			continue
 		}
-		// '.' 前是赋值目标链，往左剥掉所有索引 [...]，直到 sig 读调用 s()。
-		// 无索引：s().n = 2        （B4，原有逻辑）
-		// 带索引：rows()[0].name = "b"（C2，值变了但 sig 未写、UI 不刷新）
+		// '.' 前是赋值目标链，往左剥掉所有索引 [...] 与中间 `.field` 段，直到 sig 读调用 s()。
+		// 无索引：     s().n = 2           （B4，原有逻辑）
+		// 带索引：     rows()[0].name = "b"（C2，值变了但 sig 未写、UI 不刷新）
+		// 多级链：     p().inner.n = 5     （嵌套选择器深写——此前左剥遇到中间段
+		//                                   `inner` 就断，导致漏报、静默不刷新）
 		j := prevSig(toks, i-1)
 		if j < 0 {
 			continue
 		}
 		indexed := false
+		deepSegments := 0 // 中间 `.field` 段数（p().inner.n 的 inner）
 		steps := 0
-		for toks[j].Text == "]" {
-			lb := matchDelimBack(toks, j, "]")
-			if lb < 0 {
-				break
+		for j >= 0 && steps <= 8 { // 防御异常深链
+			if toks[j].Text == "]" {
+				lb := matchDelimBack(toks, j, "]")
+				if lb < 0 {
+					break
+				}
+				j = prevSig(toks, lb-1)
+				indexed = true
+				steps++
+				continue
 			}
-			j = prevSig(toks, lb-1)
-			if j < 0 {
-				break
+			// 中间 `.field` 段（如 p().inner.n 的 inner）：继续往左剥。
+			if toks[j].Kind == Ident {
+				d := prevSig(toks, j-1)
+				if d >= 0 && toks[d].Text == "." {
+					j = prevSig(toks, d-1)
+					deepSegments++
+					steps++
+					continue
+				}
 			}
-			indexed = true
-			steps++
-			if steps > 8 { // 防御异常深链
-				break
-			}
+			break
 		}
 		if j < 0 || toks[j].Text != ")" {
 			continue
@@ -1021,7 +1047,7 @@ func checkSignalValueDeepWrite(toks []Token, b *Bindings, diags *[]GXDiagnostic)
 		if id < 0 || toks[id].Kind != Ident || isGoKeyword(toks[id].Text) {
 			continue
 		}
-		if !isSignalRefAt(b, toks[id].Text, toks[id].Pos) {
+		if !isSig(toks[id].Text, toks[id].Pos) {
 			continue
 		}
 		// '.' 后是字段名，再跟赋值/复合赋值符。
@@ -1034,14 +1060,23 @@ func checkSignalValueDeepWrite(toks []Token, b *Bindings, diags *[]GXDiagnostic)
 			continue
 		}
 		msg := ""
-		if indexed {
+		switch {
+		case indexed && deepSegments == 0:
 			// C2：切片元素字段赋值编译得过、值也变了，但没有 sig 写、slot 不刷新。
 			msg = "sig 持有的切片元素字段直接赋值不会触发刷新（" + exprText(toks, id, op) + "）；请整体替换后重新赋值 sig，如 " + toks[id].Text + "(新切片)"
-		} else {
+		case deepSegments > 0:
+			// 嵌套选择器深写：p.inner.n = 5 → p().inner.n = 5，同样静默不刷新。
+			// 文案用改写后的完整链（与 C2 的 rows()[0].name 同一约定）。
+			msg = "sig 持有的复合值不支持嵌套字段直接赋值（" + exprText(toks, id, op) + "）；请整体替换后重新赋值 sig，如 " + toks[id].Text + "(新值)"
+		default:
 			msg = "sig 持有的复合值不支持字段直接赋值（" + toks[id].Text + "." + toks[field].Text + " = ...）；请整体替换 sig，如 " + toks[id].Text + "(新值)"
 		}
+		dpos := toks[i].Pos
+		if reportPos.valid() {
+			dpos = reportPos // JSX 片段假坐标回投到 JSX 根真实位置
+		}
 		*diags = append(*diags, GXDiagnostic{
-			Pos:     toks[i].Pos,
+			Pos:     dpos,
 			Code:    "signal-deep-write",
 			Message: msg,
 		})
@@ -1205,8 +1240,8 @@ func rewriteSignalFieldRefs(toks []Token, b *Bindings, tbl signalFieldTable, dia
 
 // signalPassthrough 描述一个「已是 sig、构造时直通」的值表达式区间。
 type signalPassthrough struct {
-	from, to int      // 直通 token 区间（开区间）；gen 为空时有效
-	gen      []Token  // 非空时直接用作载荷（读写 lambda / 裸 getter），忽略 from/to
+	from, to int     // 直通 token 区间（开区间）；gen 为空时有效
+	gen      []Token // 非空时直接用作载荷（读写 lambda / 裸 getter），忽略 from/to
 }
 
 // signalExprPassthrough 判断 [from,to) 的值表达式是否已是 sig，返回直通区间。

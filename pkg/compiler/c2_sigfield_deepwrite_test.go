@@ -68,3 +68,78 @@ func TestSigFieldDeepWriteDiagnosticGuards(t *testing.T) {
 		})
 	}
 }
+
+// 遗留缺陷回归：嵌套选择器深写（p.inner.n = 5）此前左剥遇到中间 `.field` 段就断，
+// 漏报诊断——产物 p().Inner.N = 5 语法合法、类型非法、静默不刷新。
+func TestSignalDeepWriteNestedChain(t *testing.T) {
+	src := `package main
+
+pub type Inner struct {
+	pub n int
+}
+
+pub type Outer struct {
+	pub inner Inner
+	pub x int
+}
+
+func main() {
+	sig p = Outer{x: 1, inner: Inner{n: 2}}
+	p.x += 1
+	p.inner.n = 5
+}
+`
+	res, err := CompileScene("deepnested.gx", src)
+	if err != nil {
+		t.Fatalf("CompileScene 失败: %v", err)
+	}
+	found := false
+	for _, d := range res.Analysis.Diagnostics() {
+		if d.Code == "signal-deep-write" && strings.Contains(d.Message, "inner") {
+			found = true
+			if d.Pos.Line != 15 || d.Pos.Col != 9 {
+				t.Errorf("诊断坐标应指向 p.inner.n（15:9），got %d:%d", d.Pos.Line, d.Pos.Col)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("嵌套链深写应报 signal-deep-write，got %v", res.Analysis.Diagnostics())
+	}
+}
+
+// JSX 事件体内的嵌套深写此前完全不检测（事件体是重新词法化的整体 Template
+// token，主流程检查器穿透不到）——补齐后应报出并回投到 JSX 根位置。
+func TestSignalDeepWriteJSXEventBody(t *testing.T) {
+	src := `package main
+
+pub type Inner struct {
+	pub n int
+}
+
+pub type Outer struct {
+	pub inner Inner
+}
+
+sig p = Outer{inner: Inner{n: 1}}
+
+func App() string {
+	return <button onClick={() => { p.inner.n = 5 }}>点</button>
+}
+`
+	res, err := CompileScene("jsxdeep.gx", src)
+	if err != nil {
+		t.Fatalf("CompileScene 失败: %v", err)
+	}
+	found := false
+	for _, d := range res.Analysis.Diagnostics() {
+		if d.Code == "signal-deep-write" && strings.Contains(d.Message, "inner") {
+			found = true
+			if d.Pos.Line != 14 {
+				t.Errorf("诊断应回投到 .gx 第 14 行，got %d", d.Pos.Line)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("JSX 事件体嵌套深写应报 signal-deep-write，got %v", res.Analysis.Diagnostics())
+	}
+}

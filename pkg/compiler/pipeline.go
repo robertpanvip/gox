@@ -144,7 +144,7 @@ func compileWithMode(file, src, module string, imports map[string]ImportInfo) (*
 	// 赋值仍是 =）。诊断在 analysis 建好后合并，交给 CLI/LSP 展示。
 	crossThreadDiags := checkCrossThreadSigWrite(toks, sigs)
 	toks = transformSignals(toks, bindings)
-	analysis := Analyze(toks)    // desugar 之前的 GX 语义层（联合未擦除）
+	analysis := Analyze(toks) // desugar 之前的 GX 语义层（联合未擦除）
 	analysis.diags = append(crossThreadDiags, analysis.diags...)
 	names := map[string]string{} // 小写原名 → 大写导出名（自身 pub 符号）
 	toks = expandDefaults(toks, defaultDefs)

@@ -56,3 +56,47 @@ func main() {
 		t.Fatalf("已声明变量读取不应降级 any:\n%s", got)
 	}
 }
+
+// 遗留缺陷回归：`() => users[0].name` 的返回类型曾被"第一个字面量兜底"误判成
+// 下标 `0` 的 int——字面量兜底扫描不追踪括号深度，括号内的 token 被当成表达式类型。
+func TestLambdaResultIndexChainField(t *testing.T) {
+	src := `package main
+
+pub type User struct {
+	pub name string
+	pub age int
+}
+
+func main() {
+	users := []User{User{name: "a", age: 1}}
+	f4 := () => users[0].name
+	f5 := () => users[0]
+	_, _ = f4, f5
+}
+`
+	got := compileOK(t, "lamidx.gx", src)
+	containsAll(t, got, `func() string {return users[0].Name}`, `func() User {return users[0]}`)
+	assertNotContains(t, got, `func() int {return users[0]`, "下标 0 不得误判为返回类型")
+}
+
+// 索引链 + 多级字段链：users[0] 的元素类型沿链传播。
+func TestLambdaResultSliceElemChain(t *testing.T) {
+	src := `package main
+
+pub type Inner struct {
+	pub n int
+}
+
+pub type Outer struct {
+	pub inner Inner
+}
+
+func main() {
+	outers := []Outer{}
+	g := () => outers[0].inner.n
+	_ = g
+}
+`
+	got := compileOK(t, "lamchain.gx", src)
+	containsAll(t, got, `func() int {return outers[0].Inner.N}`)
+}

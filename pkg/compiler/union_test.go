@@ -367,3 +367,31 @@ func main() { f := func(v int|string) { println(v) }; f(1) }
 	got := compileOK(t, "anonunion.gx", src)
 	containsAll(t, got, `func(v any)`, `switch v.(type)`, `case int, string:`)
 }
+
+// 遗留缺陷回归：struct 字段联合类型（pub val int | string）此前因 oneParamRoot
+// 的两标识符启发式没考虑 pub 前缀而漏擦除，产出非法 Go `Val int | string`。
+func TestUnionEraseStructFieldWithPub(t *testing.T) {
+	src := `package main
+
+pub type Box struct {
+	pub val int | string
+	pub n int
+}
+
+func main() {
+	b := Box{val: 42}
+	println(b.val, b.n)
+}
+`
+	res, err := Compile("ufield.gx", src)
+	if err != nil {
+		t.Fatalf("pub 字段联合应擦除为 any: %v", err)
+	}
+	got := res.GoSource
+	if strings.Contains(got, "Val int | string") {
+		t.Fatalf("字段联合应擦除，产物残留原始联合:\n%s", got)
+	}
+	if !strings.Contains(got, "Val any") {
+		t.Fatalf("字段类型应擦除为 any:\n%s", got)
+	}
+}

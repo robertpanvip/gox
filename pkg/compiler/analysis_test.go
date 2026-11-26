@@ -342,18 +342,38 @@ func f() {}
 }
 
 func TestStrandedIsInCompoundCondition(t *testing.T) {
+	// 守卫位于条件首位的 && 复合条件现已支持收窄（遗留缺陷修复）：
+	// 尾部条件与 then 块内的 recv 读替换为收窄临时变量。
 	src := `package main
 func f() {
     var v int | string = 1
     if v is int && v == 1 {
+        println(v)
     }
 }
 `
-	_, err := Compile("input.gx", src)
-	if err == nil {
-		t.Fatal("复合条件残留 is 应报错，而不是静默产出非法 Go")
+	res, err := Compile("input.gx", src)
+	if err != nil {
+		t.Fatalf("守卫在条件首位的复合条件应支持收窄: %v", err)
 	}
-	if !strings.Contains(err.Error(), "is 守卫仅支持") {
+	got := res.GoSource
+	if !strings.Contains(got, "; __gx_ok_") || !strings.Contains(got, "&&") {
+		t.Fatalf("复合条件应生成 comma-ok + && 尾部:\n%s", got)
+	}
+	assertNotContains(t, got, " is ", "守卫已消费，产物不应残留 is")
+
+	// 守卫不在条件首位（&& 之后）仍不支持：comma-ok 无法前置，保持明确报错。
+	mid := `package main
+func f() {
+    var v int | string = 1
+    if v == 1 && v is int {
+        println(v)
+    }
+}
+`
+	if _, err := Compile("mid.gx", mid); err == nil {
+		t.Fatal("守卫不在条件首位应报错，而不是静默产出非法 Go")
+	} else if !strings.Contains(err.Error(), "is 守卫仅支持") {
 		t.Errorf("错误信息应说明 is 限制, got %v", err)
 	}
 }

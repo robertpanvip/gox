@@ -124,17 +124,27 @@ func main() {
 }
 
 func TestTypeGuardSelectorRecvSkipped(t *testing.T) {
-	// 复合左值 obj.field 暂不支持，保留原样
+	// selector 守卫现已支持（遗留缺陷修复）：断言目标为链表达式，
+	// then 块内的链读替换为收窄临时变量，写目标保持字段赋值。
 	src := `package main
 type wrap struct{ f any }
 func main() {
     obj := wrap{f: 1}
-    if (obj.f is int) { println(obj.f) }
+    if (obj.f is int) {
+        println(obj.f)
+        obj.f = 2
+    }
 }
 `
 	got := tgStage(t, src)
-	containsAll(t, got, "obj.f is int")
-	assertNo(t, got, "__gx_", "selector 左值不应转换")
+	containsAll(t, got, "obj.f.(int)", "__gx_ok_")
+	assertNo(t, got, " is ", "守卫已消费，产物不应残留 is")
+	// 读收窄：块内 obj.f 读替换为临时变量
+	assertNotContains(t, got, "println(obj.f)", "块内链读应替换为收窄临时变量")
+	// 写目标保持：字段赋值合法，不改写
+	if !strings.Contains(got, "obj.f = 2") {
+		t.Fatalf("块内写目标应保持原样:\n%s", got)
+	}
 }
 
 func TestTypeGuardNested(t *testing.T) {
@@ -264,4 +274,83 @@ func f(v int | string | bool) {
 	if strings.Contains(got, "v := v.(string|bool)") || strings.Contains(got, "v := v.(string)") {
 		t.Errorf("剩余联合不应注入单类型断言\n---\n%s\n---", got)
 	}
+}
+
+// 遗留缺陷回归：守卫位于条件首位的 && 复合条件此前硬报错（不收窄）。
+// 现支持：断言结果绑定 + 尾部 recv 读替换 + then 块 shadow。
+func TestTypeGuardCompoundAndTail(t *testing.T) {
+	src := `package main
+
+func main() {
+	var v int | string = 42
+	if v is int && v > 2 {
+		println(v + v)
+	}
+}
+`
+	got := tgStage(t, src)
+	containsAll(t, got,
+		"__gx_v_", "__gx_ok_",
+		"&& __gx_v_",   // 尾部条件 recv 读替换为收窄临时变量
+		"v := __gx_v_", // then 块 shadow
+	)
+	assertNo(t, got, " is ", "守卫已消费")
+}
+
+// 复合条件 + then 块不用 recv：不注入块 shadow（避免未使用变量），但断言值绑定。
+func TestTypeGuardCompoundTailOnlyUse(t *testing.T) {
+	src := `package main
+
+func main() {
+	var v int | string = 42
+	if v is int && len(v) > 0 {
+		println("ok")
+	}
+}
+`
+	got := tgStage(t, src)
+	containsAll(t, got, "if __gx_v_", "; __gx_ok_", "&& len(__gx_v_")
+	assertNotContains(t, got, "v := __gx_v_", "then 块不用 recv 不应注入 shadow")
+}
+
+// || 破坏收窄语义，保持报错引导拆分。
+func TestTypeGuardCompoundOrRejected(t *testing.T) {
+	src := `package main
+
+func main() {
+	var v int | string = 42
+	if v is int || len(v) > 0 {
+		println("ok")
+	}
+}
+`
+	if _, err := Compile("or.gx", src); err == nil {
+		t.Fatal("|| 尾部应报错（收窄语义不成立）")
+	} else if !strings.Contains(err.Error(), "is 守卫仅支持") {
+		t.Errorf("错误信息应引导拆分守卫, got %v", err)
+	}
+}
+
+// selector 守卫端到端：联合擦除 + 断言 + 块内链读收窄 + 写目标保持。
+func TestTypeGuardSelectorEndToEnd(t *testing.T) {
+	src := `package main
+
+pub type Box struct {
+	pub val int | string
+}
+
+func main() {
+	b := Box{val: 42}
+	if b.val is int {
+		println(b.val + b.val)
+	}
+}
+`
+	res, err := Compile("sel.gx", src)
+	if err != nil {
+		t.Fatalf("selector 守卫应端到端编译通过: %v", err)
+	}
+	got := res.GoSource
+	containsAll(t, got, "b.Val.(int)", "+ __gx_v_")
+	assertNo(t, got, " is ", "守卫已消费")
 }

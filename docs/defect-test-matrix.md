@@ -59,6 +59,17 @@
 仍持 `bindings`/`sigs`/`sigTypes`/`signalFields` 多源，但 sig 识别规则已统一走 `Bindings`，
 剩余字段是 JSX 场景特有的类型/位置信息，非重复来源。
 
+## D 组：遗留实现债清偿（is 守卫 / let / lambda 推断 / 嵌套深写）
+
+| 条目 | 问题 | 处理 | 回归测试 | 诊断码 / 产物 |
+|---|---|---|---|---|
+| D1 | `let x = 42` 透传成非法 Go（降级耦合在 transformSignals 的 HasSignal 短路后，纯 let 文件不生效） | `transformLetDecls` 无条件执行：`let x = v` → `x := v`，`let x T = v` → `var x T = v` | `TestLetDeclWithoutSignal` / `TestLetDeclTyped` / `TestLetDeclMixedWithSig` | 产物：`x := 42` |
+| D2 | lambda 返回类型误推：`() => users[0].name` 被字面量兜底判成下标 `0` 的 int（扫描不追踪括号深度） | 字面量/字符串兜底只认顶层 token；字段访问推断扩展到索引链 `users[0].name`、多级链与 `*T` 解引用（基础类型可来自 Bindings） | `TestLambdaResultIndexChainField` / `TestLambdaResultSliceElemChain` | 产物：`func() string` |
+| D3 | 局部 sig 嵌套深写漏报：`p.inner.n = 5` 左剥遇到中间 `.field` 段就断，产物 `p().Inner.N = 5` 静默不刷新 | `checkSignalValueDeepWrite` 左剥泛化为「索引 + 中间字段段」；文案区分单层/嵌套/切片三形态 | `TestSignalDeepWriteNestedChain` | `signal-deep-write` |
+| D4 | JSX 事件体/插值内的 sig 深写完全不检测（片段是重新词法化的整体 token） | `lexExprScene` 片段改写后按已解析的 effective sig 集合复跑深写检查，坐标回投 JSX 根 | `TestSignalDeepWriteJSXEventBody` | `signal-deep-write` |
+| D5 | is 守卫只支持最简形态：复合条件 `v is int && len(v) > 0` 硬报错、selector 守卫 `b.val is int` 不支持 | 守卫位于条件首位且尾部只有 `&&` 链时：comma-ok 前置 + 尾部 recv 读替换 + then 块收窄；selector 守卫块内链读替换为收窄临时变量（写目标保持字段赋值）；`\|\|` 破坏收窄语义保持报错 | `TestTypeGuardCompoundAndTail` / `TestTypeGuardCompoundTailOnlyUse` / `TestTypeGuardCompoundOrRejected` / `TestTypeGuardSelectorEndToEnd` | 产物：`; ok && <tail>` |
+| D6 | struct 字段联合类型漏擦除：`pub val int \| string` 因字段解析的 pub 前缀偏移产出非法 Go `Val int \| string` | `fieldRoots` 剥 pub 关键字后再走两标识符启发式 | `TestUnionEraseStructFieldWithPub` | 产物：`Val any` |
+
 ## 运行
 
 ```bash

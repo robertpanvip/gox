@@ -176,6 +176,84 @@ func checkNoExplicitSigCall(toks []Token, b *Bindings, tbl signalFieldTable) err
 	return nil
 }
 
+// transformLetDecls 把 GX 的 let 声明降级为标准 Go（语言规范 §11：let 即短声明，
+// 无新语义）。两种形态：
+//
+//	let name = expr   → name := expr
+//	let name T = expr → var  name T = expr
+//
+// 必须无条件执行、不依赖 sig 是否存在（旧实现耦合在 transformSignals 的
+// HasSignal 短路后面，导致纯 let 文件透传 `let` 生成非法 Go——遗留缺陷）。
+// 无 `=` 的 `let name` 不消费后续 token，原样放行（交给下游报错，避免吞语句）。
+func transformLetDecls(in []Token) []Token {
+	changed := false
+	for _, t := range in {
+		if t.is("let") {
+			changed = true
+			break
+		}
+	}
+	if !changed {
+		return in
+	}
+	out := make([]Token, 0, len(in)+8)
+	for i := 0; i < len(in); i++ {
+		t := in[i]
+		if !t.is("let") {
+			out = append(out, t)
+			continue
+		}
+		j := nextSig(in, i+1)
+		if j < 0 || in[j].Kind != Ident || isGoKeyword(in[j].Text) {
+			out = append(out, t) // 非声明形态（let 后无标识符）：放行，不吞 token
+			continue
+		}
+		// 在本语句范围内找 `=`：中间可能是类型标注（let x int = 42 的 `int`），
+		// 也可能根本没有（let x := ... 的非法写法）。越过换行/分号/块边界仍未找到
+		// 就视为非声明形态，放行不吞 token。
+		eq := -1
+		for k := nextSig(in, j+1); k >= 0 && k < len(in); k = nextSig(in, k+1) {
+			switch in[k].Text {
+			case "=":
+				eq = k
+			case ";", "{", "}", ":=", ",", "(":
+				k = -1 // 用 -1 终止：这些符号说明 let 后面不是 `name [= type] =` 声明
+			}
+			if eq >= 0 || k < 0 {
+				break
+			}
+			if in[k].Kind == Newline {
+				break
+			}
+		}
+		if eq < 0 {
+			out = append(out, t) // 无显式 `=`：放行
+			continue
+		}
+		// j+1..eq 之间是空白或类型标注 token。
+		hasType := false
+		for k := j + 1; k < eq; k++ {
+			if in[k].Kind != Space && in[k].Kind != Newline {
+				hasType = true
+				break
+			}
+		}
+		if !hasType {
+			// let name = expr → name := expr
+			out = append(out, tokIdent(in[j].Text, in[j].Pos), tokSpace(" ", t.Pos), tokOp(":=", t.Pos))
+			i = eq // 表达式余部由后续循环原样输出
+			continue
+		}
+		// let name T = expr → var name T = expr
+		out = append(out, tokIdent("var", t.Pos), tokSpace(" ", t.Pos), tokIdent(in[j].Text, in[j].Pos))
+		for k := j + 1; k <= eq; k++ {
+			out = append(out, in[k]) // 类型标注与 `=` 原样保留
+		}
+		i = eq
+	}
+	return out
+}
+
 // transformSignals 执行 sig 语法糖降级，返回改写后的 token 流。
 // 放在 Analyze 之前：Analyze 看到的是标准 Go（sig/let 已消除、读写已是调用式）。
 //
@@ -184,6 +262,9 @@ func checkNoExplicitSigCall(toks []Token, b *Bindings, tbl signalFieldTable) err
 // 上一次构建、直接持有 Binding，主循环按节点 Kind 驱动改写，不再在主循环里重复
 // 「名字集合 + 遮蔽 + 形态排除」的扫 token 判定。sigs/isSignalRefAt 保留为对拍参照。
 func transformSignals(in []Token, b *Bindings) []Token {
+	// let 是与 signal 无关的短声明语法糖：无条件降级（遗留缺陷修复——此前
+	// 耦合在 HasSignal 短路后面，纯 let 文件的 let 会透传成非法 Go）。
+	in = transformLetDecls(in)
 	ast := ParseSignalExprs(in, b)
 	if !ast.HasSignal() {
 		return in
@@ -334,23 +415,7 @@ func rewriteSignals(toks []Token, ast *SignalAST, b *Bindings) []Token {
 			}
 		}
 
-		// 2) let 声明：let name = expr → name := expr
-		if t.is("let") {
-			if j := nextSig(toks, i+1); j >= 0 && toks[j].Kind == Ident && !isGoKeyword(toks[j].Text) {
-				out = append(out, tokIdent(toks[j].Text, t.Pos), tokSpace(" ", t.Pos))
-				eq := nextSig(toks, j+1)
-				// 原 `=` token 用 `:=` 替换；若两者之间有空白，跳过
-				for k := j + 1; k < eq; k++ {
-					if toks[k].Kind == Space {
-						continue
-					}
-					out = append(out, toks[k])
-				}
-				out = append(out, tokOp(":=", t.Pos))
-				i = eq // 表达式余部由后续循环原样输出
-				continue
-			}
-		}
+		// 2) let 声明由 transformLetDecls 无条件处理（见下），不再依赖 ast.HasSignal()。
 
 		// 把用户写的 Signal.xxx 的 Signal 标记为生成 token，供 ReconcileImports 识别注入。
 		// 第八轮 P1-4：标记前必须查 Bindings——若 Signal 在该位置解析到用户自己的

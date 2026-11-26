@@ -65,11 +65,12 @@ func main() { println("ok") }
 
 func TestCompileErrorDiagnostic(t *testing.T) {
 	// 转译失败也应产出一条 0:0 诊断供 LSP 展示。
-	// 用复合条件中的残留 is 守卫触发 Compile 错误。
+	// 守卫位于条件首位的 && 复合条件现已支持收窄（不再报错）；
+	// 改用守卫不在条件首位的形态触发 Compile 错误（comma-ok 无法前置，保持报错）。
 	src := `package main
 func f() {
     var v int | string = 1
-    if v is int && v == 1 {
+    if v == 1 && v is int {
     }
 }
 `
