@@ -122,6 +122,16 @@ s=[x for x in d['splitters'] if x['axis']=='$1'][0]
 print(int(s['x']+s['w']/2), int(s['y']+s['h']/2))
 "
 }
+# 底部工具窗标签的 y 从水平分隔条动态推算（分隔条底 + 标签头半高）。
+# 写死绝对 y 会在布局/内容行数变化后失准，故按当前分隔条位置计算。
+bottom_tab_y() {
+  python3 -c "
+import json
+d=json.load(open('$STATE'))
+s=[x for x in d['splitters'] if x['axis']=='h'][0]
+print(int(s['y']+s['h'])+13)
+"
+}
 BASE_LINE="    return <div>Hello, {name}!</div>"
 # 代码文字起点：右侧编辑区 x=306 + 行号槽 42 + 间距 8 = 362。
 # 注意垂直分隔条现在正确占据 x=300..306（此前 #frag 布局错位把它推到底部，
@@ -360,11 +370,12 @@ echo "===== 外壳与窗口交互 ====="
 # --- 21. 底部工具窗标签切换 ---
 echo "== 21. 底部 Terminal / Run / Problems 标签 =="
 assert_eq "默认底部标签为 Terminal" "$(j bottom_tab)" "Terminal"
-click 410 641
+BTY=$(bottom_tab_y)
+click 410 "$BTY"
 assert_eq "点击 Run 切换底部标签" "$(j bottom_tab)" "Run"
-click 490 641
+click 490 "$BTY"
 assert_eq "点击 Problems 切换底部标签" "$(j bottom_tab)" "Problems"
-click 345 641
+click 345 "$BTY"
 assert_eq "点击 Terminal 切回" "$(j bottom_tab)" "Terminal"
 
 # --- 22. 项目树：点击文件打开标签 + 标签切换 ---
@@ -406,8 +417,9 @@ if [ -n "$WID" ]; then
   xdotool windowsize "$WID" 1200 700 >/dev/null 2>&1; sleep_s 0.5
   assert_eq "窗口宽度随 resize 变化" "$(j window_w)" 1200
   assert_eq "窗口高度随 resize 变化" "$(j window_h)" 700
-  # resize 后界面仍可交互：底部标签点击照常生效。
-  click 490 641
+  # resize 后界面仍可交互：底部标签点击照常生效（坐标按 resize 后布局重算）。
+  BTY2=$(bottom_tab_y)
+  click 490 "$BTY2"
   assert_eq "resize 后底部标签仍可点击" "$(j bottom_tab)" "Problems"
   xdotool windowsize "$WID" "$W0" "$H0" >/dev/null 2>&1; sleep_s 0.5
   assert_eq "窗口尺寸可恢复" "$(j window_w)" "$W0"
