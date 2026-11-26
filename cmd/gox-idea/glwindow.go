@@ -70,6 +70,19 @@ type glWindow struct {
 	clickY     float64
 	clickCount int
 
+	// WebStorm 三区分隔条拖拽状态（同样只在主线程回调里读写）。
+	splitDrag   bool   // 正在拖拽分隔条
+	splitAxis   string // "v"=竖直分隔条(调左栏宽)，"h"=水平分隔条(调终端高)
+	splitStartX float64
+	splitStartY float64
+	splitStartW int
+	splitStartH int
+
+	// 完整重绘回调：拖拽分隔条改变布局尺寸时，动态子树内部的 height 变化
+	// 在增量帧后端不产生有效刷新（同类于结构型 For 的限制），故走一次
+	// app.Render 完整重建。由 main.go 在 App 创建后注入。
+	rerender func()
+
 	// UI Loop（提案 P2）：桌面主循环接入的任务队列与监测器；
 	// openGL() 创建、Run() drain、Close() 停止。
 	uiLoop *loop.Queue
@@ -259,9 +272,27 @@ func (g *glWindow) Open(cfg gxapp.WindowConfig) error {
 		ui.EditorScrollLines(-yoff * 3)
 		g.markDirty()
 	})
-	// 拖动选择：左键按住移动时持续扩展选区（与 web 端 pointermove 同语义）。
+	// 光标移动：分隔条拖拽调整区域尺寸；否则左键按住时扩展编辑器选区
+	// （与 web 端 pointermove 同语义）。
 	win.SetCursorPosCallback(func(w *glfw.Window, x, y float64) {
-		if !g.dragging || w.GetMouseButton(glfw.MouseButtonLeft) != glfw.Press {
+		if w.GetMouseButton(glfw.MouseButtonLeft) != glfw.Press {
+			return
+		}
+		if g.splitDrag {
+			if g.splitAxis == "v" {
+				ui.SetLayoutProjectW(g.splitStartW + int(x-g.splitStartX))
+			} else {
+				// 终端在下方：向上拖动(y 减小)增大高度，故取负号。
+				ui.SetLayoutTerminalH(g.splitStartH - int(y-g.splitStartY))
+			}
+			// 布局尺寸写在动态子树内部，增量帧不刷新，走完整重绘。
+			if g.rerender != nil {
+				g.rerender()
+			}
+			g.markDirty()
+			return
+		}
+		if !g.dragging {
 			return
 		}
 		if line, col, ok := g.editorHit(float32(x), float32(y)); ok {
@@ -432,6 +463,11 @@ func (g *glWindow) onMouseButton(w *glfw.Window, button glfw.MouseButton, action
 	}
 	if action == glfw.Release {
 		g.dragging = false
+		if g.splitDrag {
+			g.splitDrag = false
+			ui.SetSplitDragging(false)
+			g.markDirty()
+		}
 		return
 	}
 	if action != glfw.Press {
@@ -439,6 +475,22 @@ func (g *glWindow) onMouseButton(w *glfw.Window, button glfw.MouseButton, action
 	}
 	cx, cy := w.GetCursorPos()
 	px, py := float32(cx), float32(cy) // GLFW 光标坐标已是左上原点，与 painter/hits 一致
+
+	// ---- WebStorm 分隔条拖拽：命中 splitter 则进入拖拽态，优先于编辑器选区 ----
+	if axis, ok := g.splitterAt(px, py); ok {
+		g.splitDrag = true
+		g.splitAxis = axis
+		g.splitStartX, g.splitStartY = cx, cy
+		if axis == "v" {
+			g.splitStartW = ui.LayoutProjectW()
+		} else {
+			g.splitStartH = ui.LayoutTerminalH()
+		}
+		ui.SetSplitDragging(true)
+		g.markDirty()
+		return
+	}
+
 	// ---- 编辑器选区交互：定点 / Shift 扩展 / 双击选词 / 三击选行 / 拖拽起点 ----
 	// GLFW 没有 dblclick 事件，用"400ms 内同点位连续按下"计数模拟 detail。
 	if line, col, ok := g.editorHit(px, py); ok {
@@ -498,6 +550,31 @@ func (g *glWindow) onMouseButton(w *glfw.Window, button glfw.MouseButton, action
 			},
 		})
 	}
+}
+
+// splitterAt 判断屏幕点是否落在 WebStorm 三区的分隔条上，返回轴向。
+// 分隔条在 GX 里用 class="gx-splitter-v"/"gx-splitter-h" 标记，命中框由
+// skia 后端随帧生成；这里按 class 精确匹配，避免与编辑器/终端的命中混淆。
+func (g *glWindow) splitterAt(px, py float32) (string, bool) {
+	g.mu.Lock()
+	hits := append([]skia.HitBox(nil), g.hits...)
+	g.mu.Unlock()
+	for _, h := range hits {
+		if h.Node == nil || h.Node.Props == nil || h.W <= 0 || h.H <= 0 {
+			continue
+		}
+		if px < h.X || px >= h.X+h.W || py < h.Y || py >= h.Y+h.H {
+			continue
+		}
+		cls, _ := h.Node.Props["class"].(string)
+		switch cls {
+		case "gx-splitter-v":
+			return "v", true
+		case "gx-splitter-h":
+			return "h", true
+		}
+	}
+	return "", false
 }
 
 // editorHit 把屏幕点换算成编辑器 (行, 列)。行取 .gx-editor-row 命中框（可见行

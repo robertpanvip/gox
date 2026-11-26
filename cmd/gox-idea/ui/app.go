@@ -60,6 +60,7 @@ var themeHandler func(bool) // 参数 true=浅色
  func SetRunHandler(fn func()) { runHandler = fn }
  func TriggerRun() {
     if runHandler != nil {
+        terminalState.RunMark("Run")
         Signal.Batch(func() { RunningSig(true )})
         runHandler()
     }
@@ -70,6 +71,11 @@ var themeHandler func(bool) // 参数 true=浅色
     runInstance = inst
     runErr = err
     runStamp = runStamp + 1
+    if err != "" {
+        terminalState.Println("✗ " + err)
+    } else {
+        terminalState.Println("✓ 解释成功 · 场景树已加载到预览")
+    }
     Signal.Batch(func() { RunningSig(false )})
 }
 
@@ -89,6 +95,55 @@ func RunInfoColor() string {
 func hasRunResult() bool { return runInstance != nil }
 func currentRunErr() string { return runErr }
 func currentRunStamp() int { return runStamp }
+
+// ---- WebStorm 三区布局尺寸（信号驱动，装配层拖拽分隔条时写入）----
+// 左 Project 宽、下 Terminal 高、终端开合。所有 setter 带边界 clamp，
+// 保证拖拽时任一区域不会被拉到不可见。
+ var LayoutProjectW = Signal.New(260)
+ var LayoutTerminalH = Signal.New(180)
+ var LayoutTerminalOpen = Signal.New(true)
+ var LayoutSplitActive = Signal.New(false )// 分隔条拖拽进行中（高亮反馈）
+
+ func SetLayoutProjectW(w int) {
+    v := w
+    if v < 160 { v = 160 }
+    if v > 520 { v = 520 }
+    Signal.Batch(func() { LayoutProjectW(v )})
+}
+ func SetLayoutTerminalH(h int) {
+    v := h
+    if v < 90 { v = 90 }
+    if v > 420 { v = 420 }
+    Signal.Batch(func() { LayoutTerminalH(v )})
+}
+ func ToggleTerminal() { Signal.Batch(func() { LayoutTerminalOpen(!LayoutTerminalOpen() )}) }
+// SetSplitDragging 由装配层在分隔条按下/松开时切换高亮反馈。
+ func SetSplitDragging(on bool) { Signal.Batch(func() { LayoutSplitActive(on )}) }
+
+// ---- 进程内终端（代码区下方，Run 输出落地于此）----
+// 与 gox-term 独立 shell 不同：这是 IDEA 的控制台面板，展示解释/构建输出。
+var terminalState = widgets.NewTerminal()
+
+// TerminalOut 供装配层在 Run 前后写入输出行。
+ func TerminalOut(s string) { terminalState.Println(s) }
+ func TerminalClear() { terminalState.Clear() }
+
+// 布局尺寸/分隔条状态的 getter（函数体内裸读 sig，交给 GX 生成响应式 getter）。
+func projectWidthPx() string { return strconv.Itoa(LayoutProjectW()) }
+func terminalHeightPx() string { return strconv.Itoa(LayoutTerminalH()) }
+func splitActiveBg() string {
+    if LayoutSplitActive() { return accentColor() }
+    return borderColor()
+}
+func terminalLines() string { return strconv.Itoa(terminalState.LineCount()) + " 行" }
+func terminalText() string  { return terminalState.Text() }
+
+// TerminalView 用 JSX 自绘终端面板：height 走 GX 响应式 style 属性，
+// 拖拽水平分隔条写 layoutTerminalH 即可实时改变高度（widgets.Terminal 内部
+// height 是静态 attr，无法响应信号，故这里不用该组件）。
+func TerminalView() *gxscene.Instance {
+    return gxscene.Render(gxscene.Template{Ops:[]gxscene.Op{gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:0,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:1,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:2,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:3,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:4,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpDynChild,Slot:5,},gxscene.Op{Code:gxscene.OpDynChild,Slot:6,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:7,},gxscene.Op{Code:gxscene.OpDynChild,Slot:8,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpClose,},},N:9,}, func() any{ return gxscene.Style{FlexDirection:"column",Gap:"0",BorderRadius:widgets.RadiusCard,Overflow:"hidden",BorderWidth:widgets.HairlineWidth,Border:borderColor(),BoxShadow:cardShadow(),} }, func() any{ return gxscene.Style{FlexDirection:"row",Gap:"8",AlignItems:"center",Padding:"6 10",Background:widgets.UseToken("panelalt")(),} }, func() any{ return gxscene.Style{Width:"8",Height:"8",BorderRadius:"4",Background:"#ff5f57",} }, func() any{ return gxscene.Style{Width:"8",Height:"8",BorderRadius:"4",Background:"#febc2e",} }, func() any{ return gxscene.Style{Width:"8",Height:"8",BorderRadius:"4",Background:"#28c840",} }, func() any{ return widgets.Text(gxscene.Props{"value": "Terminal", "size": widgets.FontFootnote, "weight": "bold", "tone": "muted"}) }, func() any{ return widgets.Text(gxscene.Props{"value": terminalLines(), "size": widgets.FontFootnote, "tone": "muted"}) }, func() any{ return gxscene.Style{Background:appBg(),Padding:"8 10",Height:terminalHeightPx(),Overflow:"auto",FontSize:widgets.FontFootnote,Color:widgets.UseToken("success")(),} }, func() any{ return widgets.Text(gxscene.Props{"value": terminalText(), "size": widgets.FontFootnote, "tone": "muted"}) })
+}
 
 // ---- 示例库：元数据 + 源码文本（由 gen_samples.py 生成） ----
 
@@ -544,13 +599,10 @@ func projectSubtitle(n int) string {
 
  func Playground() *gxscene.Instance {
     n := len(Samples())
-    return gxscene.Render(gxscene.Template{Ops:[]gxscene.Op{gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:0,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:1,},gxscene.Op{Code:gxscene.OpDynChild,Slot:2,},gxscene.Op{Code:gxscene.OpDynChild,Slot:3,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:4,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:5,},gxscene.Op{Code:gxscene.OpDynChild,Slot:6,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:7,},gxscene.Op{Code:gxscene.OpDynChild,Slot:8,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:9,},gxscene.Op{Code:gxscene.OpDynChild,Slot:10,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:11,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:12,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:13,},gxscene.Op{Code:gxscene.OpChildText,Arg:"⬤ 实时预览",},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpDynChild,Slot:14,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:15,},gxscene.Op{Code:gxscene.OpDynChild,Slot:16,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:17,},gxscene.Op{Code:gxscene.OpDynChild,Slot:18,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:19,},gxscene.Op{Code:gxscene.OpChildText,Arg:"⌘↵ 运行 · ⌘Z 撤销 · ⌃空格 补全 · ⇧⌥F 格式化 · 悬停看符号",},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpClose,},},N:20,}, func() any{ return gxscene.Style{Background:canvasBg(),Color:textColor(),Padding:"0",FlexDirection:"column",Gap:"0",Width:"1360",Height:"760",BorderRadius:RadiusPanelLocal(),BorderWidth:widgets.HairlineWidth,Border:borderColor(),Overflow:"hidden",BoxShadow:paneShadow(),} }, func() any{ return gxscene.Style{Background:panelBg(),Padding:"16 20",FlexDirection:"column",Gap:"4",} }, func() any{ return widgets.Heading(gxscene.Props{"value": "GoX IDE", "level": 2, "tone": "text"}) }, func() any{ return widgets.Text(gxscene.Props{
+    return gxscene.Render(gxscene.Template{Ops:[]gxscene.Op{gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:0,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:1,},gxscene.Op{Code:gxscene.OpDynChild,Slot:2,},gxscene.Op{Code:gxscene.OpDynChild,Slot:3,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:4,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:5,},gxscene.Op{Code:gxscene.OpDynChild,Slot:6,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpAttr,Arg:"gx-splitter-v",Key:"class",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:7,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:8,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:9,},gxscene.Op{Code:gxscene.OpDynChild,Slot:10,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:11,},gxscene.Op{Code:gxscene.OpDynChild,Slot:12,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpAttr,Arg:"gx-splitter-h",Key:"class",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:13,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:14,},gxscene.Op{Code:gxscene.OpDynChild,Slot:15,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:16,},gxscene.Op{Code:gxscene.OpDynChild,Slot:17,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:18,},gxscene.Op{Code:gxscene.OpChildText,Arg:"⌘↵ 运行 · ⌘Z 撤销 · ⌃空格 补全 · ⇧⌥F 格式化 · 悬停看符号",},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpClose,},},N:19,}, func() any{ return gxscene.Style{Background:canvasBg(),Color:textColor(),Padding:"0",FlexDirection:"column",Gap:"0",Width:"1360",Height:"760",BorderRadius:RadiusPanelLocal(),BorderWidth:widgets.HairlineWidth,Border:borderColor(),Overflow:"hidden",BoxShadow:paneShadow(),} }, func() any{ return gxscene.Style{Background:panelBg(),Padding:"16 20",FlexDirection:"column",Gap:"4",} }, func() any{ return widgets.Heading(gxscene.Props{"value": "GoX IDE", "level": 2, "tone": "text"}) }, func() any{ return widgets.Text(gxscene.Props{
                 "value": projectSubtitle(n),
                 "size": widgets.FontCallout, "tone": "muted",
-            }) }, func() any{ return gxscene.Style{FlexDirection:"row",Gap:"12",Padding:"16",FlexGrow:"1",Height:"620",} }, func() any{ return gxscene.Style{Background:panelBg(),Padding:"12",BorderRadius:widgets.RadiusCard,Width:"240",FlexDirection:"column",Gap:"8",BorderWidth:widgets.HairlineWidth,Border:borderColor(),BoxShadow:cardShadow(),} }, func() any{ return projectPanel() }, func() any{ return gxscene.Style{FlexDirection:"column",Gap:"8",Width:"660",} }, func() any{ return toolbar() }, func() any{ return gxscene.Style{Background:panelBg(),Padding:"12",BorderRadius:widgets.RadiusCard,BorderWidth:widgets.HairlineWidth,Border:borderColor(),BoxShadow:cardShadow(),} }, func() any{ return Editor() }, func() any{ return gxscene.Style{Background:panelBg(),Padding:"12",BorderRadius:widgets.RadiusCard,Width:"400",FlexDirection:"column",Gap:"8",BorderWidth:widgets.HairlineWidth,Border:borderColor(),BoxShadow:cardShadow(),} }, func() any{ return gxscene.Style{FlexDirection:"column",Gap:"3",} }, func() any{ return gxscene.Style{Color:accentColor(),FontSize:widgets.FontBody,Weight:"bold",} }, func() any{ return widgets.Text(gxscene.Props{
-                        "value": Samples()[SampleIndex()].Name + " · " + Samples()[SampleIndex()].Desc,
-                        "size": widgets.FontFootnote, "tone": "muted",
-                    }) }, func() any{ return gxscene.Style{Background:appBg(),Padding:"12",BorderRadius:widgets.RadiusSmall,MinHeight:"400",BorderWidth:widgets.HairlineWidth,Border:borderColor(),} }, func() any{ return demoPreview() }, func() any{ return gxscene.Style{Color:RunInfoColor(),FontSize:widgets.FontFootnote,} }, func() any{ return RunInfo() }, func() any{ return gxscene.Style{Color:mutedColor(),FontSize:widgets.FontFootnote,Padding:"12 16",} })
+            }) }, func() any{ return gxscene.Style{FlexDirection:"row",Gap:"0",Padding:"8 12",FlexGrow:"1",Height:"620",} }, func() any{ return gxscene.Style{Background:panelBg(),Padding:"10",BorderRadius:widgets.RadiusCard,Width:projectWidthPx(),FlexShrink:"0",FlexDirection:"column",Gap:"8",BorderWidth:widgets.HairlineWidth,Border:borderColor(),BoxShadow:cardShadow(),} }, func() any{ return projectPanel() }, func() any{ return gxscene.Style{Width:"8",FlexShrink:"0",Cursor:"col-resize",Background:splitActiveBg(),Hover:&gxscene.Style{Background:accentColor(),},} }, func() any{ return gxscene.Style{FlexDirection:"column",Gap:"0",FlexGrow:"1",MinWidth:"0",} }, func() any{ return gxscene.Style{FlexDirection:"column",Gap:"8",FlexGrow:"1",Overflow:"hidden",} }, func() any{ return toolbar() }, func() any{ return gxscene.Style{Background:panelBg(),Padding:"12",BorderRadius:widgets.RadiusCard,BorderWidth:widgets.HairlineWidth,Border:borderColor(),BoxShadow:cardShadow(),Overflow:"hidden",} }, func() any{ return Editor() }, func() any{ return gxscene.Style{Height:"8",FlexShrink:"0",Cursor:"row-resize",Background:splitActiveBg(),Hover:&gxscene.Style{Background:accentColor(),},} }, func() any{ return gxscene.Style{FlexDirection:"column",Gap:"0",} }, func() any{ return TerminalView() }, func() any{ return gxscene.Style{Color:RunInfoColor(),FontSize:widgets.FontFootnote,Padding:"2 4",} }, func() any{ return RunInfo() }, func() any{ return gxscene.Style{Color:mutedColor(),FontSize:widgets.FontFootnote,Padding:"12 16",} })
 }
 // ---- 编辑器命令转发（装配层 ui.Editor* API 保持兼容）----
 

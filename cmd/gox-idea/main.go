@@ -1,7 +1,8 @@
 // GoX IDE —— WebStorm 风格的图形 IDE（skia 后端 + GLFW）。
 //
-// 左侧是内置 SVG 图标的项目管理器（PROJECT 面板），支持目录展开折叠、
-// 文件点击选中与打开；中间是 GX 语法高亮编辑器；右侧是实时预览。
+// WebStorm 风格三区布局：左侧 PROJECT 项目管理器（内置 SVG 图标，支持目录
+// 展开折叠与文件点击打开）；右侧上方是 GX 语法高亮编辑器，下方是 Terminal
+// 控制台（Run 输出落地）；两区间隔条均可鼠标拖拽调整尺寸。
 // 不传 -path 时用内置示例库，传 -path <目录> 时扫描真实磁盘项目。
 // 键盘/鼠标输入由 glwindow.go 翻译成 GX 编辑命令，编辑逻辑零条件编译。
 package main
@@ -51,6 +52,12 @@ func main() {
 	// P2 宿主接线：Loop 作为 UIExecutor 注入，帧请求/后台 Dispatch/微任务
 	// 全部进入共享 Loop 队列，由 Run() 在 GLFW 线程 drain 执行。
 	app.SetUIExecutor(win)
+
+	// 分隔条拖拽改变布局尺寸时，动态子树内部的 height/width 变化在增量帧
+	// 后端不产生有效刷新，注入完整重绘回调重建场景树（拖拽频率低，开销可接受）。
+	win.rerender = func() {
+		_ = app.Render(func() any { return ui.Playground() })
+	}
 
 	// 注入项目根与文件读取回调（必须在 Render 前，首帧即见正确项目树）。
 	ui.SetProjectRoot(root, func(path string) string {

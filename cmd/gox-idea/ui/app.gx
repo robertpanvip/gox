@@ -60,6 +60,7 @@ pub func ToggleTheme() {
 pub func SetRunHandler(fn func()) { runHandler = fn }
 pub func TriggerRun() {
     if runHandler != nil {
+        terminalState.RunMark("Run")
         Signal.batch(func() { runningSig = true })
         runHandler()
     }
@@ -70,6 +71,11 @@ pub func SetRunResult(inst *gxscene.Instance, err string) {
     runInstance = inst
     runErr = err
     runStamp = runStamp + 1
+    if err != "" {
+        terminalState.Println("✗ " + err)
+    } else {
+        terminalState.Println("✓ 解释成功 · 场景树已加载到预览")
+    }
     Signal.batch(func() { runningSig = false })
 }
 
@@ -89,6 +95,72 @@ func RunInfoColor() string {
 func hasRunResult() bool { return runInstance != nil }
 func currentRunErr() string { return runErr }
 func currentRunStamp() int { return runStamp }
+
+// ---- WebStorm 三区布局尺寸（信号驱动，装配层拖拽分隔条时写入）----
+// 左 Project 宽、下 Terminal 高、终端开合。所有 setter 带边界 clamp，
+// 保证拖拽时任一区域不会被拉到不可见。
+pub sig layoutProjectW = 260
+pub sig layoutTerminalH = 180
+pub sig layoutTerminalOpen = true
+pub sig layoutSplitActive = false // 分隔条拖拽进行中（高亮反馈）
+
+pub func SetLayoutProjectW(w int) {
+    v := w
+    if v < 160 { v = 160 }
+    if v > 520 { v = 520 }
+    Signal.batch(func() { layoutProjectW = v })
+}
+pub func SetLayoutTerminalH(h int) {
+    v := h
+    if v < 90 { v = 90 }
+    if v > 420 { v = 420 }
+    Signal.batch(func() { layoutTerminalH = v })
+}
+pub func ToggleTerminal() { Signal.batch(func() { layoutTerminalOpen = !layoutTerminalOpen }) }
+// SetSplitDragging 由装配层在分隔条按下/松开时切换高亮反馈。
+pub func SetSplitDragging(on bool) { Signal.batch(func() { layoutSplitActive = on }) }
+
+// ---- 进程内终端（代码区下方，Run 输出落地于此）----
+// 与 gox-term 独立 shell 不同：这是 IDEA 的控制台面板，展示解释/构建输出。
+var terminalState = widgets.NewTerminal()
+
+// TerminalOut 供装配层在 Run 前后写入输出行。
+pub func TerminalOut(s string) { terminalState.Println(s) }
+pub func TerminalClear() { terminalState.Clear() }
+
+// 布局尺寸/分隔条状态的 getter（函数体内裸读 sig，交给 GX 生成响应式 getter）。
+func projectWidthPx() string { return strconv.Itoa(layoutProjectW) }
+func terminalHeightPx() string { return strconv.Itoa(layoutTerminalH) }
+func splitActiveBg() string {
+    if layoutSplitActive { return accentColor() }
+    return borderColor()
+}
+func terminalLines() string { return strconv.Itoa(terminalState.LineCount()) + " 行" }
+func terminalText() string  { return terminalState.Text() }
+
+// TerminalView 用 JSX 自绘终端面板：height 走 GX 响应式 style 属性，
+// 拖拽水平分隔条写 layoutTerminalH 即可实时改变高度（widgets.Terminal 内部
+// height 是静态 attr，无法响应信号，故这里不用该组件）。
+func TerminalView() *gxscene.Instance {
+    return <div
+        style={{ flexDirection: "column", gap: 0, borderRadius: widgets.RadiusCard, overflow: "hidden", borderWidth: widgets.HairlineWidth, border: borderColor(), boxShadow: cardShadow() }}
+    >
+        <div
+            style={{ flexDirection: "row", gap: 8, alignItems: "center", padding: "6 10", background: widgets.UseToken("panelalt")() }}
+        >
+            <div style={{ width: 8, height: 8, borderRadius: 4, background: "#ff5f57" }}/>
+            <div style={{ width: 8, height: 8, borderRadius: 4, background: "#febc2e" }}/>
+            <div style={{ width: 8, height: 8, borderRadius: 4, background: "#28c840" }}/>
+            {widgets.Text(gxscene.Props{"value": "Terminal", "size": widgets.FontFootnote, "weight": "bold", "tone": "muted"})}
+            {widgets.Text(gxscene.Props{"value": terminalLines(), "size": widgets.FontFootnote, "tone": "muted"})}
+        </div>
+        <div
+            style={{ background: appBg(), padding: "8 10", height: terminalHeightPx(), overflow: "auto", fontSize: widgets.FontFootnote, color: widgets.UseToken("success")() }}
+        >
+            {widgets.Text(gxscene.Props{"value": terminalText(), "size": widgets.FontFootnote, "tone": "muted"})}
+        </div>
+    </div>
+}
 
 // ---- 示例库：元数据 + 源码文本（由 gen_samples.py 生成） ----
 
@@ -647,41 +719,36 @@ pub func Playground() *gxscene.Instance {
                 "size": widgets.FontCallout, "tone": "muted",
             })}
         </div>
-        <div style={{ flexDirection: "row", gap: 12, padding: 16, flexGrow: 1, height: 620 }}>
+        <div style={{ flexDirection: "row", gap: 0, padding: "8 12", flexGrow: 1, height: 620 }}>
             <div
-                style={{ background: panelBg(), padding: 12, borderRadius: widgets.RadiusCard, width: 240, flexDirection: "column", gap: 8, borderWidth: widgets.HairlineWidth, border: borderColor(), boxShadow: cardShadow() }}
+                style={{ background: panelBg(), padding: 10, borderRadius: widgets.RadiusCard, width: projectWidthPx(), flexShrink: 0, flexDirection: "column", gap: 8, borderWidth: widgets.HairlineWidth, border: borderColor(), boxShadow: cardShadow() }}
             >
                 {projectPanel()}
             </div>
-            <div style={{ flexDirection: "column", gap: 8, width: 660 }}>
-                {toolbar()}
-                <div
-                    style={{ background: panelBg(), padding: 12, borderRadius: widgets.RadiusCard, borderWidth: widgets.HairlineWidth, border: borderColor(), boxShadow: cardShadow() }}
-                >
-                    {Editor()}
-                </div>
-            </div>
             <div
-                style={{ background: panelBg(), padding: 12, borderRadius: widgets.RadiusCard, width: 400, flexDirection: "column", gap: 8, borderWidth: widgets.HairlineWidth, border: borderColor(), boxShadow: cardShadow() }}
-            >
-                <div style={{ flexDirection: "column", gap: 3 }}>
+                class="gx-splitter-v"
+                style={{ width: 8, flexShrink: 0, cursor: "col-resize", background: splitActiveBg(), hover: { background: accentColor() } }}
+            />
+            <div style={{ flexDirection: "column", gap: 0, flexGrow: 1, minWidth: 0 }}>
+                <div style={{ flexDirection: "column", gap: 8, flexGrow: 1, overflow: "hidden" }}>
+                    {toolbar()}
                     <div
-                        style={{ color: accentColor(), fontSize: widgets.FontBody, weight: "bold" }}
+                        style={{ background: panelBg(), padding: 12, borderRadius: widgets.RadiusCard, borderWidth: widgets.HairlineWidth, border: borderColor(), boxShadow: cardShadow(), overflow: "hidden" }}
                     >
-                        ⬤ 实时预览
+                        {Editor()}
                     </div>
-                    {widgets.Text(gxscene.Props{
-                        "value": samples()[sampleIndex].name + " · " + samples()[sampleIndex].desc,
-                        "size": widgets.FontFootnote, "tone": "muted",
-                    })}
                 </div>
                 <div
-                    style={{ background: appBg(), padding: 12, borderRadius: widgets.RadiusSmall, minHeight: 400, borderWidth: widgets.HairlineWidth, border: borderColor() }}
-                >
-                    {demoPreview()}
-                </div>
-                <div style={{ color: RunInfoColor(), fontSize: widgets.FontFootnote }}>
-                    {RunInfo()}
+                    class="gx-splitter-h"
+                    style={{ height: 8, flexShrink: 0, cursor: "row-resize", background: splitActiveBg(), hover: { background: accentColor() } }}
+                />
+                <div style={{ flexDirection: "column", gap: 0 }}>
+                    {TerminalView()}
+                    <div
+                        style={{ color: RunInfoColor(), fontSize: widgets.FontFootnote, padding: "2 4" }}
+                    >
+                        {RunInfo()}
+                    </div>
                 </div>
             </div>
         </div>

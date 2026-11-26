@@ -108,10 +108,10 @@ func TestPlaygroundSceneTree(t *testing.T) {
 		t.Fatal("Root 为 nil")
 	}
 	txt := (gxscene.TextBackend{}).Paint(root)
-	// 标题、示例名、编辑器里的行号与高亮 token 都应出现在文本投影里。
-	// 注意：编辑器源码被切成逐 token 的 span，"sig count" 不会连成连续串，
-	// 故只断言标题、示例名与确实连续的输入片段。
-	for _, want := range []string{"GoX IDE", "用 GX 写 GX", "01 Hello GX", "示例", "Hello"} {
+	// WebStorm 三区布局：标题、副标题、PROJECT 区、Terminal 区、底部状态栏。
+	// 注意：编辑器源码被切成逐 token 的 span，示例名不会连成连续串，
+	// 故断言三区标题与稳定的界面文案。
+	for _, want := range []string{"GoX IDE", "用 GX 写 GX", "PROJECT", "Terminal", "运行"} {
 		if !strings.Contains(txt, want) {
 			t.Errorf("场景树缺少 %q\n---\n%s\n---", want, txt)
 		}
