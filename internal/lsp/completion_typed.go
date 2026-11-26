@@ -47,7 +47,11 @@ func (s *Server) typedCompletion(gxSrc string, line, col int) ([]CompletionItem,
 	}
 	items := make([]CompletionItem, 0, len(cands))
 	for _, c := range cands {
-		items = append(items, CompletionItem{Label: c.Name, Kind: completionKind(c.Kind), Detail: c.Signature})
+		it := CompletionItem{Label: c.Name, Kind: completionKind(c.Kind), Detail: c.Signature}
+		if c.Pkg != "" {
+			it.Data = c.Pkg + "." + c.Name
+		}
+		items = append(items, it)
 	}
 	return items, true
 }

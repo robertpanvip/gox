@@ -28,6 +28,7 @@ type CompletionItem struct {
 	Label  string `json:"label"`
 	Kind   int    `json:"kind,omitempty"`
 	Detail string `json:"detail,omitempty"`
+	Data   string `json:"data,omitempty"` // "pkg.Name"，lspResolveDoc 的入参
 }
 
 type CompletionList struct {

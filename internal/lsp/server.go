@@ -95,7 +95,7 @@ func (s *Server) handleRequest(req *RequestMessage, body []byte) (any, *RPCError
 				TextDocumentSync:           1, // full
 				DefinitionProvider:         true,
 				HoverProvider:              true,
-				CompletionProvider:         &CompletionOptions{TriggerCharacters: []string{"."}},
+				CompletionProvider:         &CompletionOptions{TriggerCharacters: []string{"."}, ResolveProvider: true},
 				SignatureHelpProvider:      &SignatureHelpOptions{TriggerCharacters: []string{"(", ","}},
 				DocumentSymbolProvider:     true,
 				RenameProvider:             true,
@@ -119,6 +119,12 @@ func (s *Server) handleRequest(req *RequestMessage, body []byte) (any, *RPCError
 		return s.documentHighlight(body)
 	case "textDocument/codeAction":
 		return s.codeAction(body)
+	case "textDocument/semanticTokens/full":
+		return s.semanticTokens(body)
+	case "textDocument/inlayHints":
+		return s.inlayHints(body)
+	case "completionItem/resolve":
+		return s.completionResolve(body)
 	case "workspace/symbol":
 		return s.workspaceSymbol(body)
 	case "textDocument/signatureHelp":

@@ -17,28 +17,30 @@
 | codeAction(quickfix) | **undefined 包名 → 插入 import（单行式/括号块）**；**未使用 import → 删行**；浏览器端已验证"应用后复诊清零"闭环 |
 | documentSymbol | 全符号大纲 |
 | workspaceSymbol | 已打开文档聚合（v1） |
+| semanticTokens/full | ✅ 本轮落地：语法级分类（keyword/string/comment/number/namespace/type/function/variable/constant/operator…），双端同源 typecheck.Tokens+EncodeTokens；initialize 已声明 legend（12 类，Full=true）——原悬空字段就此转正 |
+| completionItem/resolve | ✅ 本轮落地：候选携带 Data=pkg.Name；桌面 completionItem/resolve 从 GOROOT/embed 源取 doc 首段；浏览器等价面 Gox.lspResolveDoc(pkg,name) |
+| inlayHints | ✅ 本轮落地：具名形参 + 字符串字面量实参提示（可变参数不提示）；坐标经 SourceMap 回投 .gx；桌面 textDocument/inlayHints + 浏览器 Gox.lspInlayHints |
 | rename / formatting | 单文档 rename；compiler.Format |
 
 ## 缺口（建议顺序）
 
-### P1 —— 编辑器体感与协议正确性
-1. **semanticTokens/full**：ServerCapabilities 里有字段但 initialize 从未声明、无实现——悬空字段，要么接编译器 token 流实现（三端高亮同源），要么删字段，保持能力声明诚实。
-2. **completionItem/resolve**：补全候选惰性带出 doc/签名（embedstd 里就有源码，成本低）。
-3. **typeDefinition / declaration / implementation**：接口→实现需要类型图反查（go/types 全程序扫描），中等成本。
-4. **跨文件 rename + workspace/willRenameFiles**：当前 rename 单文档。
-5. **organizeImports**（codeAction source 组）：需要先建 import 全量解析。
-6. **diagnostics 主动刷新（pull/refresh，LSP 3.17）**。
+### P1 —— 剩余
+1. **typeDefinition / declaration / implementation**：接口→实现需要类型图反查（go/types 全程序扫描），中等成本。
+2. **跨文件 rename + workspace/willRenameFiles**：当前 rename 单文档。
+3. **organizeImports**（codeAction source 组）：需要先建 import 全量解析。
+4. **diagnostics 主动刷新（pull/refresh，LSP 3.17）**。
 
 ### P2 —— 锦上添花
-7. **inlayHints**：参数名提示——TypeInfo 已能给出完整签名，成本低收益高。
-8. **foldingRange / selectionRange**：折叠与智能扩选；selectionRange 和我们的选区引擎天然契合。
-9. **callHierarchy / typeHierarchy**：调用链分析。
-10. **增量同步（textDocumentSync=2）**：playground 有 Rope 提速不敏感，但 gox-ide/外部编辑器大文档收益明显。
-11. **window/workDoneProgress**：首次类型图构建较长，可上报进度。
-12. **gox 组件包桌面跳转**：桌面磁盘上 github.com/robertpanvip/gox/… 无路径可解（当前诚实跳过）；需要 rootUri→module 映射或直接把 embedstd 清单复用到桌面。
-13. **协议一致性测试**：用真实客户端（VS Code/gopls 行为规格）跑 golden 场景，替代目前"单测 + CDP 探针"的组合。
+5. **foldingRange / selectionRange**：折叠与智能扩选；selectionRange 和我们的选区引擎天然契合。
+6. **callHierarchy / typeHierarchy**：调用链分析。
+7. **增量同步（textDocumentSync=2）**：playground 有 Rope 提速不敏感，但 gox-ide/外部编辑器大文档收益明显。
+8. **window/workDoneProgress**：首次类型图构建较长，可上报进度。
+9. **gox 组件包桌面跳转**：桌面磁盘上 github.com/robertpanvip/gox/… 无路径可解（当前诚实跳过）；需要 rootUri→module 映射或直接把 embedstd 清单复用到桌面。
+10. **协议一致性测试**：用真实客户端（VS Code/gopls 行为规格）跑 golden 场景，替代目前"单测 + CDP 探针"的组合。
+11. **semanticTokens 升格语义级**：当前实现是语法级分类（不依赖类型图，快且稳）；类型感知类别（区分 method/parameter、常量折叠等）可基于既有 Importer 增量升级。
 
 ## 已知边界（当前版本如实降级，不算 bug）
 - 内建函数（append/len 等）：go/types 无公开签名/源码面 → 无 signatureHelp/跳转，静默缺席。
 - 源码半截且右括号未闭合的极端语法态：导航链以"编译可过 + 映射可查"为前提，失败一律回退旧行为。
 - workspaceSymbol 仅覆盖已打开文档；未建项目索引。
+- semanticTokens 为语法级（词法 + 关键字语境），类型类别不做推断——保证任意编辑态都有着色且零依赖类型图就绪；resolve 与 inlayHints 则依赖类型图/embed 源，缺席时静默降级。

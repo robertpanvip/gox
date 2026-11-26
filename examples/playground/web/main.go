@@ -307,6 +307,19 @@ func main() {
 	g.Set("lspCodeActions", js.FuncOf(func(this js.Value, args []js.Value) any {
 		return lsp.CodeActionsJSON()
 	}))
+	g.Set("lspSemanticTokens", js.FuncOf(func(this js.Value, args []js.Value) any {
+		return lsp.SemanticTokensJSON()
+	}))
+	g.Set("lspInlayHints", js.FuncOf(func(this js.Value, args []js.Value) any {
+		return lsp.ParamHintsJSON()
+	}))
+	g.Set("lspResolveDoc", js.FuncOf(func(this js.Value, args []js.Value) any {
+		pkg, name := "", ""
+		if len(args) >= 2 {
+			pkg, name = args[0].String(), args[1].String()
+		}
+		return lsp.ResolveDocJSON(pkg, name)
+	}))
 	g.Set("lspDefinition", js.FuncOf(func(this js.Value, args []js.Value) any {
 		line, col := 0, 0
 		if len(args) >= 2 {

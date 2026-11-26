@@ -72,6 +72,7 @@ type ServerCapabilities struct {
 	RenameProvider             bool                   `json:"renameProvider"`
 	DocumentFormattingProvider bool                   `json:"documentFormattingProvider"`
 	SemanticTokensProvider     *SemanticTokensOptions `json:"semanticTokensProvider,omitempty"`
+	InlayHintProvider          bool                   `json:"inlayHintProvider,omitempty"`
 	ReferencesProvider         bool                   `json:"referencesProvider,omitempty"`
 	DocumentHighlightProvider  bool                   `json:"documentHighlightProvider,omitempty"`
 	CodeActionProvider         bool                   `json:"codeActionProvider,omitempty"`
@@ -80,6 +81,7 @@ type ServerCapabilities struct {
 
 type CompletionOptions struct {
 	TriggerCharacters []string `json:"triggerCharacters,omitempty"`
+	ResolveProvider   bool     `json:"resolveProvider,omitempty"`
 }
 
 type SemanticTokensOptions struct {
@@ -152,9 +154,11 @@ type CompletionList struct {
 }
 
 type CompletionItem struct {
-	Label  string `json:"label"`
-	Kind   int    `json:"kind,omitempty"` // 3 = Function, 5 = Field, 6 = Variable
-	Detail string `json:"detail,omitempty"`
+	Label         string `json:"label"`
+	Kind          int    `json:"kind,omitempty"` // 3 = Function, 5 = Field, 6 = Variable
+	Detail        string `json:"detail,omitempty"`
+	Documentation string `json:"documentation,omitempty"`
+	Data          string `json:"data,omitempty"` // "pkg.Name"，resolve 依据
 }
 
 type DocumentSymbol struct {
@@ -225,4 +229,29 @@ type SignatureHelp struct {
 // SignatureHelpOptions 签名帮助触发字符声明。
 type SignatureHelpOptions struct {
 	TriggerCharacters []string `json:"triggerCharacters,omitempty"`
+}
+
+// ---- semanticTokens / inlayHints（LSP 子集）----
+
+// SemanticTokensParams 请求整篇文档的语义 token。
+type SemanticTokensParams struct {
+	TextDocument TextDocumentIdentifier `json:"textDocument"`
+}
+
+// SemanticTokensResult 编码数组：每 5 元一组 [deltaLine, deltaStart, length, typeIdx, modIdx]。
+type SemanticTokensResult struct {
+	Data []int `json:"data"`
+}
+
+// InlayHintParams 请求整篇文档的参数提示。
+type InlayHintParams struct {
+	TextDocument TextDocumentIdentifier `json:"textDocument"`
+	Range        Range                  `json:"range"`
+}
+
+// InlayHint 单条提示；v1 仅 kind=2（参数名），label 为纯文本。
+type InlayHint struct {
+	Position Position `json:"position"`
+	Label    string   `json:"label"`
+	Kind     int      `json:"kind,omitempty"`
 }

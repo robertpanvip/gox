@@ -294,3 +294,106 @@ func TestCodeActionsUnused(t *testing.T) {
 	}
 	t.Fatalf("应产出删除修复: %+v", acts)
 }
+
+// TestSemanticTokensJSON 浏览器语义 token：编码数组合法且非空。
+func TestSemanticTokensJSON(t *testing.T) {
+	s := New()
+	s.SetSource("package main\n\nimport \"fmt\"\n\nfunc main() {\n\tfmt.Println(1)\n}\n")
+	tk := struct {
+		Data []int `json:"data"`
+	}{}
+	tk.Data = decodeTokensForTest(s.SemanticTokensJSON())
+	if len(tk.Data) < 15 || len(tk.Data)%5 != 0 {
+		t.Fatalf("data=%d 项", len(tk.Data))
+	}
+}
+
+// TestParamHintsJSON 浏览器参数提示：fmt.Sprintf 首参给 format:（0 基 .gx 坐标）。
+func TestParamHintsJSON(t *testing.T) {
+	if embedstd.Lookup() == nil {
+		t.Skip("embedstd 未生成")
+	}
+	s := New()
+	s.SetSource("package main\n\nimport \"fmt\"\n\nfunc main() {\n\tfmt.Sprintf(\"%d\", 1)\n}\n")
+	hints := decodeHintsForTest(s.ParamHintsJSON())
+	for _, h := range hints {
+		if h.Label == "format:" && h.Line == 5 {
+			return
+		}
+	}
+	t.Fatalf("缺 format: 提示: %+v", hints)
+}
+
+// TestResolveDocStd 补全项惰性文档：fmt/Sprintf 内嵌 doc 可取回。
+func TestResolveDocStd(t *testing.T) {
+	if embedstd.Lookup() == nil {
+		t.Skip("embedstd 未生成")
+	}
+	s := New()
+	doc := s.ResolveDocJSON("fmt", "Sprintf")
+	if !strings.Contains(doc, "formats according") {
+		t.Fatalf("resolve doc: %s", doc)
+	}
+}
+
+// —— 测试辅助：不引 encoding/json，红阶段直接肉眼解析极简 JSON 数组 ——
+func decodeTokensForTest(js string) []int {
+	return parseIntList(js[strings.Index(js, "[")+1 : strings.LastIndex(js, "]")])
+}
+func decodeHintsForTest(js string) []hintRow {
+	secs := strings.Split(js, "},")
+	out := make([]hintRow, 0, len(secs))
+	for _, sec := range secs {
+		h := hintRow{}
+		if i := strings.Index(sec, "\"line\":"); i >= 0 {
+			rest := sec[i+7:]
+			j := strings.IndexAny(rest, ",}\"")
+			h.Line, _ = atoi(rest[:j])
+		}
+		if i := strings.Index(sec, "\"label\":\""); i >= 0 {
+			rest := sec[i+9:]
+			h.Label = rest[:strings.Index(rest, "\"")]
+		}
+		if h.Label != "" {
+			out = append(out, h)
+		}
+	}
+	return out
+}
+
+type hintRow struct {
+	Line  int
+	Col   int
+	Label string
+}
+
+func parseIntList(s string) []int {
+	fs := strings.FieldsFunc(s, func(r rune) bool { return r == ',' })
+	out := make([]int, 0, len(fs))
+	for _, f := range fs {
+		if v, ok := atoi(strings.TrimSpace(f)); ok {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+func atoi(s string) (int, bool) {
+	neg := false
+	if strings.HasPrefix(s, "-") {
+		neg, s = true, s[1:]
+	}
+	if s == "" {
+		return 0, false
+	}
+	n := 0
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return 0, false
+		}
+		n = n*10 + int(r-'0')
+	}
+	if neg {
+		n = -n
+	}
+	return n, true
+}

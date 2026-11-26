@@ -114,3 +114,23 @@ race 通过。已知边界：gox 组件包（widgets 等）在桌面端没有磁
 `{"ok":true,"okRefs":true,"okFix":true,"okFixClean":true,"okUnused":true,"okUnusedClean":true}`
 ——浏览器里真的执行"接受修复→重设源码→复诊"闭环，undefined 与未使用 import 均清零。
 完整能力矩阵与未做清单见 docs/lsp-roadmap.md。
+
+## 语义 token / 参数提示 / 惰性文档（P3）
+
+同一类型图的第三波增量，全部双端同源：
+
+- **semanticTokens**：`typecheck.Tokens(src)` 用 go/scanner 对 .gx 文本做语法级分类
+  （package/import/type/var/const/func 语境 + 后随左括号判定函数），`EncodeTokens` 输出
+  LSP 五元组编码；initialize 正式声明 legend（12 类，Full），协议侧悬空字段转正。
+  不依赖类型图——任何编辑态都有着色。
+- **completionItem/resolve**：成员候选 Data 携带 `pkg.Name`；桌面 `completionItem/resolve`
+  经 `typecheck.DocOf` 从 GOROOT/embed 源解析声明 doc 首段（ParseComments，轻量独立解析）；
+  浏览器等价面 `Gox.lspResolveDoc(pkg,name)`。
+- **inlayHints**：`Importer.ParamHints` 扫调用实参——具名形参 + 字符串字面量实参给
+  `name:` 提示，可变参数不提示；坐标经 SourceMap 回投 .gx 0 基。桌面
+  `textDocument/inlayHints`，浏览器 `Gox.lspInlayHints`。
+
+实测（headless Chrome，`node scripts/selfcheck.js p1 playground.html`）：
+`{"ok":true,"okTok":true,"okHint":true,"okDoc":true}`；基线（无实现）如实报
+`no-p1-exports`。nav2 浏览器闭环里 import 补全候选已达 60 项上限（前缀过滤后），
+证明 import 语境判定在真实键入流生效。

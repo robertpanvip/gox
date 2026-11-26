@@ -71,6 +71,15 @@ export interface GoxPlaygroundAPI {
 
   /** QuickFix 列表（补/删 import）；无诊断返回 "null"。 */
   lspCodeActions(): string;
+
+  /** 语义 token（LSP 编码数组）：{"data":[...]}。 */
+  lspSemanticTokens(): string;
+
+  /** 参数提示数组（.gx 0 基坐标）。 */
+  lspInlayHints(): string;
+
+  /** 补全项惰性文档：{"doc":"..."}，不可达返回 "null"。 */
+  lspResolveDoc(pkg: string, name: string): string;
   lspSymbols(): string;
   lspFormat(): string;
 }

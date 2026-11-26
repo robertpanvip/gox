@@ -20,6 +20,8 @@ type Candidate struct {
 	Name      string
 	Signature string
 	Kind      string
+	// Pkg 为符号归属的外部包路径（用户文件内符号为空），供 resolve 类能力回溯 doc。
+	Pkg string
 }
 
 const completeDummy = "GxCompleteX_"
@@ -111,6 +113,14 @@ func objKind(o types.Object) string {
 	return "variable"
 }
 
+// candPkg 返回候选归属的外部包 import path；用户文件内符号返回空串。
+func candPkg(obj types.Object) string {
+	if obj == nil || obj.Pkg() == nil || obj.Pkg().Path() == userPkgPath {
+		return ""
+	}
+	return obj.Pkg().Path()
+}
+
 // pkgMembers 枚举包作用域导出成员（main 包外不可见名跳过）。
 func pkgMembers(pkg *types.Package) []Candidate {
 	out := []Candidate{}
@@ -130,7 +140,7 @@ func pkgMembers(pkg *types.Package) []Candidate {
 		if obj.Type() != nil {
 			sig = obj.Type().String()
 		}
-		out = append(out, Candidate{Name: name, Signature: sig, Kind: objKind(obj)})
+		out = append(out, Candidate{Name: name, Signature: sig, Kind: objKind(obj), Pkg: candPkg(obj)})
 	}
 	return out
 }
@@ -159,7 +169,7 @@ func membersOf(t types.Type) []Candidate {
 			return
 		}
 		seen[name] = true
-		out = append(out, Candidate{Name: name, Signature: sig, Kind: kind})
+		out = append(out, Candidate{Name: name, Signature: sig, Kind: kind, Pkg: candPkg(obj)})
 	}
 	if ptr, is := t.(*types.Pointer); is {
 		return membersOf(ptr.Elem())

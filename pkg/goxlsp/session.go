@@ -10,6 +10,7 @@ package goxlsp
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/robertpanvip/gox/internal/check"
@@ -229,7 +230,11 @@ func (s *Session) typedCompletion(line, col int) (CompletionList, bool) {
 	cands := s.timp.Complete(s.goSrc, off+1)
 	list := CompletionList{IsIncomplete: false, Items: make([]CompletionItem, 0, len(cands))}
 	for _, c := range cands {
-		list.Items = append(list.Items, CompletionItem{Label: c.Name, Kind: lspKind(c.Kind), Detail: c.Signature})
+		it := CompletionItem{Label: c.Name, Kind: lspKind(c.Kind), Detail: c.Signature}
+		if c.Pkg != "" {
+			it.Data = c.Pkg + "." + c.Name
+		}
+		list.Items = append(list.Items, it)
 	}
 	return list, true
 }
@@ -511,4 +516,56 @@ func (s *Session) StdSourceJSON(pkg, file string) string {
 		return "null"
 	}
 	return marshal(map[string]string{"text": src})
+}
+
+// SemanticTokensJSON 返回当前 .gx 文本的语义 token（LSP 编码数组，语法级分类）。
+func (s *Session) SemanticTokensJSON() string {
+	toks, ok := typecheck.Tokens(s.src)
+	if !ok {
+		return "{\"data\":[]}"
+	}
+	return marshal(map[string][]int{"data": typecheck.EncodeTokens(toks)})
+}
+
+// ParamHintsRow 参数提示行（.gx 0 基坐标）。
+type ParamHintsRow struct {
+	Line  int    `json:"line"`
+	Col   int    `json:"col"`
+	Label string `json:"label"`
+}
+
+// ParamHintsJSON 类型化参数提示：仅对具名形参的字符串字面量实参给标签。
+func (s *Session) ParamHintsJSON() string {
+	if s.timp == nil || s.goSrc == "" || s.smap == nil {
+		return "[]"
+	}
+	hs, ok := s.timp.ParamHints(s.goSrc)
+	if !ok {
+		return "[]"
+	}
+	out := make([]ParamHintsRow, 0, len(hs))
+	for _, h := range hs {
+		gx, ok := s.smap.GoToGx(h.Line, h.Col)
+		if !ok {
+			continue
+		}
+		out = append(out, ParamHintsRow{Line: gx.Line - 1, Col: gx.Column - 1, Label: h.Label})
+	}
+	return marshal(out)
+}
+
+// ResolveDocJSON 补全项惰性文档：按包路径+符号名取内嵌源 doc 首段。
+func (s *Session) ResolveDocJSON(pkg, name string) string {
+	lk := embedstd.Lookup()
+	if lk == nil {
+		return "null"
+	}
+	doc, file, line, ok := typecheck.DocOf(pkg, name, lk)
+	if !ok {
+		return "null"
+	}
+	if doc == "" {
+		doc = file + ":" + strconv.Itoa(line)
+	}
+	return marshal(map[string]string{"doc": doc})
 }

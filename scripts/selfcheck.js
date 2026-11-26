@@ -247,6 +247,31 @@ const NAV2_EXPR = `
     okRefs, okFix, okFixClean, okUnused, okUnusedClean });
 })()`;
 
+// 探针 I：三件套——语义 token 编码、参数提示、resolve 文档（纯 API 面）。
+const P1_EXPR = `
+(async () => {
+  const wait = ms => new Promise(r => setTimeout(r, ms));
+  const deadline = Date.now() + 40000;
+  while (!(window.Gox && window.Gox.setSource && window.Gox.lspDiagnostics)) {
+    if (Date.now() > deadline) return JSON.stringify({ err: "Gox 超时未就绪" });
+    await wait(250);
+  }
+  await wait(600);
+  if (typeof Gox.lspSemanticTokens !== "function" || typeof Gox.lspInlayHints !== "function"
+    || typeof Gox.lspResolveDoc !== "function") {
+    return JSON.stringify({ err: "no-p1-exports" });
+  }
+  Gox.setSource('package main\\n\\nimport "fmt"\\n\\nfunc main() {\\n\\tfmt.Sprintf("%d", 1)\\n}\\n');
+  await wait(900);
+  const tk = JSON.parse(Gox.lspSemanticTokens());
+  const okTok = !!(tk && tk.data && tk.data.length >= 30 && tk.data.length % 5 === 0);
+  const hs = JSON.parse(Gox.lspInlayHints());
+  const okHint = !!(hs && hs.some(h => h.label === "format:" && h.line === 5));
+  const rd = JSON.parse(Gox.lspResolveDoc("fmt", "Sprintf"));
+  const okDoc = !!(rd && String(rd.doc).indexOf("formats according") >= 0);
+  return JSON.stringify({ ok: okTok && okHint && okDoc, okTok, okHint, okDoc });
+})()`;
+
 const PROVIDER_EXPR = `
 (async () => {
   const wait = ms => new Promise(r => setTimeout(r, ms));
@@ -270,9 +295,9 @@ const PROVIDER_EXPR = `
 })()`;
 
 (async () => {
-  const expr = mode === "stacking" ? STACKING_EXPR : (mode === "gsyntax" ? GSYNTAX_EXPR : (mode === "comp" ? COMP_EXPR : (mode === "sig" ? SIG_EXPR : (mode === "nav" ? NAV_EXPR : (mode === "nav2" ? NAV2_EXPR : PROVIDER_EXPR)))));
+  const expr = mode === "stacking" ? STACKING_EXPR : (mode === "gsyntax" ? GSYNTAX_EXPR : (mode === "comp" ? COMP_EXPR : (mode === "sig" ? SIG_EXPR : (mode === "nav" ? NAV_EXPR : (mode === "nav2" ? NAV2_EXPR : (mode === "p1" ? P1_EXPR : PROVIDER_EXPR))))));
   let url;
-  if (mode === "stacking" || mode === "gsyntax" || mode === "comp" || mode === "sig" || mode === "nav" || mode === "nav2") {
+  if (mode === "stacking" || mode === "gsyntax" || mode === "comp" || mode === "sig" || mode === "nav" || mode === "nav2" || mode === "p1") {
     url = "file://" + target;
   } else {
     server = http.createServer((q, s) => {
@@ -328,7 +353,9 @@ const PROVIDER_EXPR = `
   if (pageErrs.length) console.log("PAGE_ERRORS", JSON.stringify(pageErrs.slice(0, 3)));
   let v = {};
   try { v = JSON.parse(String(out)); } catch {}
-  const pass = mode === "nav2"
+  const pass = mode === "p1"
+    ? !v.err && v.ok === true
+    : mode === "nav2"
     ? !v.err && v.ok === true
     : mode === "nav"
     ? !v.err && v.ok === true
