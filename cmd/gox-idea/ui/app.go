@@ -805,7 +805,7 @@ func menuPopup(label string, name string, content func() *gxscene.Instance) *gxs
         "onOpenChange": func(v bool) { if v { OpenMenu(name )} else { OpenMenu("" )} },
         "placement":    "bottom-start",
         "offset":       "2",
-        "noScrim":      false,
+        "noScrim":      true,
         "width":        "200",
         "trigger":      func() any { return menuTrigger(label, name) },
         "content":      func() any { return content() },
