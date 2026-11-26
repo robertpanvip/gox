@@ -154,3 +154,23 @@ race 通过。已知边界：gox 组件包（widgets 等）在桌面端没有磁
 实测（headless Chrome 158，`node scripts/selfcheck.js nav3 playground.html`）：
 `{"ok":true,"okTD":true,"okImpl":true}`；基线（无实现）如实报 `no-nav3-exports`。
 全探针回归 nav2/nav/sig/comp/gsyntax/stacking/p1 全绿，race 四包通过。
+
+## organizeImports / pull diagnostics（导航四期）
+
+- `OrganizeImports(src)`（internal/typecheck/organize.go）：纯词法、零类型图依赖，
+  任何编辑态可用。连续无空行的单行 import（≥2 条）合并为括号块；块按空行分子组，
+  子组内 std 段在前、非 std 段在后、段间空行、路径升序；`import "C"` 与别名/点导入
+  原样保留；块内含注释或杂质形态的保守跳过；结果与原文一致返回 false（幂等）。
+- 桌面 `codeAction` 在 quickfix 之外常驻返回 `source.organizeImports` 动作（有变更
+  才出现）；`CodeActionProvider` 升级为 `CodeActionOptions{CodeActionKinds}` 声明。
+- 浏览器 `lspCodeActions` 同步输出 organize 动作；TextEdit 新增 `endLine`
+  （0 基 end-exclusive）表达区域替换，旧字段旧语义不动，TS 无消费方零影响。
+- 桌面 `textDocument/diagnostic`（3.17 拉取模型）：与 publishDiagnostics 复用同一
+  compileAndCheck 管线，现算现返 `DiagnosticReport{kind:"full",items}`；
+  `diagnosticProvider` 能力声明 interFileDependencies/workspaceDiagnostics=false。
+
+实测：`node scripts/selfcheck.js org playground.html` →
+`{"ok":true,"hasOrga":true,"okApply":true,"okIdem":true,"sorted":true}`；基线
+（无实现）如实报 `{"err":"no-organize-action"}`。三层单测红→绿（合并/分组排序/
+幂等、桌面 organize 动作、pull 诊断 cannot use 命中、浏览器动作），其余八探针
+零回归；全仓 26 包 ok、race 通过、gofmt/vet 干净。

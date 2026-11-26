@@ -21,6 +21,8 @@
 | completionItem/resolve | ✅ 本轮落地：候选携带 Data=pkg.Name；桌面 completionItem/resolve 从 GOROOT/embed 源取 doc 首段；浏览器等价面 Gox.lspResolveDoc(pkg,name) |
 | typeDefinition | ✅ 本轮落地：光标符号类型→声明（指针解引用、别名展开；universe/匿名类型如实缺席）；桌面 `textDocument/typeDefinition` + 浏览器 `Gox.lspTypeDefinition` |
 | implementation | ✅ 本轮落地：接口类型名/接口方法→本源内满足实现的命名类型（对象同一性判定）；桌面 `textDocument/implementation` + 浏览器 `Gox.lspImplementation`。跨包全闭包反查在 roadmap |
+| organizeImports | ✅ 已具备：`typecheck.OrganizeImports` 纯词法——连续单行 import（≥2）合并为括号块；块内按空行分子组，std 段在前、非 std 在后、段间空行、路径升序；别名/点导入与 `import "C"` 保留；含注释的块保守跳过；幂等（有序即不动）。桌面 `codeAction` 常驻 `source.organizeImports`（`CodeActionProvider` 升级为 kinds 列表声明），浏览器 `lspCodeActions` 同步带区域替换编辑（TextEdit `endLine`，0 基 end-exclusive） |
+| pull diagnostics | ✅ 已具备：3.17 `textDocument/diagnostic`，复用 publishDiagnostics 同一 compileAndCheck 管线，返回 `DiagnosticReport{kind:"full",items}`；`diagnosticProvider` 已声明，interFileDependencies/workspaceDiagnostics 如实置 false——能力声明与实现严格对齐 |
 | rename（跨文件） | ✅ 本轮落地：同包多文件一次 types 检查 + Uses/Defs 对象同一性定位，WorkspaceEdit 按文档分发（局部遮蔽免疫，red 有专项用例）；任一文档编译不过整体回退旧单文件符号表路径，零回归。`workspace/willRenameFiles` 仍在 roadmap |
 | inlayHints | ✅ 本轮落地：具名形参 + 字符串字面量实参提示（可变参数不提示）；坐标经 SourceMap 回投 .gx；桌面 textDocument/inlayHints + 浏览器 Gox.lspInlayHints |
 | rename / formatting | 单文档 rename；compiler.Format |
@@ -28,10 +30,8 @@
 ## 缺口（建议顺序）
 
 ### P1 —— 剩余
-1. **organizeImports**（codeAction source 组）：需要先建 import 全量解析。
-2. **diagnostics 主动刷新（pull/refresh，LSP 3.17）**。
-3. **workspace/willRenameFiles**：文件移动/重命名时同步 import 与引用。
-4. **implementation 跨包反查**：全闭包扫描成本高，可先按已导入包做窄口径扩展。
+1. **workspace/willRenameFiles**：文件移动/重命名时同步 import 与引用。
+2. **implementation 跨包反查**：全闭包扫描成本高，可先按已导入包做窄口径扩展。
 
 ### P2 —— 锦上添花
 5. **foldingRange / selectionRange**：折叠与智能扩选；selectionRange 和我们的选区引擎天然契合。
@@ -46,4 +46,5 @@
 - 内建函数（append/len 等）：go/types 无公开签名/源码面 → 无 signatureHelp/跳转，静默缺席。
 - 源码半截且右括号未闭合的极端语法态：导航链以"编译可过 + 映射可查"为前提，失败一律回退旧行为。
 - workspaceSymbol 仅覆盖已打开文档；未建项目索引。
+- organizeImports 对含注释的 import 块整体跳过（不做行内重排），避免注释错位；pull diagnostics 为文档级，工作区级未启用（能力如实声明）。
 - semanticTokens 为语法级（词法 + 关键字语境），类型类别不做推断——保证任意编辑态都有着色且零依赖类型图就绪；resolve 与 inlayHints 则依赖类型图/embed 源，缺席时静默降级。
