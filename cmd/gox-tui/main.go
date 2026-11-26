@@ -37,6 +37,13 @@ func main() {
 		return
 	}
 
+	// 无 TERM（管道化 pty、极简环境）时 lipgloss 会降级到 ASCII——全终端
+	// 无色彩、无边框、近似黑屏。注入安全默认值，仅影响本进程；真实终端里
+	// xterm-256color 与 lipgloss 的颜色探测行为一致，不改变既有渲染。
+	if os.Getenv("TERM") == "" {
+		_ = os.Setenv("TERM", "xterm-256color")
+	}
+
 	dark := strings.ToLower(themeFlag) != "light"
 
 	// 解析起始路径：文件则打开它并以其目录为根；目录则作为项目根。

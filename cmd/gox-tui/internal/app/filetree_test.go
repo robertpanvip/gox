@@ -1,6 +1,8 @@
 package app
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -9,8 +11,21 @@ import (
 	"github.com/muesli/termenv"
 )
 
-func treeTestModel() *Model {
-	m := New("/workspace/gox/cmd/gox-tui", true, nil)
+func treeTestModel(t *testing.T) *Model {
+	// 自包含夹具：此前硬编码 /workspace/gox/cmd/gox-tui，只在作者机器存在该
+	// 路径时通过；任何干净环境（CI/容器/他人 checkout）树为空，三条坐标用例
+	// 与图标用例全部假失败。现改为 t.TempDir 构造同构目录，断言逐字不动：
+	// node[0]=根、node[2] 存在、首个文件节点在 index 2、📂 与 🐹 必须渲染。
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "internal"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []string{"main.go", "app_test.go"} {
+		if err := os.WriteFile(filepath.Join(root, f), []byte("package main\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	m := New(root, true, nil)
 	m.width = 100
 	m.height = 30
 	m.focus = 1
@@ -42,7 +57,7 @@ func TestGlyphFor(t *testing.T) {
 }
 
 func TestNodeAtAndInTreeX(t *testing.T) {
-	m := treeTestModel()
+	m := treeTestModel(t)
 	// header 在 y=3，node[0] 在 y=4。
 	if idx, ok := m.nodeAt(4); !ok || idx != 0 {
 		t.Errorf("nodeAt(4) = %d,%v; want 0,true", idx, ok)
@@ -63,7 +78,7 @@ func TestNodeAtAndInTreeX(t *testing.T) {
 }
 
 func TestTreeClickTogglesDir(t *testing.T) {
-	m := treeTestModel()
+	m := treeTestModel(t)
 	nodes := m.tree.nodes()
 	// node[0] 是根目录 gox-tui（dir，展开）。点它应折叠。
 	clickY := 4
@@ -82,7 +97,7 @@ func TestTreeClickTogglesDir(t *testing.T) {
 }
 
 func TestTreeClickOpensFile(t *testing.T) {
-	m := treeTestModel()
+	m := treeTestModel(t)
 	nodes := m.tree.nodes()
 	// 找第一个文件节点的可见下标。
 	fileIdx := -1
@@ -114,7 +129,7 @@ func TestTreeClickOpensFile(t *testing.T) {
 }
 
 func TestTreeHoverHighlights(t *testing.T) {
-	m := treeTestModel()
+	m := treeTestModel(t)
 	m.handleMouse(tea.MouseMsg{Action: tea.MouseActionMotion, X: 5, Y: 6})
 	if m.treeSel != 2 {
 		t.Errorf("悬停应设置 treeSel=2, got %d", m.treeSel)
@@ -129,7 +144,7 @@ func TestTreeIconsRendered(t *testing.T) {
 	old := lipgloss.ColorProfile()
 	lipgloss.SetColorProfile(termenv.TrueColor)
 	defer lipgloss.SetColorProfile(old)
-	m := treeTestModel()
+	m := treeTestModel(t)
 	v := m.View()
 	// 强制彩色后，图标应带 SGR 前景色；且目录展开箭头与 go 文件图标应出现。
 	for _, g := range []string{"📂", "🐹"} {
@@ -162,7 +177,7 @@ func TestTreeNamePerTypeHighlight(t *testing.T) {
 	old := lipgloss.ColorProfile()
 	lipgloss.SetColorProfile(termenv.TrueColor)
 	defer lipgloss.SetColorProfile(old)
-	m := treeTestModel()
+	m := treeTestModel(t)
 	th := m.theme
 
 	// 不同类型文件名的着色必须不同（go / md / conf 三种语义色）。

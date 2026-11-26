@@ -166,6 +166,17 @@ func (m *Model) saveActive() {
 	m.statusMsg = "已保存 " + b.Name
 }
 
+// dirtyCount 未保存修改的 buffer 数。
+func (m *Model) dirtyCount() int {
+	n := 0
+	for _, b := range m.buffers {
+		if b.Dirty {
+			n++
+		}
+	}
+	return n
+}
+
 // Update 实现 tea.Model，处理所有按键与窗口事件。
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
@@ -207,7 +218,18 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.focus = 1
 			return m, nil
 		}
-		m.quitConfirm = true
+		if key == "esc" {
+			// 数据安全优先：存在未保存修改时，第一次 esc 只提示，
+			// 第二次 esc 才退出；ctrl+c 保留终端惯例无条件退出。
+			if m.dirtyCount() > 0 && !m.quitConfirm {
+				m.quitConfirm = true
+				m.statusMsg = "有未保存修改，再按 esc 放弃修改并退出"
+				return m, nil
+			}
+			m.quitConfirm = false
+			return m, tea.Quit
+		}
+		m.quitConfirm = false
 		return m, tea.Quit
 	case "ctrl+s":
 		m.saveActive()
@@ -251,6 +273,7 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	m.quitConfirm = false
 	if m.focus == 0 {
 		return m.handleTreeKey(key)
 	}

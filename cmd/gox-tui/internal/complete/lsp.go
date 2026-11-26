@@ -22,7 +22,6 @@ type LSPProvider struct {
 	cache   []string
 	stamp   int64
 	warming bool
-	once    sync.Once
 }
 
 func NewLSPProvider(root string) *LSPProvider {
@@ -56,32 +55,28 @@ func (p *LSPProvider) Provide(q Query) []Candidate {
 }
 
 func (p *LSPProvider) ensureWarm() {
-	p.mu.RLock()
-	fresh := len(p.cache) > 0 && nowNano()-p.stamp < 30*1e9
-	warming := p.warming
-	p.mu.RUnlock()
-	if fresh || warming {
+	p.mu.Lock()
+	// TTL 语义统一：stamp 无论成败都在抓取结束时刷新——30 秒内不重复抓，
+	// 过期后允许重抓。此前用 sync.Once 只允许预热一次，缓存过期后候选
+	// 永久消失；外层 2.5s 预算又小于内层 initialize 的 3s，慢启动的 gopls
+	// 必被超时击杀且再无重试机会。失败退避与成功保鲜共用同一个 stamp。
+	fresh := nowNano()-p.stamp < 30*int64(time.Second)
+	if fresh || p.warming {
+		p.mu.Unlock()
 		return
 	}
-	p.once.Do(func() {
+	p.warming = true
+	p.mu.Unlock()
+	go func() {
+		syms, ok := fetchSymbols(p.root, 8*time.Second)
 		p.mu.Lock()
-		p.warming = true
+		p.warming = false
+		if ok {
+			p.cache = syms
+		}
+		p.stamp = nowNano()
 		p.mu.Unlock()
-		go func() {
-			defer func() {
-				p.mu.Lock()
-				p.warming = false
-				p.mu.Unlock()
-			}()
-			syms, ok := fetchSymbols(p.root, 2500*time.Millisecond)
-			if !ok {
-				return
-			}
-			p.mu.Lock()
-			p.cache, p.stamp = syms, nowNano()
-			p.mu.Unlock()
-		}()
-	})
+	}()
 }
 
 func fetchSymbols(root string, timeout time.Duration) ([]string, bool) {
@@ -138,7 +133,7 @@ func fetchSymbols(root string, timeout time.Duration) ([]string, bool) {
 			resCh <- result{ok: false}
 			return
 		}
-		_ = writeLSP(stdin, 2, "initialized", map[string]any{})
+		_ = writeNotify(stdin, "initialized", map[string]any{})
 		time.Sleep(250 * time.Millisecond)
 		_ = writeLSP(stdin, 3, "workspace/symbol", map[string]any{"query": ""})
 		raw, err := readUntilID(r, 3, 3*time.Second)
@@ -192,12 +187,20 @@ func fetchSymbols(root string, timeout time.Duration) ([]string, bool) {
 }
 
 func writeLSP(w io.Writer, id int, method string, params any) error {
-	payload, err := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": id, "method": method, "params": params})
+	return writeFrame(w, map[string]any{"jsonrpc": "2.0", "id": id, "method": method, "params": params})
+}
+
+// writeNotify 发送通知：LSP 规范通知不得携带 id。
+func writeNotify(w io.Writer, method string, params any) error {
+	return writeFrame(w, map[string]any{"jsonrpc": "2.0", "method": method, "params": params})
+}
+
+func writeFrame(w io.Writer, body map[string]any) error {
+	payload, err := json.Marshal(body)
 	if err != nil {
 		return err
 	}
-	_, err = io.WriteString(w, "Content-Length: "+strconv.Itoa(len(payload))+"\r\n\r\n")
-	if err != nil {
+	if _, err = io.WriteString(w, "Content-Length: "+strconv.Itoa(len(payload))+"\r\n\r\n"); err != nil {
 		return err
 	}
 	_, err = w.Write(payload)
