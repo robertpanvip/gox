@@ -28,11 +28,7 @@ func (m *Model) View() string {
 	title := m.viewTitle(innerW)
 	tabbar := m.viewTabBar(innerW)
 	rule := m.viewRule(innerW)
-	statusH := 1
-	bodyH := innerH - 3 - statusH // 标题(1) + 标签(1) + 细线(1) + 状态(1)
-	if bodyH < 3 {
-		bodyH = 3
-	}
+	bodyH := bodyHeight(m.height)
 	body := m.viewBody(innerW, bodyH)
 	status := m.viewStatus(innerW)
 
@@ -111,24 +107,21 @@ func (m *Model) viewBody(w, h int) string {
 	s := m.current()
 	var lines []string
 	if s != nil {
-		all := ansiToLines(s.Snapshot())
-		end := len(all)
-		if m.scrollBack > 0 && end-m.scrollBack > 0 {
-			end = end - m.scrollBack
-		}
-		start := end - h
-		if start < 0 {
-			start = 0
-		}
-		for _, ln := range all[start:end] {
-			lines = append(lines, truncateANSI(ln.text, w))
+		if sc := m.screens[s.ID]; sc != nil {
+			back := m.scrollBack
+			// 交替屏幕（vim/htop 全屏）没有回滚历史，强制回到实时画面。
+			if sc.InAlt() {
+				back = 0
+			}
+			lines = sc.RenderWindow(back, h)
 		}
 	}
-	for len(lines) < h {
-		lines = append(lines, "")
+	if len(lines) == 0 {
+		lines = make([]string, h)
 	}
 	var out []string
 	for _, ln := range lines[:h] {
+		// 屏幕模拟器输出的行宽恰为 cols（== w），此处只补齐主题背景。
 		out = append(out, m.theme.Terminal.Width(w).Render(padANSI(ln, w)))
 	}
 	return strings.Join(out, "\n")

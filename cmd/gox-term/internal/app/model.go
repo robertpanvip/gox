@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/robertpanvip/gox-term/internal/screen"
 	"github.com/robertpanvip/gox-term/internal/session"
 	"github.com/robertpanvip/gox-term/internal/theme"
 )
@@ -15,6 +16,7 @@ type Model struct {
 	theme    *theme.Theme
 	prog     *tea.Program
 	sessions []*session.Session
+	screens  map[int]*screen.Screen // 每个会话一块屏幕（VT 模拟器）
 	active   int
 	nextID   int
 	shell    string
@@ -32,7 +34,10 @@ type Model struct {
 
 // New 构建 Model（不立即建会话，等 Init 拿到 prog 后建）。
 func New(dark bool, shell string) *Model {
-	m := &Model{theme: theme.New(toMode(dark)), shell: shell, autoScroll: true}
+	m := &Model{
+		theme: theme.New(toMode(dark)), shell: shell,
+		autoScroll: true, screens: map[int]*screen.Screen{},
+	}
 	return m
 }
 
@@ -69,6 +74,16 @@ func (m *Model) newSession() {
 		return
 	}
 	m.sessions = append(m.sessions, s)
+	// 建屏幕模拟器，并让默认前景/背景跟随主题面板色。
+	sc := screen.New(int(cols), int(rows))
+	p := m.theme.Palette
+	sc.SetDefaultColors(string(p.Text), string(p.Panel))
+	// 重放建立前已到达的 PTY 输出：readLoop 在 Run() 前就可能产生提示符，
+	// 那时 tea.Program.Send 尚未消费，OutputMsg 可能丢失；从缓冲补齐。
+	if early := s.Snapshot(); len(early) > 0 {
+		sc.Write(early)
+	}
+	m.screens[s.ID] = sc
 	m.active = len(m.sessions) - 1
 	m.nextID++
 	m.scrollBack = 0
@@ -86,7 +101,9 @@ func (m *Model) closeActive() {
 	if len(m.sessions) == 0 {
 		return
 	}
-	m.sessions[m.active].Close()
+	closed := m.sessions[m.active]
+	closed.Close()
+	delete(m.screens, closed.ID)
 	m.sessions = append(m.sessions[:m.active], m.sessions[m.active+1:]...)
 	if len(m.sessions) == 0 {
 		m.newSession()
@@ -101,14 +118,18 @@ func (m *Model) closeActive() {
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
-		oldRows := m.rows
+		oldCols, oldRows := m.cols, m.rows
 		m.width, m.height = msg.Width, msg.Height
 		m.cols = maxInt(20, m.width-2)
-		m.rows = maxInt(4, m.height-4) // 标题栏(1) + 状态栏(1) + 边框(2)
-		if oldRows != m.rows {
+		m.rows = maxInt(4, bodyHeight(m.height))
+		if oldCols != m.cols || oldRows != m.rows {
 			for _, s := range m.sessions {
 				s.Resize(uint16(m.cols), uint16(m.rows))
 			}
+			for _, sc := range m.screens {
+				sc.Resize(m.cols, m.rows)
+			}
+			m.scrollBack = 0
 		}
 		return m, nil
 
@@ -116,7 +137,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleKey(msg)
 
 	case session.OutputMsg:
-		// 输出已由 session 缓冲；这里只触发重绘（bubbletea 会自动重绘）。
+		// 把 PTY 字节喂给对应会话的 VT 模拟器——这是让 vim/htop 正常显示的关键。
+		// 解析必须在 UI 线程完成，避免与渲染并发读写网格。
+		if sc := m.screens[msg.ID]; sc != nil {
+			sc.Write(msg.Data)
+		}
+		if s := m.current(); s != nil && s.ID == msg.ID && m.autoScroll {
+			m.scrollBack = 0
+		}
 		return m, nil
 
 	case session.ExitedMsg:
@@ -252,6 +280,13 @@ func maxInt(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// bodyHeight 是终端显示区行数，必须与 view.go 的布局段数严格一致：
+// 窗口边框(2) + 标题(1) + 标签(1) + 细线(1) + 状态(1) + 细线(1) = 7。
+// PTY 的 winsize 和屏幕网格都用这个值，否则网格行数与可见行错位。
+func bodyHeight(totalHeight int) int {
+	return maxInt(4, totalHeight-7)
 }
 
 var _ = strings.TrimSpace

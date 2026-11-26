@@ -35,8 +35,13 @@ go build -o gox-term ./cmd/gox-term
 ## 实现要点
 
 - **真 PTY**：`creack/pty` 启动 shell，`$TERM=xterm-256color`；键盘字节写入 PTY，输出经 `tea.Program.Send` 回投 UI，窗口尺寸变化时 `Setsize` 同步（保证 `ls` 分列正确）。
-- **ANSI 保留**：PTY 输出里的 SGR 颜色序列（红/绿/蓝、粗体等）保留并渲染；光标移动、清屏、OSC 标题等控制序列做简化处理（`ansi.go`）。对 `echo`/`ls --color`/`git`/`pwd` 等常规命令效果完整；全屏 TUI 程序（vim 等）的复杂重绘是已知边界。
-- **会话隔离**：每个标签一个独立 PTY + 进程，输出缓冲独立；切换标签互不串扰。
+- **完整的终端屏幕模拟器**（`internal/screen`）：这是支持 vim/htop 的关键。维护一块二维字符网格（每格有字符 + 前景/背景色 + 属性），而非简单地把输出逐行追加。正确处理：
+  - **光标寻址**（`ESC[row;colH`）、局部擦除（`ESC[K`/`ESC[J`）、插入/删除行列、滚动区
+  - **交替屏幕**（`?1049`）——vim/htop 退出后能干净恢复进入前的画面
+  - **SGR 颜色**（8/16 色、256 色、24-bit 真彩）、反显、粗体、下划线等属性
+  - **UTF-8 / CJK 宽字符**、延迟换行、滚动历史
+  - 因此光标移到屏幕中间"擦掉重写"能正确还原，不再乱套。
+- **会话隔离**：每个标签一个独立 PTY + 屏幕模拟器，输出与历史互不串扰。
 - **独立 module**：bubbletea / lipgloss / creack/pty 依赖留在 `cmd/gox-term` 子模块，不污染 gox 主库依赖树。
 
 ## 测试
@@ -45,4 +50,7 @@ go build -o gox-term ./cmd/gox-term
 go test ./cmd/gox-term/...
 ```
 
-覆盖 ANSI 序列解析（SGR 保留、光标/清屏/OSC 丢弃、退格）、可见宽度（含 CJK）、ANSI 安全截断、按键编码等。
+- `internal/screen`：光标寻址、局部擦除、滚动与历史、SGR 颜色、反显、交替屏幕、CJK 宽字符、vim 典型会话序列、CJK 回滚等单测。
+- `internal/app`：可见宽度（含 CJK）、ANSI 安全截断、按键编码等。
+
+实测（xvfb + xterm）：`echo`/`ls`/`git`/ANSI 彩色输出、vim 全屏编辑并保存退出、htop 实时刷新与功能键栏、交替屏幕退出恢复、明暗双主题渲染均正常。
