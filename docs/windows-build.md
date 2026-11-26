@@ -131,7 +131,7 @@ git checkout -- go.mod
 
 ## 七、一条龙脚本
 
-CI 已固化全流程（`.github/workflows/ci.yml` 的 build-windows job）：push 到 main
+CI 全流程已脚本化（workflow 定义见 `.github/workflows-test/ci.yml`，把目录改名为 `.github/workflows/` 即启用，build-windows job）：push 到 main
 即自动构建并上传 `GX-Playground-windows-x64` artifact，打 `v*` tag 会额外发布
 GitHub Release。本地等价脚本（需在 MSYS2 MINGW64 shell 运行）：
 
