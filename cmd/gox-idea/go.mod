@@ -20,7 +20,7 @@ replace github.com/robertpanvip/gox-backend-web => ../../backend/web
 
 replace github.com/robertpanvip/gox-skia => ../../third_party/skia
 
-// 上游 yoga-go-binding v0.1.0 自带的 libyogacore.a 是 Linux ELF 格式，
-// Windows 链接器不识别；此处替换为本地拷贝，lib 内是 mingw 编译的 COFF 静态库
-// （源码：facebook/yoga v3.2.1，头文件与上游 binding 完全一致）。
-replace github.com/ahati/yoga-go-binding => E:/AI-workspace/tools/yoga-go-binding-win
+// yoga-go-binding 默认用上游自带的 libyogacore.a（Linux ELF），Linux/macOS 构建
+// 直接可用。Windows 交叉编译需用 COFF 版静态库，通过 scripts/build-windows-msys2.sh
+// 在本地模块副本里临时加 replace（见 docs/windows-build.md），不要在本文件写死
+// 机器相关的绝对路径，否则 Linux/CI 连 go test ./... 都无法 setup。
