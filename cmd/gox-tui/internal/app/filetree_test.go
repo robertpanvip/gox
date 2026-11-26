@@ -243,3 +243,41 @@ func TestViewTreeNoWrapOnLongNames(t *testing.T) {
 		}
 	}
 }
+
+// TestTreeChevronExpandCollapse 固化 WebStorm 风格展开/折叠箭头：
+// 展开的目录渲染 ▾、折叠后渲染 ▸，文件行不带箭头但保持等宽占位对齐。
+// 箭头是单宽字符，缩进/截断按列计算时不得把对齐挤歪。
+func TestTreeChevronExpandCollapse(t *testing.T) {
+	old := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	defer lipgloss.SetColorProfile(old)
+
+	m := treeTestModel(t)
+	w := m.treeWidth()
+
+	// 默认全展开：▾ 必须出现，▸ 不应出现。
+	tree := m.viewTree(w, m.height-4)
+	if !strings.Contains(tree, "▾") {
+		t.Error("展开的目录应渲染 ▾ 箭头")
+	}
+	if strings.Contains(tree, "▸") {
+		t.Error("未折叠时不应出现 ▸")
+	}
+
+	// 折叠根目录：▸ 必须出现，▾ 消失。
+	m.tree.toggle(m.tree.root)
+	tree = m.viewTree(w, m.height-4)
+	if !strings.Contains(tree, "▸") {
+		t.Error("折叠后的目录应渲染 ▸ 箭头")
+	}
+	if strings.Contains(tree, "▾") {
+		t.Error("全部折叠后不应残留 ▾")
+	}
+
+	// 箭头是单宽字符（占 1 列），对齐计算依赖此约定。
+	for _, c := range []string{"▾", "▸"} {
+		if lw := lipgloss.Width(c); lw != 1 {
+			t.Errorf("箭头 %q 显示宽度=%d，应为 1", c, lw)
+		}
+	}
+}

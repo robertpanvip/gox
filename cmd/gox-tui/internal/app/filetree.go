@@ -77,7 +77,8 @@ func (t *fileTree) toggle(path string) {
 }
 
 // glyphFor 返回节点图标（emoji）与主题里的样式 key。
-// 目录用 📂/📁 表达展开/折叠，文件按扩展名/用途分类， IDEA 风格一眼可辨。
+// 目录用 📂/📁 表达展开/折叠，文件按扩展名/用途分类， IDEA 风格一眼可辨；
+// 展开状态的箭头 ▾/▸ 由 view.go 在行首单独渲染（WebStorm 风格）。
 // 注意：emoji 通常是双宽字符（lipgloss.Width==2），view.go 的 truncateWidth
 // 已按显示宽度截断，缩进也按列计算，故不影响文件树对齐与点击命中。
 func glyphFor(n treeNode) (glyph, styleKey string) {

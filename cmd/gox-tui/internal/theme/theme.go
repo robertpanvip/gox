@@ -118,11 +118,12 @@ type Theme struct {
 	TabActive lipgloss.Style
 
 	// 文件树
-	TreeItem   lipgloss.Style
-	TreeActive lipgloss.Style
-	TreeFolder lipgloss.Style
-	TreeIcon   map[string]lipgloss.Style // folder/go/test/gx/md/conf/script/file
-	TreeName   map[string]lipgloss.Style // 文件名按类型着色（emoji 自带颜色，文件名仍需区分高亮）
+	TreeItem    lipgloss.Style
+	TreeActive  lipgloss.Style
+	TreeFolder  lipgloss.Style
+	TreeChevron lipgloss.Style            // 目录展开/折叠箭头 ▾/▸
+	TreeIcon    map[string]lipgloss.Style // folder/go/test/gx/md/conf/script/file
+	TreeName    map[string]lipgloss.Style // 文件名按类型着色（emoji 自带颜色，文件名仍需区分高亮）
 
 	// 编辑区
 	LineNo     lipgloss.Style
@@ -200,6 +201,7 @@ func New(m Mode) *Theme {
 	t.TreeActive = lipgloss.NewStyle().
 		Foreground(p.AccentFG).Background(p.Accent).Padding(0, 1)
 	t.TreeFolder = lipgloss.NewStyle().Foreground(p.Muted).Bold(true).Padding(0, 1)
+	t.TreeChevron = lipgloss.NewStyle().Foreground(p.Muted)
 	t.TreeIcon = map[string]lipgloss.Style{
 		"folder": lipgloss.NewStyle().Foreground(p.IconFolder).Bold(true),
 		"go":     lipgloss.NewStyle().Foreground(p.IconGo).Bold(true),

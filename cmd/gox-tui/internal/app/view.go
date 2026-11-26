@@ -178,16 +178,32 @@ func (m *Model) viewTree(w, h int) string {
 		}
 		indent := strings.Repeat("  ", n.Depth)
 		glyph, styleKey := glyphFor(n)
+		// WebStorm 风格展开/折叠箭头：目录 ▾(展开)/▸(折叠)，文件用等宽占位对齐。
+		if n.Dir {
+			chev := "▾"
+			if !n.Open {
+				chev = "▸"
+			}
+			if i == m.treeSel {
+				label := indent + t.TreeChevron.Render(chev) + " " + glyph + " " + n.Name
+				lines = append(lines, t.TreeActive.Width(avail).Render(truncate(label, rowW)))
+			} else {
+				label := indent + t.TreeChevron.Render(chev) + " " +
+					t.TreeIcon[styleKey].Render(glyph) + " " + t.TreeName[styleKey].Render(n.Name)
+				lines = append(lines, t.TreeItem.Width(avail).Render(truncate(label, rowW)))
+			}
+			continue
+		}
 		if i == m.treeSel {
 			// 选中行整行反显：图标与文件名统一用强调前景色，保证在强调背景上可读。
-			label := indent + glyph + " " + n.Name
+			label := indent + "  " + glyph + " " + n.Name
 			lines = append(lines, t.TreeActive.Width(avail).Render(truncate(label, rowW)))
 			continue
 		}
 		// 未选中行按文件类型着色：emoji 自带颜色，文件名用同语义色区分高亮。
 		icon := t.TreeIcon[styleKey].Render(glyph) + " "
 		name := t.TreeName[styleKey].Render(n.Name)
-		label := indent + icon + name
+		label := indent + "  " + icon + name
 		lines = append(lines, t.TreeItem.Width(avail).Render(truncate(label, rowW)))
 	}
 	for len(lines) < h-2 {
