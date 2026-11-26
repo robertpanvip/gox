@@ -39,7 +39,8 @@ pub func Counter(props gxscene.Props) *gxscene.Instance {
                 select {
                 case <-ticker.c:
                     if count >= 3 { return }
-                    count += 1
+                    // 写 signal 经 UI Runtime 投递，后台线程直接写会并发重建依赖图
+                    Signal.safe(() => { count += 1 })
                 case <-stop:
                     return
                 }

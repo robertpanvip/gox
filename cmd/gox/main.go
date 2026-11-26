@@ -192,14 +192,6 @@ func cmdBuild(args []string) error {
 	if err != nil {
 		return err
 	}
-	if err := res.Validate(); err != nil {
-		return fmt.Errorf("生成的 Go 代码语法无效: %w", err)
-	}
-	if err := os.WriteFile(f.out, []byte(res.GoSource), 0644); err != nil {
-		return err
-	}
-	fmt.Printf("已生成 %s （%d 字节，%d 条映射）\n", f.out, len(res.GoSource), res.SourceMap.Len())
-
 	// 第十三轮 P2-B：单文件模式此前从不消费 Analysis 诊断，导致同一份 .gx
 	// 「单文件构建通过、项目模式阻断」的结论分叉。与 cmdBuildProject 对齐：
 	// 语义诊断（signal-field-index-unknown / for-not-list / 大小写等）统一打印，
@@ -213,6 +205,22 @@ func cmdBuild(args []string) error {
 			})
 		}
 	}
+	// 编译器闸门已把非法产物抑制（InvalidGo=true、GoSource 清空）：直接报错，
+	// 不再对空产物跑 Validate（会误报 expected 'package' 误导定位）。
+	if res.InvalidGo {
+		if len(gxDiags) > 0 {
+			printGxDiagnostics(gxDiags)
+		}
+		return fmt.Errorf("生成的 Go 代码语法无效: 编译产物已被编译器闸门抑制")
+	}
+	if err := res.Validate(); err != nil {
+		return fmt.Errorf("生成的 Go 代码语法无效: %w", err)
+	}
+	if err := os.WriteFile(f.out, []byte(res.GoSource), 0644); err != nil {
+		return err
+	}
+	fmt.Printf("已生成 %s （%d 字节，%d 条映射）\n", f.out, len(res.GoSource), res.SourceMap.Len())
+
 	if len(gxDiags) > 0 {
 		printGxDiagnostics(gxDiags)
 		return fmt.Errorf("GX 语义检查未通过")

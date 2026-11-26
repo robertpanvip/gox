@@ -18,16 +18,17 @@ pub func Brand(props gxscene.Props) *gxscene.Instance {
 }
 
 func main() {
-    signal count = 42
-    signal name = "operator"
-    let doubled = Signal.computed(() => count() * 2)
-    let loadPct = Signal.computed(() => (count() % 50) * 2)
+    sig count = 42
+    sig name = "operator"
+    let doubled = Signal.computed(() => count * 2)
+    let loadPct = Signal.computed(() => (count % 50) * 2)
 
-    // 模拟实时数据流：每 1.4 秒 +1
+    // 模拟实时数据流：每 1.4 秒 +1（写 signal 经 Signal.safe 投递到 UI Runtime，
+    // 后台线程直接写会与 UI 线程并发重建依赖图）
     go func() {
         for {
             time.sleep(1400 * time.millisecond)
-            count = count() + 1
+            Signal.safe(() => { count = count + 1 })
         }
     }()
 
@@ -35,9 +36,9 @@ func main() {
     if err != nil { panic(err) }
     defer app.close()
 
-    // 紧凑单行规避 GX 编译器跨行缩进边界；signal 写用 () 显式读。
+    // 紧凑单行规避 GX 编译器跨行缩进边界；sig 按普通变量读写，() 由编译器补全。
     // 所有按钮/卡片/徽章/进度条/输入框均来自后端预制 widgets 库——JSX 只描述语义。
-    app.render(() => <div bg="#0b1020" height="640" padding="28" flex-direction="column" gap="18"><widgets.row gap="12" align="center" justify="space-between"><Brand/><widgets.badge label="LIVE" tone="green" dot/></widgets.row><widgets.row gap="14"><widgets.card title="REQUESTS" tone="cyan" width="196"><b color="#2dd4bf" font-size="34" weight="bold">{fmt.sprint(count)}</b></widgets.card><widgets.card title="THROUGHPUT" tone="purple" width="196"><b color="#a78bfa" font-size="34" weight="bold">{fmt.sprint(doubled)}</b></widgets.card><widgets.card title="UPTIME" tone="orange" width="196"><b color="#fb923c" font-size="34" weight="bold">99.98%</b></widgets.card></widgets.row><widgets.card title="SYSTEM LOAD" tone="info" width="624"><widgets.progress value={loadPct} width="560" tone="cyan" label={fmt.sprint(loadPct) + "%"}/></widgets.card><widgets.card title="OPERATOR CONSOLE" tone="primary" width="624"><widgets.input id="operator" value={name} placeholder="Type your name…" width="300" onInput={widgets.bindInput(func(s string) { name = s })}/><span color="#8b9bb4" font-size="13">Hello, {name} — the text box is backed by a signal (type and press backspace).</span></widgets.card><widgets.row gap="12"><widgets.button label="+ BOOST" variant="primary" onClick={gxscene.Handler(func(ctx gxscene.EventContext) { count = count() + 10 })}/><widgets.button label="- RESET" variant="secondary" onClick={gxscene.Handler(func(ctx gxscene.EventContext) { count = count() - 10 })}/><widgets.button label="CLEAR" variant="danger" onClick={gxscene.Handler(func(ctx gxscene.EventContext) { name = "" })}/></widgets.row></div>)
+    app.render(() => <div bg="#0b1020" height="640" padding="28" flex-direction="column" gap="18"><widgets.row gap="12" align="center" justify="space-between"><Brand/><widgets.badge label="LIVE" tone="green" dot/></widgets.row><widgets.row gap="14"><widgets.card title="REQUESTS" tone="cyan" width="196"><b color="#2dd4bf" font-size="34" weight="bold">{fmt.sprint(count)}</b></widgets.card><widgets.card title="THROUGHPUT" tone="purple" width="196"><b color="#a78bfa" font-size="34" weight="bold">{fmt.sprint(doubled)}</b></widgets.card><widgets.card title="UPTIME" tone="orange" width="196"><b color="#fb923c" font-size="34" weight="bold">99.98%</b></widgets.card></widgets.row><widgets.card title="SYSTEM LOAD" tone="info" width="624"><widgets.progress value={loadPct} width="560" tone="cyan" label={fmt.sprint(loadPct) + "%"}/></widgets.card><widgets.card title="OPERATOR CONSOLE" tone="primary" width="624"><widgets.input id="operator" value={name} placeholder="Type your name…" width="300" onInput={widgets.bindInput(func(s string) { name = s })}/><span color="#8b9bb4" font-size="13">Hello, {name} — the text box is backed by a signal (type and press backspace).</span></widgets.card><widgets.row gap="12"><widgets.button label="+ BOOST" variant="primary" onClick={gxscene.Handler(func(ctx gxscene.EventContext) { count = count + 10 })}/><widgets.button label="- RESET" variant="secondary" onClick={gxscene.Handler(func(ctx gxscene.EventContext) { count = count - 10 })}/><widgets.button label="CLEAR" variant="danger" onClick={gxscene.Handler(func(ctx gxscene.EventContext) { name = "" })}/></widgets.row></div>)
 
     app.run()
 }

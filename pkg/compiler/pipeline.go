@@ -222,15 +222,16 @@ func compileWithMode(file, src, module string, imports map[string]ImportInfo) (*
 	// Bug 05：致命诊断（如 B9 多根 / return-if、B6 事件箭头赋值）在 emit 后仍
 	// 留下非法 Go。但这些错误走诊断化路径（err==nil）以便 LSP 展示，若下游
 	// cabi 直接把 GoSource 落盘/展示就会拿到坏产物。这里用 Go 解析器做闸门：
-	// 有诊断且语法非法则清空产物并标记 InvalidGo，诊断仍保留在 Analysis 中。
+	// 语法非法则标记 InvalidGo，供落盘方（CLI / module / cabi）拦截写盘。
 	// 不返回 error——维持「诊断化错误 err==nil」的既有契约（LSP 靠诊断工作）。
-	// 只在已有诊断时抑制，避免把"无诊断但语法非法"的其它问题（另案）卷入本次修复。
-	if len(analysis.diags) > 0 {
-		if err := res.Validate(); err != nil {
-			res.GoSource = ""
-			res.SourceMap = nil
-			res.InvalidGo = true
-		}
+	// 闸门无条件执行（此前只在已有诊断时校验）：`signal x = 1` 这类把包名当
+	// 声明关键字的写法不产生任何诊断、产物却非法，漏过会让 Compile 调用方拿
+	// 到非法产物而 InvalidGo=false。
+	// GoSource 保留不清空：goxlsp 的语法诊断链路靠非法产物产出 parse 诊断
+	// （check.CheckAll），清空会让 LSP 用户看不到语法错误；所有落盘方
+	// （CLI 单文件/项目模式、module.Build、cabi）均已按 InvalidGo 拦截。
+	if err := res.Validate(); err != nil {
+		res.InvalidGo = true
 	}
 	return res, nil
 }
