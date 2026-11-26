@@ -129,7 +129,17 @@ git checkout -- go.mod
 由 `linkflags.go` 的 `#cgo linux LDFLAGS` 指向仓库根 `.demolibs/`（内含 X11
 系列运行时 .so 软链），沙箱无需额外安装系统包。
 
-## 七、一条龙脚本（摘自实际构建记录）
+## 七、一条龙脚本
+
+CI 已固化全流程（`.github/workflows/ci.yml` 的 build-windows job）：push 到 main
+即自动构建并上传 `GX-Playground-windows-x64` artifact，打 `v*` tag 会额外发布
+GitHub Release。本地等价脚本（需在 MSYS2 MINGW64 shell 运行）：
+
+```bash
+bash scripts/build-windows-msys2.sh
+```
+
+以下为脚本背后的历史构建记录，供排查每一步的上下文：
 
 ```bash
 # 0) 工具链
