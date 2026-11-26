@@ -969,3 +969,5 @@ return 1 }, func() *gxscene.Instance { return gxscene.Render(gxscene.Template{Op
 // 暴露可见行数与展开目录数让 E2E 能硬断言，而非比对截图。
  func ProjectVisibleRows() int { return len(projectRows()) }
  func ProjectExpandedCount() int { return len(ProjectExpanded()) }
+// TerminalTextSnapshot 供 E2E 断言 Run 主流程的终端输出（解释成功/错误信息）。
+ func TerminalTextSnapshot() string { return terminalState.Text() }

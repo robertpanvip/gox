@@ -809,6 +809,33 @@ func (g *glWindow) DebugSplitters() []map[string]any {
 	return out
 }
 
+// DebugTestidBoxes 导出当前帧所有带 testid 节点的命中框，供图标渲染 E2E
+// 断言：每个图标（btn-folder / stripe-search / ...）都应被绘制、有非零尺寸、
+// 落在预期区域。像素层再配合截图采样确认不是空白方框。
+func (g *glWindow) DebugTestidBoxes() []map[string]any {
+	g.mu.Lock()
+	hits := append([]skia.HitBox(nil), g.hits...)
+	g.mu.Unlock()
+	out := []map[string]any{}
+	for _, h := range hits {
+		if h.Node == nil || h.Node.Props == nil {
+			continue
+		}
+		tid, _ := h.Node.Props["testid"].(string)
+		if tid == "" {
+			continue
+		}
+		out = append(out, map[string]any{
+			"testid": tid,
+			"x":      h.X,
+			"y":      h.Y,
+			"w":      h.W,
+			"h":      h.H,
+		})
+	}
+	return out
+}
+
 // DebugWindowSize 供 E2E 快照读取窗口逻辑尺寸（点），用于断言 resize 生效。
 func (g *glWindow) DebugWindowSize() (int, int) {
 	w, h := g.win.GetSize()

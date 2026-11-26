@@ -72,6 +72,7 @@ func main() {
 					var snap map[string]any
 					if json.Unmarshal(data, &snap) == nil {
 						snap["splitters"] = win.DebugSplitters()
+						snap["testid_boxes"] = win.DebugTestidBoxes()
 						snap["scroll_events"] = win.scrollEvents.Load()
 						snap["last_scroll_yoff"] = win.lastScrollYOff
 						snap["last_scroll_before"] = win.lastScrollBefore

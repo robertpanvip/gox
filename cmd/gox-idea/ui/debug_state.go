@@ -31,6 +31,7 @@ type DebugSnapshot struct {
 	WindowH             int      `json:"window_h"`
 	ProjectVisibleRows  int      `json:"project_visible_rows"`
 	ProjectExpandedCnt  int      `json:"project_expanded_count"`
+	TerminalText        string   `json:"terminal_text"`
 }
 
 // DebugScrollTop 供装配层诊断滚轮链路：区分「回调没到」「转发没生效」「被 effect 回写」。
@@ -63,6 +64,7 @@ func DebugStateJSON() []byte {
 		RunInfo:             RunInfo(),
 		ProjectVisibleRows:  ProjectVisibleRows(),
 		ProjectExpandedCnt:  ProjectExpandedCount(),
+		TerminalText:        TerminalTextSnapshot(),
 	}
 	b, err := json.Marshal(s)
 	if err != nil {
