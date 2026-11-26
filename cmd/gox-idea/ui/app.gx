@@ -689,12 +689,106 @@ func menuItem(label string) *gxscene.Instance {
     </div>
 }
 
+// ---- 真下拉菜单（widgets.Popover 浮层底座；openMenu 受控，同时只开一个）----
+// WebStorm 的菜单栏是可点下拉；这里把 File/View/Run 三项接成真菜单，
+// 其余项保持静态文本（不造假交互）。菜单项只绑现有真实命令。
+
+pub sig openMenu = ""
+
+// SetMenu 切换菜单：点同一个关闭，点另一个自然互斥（单一状态变量）。
+pub func SetMenu(name string) {
+    if openMenu == name { openMenu = "" } else { openMenu = name }
+}
+pub func MenuName() string { return openMenu }
+
+// NewFile 把编辑器重置为最小可运行骨架（File ▸ New File 的动作）。
+pub func NewFile() {
+    runInstance = nil
+    runErr = ""
+    Signal.batch(func() {
+        EditorSetText("package main\n\nfunc main() {\n    println(\"hello, gox\")\n}\n")
+        EditorHome()
+        EditorFocus()
+        runningSig = false
+    })
+}
+
+// menuRow 菜单项：点击执行命令并收起菜单。
+func menuRow(label string, fn func()) *gxscene.Instance {
+    return <div
+        onClick={func() { fn(); openMenu = "" }}
+        style={{ flexDirection: "row", alignItems: "center", height: 30, padding: "0 14", cursor: "pointer", hover: { background: widgets.UseToken("panelalt")() } }}
+    >
+        {widgets.Text(gxscene.Props{"value": label, "size": "12", "tone": "text"})}
+    </div>
+}
+
+func menuBox(inner func() any) *gxscene.Instance {
+    return <div
+        style={{ flexDirection: "column", background: widgets.UseToken("elevated")(), borderRadius: widgets.RadiusSmall, borderWidth: widgets.HairlineWidth, border: borderColor(), padding: "4 0" }}
+    >
+        {inner()}
+    </div>
+}
+
+// menuPopup trigger 与浮层内容组装成受控 Popover（外部点击由 scrim 关闭）。
+func menuPopup(label string, name string, content func() *gxscene.Instance) *gxscene.Instance {
+    return widgets.Popover(gxscene.Props{
+        "open":         func() bool { return openMenu == name },
+        "onOpenChange": func(v bool) { if v { openMenu = name } else { openMenu = "" } },
+        "placement":    "bottom-start",
+        "offset":       "2",
+        "width":        "200",
+        "trigger":      func() any { return menuTrigger(label, name) },
+        "content":      func() any { return content() },
+    })
+}
+
+func menuTrigger(label string, name string) *gxscene.Instance {
+    tone := "muted"
+    if openMenu == name { tone = "text" }
+    return <div
+        onClick={() => SetMenu(name)}
+        style={{ padding: "3 8", cursor: "pointer", borderRadius: widgets.RadiusSmall, background: widgets.UseToken("panelalt")(), hover: { background: widgets.UseToken("panelalt")() } }}
+    >
+        {widgets.Text(gxscene.Props{"value": label, "size": widgets.FontFootnote, "tone": tone})}
+    </div>
+}
+
+func fileMenuContent() *gxscene.Instance {
+    return menuBox(func() any {
+        return <div style={{ flexDirection: "column" }}>
+            {menuRow("New File", NewFile)}
+            {menuRow("Next Example", nextSample)}
+            {menuRow("Previous Example", prevSample)}
+        </div>
+    })
+}
+
+func viewMenuContent() *gxscene.Instance {
+    return menuBox(func() any {
+        return <div style={{ flexDirection: "column" }}>
+            {menuRow("Toggle Terminal Panel", ToggleTerminal)}
+            {menuRow("Switch Theme", ToggleTheme)}
+        </div>
+    })
+}
+
+func runMenuContent() *gxscene.Instance {
+    return menuBox(func() any {
+        return <div style={{ flexDirection: "column" }}>
+            {menuRow("Run Current Example", TriggerRun)}
+            {menuRow("Clear Console", TerminalClear)}
+        </div>
+    })
+}
+
 func menuBar() *gxscene.Instance {
     return <div
         style={{ flexDirection: "row", alignItems: "center", gap: 14, height: 30, padding: "0 12", background: chromeBg(), borderWidth: widgets.HairlineWidth, border: borderColor() }}
     >
-        {menuItem("File")}{menuItem("Edit")}{menuItem("View")}{menuItem("Navigate")}
-        {menuItem("Code")}{menuItem("Refactor")}{menuItem("Run")}{menuItem("Tools")}
+        {menuPopup("File", "File", fileMenuContent)}{menuItem("Edit")}{menuPopup("View", "View", viewMenuContent)}{menuItem("Navigate")}
+        {menuItem("Code")}{menuItem("Refactor")}{menuPopup("Run", "Run", runMenuContent)}{menuItem("Tools")}
         {menuItem("Git")}{menuItem("Window")}{menuItem("Help")}
         <div style={{ flexGrow: 1 }}/>
         {widgets.Text(gxscene.Props{"value": "GoX IDE", "size": widgets.FontFootnote, "tone": "muted"})}

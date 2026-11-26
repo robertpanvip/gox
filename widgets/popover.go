@@ -93,6 +93,11 @@ func Popover(props gxscene.Props) *gxscene.Instance {
 		if st := stateGet(); st != nil {
 			return st.IsOpen()
 		}
+		// 受控协议声明为 open: func() bool，但 gxscene.Get 只识别 func() any
+		// getter——这里显式兑现 func() bool，否则类型断言失败恒为 false。
+		if gb, ok := props["open"].(func() bool); ok {
+			return gb()
+		}
 		return openGet()
 	}
 

@@ -146,15 +146,15 @@ func splitActiveBg() string {
 func terminalLines() string { return strconv.Itoa(terminalState.LineCount()) + " 行" }
 func terminalText() string  { return terminalState.Text() }
 
+// 终端区可读性：10px footnote 加粗笔画在屏幕上会碎成点阵（"Terminal 像
+// 有空格"的观感根源），tab 标签统一抬到 12px；输出区声明等宽栈，与控制台
+// 语义一致。局部常量，不动全局 FontFootnote token（其他组件仍在用）。
+const termTabSize = "12"
+const termOutFont = "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+
 // TerminalView 用 JSX 自绘终端面板：height 走 GX 响应式 style 属性，
 // 拖拽水平分隔条写 layoutTerminalH 即可实时改变高度（widgets.Terminal 内部
 // height 是静态 attr，无法响应信号，故这里不用该组件）。
-// 终端区可读性常量，与 app.gx 保持同步：tab 标签 12px、输出区等宽栈。
-const (
-	termTabSize = "12"
-	termOutFont = "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
-)
-
 func TerminalView() *gxscene.Instance {
     // WebStorm 底部工具窗口：无圆角卡片、无 Mac 红黄绿灯，贴紧分隔条的细标签头。
     return gxscene.Render(gxscene.Template{Ops:[]gxscene.Op{gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:0,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:1,},gxscene.Op{Code:gxscene.OpDynChild,Slot:2,},gxscene.Op{Code:gxscene.OpDynChild,Slot:3,},gxscene.Op{Code:gxscene.OpDynChild,Slot:4,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:5,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpDynChild,Slot:6,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:7,},gxscene.Op{Code:gxscene.OpDynChild,Slot:8,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpClose,},},N:9,}, func() any{ return gxscene.Style{FlexDirection:"column",Gap:"0",Overflow:"hidden",} }, func() any{ return gxscene.Style{FlexDirection:"row",Gap:"16",AlignItems:"center",Padding:"4 12",Background:panelBg(),} }, func() any{ return widgets.Text(gxscene.Props{"value": "Terminal", "size": termTabSize, "weight": "bold", "tone": accentColor()}) }, func() any{ return widgets.Text(gxscene.Props{"value": "Run", "size": termTabSize, "tone": "muted"}) }, func() any{ return widgets.Text(gxscene.Props{"value": "Problems", "size": termTabSize, "tone": "muted"}) }, func() any{ return gxscene.Style{FlexGrow:"1",} }, func() any{ return widgets.Text(gxscene.Props{"value": terminalLines(), "size": termTabSize, "tone": "muted"}) }, func() any{ return gxscene.Style{Background:canvasBg(),Padding:"6 12",Height:terminalHeightPx(),Overflow:"auto",FontSize:termTabSize,FontFamily:termOutFont,Color:widgets.UseToken("success")(),} }, func() any{ return widgets.Text(gxscene.Props{"value": terminalText(), "size": termTabSize, "tone": "muted"}) })
@@ -605,8 +605,78 @@ func menuItem(label string) *gxscene.Instance {
     return gxscene.Render(gxscene.Template{Ops:[]gxscene.Op{gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:0,},gxscene.Op{Code:gxscene.OpDynChild,Slot:1,},gxscene.Op{Code:gxscene.OpClose,},},N:2,}, func() any{ return gxscene.Style{Cursor:"pointer",Padding:"3 3",} }, func() any{ return widgets.Text(gxscene.Props{"value": label, "size": widgets.FontFootnote, "tone": "muted"}) })
 }
 
+// ---- 真下拉菜单（widgets.Popover 浮层底座；openMenu 受控，同时只开一个）----
+// WebStorm 的菜单栏是可点下拉；这里把 File/View/Run 三项接成真菜单，
+// 其余项保持静态文本（不造假交互）。菜单项只绑现有真实命令。
+
+ var OpenMenu = Signal.New("")
+
+// SetMenu 切换菜单：点同一个关闭，点另一个自然互斥（单一状态变量）。
+ func SetMenu(name string) {
+    if OpenMenu() == name { OpenMenu("" )} else { OpenMenu(name )}
+}
+ func MenuName() string { return OpenMenu() }
+
+// NewFile 把编辑器重置为最小可运行骨架（File ▸ New File 的动作）。
+ func NewFile() {
+    runInstance = nil
+    runErr = ""
+    Signal.Batch(func() {
+        EditorSetText("package main\n\nfunc main() {\n    println(\"hello, gox\")\n}\n")
+        EditorHome()
+        EditorFocus()
+        RunningSig(false)
+    })
+}
+
+// menuRow 菜单项：点击执行命令并收起菜单。
+func menuRow(label string, fn func()) *gxscene.Instance {
+    return gxscene.Render(gxscene.Template{Ops:[]gxscene.Op{gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpEvent,Key:"onClick",Slot:0,},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:1,},gxscene.Op{Code:gxscene.OpDynChild,Slot:2,},gxscene.Op{Code:gxscene.OpClose,},},N:3,}, func() any{ return func() { fn(); OpenMenu("" )} }, func() any{ return gxscene.Style{FlexDirection:"row",AlignItems:"center",Height:"30",Padding:"0 14",Cursor:"pointer",Hover:&gxscene.Style{Background:widgets.UseToken("panelalt")(),},} }, func() any{ return widgets.Text(gxscene.Props{"value": label, "size": "12", "tone": "text"}) })
+}
+
+func menuBox(inner func() any) *gxscene.Instance {
+    return gxscene.Render(gxscene.Template{Ops:[]gxscene.Op{gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:0,},gxscene.Op{Code:gxscene.OpDynChild,Slot:1,},gxscene.Op{Code:gxscene.OpClose,},},N:2,}, func() any{ return gxscene.Style{FlexDirection:"column",Background:widgets.UseToken("elevated")(),BorderRadius:widgets.RadiusSmall,BorderWidth:widgets.HairlineWidth,Border:borderColor(),Padding:"4 0",} }, func() any{ return inner() })
+}
+
+// menuPopup trigger 与浮层内容组装成受控 Popover（外部点击由 scrim 关闭）。
+func menuPopup(label string, name string, content func() *gxscene.Instance) *gxscene.Instance {
+    return widgets.Popover(gxscene.Props{
+        "open":         func() bool { return OpenMenu() == name },
+        "onOpenChange": func(v bool) { if v { OpenMenu(name )} else { OpenMenu("" )} },
+        "placement":    "bottom-start",
+        "offset":       "2",
+        "width":        "200",
+        "trigger":      func() any { return menuTrigger(label, name) },
+        "content":      func() any { return content() },
+    })
+}
+
+func menuTrigger(label string, name string) *gxscene.Instance {
+    tone := "muted"
+    if OpenMenu() == name { tone = "text" }
+    return gxscene.Render(gxscene.Template{Ops:[]gxscene.Op{gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpEvent,Key:"onClick",Slot:0,},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:1,},gxscene.Op{Code:gxscene.OpDynChild,Slot:2,},gxscene.Op{Code:gxscene.OpClose,},},N:3,}, func() any{ return func() { SetMenu(name) } }, func() any{ return gxscene.Style{Padding:"3 8",Cursor:"pointer",BorderRadius:widgets.RadiusSmall,Background:widgets.UseToken("panelalt")(),Hover:&gxscene.Style{Background:widgets.UseToken("panelalt")(),},} }, func() any{ return widgets.Text(gxscene.Props{"value": label, "size": widgets.FontFootnote, "tone": tone}) })
+}
+
+func fileMenuContent() *gxscene.Instance {
+    return menuBox(func() any {
+        return gxscene.Render(gxscene.Template{Ops:[]gxscene.Op{gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:0,},gxscene.Op{Code:gxscene.OpDynChild,Slot:1,},gxscene.Op{Code:gxscene.OpDynChild,Slot:2,},gxscene.Op{Code:gxscene.OpDynChild,Slot:3,},gxscene.Op{Code:gxscene.OpClose,},},N:4,}, func() any{ return gxscene.Style{FlexDirection:"column",} }, func() any{ return menuRow("New File", NewFile) }, func() any{ return menuRow("Next Example", NextSample) }, func() any{ return menuRow("Previous Example", PrevSample) })
+    })
+}
+
+func viewMenuContent() *gxscene.Instance {
+    return menuBox(func() any {
+        return gxscene.Render(gxscene.Template{Ops:[]gxscene.Op{gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:0,},gxscene.Op{Code:gxscene.OpDynChild,Slot:1,},gxscene.Op{Code:gxscene.OpDynChild,Slot:2,},gxscene.Op{Code:gxscene.OpClose,},},N:3,}, func() any{ return gxscene.Style{FlexDirection:"column",} }, func() any{ return menuRow("Toggle Terminal Panel", ToggleTerminal) }, func() any{ return menuRow("Switch Theme", ToggleTheme) })
+    })
+}
+
+func runMenuContent() *gxscene.Instance {
+    return menuBox(func() any {
+        return gxscene.Render(gxscene.Template{Ops:[]gxscene.Op{gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:0,},gxscene.Op{Code:gxscene.OpDynChild,Slot:1,},gxscene.Op{Code:gxscene.OpDynChild,Slot:2,},gxscene.Op{Code:gxscene.OpClose,},},N:3,}, func() any{ return gxscene.Style{FlexDirection:"column",} }, func() any{ return menuRow("Run Current Example", TriggerRun) }, func() any{ return menuRow("Clear Console", TerminalClear) })
+    })
+}
+
 func menuBar() *gxscene.Instance {
-    return gxscene.Render(gxscene.Template{Ops:[]gxscene.Op{gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:0,},gxscene.Op{Code:gxscene.OpDynChild,Slot:1,},gxscene.Op{Code:gxscene.OpDynChild,Slot:2,},gxscene.Op{Code:gxscene.OpDynChild,Slot:3,},gxscene.Op{Code:gxscene.OpDynChild,Slot:4,},gxscene.Op{Code:gxscene.OpDynChild,Slot:5,},gxscene.Op{Code:gxscene.OpDynChild,Slot:6,},gxscene.Op{Code:gxscene.OpDynChild,Slot:7,},gxscene.Op{Code:gxscene.OpDynChild,Slot:8,},gxscene.Op{Code:gxscene.OpDynChild,Slot:9,},gxscene.Op{Code:gxscene.OpDynChild,Slot:10,},gxscene.Op{Code:gxscene.OpDynChild,Slot:11,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:12,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpDynChild,Slot:13,},gxscene.Op{Code:gxscene.OpClose,},},N:14,}, func() any{ return gxscene.Style{FlexDirection:"row",AlignItems:"center",Gap:"14",Height:"30",Padding:"0 12",Background:chromeBg(),BorderWidth:widgets.HairlineWidth,Border:borderColor(),} }, func() any{ return menuItem("File") }, func() any{ return menuItem("Edit") }, func() any{ return menuItem("View") }, func() any{ return menuItem("Navigate") }, func() any{ return menuItem("Code") }, func() any{ return menuItem("Refactor") }, func() any{ return menuItem("Run") }, func() any{ return menuItem("Tools") }, func() any{ return menuItem("Git") }, func() any{ return menuItem("Window") }, func() any{ return menuItem("Help") }, func() any{ return gxscene.Style{FlexGrow:"1",} }, func() any{ return widgets.Text(gxscene.Props{"value": "GoX IDE", "size": widgets.FontFootnote, "tone": "muted"}) })
+    return gxscene.Render(gxscene.Template{Ops:[]gxscene.Op{gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:0,},gxscene.Op{Code:gxscene.OpDynChild,Slot:1,},gxscene.Op{Code:gxscene.OpDynChild,Slot:2,},gxscene.Op{Code:gxscene.OpDynChild,Slot:3,},gxscene.Op{Code:gxscene.OpDynChild,Slot:4,},gxscene.Op{Code:gxscene.OpDynChild,Slot:5,},gxscene.Op{Code:gxscene.OpDynChild,Slot:6,},gxscene.Op{Code:gxscene.OpDynChild,Slot:7,},gxscene.Op{Code:gxscene.OpDynChild,Slot:8,},gxscene.Op{Code:gxscene.OpDynChild,Slot:9,},gxscene.Op{Code:gxscene.OpDynChild,Slot:10,},gxscene.Op{Code:gxscene.OpDynChild,Slot:11,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:12,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpDynChild,Slot:13,},gxscene.Op{Code:gxscene.OpClose,},},N:14,}, func() any{ return gxscene.Style{FlexDirection:"row",AlignItems:"center",Gap:"14",Height:"30",Padding:"0 12",Background:chromeBg(),BorderWidth:widgets.HairlineWidth,Border:borderColor(),} }, func() any{ return menuPopup("File", "File", fileMenuContent) }, func() any{ return menuItem("Edit") }, func() any{ return menuPopup("View", "View", viewMenuContent) }, func() any{ return menuItem("Navigate") }, func() any{ return menuItem("Code") }, func() any{ return menuItem("Refactor") }, func() any{ return menuPopup("Run", "Run", runMenuContent) }, func() any{ return menuItem("Tools") }, func() any{ return menuItem("Git") }, func() any{ return menuItem("Window") }, func() any{ return menuItem("Help") }, func() any{ return gxscene.Style{FlexGrow:"1",} }, func() any{ return widgets.Text(gxscene.Props{"value": "GoX IDE", "size": widgets.FontFootnote, "tone": "muted"}) })
 }
 
 func iconButton(name string, fn func()) *gxscene.Instance {
