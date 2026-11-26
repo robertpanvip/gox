@@ -146,6 +146,12 @@ func splitActiveBg() string {
 func terminalLines() string { return strconv.Itoa(terminalState.LineCount()) + " 行" }
 func terminalText() string  { return terminalState.Text() }
 
+// 终端区可读性：10px footnote 加粗笔画在屏幕上会碎成点阵（"Terminal 像
+// 有空格"的观感根源），tab 标签统一抬到 12px；输出区声明等宽栈，与控制台
+// 语义一致。局部常量，不动全局 FontFootnote token（其他组件仍在用）。
+const termTabSize = "12"
+const termOutFont = "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+
 // TerminalView 用 JSX 自绘终端面板：height 走 GX 响应式 style 属性，
 // 拖拽水平分隔条写 layoutTerminalH 即可实时改变高度（widgets.Terminal 内部
 // height 是静态 attr，无法响应信号，故这里不用该组件）。
@@ -155,16 +161,16 @@ func TerminalView() *gxscene.Instance {
         <div
             style={{ flexDirection: "row", gap: 16, alignItems: "center", padding: "4 12", background: panelBg() }}
         >
-            {widgets.Text(gxscene.Props{"value": "Terminal", "size": widgets.FontFootnote, "weight": "bold", "tone": accentColor()})}
-            {widgets.Text(gxscene.Props{"value": "Run", "size": widgets.FontFootnote, "tone": "muted"})}
-            {widgets.Text(gxscene.Props{"value": "Problems", "size": widgets.FontFootnote, "tone": "muted"})}
+            {widgets.Text(gxscene.Props{"value": "Terminal", "size": termTabSize, "weight": "bold", "tone": accentColor()})}
+            {widgets.Text(gxscene.Props{"value": "Run", "size": termTabSize, "tone": "muted"})}
+            {widgets.Text(gxscene.Props{"value": "Problems", "size": termTabSize, "tone": "muted"})}
             <div style={{ flexGrow: 1 }}/>
-            {widgets.Text(gxscene.Props{"value": terminalLines(), "size": widgets.FontFootnote, "tone": "muted"})}
+            {widgets.Text(gxscene.Props{"value": terminalLines(), "size": termTabSize, "tone": "muted"})}
         </div>
         <div
-            style={{ background: canvasBg(), padding: "6 12", height: terminalHeightPx(), overflow: "auto", fontSize: widgets.FontFootnote, color: widgets.UseToken("success")() }}
+            style={{ background: canvasBg(), padding: "6 12", height: terminalHeightPx(), overflow: "auto", fontSize: termTabSize, fontFamily: termOutFont, color: widgets.UseToken("success")() }}
         >
-            {widgets.Text(gxscene.Props{"value": terminalText(), "size": widgets.FontFootnote, "tone": "muted"})}
+            {widgets.Text(gxscene.Props{"value": terminalText(), "size": termTabSize, "tone": "muted"})}
         </div>
     </div>
 }
