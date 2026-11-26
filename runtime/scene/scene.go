@@ -196,7 +196,7 @@ type slotKind uint8
 const (
 	slotChild slotKind = iota
 	slotAttr
-	slotNoop // 未被模板引用的补全插槽：写入一律忽略（防御路径若指向根会毁树）
+	slotNoop    // 未被模板引用的补全插槽：写入一律忽略（防御路径若指向根会毁树）
 	slotComp    // 复合组件：getter 返回一个 *Instance，挂载为子树，Update 递归驱动
 	slotBranch  // 动态子树：getter 返回 subtreeController（*Branch 条件分支 / *For keyed 列表）
 	slotEvent   // 事件绑定：getter 返回 handler 原值，写入节点的 Handlers（不进 Props）
