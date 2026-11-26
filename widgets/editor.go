@@ -74,7 +74,7 @@ func NewEditorState(source string) *EditorState {
     doc := Rope.Of(source) // 只构造一次：LineCount 与文本权威共用同一棵根
     lc := doc.LineCount()
     st := &EditorState{
-        sourceCode:    Signal.LockedGetterShared("sf:source:3436",func() string { return source },
+        sourceCode:    Signal.LockedGetterShared("sf:source:3506",func() string { return source },
 func(__v string) { source = __v },
 ),
         doc:           doc, // 单次构造：LineCount 与文本权威共用同一棵根
@@ -83,7 +83,7 @@ func(__v string) { source = __v },
         selAnchorLine: Signal.New(0),
         selAnchorCol:  Signal.New(0),
         focused:       Signal.New(false),
-        lineCount:     Signal.LockedGetterShared("sf:lc:3643",func() int { return lc },
+        lineCount:     Signal.LockedGetterShared("sf:lc:3717",func() int { return lc },
 func(__v int) { lc = __v },
 ),
         scrollTop:     Signal.New(0.0),
@@ -96,6 +96,11 @@ func(__v int) { lc = __v },
     // 惰性解析：不再全文 tokenize。缓存切片按行数预留（nil 元素 = 该行未解析），
     // 首屏 O(1)；行进入可见窗口时由 lineText/lineCodeGradient 现场解析并缓存。
     st.ensureCacheLen(lc)
+    // 行文本快照必须在构造期同步填充：lineTextCache 是渲染（rich-text/gradient）
+    // 与点击换算（PickColumn）的权威来源，留空会导致「逻辑层 doc 有内容、
+    // 显示与点击换算却拿到空串」的失步——表现为代码区空白、点击列恒 0、
+    // 空格插错位置（-path 磁盘模式首开即复现）。tokenize 仍是惰性的。
+    for i := 0; i < lc; i = i + 1 { st.lineTextCache[i] = doc.Line(i) }
     st.rowVers.SetLen(lc) // 行数 >64 时 Vec 自动迁移到 pvector 大后端
     return st
 }
@@ -1159,6 +1164,16 @@ func (s *EditorState) rebuildTokenCache(lines []string) []int {
 // 行内容以 lineTextCache 为准（setSource 已同步）。
 func (s *EditorState) ensureLineParsed(idx int) {
     if idx < 0 || idx >= len(s.tokenCache) { return }
+    // 防御校验：行文本快照与 doc 权威不一致时重置本行缓存。doc 是唯一文本权威
+    // （编辑走 applyRopeDelta/setSource，正常都会同步快照），但任何失步窗口
+    // （构造期未填、未来重构遗漏同步）都会让渲染与点击换算读到旧/空行文本，
+    // 表现为显示错位、空格插错位置。Line() 是 O(log N) rope 读取，可见行数固定，
+    // 每次读取的代价可忽略。快照相等时零额外开销（等长字符串比较）。
+    if idx < len(s.lineTextCache) && idx < s.doc.LineCount() && s.lineTextCache[idx] != s.doc.Line(idx) {
+        s.lineTextCache[idx] = s.doc.Line(idx)
+        s.tokenCache[idx] = nil
+        s.textCache[idx] = ""
+    }
     if s.tokenCache[idx] != nil { return }
     line := ""
     if idx < len(s.lineTextCache) { line = s.lineTextCache[idx] }

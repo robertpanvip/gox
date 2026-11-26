@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"path/filepath"
 	"runtime"
 	"sort"
 	"strings"
@@ -273,7 +274,9 @@ func (g *glWindow) Open(cfg gxapp.WindowConfig) error {
 		if (ch < 0x20 && ch != '\t') || ch == 0x7f {
 			return
 		}
+		inputLogf("char %q before: %s", ch, ui.EditorStatus())
 		ui.EditorInsert(string(ch))
+		inputLogf("char %q after:  %s", ch, ui.EditorStatus())
 	})
 	win.SetMouseButtonCallback(g.onMouseButton)
 	// 滚轮 → 虚拟滚动窗口移动。GLFW yoff 正为向上滚，因此取负号转成"向下为正行数"。
@@ -558,6 +561,7 @@ func (g *glWindow) onMouseButton(w *glfw.Window, button glfw.MouseButton, action
 	}
 	cx, cy := w.GetCursorPos()
 	px, py := float32(cx), float32(cy) // GLFW 光标坐标已是左上原点，与 painter/hits 一致
+	inputLogf("click px=%.1f py=%.1f", px, py)
 
 	// ---- WebStorm 分隔条拖拽：命中 splitter 则进入拖拽态，优先于编辑器选区 ----
 	if axis, ok := g.splitterAt(px, py); ok {
@@ -635,6 +639,23 @@ func (g *glWindow) onMouseButton(w *glfw.Window, button glfw.MouseButton, action
 	}
 }
 
+// ---- 输入诊断日志（GOX_INPUT_DEBUG=1 时启用，写 %TEMP%\gox-ide-input.log）----
+// 用于定位「点击定位偏移 / 空格插错位置」类报障：记录每次点击的换算输入输出
+// 与每次字符输入后的光标状态，区分「逻辑层错」与「显示层错」。
+
+func inputLogf(format string, args ...any) {
+	if os.Getenv("GOX_INPUT_DEBUG") == "" {
+		return
+	}
+	p := filepath.Join(os.TempDir(), "gox-ide-input.log")
+	f, err := os.OpenFile(p, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		return
+	}
+	fmt.Fprintf(f, time.Now().Format("15:04:05.000 ")+" "+format+"\n", args...)
+	f.Close()
+}
+
 // splitterAt 判断屏幕点是否落在 WebStorm 三区的分隔条上，返回轴向。
 // 分隔条在 GX 里用 class="gx-splitter-v"/"gx-splitter-h" 标记，命中框由
 // skia 后端随帧生成；这里按 class 精确匹配，避免与编辑器/终端的命中混淆。
@@ -685,6 +706,8 @@ func (g *glWindow) editorHit(px, py float32) (int, int, bool) {
 	for idx, r := range rows {
 		if py >= r.Y && py < r.Y+22 {
 			relX := float64(px) - (float64(r.X) + 50)
+			inputLogf("editorHit px=%.1f py=%.1f r.X=%.1f r.Y=%.1f idx=%d relX=%.1f line=%q col=%d",
+				px, py, r.X, r.Y, idx, relX, ui.EditorLineSource(idx), ui.PickColumn(idx, relX))
 			return idx, ui.PickColumn(idx, relX), true
 		}
 	}
