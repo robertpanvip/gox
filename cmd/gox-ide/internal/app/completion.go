@@ -40,8 +40,15 @@ func (m *Model) refreshCompletion(seq int) {
 	if col < len([]rune(line)) {
 		left = string([]rune(line)[:col])
 	}
-	token := complete.TokenBefore(left)
-	if token == "" || utf8.RuneCountInString(token) < 1 || utf8.RuneCountInString(token) > 40 {
+	// 点号上下文（obj. / pkg.）走 go/types 成员补全，点号后前缀可为空；
+	// 其余走符号/关键字路径，token 至少 1 个字符。
+	memberTok, isMember := complete.MemberToken(left)
+	token := memberTok
+	if !isMember {
+		token = complete.TokenBefore(left)
+	}
+	tokenLen := utf8.RuneCountInString(token)
+	if tokenLen > 40 || (!isMember && tokenLen < 1) {
 		m.closeComp()
 		return
 	}
@@ -50,6 +57,9 @@ func (m *Model) refreshCompletion(seq int) {
 		Line:       left,
 		BufferText: b.Text(),
 		CWD:        m.root,
+		LineNo:     ln,
+		Col:        col,
+		Member:     isMember,
 	})
 	if len(cands) == 0 {
 		m.closeComp()

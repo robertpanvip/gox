@@ -46,11 +46,14 @@ go build -o gox-ide ./cmd/gox-ide
 
 在编辑区输入标识符时**光标旁弹出候选**，无需记 API：
 
+- **类型感知成员补全**（`obj.` / `pkg.`）：输入点号即弹成员，走真实 **go/types** —— 结构体字段、方法集、包导出符号，详情显示完整函数签名。例如 `b := strings.NewReplacer()` 后输 `b.R` 弹 `Replace · func(s string) string`。占位符注入 + 持久 Importer 缓存类型图，空前缀（`obj.`）也触发。
 - **GX/Go 关键字与片段**：`sig`/`func`/`view`/`for`… 及常用代码块。
 - **本文件 / 项目符号**：从当前文档与项目源码里抽取 `func`/`type`/`sig`/`var` 等声明。
 - **LSP 代码符号**：PATH 里有 `gopls`/`gox-lsp` 时异步拉取 `workspace/symbol`，装了全局语言服务器就自动多一路候选（没装则静默降级）。
 
-四类来源走可插拔 Provider，统一打分（前缀 > 子串 > 子序列）、去重、限流；LSP 异步预热，`Provide` 永不阻塞 UI。采纳时按字符数回退当前 token 再插入候选，光标与 Rope 文本保持同步。
+五类来源走可插拔 Provider，统一打分（前缀 > 子串 > 子序列）、去重、限流。点号上下文**只走成员补全**，避免关键字/符号噪声淹没成员；其余上下文跳过成员 provider。成员/LSP 异步预热，`Provide` 永不阻塞 UI。采纳时按字符数回退当前 token 再插入候选，光标与 Rope 文本保持同步。
+
+> 成员补全由主仓库公共包 `pkg/gxcomplete` 提供（gox-ide 是独立 module，无法 import `internal/typecheck`，故经此门面复用），依赖 GOROOT 源码；无 GOROOT 时静默降级到符号补全。
 
 ## 架构
 
@@ -67,6 +70,7 @@ cmd/gox-ide/                  独立 Go module（replace gox => ../..）
 │   │   ├── buffer.go         本文件符号
 │   │   ├── project.go        项目符号扫描（带缓存）
 │   │   ├── symbols.go        声明符号抽取
+│   │   ├── member.go         类型感知点号成员补全（经 gox/pkg/gxcomplete）
 │   │   └── lsp.go            可选 LSP workspace/symbol（异步预热）
 │   └── app/                  bubbletea 主 Model
 │       ├── model.go          状态、Update、全局快捷键
@@ -90,3 +94,7 @@ go test ./cmd/gox-ide/...
 ```
 
 覆盖高亮"拼回原文不变"契约、关键字/字符串/注释着色、Rope 插入删除/跨行退格/中文光标、20000 行定位等；补全引擎的打分/去重/排序、token 与成员前缀提取、符号抽取、关键字过滤；补全市集的 token 替换、选中环绕、状态清理等。
+
+类型感知成员补全的核心断言在 `gox/pkg/gxcomplete`（空/非空前缀、局部变量、GX sig 声明、非点号回退、CJK 行列换算），gox-ide 侧另有真实 go/types 集成断言、点号分流与 Tab 采纳（补全打开时 Tab 优先采纳而非切焦点）测试。
+
+实测（xvfb + xterm）：打开含 `import "strings"` 的 GX 文件，输入 `b.R` 弹出 `Replace`/`WriteString` 两个 Replacer 成员（含完整函数签名），Tab 采纳后成为 `b.Replace`，浮层关闭、无重复插入。

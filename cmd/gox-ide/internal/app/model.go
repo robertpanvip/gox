@@ -205,6 +205,10 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.closeActive()
 		return m, nil
 	case "tab":
+		// 补全浮层打开且焦点在编辑区时，Tab 用于采纳候选（优先级高于切换焦点）。
+		if m.compOpen && m.focus == 1 {
+			return m.handleEditorKey(msg)
+		}
 		if m.focus == 0 {
 			m.focus = 1
 		} else {

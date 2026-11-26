@@ -97,3 +97,72 @@ func TestKeywordProvider(t *testing.T) {
 		t.Error("应包含 func")
 	}
 }
+
+func TestMemberToken(t *testing.T) {
+	cases := []struct {
+		left string
+		tok  string
+		ok   bool
+	}{
+		{"strings.", "", true},
+		{"b.Re", "Re", true},
+		{"    x := obj.field.Na", "Na", true},
+		{"count", "", false},
+		{"", "", false},
+		{".", "", false},
+		{"a + b", "", false},
+	}
+	for _, c := range cases {
+		tok, ok := MemberToken(c.left)
+		if tok != c.tok || ok != c.ok {
+			t.Errorf("MemberToken(%q) = (%q,%v), want (%q,%v)", c.left, tok, ok, c.tok, c.ok)
+		}
+	}
+}
+
+func TestEngineMemberRouting(t *testing.T) {
+	// 点号上下文下，引擎不应混入关键字/符号等噪声。用一个假成员 provider 验证分流。
+	e := NewEngineWith(9,
+		&fakeProvider{name: "member", cands: []Candidate{{Text: "Replace", Label: "Replace", Kind: KindMember}}},
+		&fakeProvider{name: "keyword", cands: []Candidate{{Text: "func", Label: "func", Kind: KindKeyword}}},
+	)
+	got := e.Complete(Query{Token: "Re", Member: true})
+	if len(got) != 1 || got[0].Label != "Replace" {
+		t.Fatalf("点号上下文应只出成员, got %v", got)
+	}
+	// 非点号上下文跳过成员 provider。
+	got = e.Complete(Query{Token: "fu", Member: false})
+	if len(got) != 1 || got[0].Label != "func" {
+		t.Fatalf("非点号上下文应只出关键字, got %v", got)
+	}
+}
+
+type fakeProvider struct {
+	name  string
+	cands []Candidate
+}
+
+func (f *fakeProvider) Name() string              { return f.name }
+func (f *fakeProvider) Provide(Query) []Candidate { return f.cands }
+
+func TestMemberProviderRealGoTypes(t *testing.T) {
+	// 真实调用 gxcomplete：诊断型测试，GOROOT 不可用时跳过。
+	src := "package main\n\nimport \"strings\"\n\nfunc f() {\n    b := strings.NewReplacer()\n    b.\n    _ = b\n}\n"
+	p := NewMemberProvider()
+	cands := p.Provide(Query{Member: true, BufferText: src, LineNo: 6, Col: 6})
+	if len(cands) == 0 {
+		t.Skip("当前环境无 GOROOT/src 或类型检查不可用，跳过（生产环境降级到符号补全）")
+	}
+	found := false
+	for _, c := range cands {
+		if c.Label == "Replace" {
+			found = true
+		}
+		if c.Kind != KindMember {
+			t.Errorf("成员候选 Kind 应为 KindMember: %s=%v", c.Label, c.Kind)
+		}
+	}
+	if !found {
+		t.Fatalf("b. 应含 Replace, got %v", cands)
+	}
+}

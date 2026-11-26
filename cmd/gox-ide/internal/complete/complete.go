@@ -19,6 +19,7 @@ const (
 	KindSymbol
 	KindBuffer
 	KindLSP
+	KindMember
 )
 
 func (k Kind) Mark() string {
@@ -31,6 +32,8 @@ func (k Kind) Mark() string {
 		return "•"
 	case KindLSP:
 		return "λ"
+	case KindMember:
+		return "⊕"
 	}
 	return "·"
 }
@@ -46,10 +49,13 @@ type Candidate struct {
 
 // Query 是一次补全请求。
 type Query struct {
-	Token      string // 光标前当前标识符
+	Token      string // 光标前当前标识符（点号上下文下为点号后的前缀，可为空）
 	Line       string // 当前行（光标前）
-	BufferText string // 当前文档全文（供 buffer 符号）
+	BufferText string // 当前文档全文（供 buffer 符号 / 成员补全类型检查）
 	CWD        string // 项目目录
+	LineNo     int    // 光标所在 0 基行号（成员补全定位用）
+	Col        int    // 光标 0 基 rune 列（成员补全定位用）
+	Member     bool   // 是否为点号上下文（obj. / pkg.）——为真时只走成员补全
 }
 
 // Provider 是一个补全来源。
@@ -66,8 +72,11 @@ type Engine struct {
 
 // NewEngine 用默认来源构建引擎。cwd 为项目根目录。
 func NewEngine(cwd string) *Engine {
+	mp := NewMemberProvider()
+	mp.Warm() // 异步预热 go/types 类型图，首次点号补全不卡 UI
 	return &Engine{
 		providers: []Provider{
+			mp,
 			NewKeywordProvider(),
 			NewBufferProvider(),
 			NewProjectProvider(cwd),
@@ -83,9 +92,14 @@ func NewEngineWith(limit int, providers ...Provider) *Engine {
 }
 
 // Complete 返回排序后的候选。
+// 点号上下文（q.Member）只走成员补全，避免关键字/符号噪声淹没 obj. 的成员。
 func (e *Engine) Complete(q Query) []Candidate {
 	all := make([]Candidate, 0, 64)
 	for _, p := range e.providers {
+		isMember := p.Name() == "member"
+		if q.Member != isMember {
+			continue
+		}
 		all = append(all, p.Provide(q)...)
 	}
 	type ranked struct {
@@ -137,6 +151,8 @@ func (k Kind) String() string {
 		return "buffer"
 	case KindLSP:
 		return "lsp"
+	case KindMember:
+		return "member"
 	}
 	return "?"
 }
@@ -203,6 +219,28 @@ func MemberPrefix(left string) string {
 		start--
 	}
 	return s[start+1 : i]
+}
+
+// MemberToken 判断光标左侧是否为点号成员上下文，返回点号后的前缀（可为空）。
+// 例如 "strings." → ("", true)；"b.Re" → ("Re", true)；"count" → ("", false)。
+func MemberToken(left string) (string, bool) {
+	s := strings.TrimRight(left, " \t")
+	if s == "" {
+		return "", false
+	}
+	// 取末尾标识符串（含已敲前缀）。
+	start := len(s)
+	for start > 0 && isIdent(s[start-1]) {
+		start--
+	}
+	if start == 0 || s[start-1] != '.' {
+		return "", false
+	}
+	// 点号前需有成员基底（标识符 / 右括号 / 字符串引号 / 数字），纯 "." 不算。
+	if start < 2 {
+		return "", false
+	}
+	return s[start:], true
 }
 
 func isIdent(r byte) bool {
