@@ -281,6 +281,16 @@ func inheritedStyle(n *gxscene.Node, parent textStyle) textStyle {
 	return s
 }
 
+// richTextStyle 构造富文本/渐变文字用的 textStyle，关键在于带上 family：
+// 编辑器代码行声明了 font-family（等宽栈），若漏传 family，splitRuns 会退回
+// sans-serif 用比例字体绘制，而测量端 MeasureEditorAdvances 用 pickFontFamily
+// 解析出的等宽字体测宽——两端字体不一致，导致 caret 渲染与点击命中（PickColumn）
+// 系统性错位（点 <div 的 v 后空格却插到 div 前面）。用 inheritedStyle 从节点
+// 自身 font-family prop 解析出族名，与测量端同口径。
+func richTextStyle(n *gxscene.Node, color uint32, fontSize int, bold bool) textStyle {
+	return inheritedStyle(n, textStyle{color: color, fontSize: fontSize, bold: bold})
+}
+
 // defaultTextStyle 是根节点的继承起点（黑字 / 16px / 常规）。
 func defaultTextStyle() textStyle {
 	d := defaultStyle()
@@ -480,15 +490,14 @@ func (p *painter) paintElement(n *gxscene.Node, box layoutBox) {
 		//   - Skia 端在此把渐变解析回 RichText 分段绘制。
 		// 兼容仍用 rich-text 属性的旧节点（其它示例可能使用）。
 		// 其纯文本子节点会在 paintChildrenClipped 跳过，避免单色文字覆盖正确着色。
+		st := richTextStyle(n, s.color, s.fontSize, s.bold)
 		var coloredText string
 		if rt, ok := gxscene.RichTextFromProps(n.Props); ok && len(rt) > 0 {
-			st := textStyle{color: s.color, fontSize: s.fontSize, bold: s.bold}
 			p.paintRichText(n, rt, box, st)
 			coloredText = rt.Plain()
 		} else if grad := gradientBg(n); grad != "" && isGradientText(n) {
 			// 仅编辑器代码行（gradient-text 标记）把渐变映射到文字；
 			// 普通 div 的渐变已在上方画成背景，此处不处理。
-			st := textStyle{color: s.color, fontSize: s.fontSize, bold: s.bold}
 			txt := nodeText(n)
 			// 原生 shader 优先：整段文字共享一份渐变 shader，按字形 canvas 坐标取色，
 			// 零 Go 侧拆色分配；构造失败回退到 RichText 分段路径。

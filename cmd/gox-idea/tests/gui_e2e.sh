@@ -65,24 +65,33 @@ assert_eq() {
 }
 
 # ---- 场景 1：点击 <div 的 v 后按空格，空格应落在 v 之后（">" 前） ----
-# 编辑器第 10 行 "    return <div>Hello, {name}!</div>"；v 后的屏幕坐标约 (448,312)。
+# 编辑器第 10 行 "    return <div>Hello, {name}!</div>"。
+# 点击坐标自适应：从编辑器实测字宽算出 v 后（col 15）的屏幕 x，避免写死像素
+# 在不同字体/修复前后失效。代码文字起点固定为 356（行盒 X=306 + gutter 42 + margin 8），
+# 行高 22，第 10 行（idx 9）中心 y=311。这些是 gox-idea WebStorm 布局的固定值。
 echo "== 场景1：点击定位 =="
 BASE=$(read_editor | sed -n '10p')
 echo "  基线第10行: $BASE"
 
-DISPLAY="$DISP" xdotool mousemove 448 312 click 1 >/dev/null 2>&1
+# 用 skia 实测等宽字 advance（与编辑器注入口径一致）算 col 15 的 x。
+CHAR_W=$(cd "$(dirname "$0")/.." && GOTOOLCHAIN=go1.27.4 go run ./tests/charwidth.go 2>/dev/null)
+if [ -z "$CHAR_W" ]; then CHAR_W=7.8267; fi
+CLICK_X=$(python3 -c "print(int(round(356 + 15 * $CHAR_W)))")
+echo "  实测字宽=$CHAR_W 点击 col15 的 x=$CLICK_X"
+
+DISPLAY="$DISP" xdotool mousemove "$CLICK_X" 311 click 1 >/dev/null 2>&1
 sleep 0.4
 DISPLAY="$DISP" xdotool key space >/dev/null 2>&1
 sleep 0.4
 AFTER=$(read_editor | sed -n '10p')
 echo "  输入后第10行: $AFTER"
 
-# 正确行为：<div 的 v 后插入空格 → "return <div Hello"；
-# 已知 bug：空格跑到 < 与 div 之间 → "return < div>"。
-if [ "$AFTER" = "    return <div Hello, {name}!</div>" ]; then
-  echo "  [PASS] 空格落在 v 之后"
+# 正确行为（等宽字体，点击 col15 = v 与 > 之间）："    return <div >Hello"（空格在 > 前）；
+# 已知 bug（比例字体导致换算偏左）：空格跑到 < 与 div 之间 → "    return < div>"。
+if printf '%s' "$AFTER" | grep -q 'return <div >Hello'; then
+  echo "  [PASS] 空格落在 v 之后（点击定位正确）"
   PASS=$((PASS+1))
-elif [ "$AFTER" = "    return < div>Hello, {name}!</div>" ]; then
+elif printf '%s' "$AFTER" | grep -q 'return < div>'; then
   if [ "$STRICT" -eq 1 ]; then
     echo "  [FAIL] 抓到缺陷：点击 v 后按空格，空格跑到了 < 与 div 之间（点击定位偏移）"
     echo "         got : $AFTER"
