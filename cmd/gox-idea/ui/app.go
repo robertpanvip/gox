@@ -963,3 +963,9 @@ return 1 }, func() *gxscene.Instance { return gxscene.Render(gxscene.Template{Op
  func EditorStatus() string               { return editorState.Status() }
  func PickColumn(idx int, x float64) int  { return editorState.PickColumn(idx, x) }
  func EditorLineText(idx int, slot int) string { return editorState.LineText(idx, slot) }
+
+// ---- GUI 端到端测试用的只读观测（无副作用，仅快照读取）----
+// 项目树展开/折叠、点击文件打开标签都是纯响应面变化，进程外看不见；
+// 暴露可见行数与展开目录数让 E2E 能硬断言，而非比对截图。
+ func ProjectVisibleRows() int { return len(projectRows()) }
+ func ProjectExpandedCount() int { return len(ProjectExpanded()) }

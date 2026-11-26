@@ -809,6 +809,12 @@ func (g *glWindow) DebugSplitters() []map[string]any {
 	return out
 }
 
+// DebugWindowSize 供 E2E 快照读取窗口逻辑尺寸（点），用于断言 resize 生效。
+func (g *glWindow) DebugWindowSize() (int, int) {
+	w, h := g.win.GetSize()
+	return w, h
+}
+
 func (g *glWindow) Config() gxapp.WindowConfig { return g.cfg }
 
 // Frames 返回已绘制帧数（观测用）。

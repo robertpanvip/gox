@@ -76,6 +76,9 @@ func main() {
 						snap["last_scroll_yoff"] = win.lastScrollYOff
 						snap["last_scroll_before"] = win.lastScrollBefore
 						snap["last_scroll_after"] = win.lastScrollAfter
+						ww, wh := win.DebugWindowSize()
+						snap["window_w"] = ww
+						snap["window_h"] = wh
 						if merged, err := json.Marshal(snap); err == nil {
 							data = merged
 						}

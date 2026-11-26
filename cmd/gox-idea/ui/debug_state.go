@@ -27,6 +27,10 @@ type DebugSnapshot struct {
 	EditorStatus        string   `json:"editor_status"`
 	ScrollTop           float64  `json:"scroll_top"`
 	RunInfo             string   `json:"run_info"`
+	WindowW             int      `json:"window_w"`
+	WindowH             int      `json:"window_h"`
+	ProjectVisibleRows  int      `json:"project_visible_rows"`
+	ProjectExpandedCnt  int      `json:"project_expanded_count"`
 }
 
 // DebugScrollTop 供装配层诊断滚轮链路：区分「回调没到」「转发没生效」「被 effect 回写」。
@@ -57,6 +61,8 @@ func DebugStateJSON() []byte {
 		EditorStatus:        EditorStatus(),
 		ScrollTop:           editorState.ScrollTop(),
 		RunInfo:             RunInfo(),
+		ProjectVisibleRows:  ProjectVisibleRows(),
+		ProjectExpandedCnt:  ProjectExpandedCount(),
 	}
 	b, err := json.Marshal(s)
 	if err != nil {
