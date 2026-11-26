@@ -93,10 +93,12 @@ func (m *Model) newSession() {
 		return
 	}
 	m.sessions = append(m.sessions, s)
-	// 建屏幕模拟器，并让默认前景/背景跟随主题面板色。
+	// 建屏幕模拟器：默认前景跟随主题文字色；默认背景留空（透明）——
+	// 不发射背景 SGR，让终端文字直接画在面板底色上，避免"每个字都带背景块"。
+	// 程序（vim/htop/彩色提示符）显式输出的背景色仍会被忠实解析并渲染。
 	sc := screen.New(int(cols), int(rows))
 	p := m.theme.Palette
-	sc.SetDefaultColors(string(p.Text), string(p.Panel))
+	sc.SetDefaultColors(string(p.Text), "")
 	// 重放建立前已到达的 PTY 输出：readLoop 在 Run() 前就可能产生提示符，
 	// 那时 tea.Program.Send 尚未消费，OutputMsg 可能丢失；从缓冲补齐。
 	if early := s.Snapshot(); len(early) > 0 {

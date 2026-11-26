@@ -246,3 +246,30 @@ func TestSelectionHighlight(t *testing.T) {
 		t.Fatalf("选区行应含反显序列: %q", line)
 	}
 }
+
+func TestNoBackgroundBlockForPlainText(t *testing.T) {
+	// 普通文本行（默认前景/背景）不应携带背景色序列 48;——这是"文字带背景块"的根因。
+	s := New(10, 1)
+	s.SetDefaultColors("#e8e8ea", "") // 默认背景留空（透明）
+	s.Write([]byte("abc"))
+	s.showCursor = false
+	line := s.RenderWindow(0, 1)[0]
+	if strings.Contains(line, "48;") {
+		t.Fatalf("默认文本行不应含背景色序列 48;: %q", line)
+	}
+}
+
+func TestCursorUsesUnderlineNotReverse(t *testing.T) {
+	s := New(10, 1)
+	s.Write([]byte("abc")) // 光标停在 c 之后（x=3）
+	s.showCursor = true
+	line := s.RenderWindow(0, 1)[0]
+	// 光标应以下划线(4m)标记，不再是反显块(7m)。
+	if !strings.Contains(line, "4m") {
+		t.Fatalf("光标行应含下划线序列: %q", line)
+	}
+	// 无选区时不应出现反显。
+	if strings.Contains(line, "7m") {
+		t.Fatalf("光标行不应含反显序列 7m: %q", line)
+	}
+}

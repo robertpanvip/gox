@@ -56,8 +56,8 @@ func main() {
 
 	m := app.New(root, dark, files)
 	p := tea.NewProgram(m,
-		tea.WithAltScreen(),       // 全屏备用缓冲区，退出后还原终端
-		tea.WithMouseCellMotion(), // 支持鼠标
+		tea.WithAltScreen(),      // 全屏备用缓冲区，退出后还原终端
+		tea.WithMouseAllMotion(), // 全鼠标移动：Ctrl+ hovering 单词即可显示下划线
 	)
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintln(os.Stderr, "gox-ide 启动失败:", err)

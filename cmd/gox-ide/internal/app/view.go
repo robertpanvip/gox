@@ -2,6 +2,7 @@ package app
 
 import (
 	"strings"
+	"unicode/utf8"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/robertpanvip/gox-ide/internal/syntax"
@@ -210,7 +211,8 @@ func (m *Model) viewEditor(w, h int) string {
 	var lines []string
 	for i := start; i < end; i++ {
 		no := padLeft(itoa(i+1), noWidth-1) + " "
-		code := m.renderHighlighted(b.Line(i), codeW)
+		us, ue, hasHover := m.underlineSpan(i)
+		code := m.renderHighlightedHover(b.Line(i), codeW, us, ue, hasHover)
 		row := t.LineNo.Render(no) + code
 		if i == ln {
 			// 当前行高亮：整行铺底色。
@@ -227,11 +229,49 @@ func (m *Model) viewEditor(w, h int) string {
 
 // renderHighlighted 把一行源码按语义 token 着色，拼成带 ANSI 的字符串。
 func (m *Model) renderHighlighted(line string, width int) string {
+	return m.renderHighlightedHover(line, width, 0, 0, false)
+}
+
+// renderHighlightedHover 与 renderHighlighted 相同，但把 rune 列区间
+// [uStart, uEnd) 内的字符加下划线（Ctrl+hover 导航的 WebStorm 风格提示）。
+// token 内按 rune 再切一段，保证下划线边界精确落在单词上，不破坏语法配色。
+func (m *Model) renderHighlightedHover(line string, width, uStart, uEnd int, underline bool) string {
 	var b strings.Builder
+	col := 0
 	for _, tk := range syntax.Highlight(line) {
-		b.WriteString(m.theme.SynStyle(tk.Color).Render(tk.Text))
+		style := m.theme.SynStyle(tk.Color)
+		if !underline {
+			b.WriteString(style.Render(tk.Text))
+			col += utf8.RuneCountInString(tk.Text)
+			continue
+		}
+		// 逐 rune 走，遇到区间边界就切换样式。
+		runes := []rune(tk.Text)
+		segStart := 0
+		segUnderline := inUnderline(col, underline, uStart, uEnd)
+		for i := 0; i <= len(runes); i++ {
+			curUnderline := i < len(runes) && inUnderline(col+i, underline, uStart, uEnd)
+			if i == len(runes) || curUnderline != segUnderline {
+				seg := string(runes[segStart:i])
+				if seg != "" {
+					s := style
+					if segUnderline {
+						s = s.Underline(true)
+					}
+					b.WriteString(s.Render(seg))
+				}
+				segStart = i
+				segUnderline = curUnderline
+			}
+		}
+		col += len(runes)
 	}
 	return truncateAnsi(b.String(), width)
+}
+
+// inUnderline 判断第 i 个 rune 列是否落在下划线区间。
+func inUnderline(i int, underline bool, uStart, uEnd int) bool {
+	return underline && i >= uStart && i < uEnd
 }
 
 // viewStatusBar 渲染底部状态栏。

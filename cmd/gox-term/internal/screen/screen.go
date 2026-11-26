@@ -1024,7 +1024,9 @@ func (s *Screen) renderCells(row []Cell, cursorX int, showCursor bool, gridY int
 		}
 		at := c.Attr
 		if showCursor && x == cursorX {
-			at ^= attrReverse // 反显模拟光标块
+			// 用下划线而非反显块模拟光标：不覆盖字符、不产生"文字背景块"，
+			// 终端文字保持干净底色（用户诉求），同时光标位置依旧清晰可辨。
+			at |= attrUnderline
 		}
 		if gridY >= 0 && s.inSelection(x, gridY) {
 			at |= attrReverse // 选区反显高亮

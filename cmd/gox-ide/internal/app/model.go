@@ -67,6 +67,10 @@ type Model struct {
 	peekDef   gxcomplete.Def       // peek 中的定义（std 符号）
 	hoverInfo gxcomplete.HoverInfo // hover 签名信息
 	readOnly  map[int]bool         // 只读标签（std 全文视图），按 buffer 索引
+
+	// Ctrl+鼠标导航（WebStorm 风格）：按住 Ctrl 移入标识符时，在该单词下画下划线；
+	// 再按住 Ctrl+左键点击即跳转到定义（本地跳行 / std 弹 peek）。
+	navHover *wordSpan // 当前正在展示下划线的单词（nil 表示无）
 }
 
 // New 构建 Model。root 为空时退化为内存草稿。
@@ -171,6 +175,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyMsg:
 		return m.handleKey(msg)
+
+	case tea.MouseMsg:
+		return m.handleMouse(msg)
 
 	case completionTickMsg:
 		m.refreshCompletion(msg.seq)
@@ -284,6 +291,8 @@ func (m *Model) handleTreeKey(key string) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) handleEditorKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// 任何键盘编辑/移动都意味着离开鼠标悬停态，清除导航下划线。
+	m.clearNavHover()
 	b := m.Current()
 	key := msg.String()
 
