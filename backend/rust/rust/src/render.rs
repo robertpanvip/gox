@@ -2453,3 +2453,233 @@ mod parity_tests {
         assert!(text_sig(&t).contains("@w700"), "字重变化应触发重新 shape");
     }
 }
+
+// ---------------------------------------------------------------------------
+// 三端一致性矩阵测试（与 backend/skia/threeway_test.go、backend/web/threeway_test.go
+// 共享同一份 testdata/threeway/cases.json）。任何一条失败都意味着 Rust 端该
+// 样式属性未实现、Taffy 映射传值错误或与 Web/Skia 语义不一致。
+// 运行：cargo test --manifest-path backend/rust/rust/Cargo.toml threeway_matrix
+// ---------------------------------------------------------------------------
+#[cfg(test)]
+mod threeway_tests {
+    use super::*;
+    use crate::binprotocol::NodeType;
+    use crate::scene::SceneNode;
+
+    fn tw_build(v: &serde_json::Value, id_counter: &mut usize) -> SceneNode {
+        let kind = v["kind"].as_str().unwrap_or("div");
+        let mut props: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+        if let Some(map) = v["props"].as_object() {
+            for (k, pv) in map {
+                props.insert(k.clone(), pv.as_str().unwrap_or_default().to_string());
+            }
+        }
+        if let Some(name) = v["name"].as_str() {
+            props.insert("gx-name".into(), name.into());
+        }
+        *id_counter += 1;
+        let id = id_counter.to_string();
+        let mut children = vec![];
+        if let Some(arr) = v["children"].as_array() {
+            for c in arr {
+                children.push(tw_build(c, id_counter));
+            }
+        }
+        if kind == "text" {
+            SceneNode {
+                typ: NodeType::Text, kind: "#text".into(), id, text: v["text"].as_str().unwrap_or("").into(),
+                props, events: vec![], children,
+            }
+        } else {
+            // Skia 端对全部 div 登记命中框；镜像对齐：每个 div 视作可命中。
+            SceneNode {
+                typ: NodeType::Div, kind: "div".into(), id, text: String::new(),
+                props, events: vec!["on-click".into()], children,
+            }
+        }
+    }
+
+    fn tw_hex(c: (u8, u8, u8)) -> String {
+        format!("#{:02x}{:02x}{:02x}", c.0, c.1, c.2)
+    }
+
+    #[derive(Clone)]
+    struct TwRect { bg: String, x: f32, y: f32, w: f32, h: f32 }
+    #[derive(Clone)]
+    struct TwText { text: String, x: f32, y: f32 }
+
+    fn tw_observe(dl: &DisplayList, bg_by_id: &std::collections::HashMap<String, String>) -> (Vec<TwRect>, Vec<TwText>) {
+        let mut rects = vec![];
+        for s in &dl.shapes {
+            if s.bg_present && s.bg_gradient.is_none() {
+                rects.push(TwRect { bg: tw_hex(s.bg), x: s.x, y: s.y, w: s.w, h: s.h });
+            }
+        }
+        let mut texts = vec![];
+        for t in &dl.texts {
+            texts.push(TwText { text: t.text.clone(), x: t.x, y: t.y });
+        }
+        // 命中观测对齐 Skia HitTest：逆序（自顶向下）第一个包含点的命中框。
+        let _ = bg_by_id;
+        (rects, texts)
+    }
+
+    fn tw_hit_at(dl: &DisplayList, bg_by_id: &std::collections::HashMap<String, String>, px: f32, py: f32) -> (String, String) {
+        for hb in dl.hitboxes.iter().rev() {
+            let (x, y, w, h, id, _, _, clip, cursor) = hb;
+            let contains = px >= *x && px < x + *w && py >= *y && py < y + *h;
+            if contains && !clip_rejects(*clip, px, py, 0.0, 0.0) {
+                return (bg_by_id.get(id).cloned().unwrap_or_default(), cursor.clone());
+            }
+        }
+        (String::new(), String::new())
+    }
+
+    fn near(a: f32, b: f64, tol: f64) -> bool {
+        ((a as f64 - b).abs()) <= tol
+    }
+
+    #[test]
+    fn threeway_matrix() {
+        let manifest = env!("CARGO_MANIFEST_DIR");
+        let path = std::env::var("GX_THREEWAY_CASES")
+            .unwrap_or_else(|_| format!("{}/../../../testdata/threeway/cases.json", manifest));
+        let raw = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("读取用例 {}: {}", path, e));
+        let suite: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        let (vw, vh) = {
+            let vp = suite["viewport"].as_array().unwrap();
+            (vp[0].as_f64().unwrap() as f32, vp[1].as_f64().unwrap() as f32)
+        };
+
+        let mut fails: Vec<String> = vec![];
+        let mut case_reports: Vec<serde_json::Value> = vec![];
+        for case in suite["cases"].as_array().unwrap() {
+            let name = case["name"].as_str().unwrap_or("?").to_string();
+            let mut counter = 0usize;
+            let mut bg_by_id = std::collections::HashMap::new();
+            let root = tw_build(&case["scene"], &mut counter);
+            // 构造后收集 id → bg 便于命中目标识别。
+            fn collect(n: &SceneNode, m: &mut std::collections::HashMap<String, String>) {
+                if let Some(bg) = n.props.get("bg") { m.insert(n.id.clone(), bg.clone()); }
+                for c in &n.children { collect(c, m); }
+            }
+            collect(&root, &mut bg_by_id);
+            let dl = DisplayList::from_scene(&root, vw, vh);
+            let (rects, texts) = tw_observe(&dl, &bg_by_id);
+            let mut case_fails: Vec<String> = vec![];
+            let first_rect = |bg: &str| rects.iter().find(|r| r.bg == bg).cloned();
+            let first_text = |s: &str| texts.iter().find(|t| t.text == s).cloned();
+
+            for e in case["expect"].as_array().unwrap() {
+                let kind = e["kind"].as_str().unwrap_or("");
+                match kind {
+                    "rect" | "text" | "text-dx" | "text-dy" | "order" | "hit" => {}
+                    _ => continue, // style/css 仅 Web 端评估
+                }
+                match kind {
+                    "rect" => {
+                        let bg = e["bg"].as_str().unwrap_or("");
+                        match first_rect(bg) {
+                            None => case_fails.push(format!("[rust] {}: rect {} 未绘制（属性未消费或颜色未透传）", name, bg)),
+                            Some(r) => {
+                                for (got, want, label) in [
+                                    (r.x, e["x"].as_f64().unwrap_or(0.0), "x"),
+                                    (r.y, e["y"].as_f64().unwrap_or(0.0), "y"),
+                                    (r.w, e["w"].as_f64().unwrap_or(0.0), "w"),
+                                    (r.h, e["h"].as_f64().unwrap_or(0.0), "h"),
+                                ] {
+                                    let tol = e["tol"].as_f64().unwrap_or(1.0);
+                                    if !near(got, want, tol) {
+                                        case_fails.push(format!("[rust] {}: rect {} {}={:.1} want {}", name, bg, label, got, want));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    "text" | "text-dx" | "text-dy" => {
+                        let txt = e["text"].as_str().unwrap_or("");
+                        match first_text(txt) {
+                            None => case_fails.push(format!("[rust] {}: text {:?} 未绘制（文本属性未消费或内容被错误改写）", name, txt)),
+                            Some(t) => match kind {
+                                "text-dx" => {
+                                    let want = e["x"].as_f64().unwrap_or(0.0);
+                                    let tol = e["tol"].as_f64().unwrap_or(1.0);
+                                    if !near(t.x, want, tol) {
+                                        case_fails.push(format!("[rust] {}: text {:?} x={:.1} want {}(±{})", name, txt, t.x, want, tol));
+                                    }
+                                }
+                                "text-dy" => {
+                                    let anc = e["anchor"].as_str().unwrap_or("");
+                                    match first_text(anc) {
+                                        None => case_fails.push(format!("[rust] {}: anchor text {:?} 未绘制", name, anc)),
+                                        Some(a) => {
+                                            let want = e["dy"].as_f64().unwrap_or(0.0);
+                                            let tol = e["tol"].as_f64().unwrap_or(1.0);
+                                            if !near(t.y - a.y, want, tol) {
+                                                case_fails.push(format!("[rust] {}: text {:?} dy={:.1} want {}(±{})", name, txt, t.y - a.y, want, tol));
+                                            }
+                                        }
+                                    }
+                                }
+                                _ => {}
+                            },
+                        }
+                    }
+                    "order" => {
+                        let bgs: Vec<&str> = e["bgs"].as_array().unwrap().iter().filter_map(|v| v.as_str()).collect();
+                        let mut pos: Vec<usize> = vec![];
+                        for bg in &bgs {
+                            match rects.iter().position(|r| r.bg == *bg) {
+                                Some(i) => pos.push(i),
+                                None => { case_fails.push(format!("[rust] {}: order {:?} 有 bg 未绘制", name, bgs)); pos.clear(); break; }
+                            }
+                        }
+                        if !pos.is_empty() {
+                            for w in pos.windows(2) {
+                                if w[0] >= w[1] {
+                                    case_fails.push(format!("[rust] {}: order {:?} z-index 绘制顺序不符", name, bgs));
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    "hit" => {
+                        let px = e["x"].as_f64().unwrap_or(0.0) as f32;
+                        let py = e["y"].as_f64().unwrap_or(0.0) as f32;
+                        let (bg, cursor) = tw_hit_at(&dl, &bg_by_id, px, py);
+                        let want_target = e["target"].as_str().unwrap_or("");
+                        if want_target.is_empty() {
+                            if !bg.is_empty() {
+                                case_fails.push(format!("[rust] {}: hit({},{}) 命中了 {}，期望空白区", name, px, py, bg));
+                            }
+                        } else if bg != want_target {
+                            case_fails.push(format!("[rust] {}: hit({},{}) = {}, want {}（pointer-events 命中豁免或 z 序不符）", name, px, py, bg, want_target));
+                        }
+                        if let Some(wc) = e["cursor"].as_str() {
+                            if !wc.is_empty() && cursor != wc {
+                                case_fails.push(format!("[rust] {}: hit({},{}) cursor = {}, want {}", name, px, py, cursor, wc));
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            // 收集 per-case 结果（供报告落盘与总断言）。
+            case_reports.push(serde_json::json!({
+                "name": name,
+                "pass": case_fails.is_empty(),
+                "fails": case_fails,
+            }));
+            for f in &case_fails {
+                fails.push(f.clone());
+            }
+        }
+
+        // 报告落盘（供脚本汇总矩阵）。
+        if let Ok(out) = std::env::var("GX_THREEWAY_OUT") {
+            let report = serde_json::json!({"backend": "rust", "cases": case_reports});
+            let _ = std::fs::write(&out, serde_json::to_string_pretty(&report).unwrap_or_default());
+        }
+        assert!(fails.is_empty(), "三端矩阵 Rust 端失败 {} 项:\n{}", fails.len(), fails.join("\n"));
+    }
+}
