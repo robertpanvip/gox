@@ -1,6 +1,7 @@
 package compiler
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
 )
@@ -2064,9 +2065,16 @@ func (t signalFieldTable) hasSignalFieldsOf(typeName string) bool {
 	return len(t.sig[typeName]) > 0
 }
 
-// rewriteJSXSignalFieldSelectors 在 JSX 插值 token 里给「sig 字段 selector 读」
-// 补上调用括号：p.name → p.name()。JSX 生成的 token 是 transform 新产物，没经过
-// rewriteSignalFieldRefs，故需在此补——否则 {p.name} 会把 Signal 函数当值插入界面。
+// rewriteJSXSignalFieldSelectors 在 JSX 片段 token（插值 / 属性槽 / 事件体）里做
+// sig 字段读写改写：p.name → p.name()、p.name = v → p.name(v)、p.name += v →
+// p.name(p.name() + v)、p.name++ → p.name(p.name() + 1)。JSX 片段是重新词法化的
+// 独立 token，没经过主流程 rewriteSignalFieldRefs，故需在此补——否则 {p.name}
+// 会把 Signal 函数当值插入界面、事件体里 p.name = v 会产出非法的 p.name() = v。
+// 改写形态与主流程 emitChain/emitExpr 逐一对齐（含中间 sig 段补 ()、复合写读回整链）。
+//
+// 同时承担规范检查：用户手写的显式调用 p.name(...) 走 errSink 报错——与主 token 流
+// 的 checkNoExplicitSigCall 同源。主检查器跑时插值/事件体还是整体 Template token
+// 穿透不到，fragment 改写是唯一能看到这些 token 的地方。
 //
 // 识别 X.field：field 是 receiver 推断类型上的 sig 字段、field 后不是 '('、
 // 且 receiver X 不是紧邻 ')' 的调用结果（排除 For item getter `u().name` 这类普通字段读取）。
@@ -2079,11 +2087,19 @@ func (t signalFieldTable) hasSignalFieldsOf(typeName string) bool {
 //
 // pos 是 JSX 在原始源码中的绝对位置：插值 token 的 Pos 是相对表达式的偏移，
 // 不能用于 bindings 查询；以 JSX 根位置为锚点解析 receiver 绑定与 isSignalRefAt 一致。
-func rewriteJSXSignalFieldSelectors(toks []Token, b *Bindings, tbl signalFieldTable, pos Pos) []Token {
+func rewriteJSXSignalFieldSelectors(toks []Token, b *Bindings, tbl signalFieldTable, pos Pos, errSink *error) []Token {
 	if !tbl.hasSignalFields() {
 		return toks
 	}
-	out := make([]Token, 0, len(toks)+4)
+	out := make([]Token, 0, len(toks)+8)
+	isSeg := func(segs []int, k int) bool {
+		for _, s := range segs {
+			if s == k {
+				return true
+			}
+		}
+		return false
+	}
 	for i := 0; i < len(toks); i++ {
 		t := toks[i]
 		out = append(out, t)
@@ -2095,33 +2111,76 @@ func rewriteJSXSignalFieldSelectors(toks []Token, b *Bindings, tbl signalFieldTa
 		if prev := prevSig(toks, i-1); prev >= 0 && toks[prev].Text == ")" {
 			continue
 		}
-		// skipCalls=true：与手写改写路径一致，跳过中间 sig 段已有的 () 走到
-		// 真正链尾；输出仍逐 token 原样，已有 () 不重复补。
+		// skipCalls=true：跳过中间 sig 段已显式写的 () 走到真正链尾。
 		chain, ok := resolveSignalChainEx(toks, i, pos, b, tbl, 0, true)
 		if !ok || len(chain.segs) == 0 {
 			continue
 		}
-		// 逐段输出链：链首 t 已在上面 append，这里从 '.'（i+1）开始，避免重复。
-		// 对象字面量 key（field 后跟 ':'）与已是调用（field 后跟 '('）不补 ()。
-		for k := i + 1; k <= chain.tailIdx; k++ {
-			out = append(out, toks[k])
-			isSig := false
-			for _, s := range chain.segs {
-				if s == k {
-					isSig = true
-					break
+		tail := chain.tailIdx
+		p := toks[tail].Pos
+		// 链输出辅助（与主流程 emitChain 对齐）：sig 段补读 ()，skipIdx（写目标）
+		// 与已是调用（后跟 '('）/对象字面量键（后跟 ':'）的段不补。
+		emitChain := func(from, to, skipIdx int) {
+			for k := from; k <= to; k++ {
+				out = append(out, toks[k])
+				if k == skipIdx || !isSeg(chain.segs, k) {
+					continue
 				}
+				if n2 := nextSig(toks, k+1); n2 >= 0 && (toks[n2].Text == "(" || toks[n2].Text == ":") {
+					continue
+				}
+				out = append(out, tokOp("(", toks[k].Pos), tokOp(")", toks[k].Pos))
 			}
-			if !isSig {
-				continue
-			}
-			n := nextSig(toks, k+1)
-			if n >= 0 && (toks[n].Text == "(" || toks[n].Text == ":") {
-				continue
-			}
-			out = append(out, tokOp("(", toks[k].Pos), tokOp(")", toks[k].Pos))
 		}
-		i = chain.tailIdx
+		n := nextSig(toks, tail+1)
+		switch {
+		case n >= 0 && toks[n].Text == "(":
+			// 用户手写显式调用 recv.field(...)：规范禁止——sig 是透明字段，
+			// 读写都按普通字段书写，() 全由编译器补全。
+			if errSink != nil && *errSink == nil {
+				*errSink = fmt.Errorf("%d:%d: sig 字段 %s 应像普通字段一样读写（写 recv.%s 而非 recv.%s()）；GX 会编译期自动补全信号字段读写",
+					toks[tail].Pos.Line, toks[tail].Pos.Col, toks[tail].Text, toks[tail].Text, toks[tail].Text)
+			}
+			i = tail // 原样透传（报错后管线终止，产物不再被消费）
+		case n >= 0 && isAssignOp(toks[n].Text):
+			// 写：recv.x = RHS → recv.x(RHS)。RHS 递归改写（内部 sig 读补 ()）。
+			end := signalExprEnd(toks, n+1)
+			emitChain(i+1, tail, tail)
+			out = append(out, tokOp("(", p))
+			out = append(out, rewriteJSXSignalFieldSelectors(toks[n+1:end], b, tbl, pos, errSink)...)
+			out = append(out, tokOp(")", p))
+			i = end - 1
+		case n >= 0 && compoundAssignOps[toks[n].Text]:
+			// 复合写：recv.x += RHS → recv.x(recv.x() + RHS)。链尾由 "()" 补读，
+			// 中间 sig 段由 emitChain 补（skipIdx=tail）——与主流程逐 token 一致。
+			binop := strings.TrimSuffix(toks[n].Text, "=")
+			end := signalExprEnd(toks, n+1)
+			emitChain(i+1, tail, tail)
+			out = append(out, tokOp("(", p))
+			out = append(out, toks[i]) // 内层读回整链：链首已随外层消费，此处补发
+			emitChain(i+1, tail, tail)
+			out = append(out, tokOp("()", p), tokSpace(" ", p), tokOp(binop, p), tokSpace(" ", p))
+			out = append(out, rewriteJSXSignalFieldSelectors(toks[n+1:end], b, tbl, pos, errSink)...)
+			out = append(out, tokOp(")", p))
+			i = end - 1
+		case n >= 0 && (toks[n].Text == "++" || toks[n].Text == "--"):
+			// 自增/自减：recv.x++ → recv.x(recv.x() + 1)。
+			binop := "+"
+			if toks[n].Text == "--" {
+				binop = "-"
+			}
+			emitChain(i+1, tail, tail)
+			out = append(out, tokOp("(", p))
+			out = append(out, toks[i]) // 内层读回整链：链首已随外层消费，此处补发
+			emitChain(i+1, tail, tail)
+			out = append(out, tokOp("()", p), tokSpace(" ", p), tokOp(binop, p), tokSpace(" ", p), tokOp("1", p))
+			out = append(out, tokOp(")", p))
+			i = tail + 1 // 跳过 ++ / -- token
+		default:
+			// 读形态：逐段输出链，sig 段补 ()。
+			emitChain(i+1, tail, -1)
+			i = tail
+		}
 	}
 	return out
 }

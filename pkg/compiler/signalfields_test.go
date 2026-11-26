@@ -1377,3 +1377,113 @@ func TestSigFieldAssignRHSReadGetsCall(t *testing.T) {
 		})
 	}
 }
+
+// JSX 片段（插值 / 属性槽 / 事件体）里的 sig 字段读写改写与规范拦截。
+// 片段是重新词法化的独立 token，主流程 checkNoExplicitSigCall /
+// rewriteSignalFieldRefs 都穿透不到，全靠 rewriteJSXSignalFieldSelectors。
+// 历史 bug：事件体里 s.x = 2 曾产出非法的 s.x() = 2（go/parser 语法层接受、
+// InvalidGo 闸门拦不住，只有真实 go build 才炸）；显式调用 s.x() 在 fragment
+// 里也不报错（主检查器只覆盖 sig 变量）。本测试守护两条防线。
+func TestJSXFragmentSigFieldReadWrite(t *testing.T) {
+	compact := func(s string) string {
+		return strings.Join(strings.Fields(s), "")
+	}
+	// 写形态：产物必须与主流程改写一致（p.name( 值 )），不得残留 s.x() = 形态。
+	writes := []struct{ name, src, want string }{
+		{
+			"事件体字段写",
+			"package main\ntype S struct{ sig x int }\nfunc main(){ s := S{x:1}; _ = <button onClick={func(){ s.x = 2 }}>a</button> }",
+			"s.x(2)",
+		},
+		{
+			"事件体字段复合写",
+			"package main\ntype S struct{ sig x int }\nfunc main(){ s := S{x:1}; _ = <button onClick={func(){ s.x += 2 }}>a</button> }",
+			"s.x(s.x()+2)",
+		},
+		{
+			"事件体字段自增",
+			"package main\ntype S struct{ sig x int }\nfunc main(){ s := S{x:1}; _ = <button onClick={func(){ s.x++ }}>a</button> }",
+			"s.x(s.x()+1)",
+		},
+		{
+			"事件体字段自减",
+			"package main\ntype S struct{ sig x int }\nfunc main(){ s := S{x:1}; _ = <button onClick={func(){ s.x-- }}>a</button> }",
+			"s.x(s.x()-1)",
+		},
+		{
+			"事件体字段写RHS含字段",
+			"package main\ntype S struct{ sig x int; sig y int }\nfunc main(){ s := S{x:1, y:2}; _ = <button onClick={func(){ s.x = s.y + 1 }}>a</button> }",
+			"s.x(s.y()+1)",
+		},
+	}
+	for _, tc := range writes {
+		t.Run("write_"+tc.name, func(t *testing.T) {
+			got := compact(compileOK(t, "frag_write.gx", tc.src))
+			if !strings.Contains(got, tc.want) {
+				t.Errorf("片段字段写应改写为 %q，got:\n%s", tc.want, got)
+			}
+			if strings.Contains(got, "s.x()=") {
+				t.Errorf("不得残留非法的 s.x() = 形态:\n%s", got)
+			}
+		})
+	}
+	// 显式调用：三入口全部报错（与主 token 流 checkNoExplicitSigCall 同源）。
+	forbidden := []struct{ name, src string }{
+		{
+			"插值内显式调用",
+			"package main\ntype S struct{ sig x int }\nfunc main(){ s := S{x:1}; _ = <div>{s.x()}</div> }",
+		},
+		{
+			"属性槽显式调用",
+			"package main\ntype S struct{ sig x int }\nfunc main(){ s := S{x:1}; _ = <div title={s.x()}/> }",
+		},
+		{
+			"事件体显式调用",
+			"package main\ntype S struct{ sig x int }\nfunc main(){ s := S{x:1}; _ = <button onClick={func(){ s.x() }}>a</button> }",
+		},
+		{
+			"箭头事件显式调用",
+			"package main\ntype S struct{ sig x int }\nfunc main(){ s := S{x:1}; _ = <button onClick={() => s.x()}>a</button> }",
+		},
+	}
+	for _, tc := range forbidden {
+		t.Run("forbid_"+tc.name, func(t *testing.T) {
+			_, err := Compile("frag_call.gx", tc.src)
+			if err == nil || !strings.Contains(err.Error(), "sig 字段") {
+				t.Errorf("%s 应被拦截，got: %v", tc.name, err)
+			}
+		})
+	}
+	// 不误伤：裸读 / 比较运算 / 普通字段写 / For item getter 字段读。
+	type al struct{ name, src, want string }
+	allowed := []al{
+		{
+			"事件体裸读",
+			"package main\ntype S struct{ sig x int }\nfunc main(){ s := S{x:1}; _ = <button onClick={func(){ _ = s.x }}>a</button> }",
+			"func(){ _ = s.x() }",
+		},
+		{
+			"事件体比较运算",
+			"package main\ntype S struct{ sig x int }\nfunc main(){ s := S{x:1}; _ = <button onClick={func(){ if s.x == 2 { _ = 1 } }}>a</button> }",
+			"s.x() == 2",
+		},
+		{
+			"普通字段写不补括号",
+			"package main\ntype S struct{ sig x int; z int }\nfunc main(){ s := S{z:0}; _ = <button onClick={func(){ s.z = 2 }}>a</button> }",
+			"s.z = 2",
+		},
+		{
+			"For key lambda 字段读",
+			"package main\ntype U struct{ sig name string }\nfunc main(){ us := []U{{name: \"a\"}}; _ = <For each={us} key={(u) => u.name}>{(u U) => <div>{u.name}</div>}</For> }",
+			"u.name()",
+		},
+	}
+	for _, tc := range allowed {
+		t.Run("allow_"+tc.name, func(t *testing.T) {
+			got := compact(compileOK(t, "frag_allow.gx", tc.src))
+			if !strings.Contains(got, compact(tc.want)) {
+				t.Errorf("期望含 %q，got:\n%s", tc.want, got)
+			}
+		})
+	}
+}

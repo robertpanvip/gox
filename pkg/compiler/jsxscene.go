@@ -35,8 +35,9 @@ import (
 type jsxSceneCtx struct {
 	sigs  map[string]bool
 	comps map[string]string
-	// explicitSigCallErr: JSX 插值里用户显式调用 sig（{count()}）时记录，
-	// 编译结束后由 transformJSXScene 返回给上层报错。
+	// explicitSigCallErr: JSX 片段（插值 / 属性槽 / 事件体）里用户显式调用 sig
+	// 变量（{count()}）或 sig 字段（{s.x()}）时记录，编译结束后由
+	// transformJSXScene 返回给上层报错。
 	explicitSigCallErr error
 	// sigTypes: sig 变量声明类型（改写前收集，如 users→[]User），
 	// 供 <For> 在 render 参数无类型注解时从 each 推断元素类型。
@@ -875,7 +876,7 @@ func forTokens(n *jsxNode, ctx *jsxSceneCtx) []Token {
 		// 也要补 ()，否则 key 取到函数地址、去重永远不相等。注入 kName 的静态
 		// 类型并走 sig 字段 selector 改写（与 render body 同源）。
 		restoreKeyType := ctx.bindings.WithTypeOverride(kName, kType)
-		bodyToks = rewriteJSXSignalFieldSelectors(bodyToks, ctx.bindings, ctx.signalFields, ctx.jsxPos)
+		bodyToks = rewriteJSXSignalFieldSelectors(bodyToks, ctx.bindings, ctx.signalFields, ctx.jsxPos, &ctx.explicitSigCallErr)
 		restoreKeyType()
 		for _, t := range bodyToks {
 			if t.Kind == EOF {
@@ -1455,9 +1456,9 @@ func lexExprScene(expr string, base Pos, ctx *jsxSceneCtx) []Token {
 		}
 		toks = rewriteJSXInterpSignals(toks, effective, &ctx.explicitSigCallErr, ctx.forItemParam)
 	}
-	// sig 字段 selector 读补 ()（如组件内 {p.name} → p.name()）。
+	// sig 字段 selector 读写改写（读补 ()、写转调用式、显式调用报错）。
 	// 与 rewriteJSXInterpSignals 独立：后者只认全局 sig 名，不管 sig 字段。
-	toks = rewriteJSXSignalFieldSelectors(toks, ctx.bindings, ctx.signalFields, ctx.jsxPos)
+	toks = rewriteJSXSignalFieldSelectors(toks, ctx.bindings, ctx.signalFields, ctx.jsxPos, &ctx.explicitSigCallErr)
 	// 对象字面量自动推断：{ { name: "x", age: 1 } } → struct{ name string; age int }{...}。
 	// 插值片段无期望类型上下文，走匿名 struct 推断路径。
 	if converted, err := transformObjectLitExpr(toks); err == nil {
