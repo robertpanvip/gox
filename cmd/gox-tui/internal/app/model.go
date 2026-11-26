@@ -211,7 +211,7 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleHoverKey(key)
 	}
 	if m.ov != ovNone {
-		return m.handleOverlayKey(key)
+		return m.handleOverlayKey(msg)
 	}
 
 	// 全局快捷键（Ctrl 组合）。
@@ -271,7 +271,10 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.focus = 0
 		}
 		return m, nil
-	case "ctrl+tab":
+	case "ctrl+tab", "alt+tab":
+		// 循环切换标签。alt+tab 是多数终端对 Ctrl+Tab 的真实编码
+		// （\x1b\t → bubbletea 解析为 alt+tab；bubbletea 没有 KeyCtrlTab，
+		// 纯 "ctrl+tab" 字符串匹配只能命中合成事件，真实终端下是死代码）。
 		m.active = (m.active + 1) % len(m.buffers)
 		return m, nil
 	}
@@ -365,10 +368,17 @@ func (m *Model) handleEditorKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	// 文本输入（单 rune）。
-	if len(key) == 1 || (len(key) > 0 && strings.HasPrefix(key, "runes:")) {
-		for _, r := range msg.Runes {
-			b.InsertRune(r)
+	// 文本输入：所有 KeyRunes 事件（含多字节 CJK/emoji）。此前按
+	// len(key)==1 判断，中文等多字节字符（key 为 3 字节）被整体漏掉，
+	// 导致编辑器无法输入中文。括号粘贴含换行时走 InsertString 保行结构。
+	if msg.Type == tea.KeyRunes && len(msg.Runes) > 0 {
+		s := string(msg.Runes)
+		if msg.Paste || strings.ContainsRune(s, '\n') {
+			b.InsertString(s)
+		} else {
+			for _, r := range msg.Runes {
+				b.InsertRune(r)
+			}
 		}
 		m.ensureCursorVisible()
 		return m, m.bumpComp()
@@ -405,10 +415,12 @@ func (m *Model) handleEditorKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		b.WordLeft()
 	case "ctrl+right":
 		b.WordRight()
-	case "ctrl+shift+up":
+	case "ctrl+shift+up", "ctrl+up":
+		// ctrl+shift+up 仅合成事件可达；真实终端的 Ctrl+Shift+Up 多发
+		// \x1b[1;5A → bubbletea 解析为 ctrl+up（bubbletea 无 ctrl+shift 组合类型）。
 		_, col := b.Cursor()
 		b.SetCursor(0, col)
-	case "ctrl+shift+down":
+	case "ctrl+shift+down", "ctrl+down":
 		_, col := b.Cursor()
 		b.SetCursor(b.LineCount()-1, col)
 	}

@@ -137,6 +137,20 @@ func (m *Model) wordSpanAt(line, col int) *wordSpan {
 //     因此在 xterm 下提供等价兼容路径：先 Ctrl+悬停使单词出现下划线，再普通左键
 //     点击该单词即可跳转。下划线本身就是"此处可导航"的可视提示，语义自然。
 func (m *Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+	// 滚轮滚动编辑区（此前滚轮完全无处理，鼠标滚轮在编辑区没有任何效果）。
+	if msg.Action == tea.MouseActionPress {
+		switch msg.Button {
+		case tea.MouseButtonWheelUp:
+			m.scrollLn = maxInt(0, m.scrollLn-3)
+			return m, nil
+		case tea.MouseButtonWheelDown:
+			if max := m.Current().LineCount() - m.viewportHeight(); max > 0 && m.scrollLn < max {
+				m.scrollLn = minInt(max, m.scrollLn+3)
+			}
+			return m, nil
+		}
+	}
+
 	// 文件树交互：普通左键点击即可（xterm 对无修饰点击正常上报）。
 	// 浮层打开时不响应，避免与浮层键盘交互冲突。
 	if m.ov == ovNone && m.inTreeX(msg.X) {

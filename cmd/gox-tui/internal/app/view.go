@@ -19,7 +19,9 @@ func (m *Model) View() string {
 	innerW := m.width - 2 // 去掉 App 圆角边框左右各 1
 	innerH := m.height - 2
 	if innerW < 20 || innerH < 8 {
-		return "终端窗口太小，请放大后重试"
+		// 提示语本身也要按终端宽度截断（13 个 CJK 字符宽 26 列，
+		// 比极小终端还宽会再次折行，违背本函数"尺寸不足即降级"的初衷）。
+		return truncateWidth("终端窗口太小，请放大后重试", m.width)
 	}
 
 	titleBar := m.viewTitleBar(innerW)
@@ -408,7 +410,9 @@ func placeOverlay(base, panel string) string {
 		}
 		prefix := truncateWidth(lines[yi], maxInt(0, lipgloss.Width(lines[yi])-pw))
 		suffix := ""
-		remain := lipgloss.Width(lines[yi]) - lipgloss.Width(prefix)
+		// 行宽补齐 = 原行宽 - 前缀宽 - 面板宽。此前误算为"原行宽-前缀宽"，
+		// 每行多补 pw 列空格，浮层打开时整帧超宽 → 终端折行 → 全屏闪动。
+		remain := lipgloss.Width(lines[yi]) - lipgloss.Width(prefix) - pw
 		if remain > 0 {
 			suffix = strings.Repeat(" ", remain)
 		}
@@ -429,7 +433,12 @@ func placeOverlayAt(base, panel string, startX, startY int) string {
 		}
 		baseLine := lines[yi]
 		left := truncateWidth(baseLine, maxInt(0, startX))
-		lines[yi] = left + row
+		// 面板行超出右边界时截断，避免合成行超宽引发终端折行。
+		avail := lipgloss.Width(baseLine) - startX
+		if avail < 0 {
+			avail = 0
+		}
+		lines[yi] = left + truncateWidth(row, avail)
 	}
 	return strings.Join(lines, "\n")
 }

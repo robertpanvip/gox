@@ -85,7 +85,8 @@ func padNum(n int) string {
 	return s
 }
 
-func (m *Model) handleOverlayKey(key string) (tea.Model, tea.Cmd) {
+func (m *Model) handleOverlayKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	key := msg.String()
 	switch key {
 	case "esc", "ctrl+c":
 		m.ov = ovNone
@@ -112,14 +113,15 @@ func (m *Model) handleOverlayKey(key string) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	default:
-		// 追加可打印字符到 query。
-		if key == "space" {
-			m.query += " "
+		// 追加输入字符：按 KeyRunes 事件取 rune（含多字节 CJK——此前按
+		// len(key)==1 判断，中文被整体漏掉导致搜索框无法输入中文）。
+		if msg.Type == tea.KeyRunes && len(msg.Runes) > 0 {
+			m.query += string(msg.Runes)
 			m.refreshMatches()
 			return m, nil
 		}
-		if len(key) == 1 {
-			m.query += key
+		if key == " " { // KeySpace
+			m.query += " "
 			m.refreshMatches()
 		}
 	}
