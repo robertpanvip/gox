@@ -1,9 +1,8 @@
 package lsp
 
-// 桌面端类型化导航：definition / hover / import 路径补全的 go/types 兜底，
-// 与浏览器（pkg/goxlsp）共用 internal/typecheck 管线；数据源为本机 GOROOT。
-// std 符号跳转返回真实文件 file:// URI——编辑器原生"开新标签页跳到声明"；
-// 任何环节不适用都回退原符号表路径，零行为回归。
+// 桌面端类型化导航底座：光标映射（含编译产物回传）、持久 Importer 惰性单例、
+// definition/hover 的类型层实现、GOROOT 包清单。references/highlight/codeAction
+// 在 actions.go 复用这里。
 
 import (
 	"os"
@@ -32,33 +31,42 @@ func (s *Server) navImporter() *typecheck.Importer {
 	return s.timp
 }
 
-// navCursor 把 .gx 光标坐标（0 基行；character 指向光标之后）映射到生成 Go 中
-// "光标前一字符"的字节偏移。前一字符必须是标识符成员；编译/映射失败即 false。
-func navCursor(gxSrc string, line, character int) (off int, goSrc string, ok bool) {
+// navCompile 把 .gx 光标坐标（0 基行；character 指向光标之后）映射到生成 Go 中
+// "光标前一字符"的字节偏移，并回传编译产物（SourceMap 供回投）。失败即 false。
+func navCompile(gxSrc string, line, character int) (int, *compiler.Result, bool) {
 	if character <= 0 {
-		return 0, "", false
+		return 0, nil, false
 	}
 	ls := strings.Split(gxSrc, "\n")
 	if line < 0 || line >= len(ls) || character > len(ls[line]) || !navIdentByte(ls[line][character-1]) {
-		return 0, "", false
+		return 0, nil, false
 	}
 	res, err := compiler.Compile("input.gx", gxSrc)
 	if err != nil || res == nil || res.GoSource == "" || res.InvalidGo || res.SourceMap == nil {
-		return 0, "", false
+		return 0, nil, false
 	}
 	gp, ok := res.SourceMap.GxToGo(line+1, character)
 	if !ok {
-		return 0, "", false
+		return 0, nil, false
 	}
 	o := typecheck.ByteOffset(res.GoSource, gp.Line, gp.Column)
 	if o < 0 || o >= len(res.GoSource) || !navIdentByte(res.GoSource[o]) {
+		return 0, nil, false
+	}
+	return o, res, true
+}
+
+// navCursor 只需 go 源码文本的调用方便捷形态。
+func navCursor(gxSrc string, line, character int) (int, string, bool) {
+	o, res, ok := navCompile(gxSrc, line, character)
+	if !ok {
 		return 0, "", false
 	}
 	return o, res.GoSource, true
 }
 
-// typedDefinition：外部（std）符号 → 本机 GOROOT 真实文件；本地符号留给符号表
-// （.gx 文档内回跳更准），gox 闭包等不在磁盘的路径不伪造、同样回退。
+// typedDefinition 外部（std）符号 → 本机 GOROOT 真实文件 file:// URI；
+// 本地符号留给符号表（同文档 .gx 坐标回跳更准），磁盘不存在的路径不伪造。
 func (s *Server) typedDefinition(gxSrc string, line, character int) (Location, bool) {
 	off, goSrc, ok := navCursor(gxSrc, line, character)
 	if !ok {
@@ -85,7 +93,7 @@ func (s *Server) typedDefinition(gxSrc string, line, character int) (Location, b
 	}, true
 }
 
-// typedHover：符号表缺席时用真实签名兜底（std 符号 hover 的核心增量）。
+// typedHover 符号表缺席时用真实签名兜底（std 符号 hover 的核心增量）。
 func (s *Server) typedHover(gxSrc string, line, character int) (Hover, bool) {
 	off, goSrc, ok := navCursor(gxSrc, line, character)
 	if !ok {
@@ -115,8 +123,8 @@ var (
 	navPkgs     []string
 )
 
-// navImportItems：GOROOT/src 顶层可导入包清单（跳过 cmd/internal/vendor 等），前缀过滤。
-func navImportItems(prefix string) []CompletionItem {
+// diskPkgNames GOROOT/src 顶层可导入包清单（cmd/vendor/internal/点开头剔除）。
+func diskPkgNames() []string {
 	navPkgsOnce.Do(func() {
 		gr := runtime.GOROOT()
 		if gr == "" {
@@ -137,8 +145,13 @@ func navImportItems(prefix string) []CompletionItem {
 			navPkgs = append(navPkgs, n)
 		}
 	})
+	return navPkgs
+}
+
+// navImportItems：GOROOT 包清单前缀过滤。
+func navImportItems(prefix string) []CompletionItem {
 	items := make([]CompletionItem, 0, 16)
-	for _, p := range navPkgs {
+	for _, p := range diskPkgNames() {
 		if !strings.HasPrefix(p, prefix) {
 			continue
 		}

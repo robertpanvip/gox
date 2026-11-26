@@ -80,3 +80,28 @@ type DefinitionResult struct {
 	Snippet string `json:"snippet,omitempty"`
 	Doc     string `json:"doc,omitempty"`
 }
+
+// Reference 浏览器面的一次引用。Pkg 空=用户文件内（Line/Col 为 .gx 0 基）；
+// 外部声明点带 Pkg/File（内嵌源 1 基坐标），供速览卡展示。
+type Reference struct {
+	Pkg   string `json:"pkg,omitempty"`
+	File  string `json:"file,omitempty"`
+	Line  int    `json:"line"`
+	Col   int    `json:"col"`
+	Name  string `json:"name,omitempty"`
+	IsDef bool   `json:"isDef,omitempty"`
+}
+
+// TextEdit 最小行编辑：Delete=true 删除 Line 行；否则在 Line/Col 前插入 Text。0 基。
+type TextEdit struct {
+	Line   int    `json:"line"`
+	Col    int    `json:"col,omitempty"`
+	Text   string `json:"text,omitempty"`
+	Delete bool   `json:"delete,omitempty"`
+}
+
+// CodeAction QuickFix 动作（title + 单条编辑）。
+type CodeAction struct {
+	Title string    `json:"title"`
+	Edit  *TextEdit `json:"edit,omitempty"`
+}

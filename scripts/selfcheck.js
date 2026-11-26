@@ -195,6 +195,58 @@ const NAV_EXPR = `
     okDef, okHov, okLocal, okFull, okImp, okPop, okView });
 })()`;
 
+// 探针 H：references + QuickFix 闭环——引用清单、补 import 后复诊清零、删未使用 import。
+const NAV2_EXPR = `
+(async () => {
+  const wait = ms => new Promise(r => setTimeout(r, ms));
+  const deadline = Date.now() + 40000;
+  while (!(window.Gox && window.Gox.setSource && window.Gox.lspDiagnostics)) {
+    if (Date.now() > deadline) return JSON.stringify({ err: "Gox 超时未就绪" });
+    await wait(250);
+  }
+  await wait(600);
+  if (typeof Gox.lspReferences !== "function") return JSON.stringify({ err: "no-lspReferences" });
+  if (typeof Gox.lspCodeActions !== "function") return JSON.stringify({ err: "no-lspCodeActions" });
+  const srcA = 'package main\\n\\nimport "fmt"\\n\\nfunc main() {\\n\\ts := fmt.Sprintf("%d", "x")\\n\\t_ = s\\n}\\n';
+  Gox.setSource(srcA);
+  await wait(900);
+  const refs = JSON.parse(Gox.lspReferences(5, 16));
+  const okRefs = !!(refs && refs.length >= 2
+    && refs.some(r => r.isDef && r.pkg === "fmt") && refs.some(r => !r.isDef));
+  const srcB = 'package main\\n\\nfunc main() {\\n\\ts := fmt.Sprintf("%d", "x")\\n\\t_ = s\\n}\\n';
+  Gox.setSource(srcB);
+  await wait(900);
+  const acts = JSON.parse(Gox.lspCodeActions());
+  const add = acts && acts.find(a => String(a.title).indexOf("fmt") >= 0 && a.edit && a.edit.text);
+  let okFix = false, okFixClean = false;
+  if (add) {
+    const ls = srcB.split('\\n');
+    ls.splice(add.edit.line, 0, add.edit.text.replace(/\\n$/, ""));
+    Gox.setSource(ls.join('\\n'));
+    await wait(900);
+    const di = JSON.parse(Gox.lspDiagnostics());
+    okFix = true;
+    okFixClean = !di.some(d => String(d.message).indexOf("undefined") >= 0);
+  }
+  const srcC = 'package main\\n\\nimport "fmt"\\n\\nfunc main() {\\n\\tprintln(1)\\n}\\n';
+  Gox.setSource(srcC);
+  await wait(900);
+  const acts2 = JSON.parse(Gox.lspCodeActions());
+  const del = acts2 && acts2.find(a => a.edit && a.edit.delete === true);
+  let okUnused = false, okUnusedClean = false;
+  if (del) {
+    okUnused = String(del.title).indexOf("fmt") >= 0;
+    const ls2 = srcC.split('\\n');
+    ls2.splice(del.edit.line, 1);
+    Gox.setSource(ls2.join('\\n'));
+    await wait(900);
+    const di2 = JSON.parse(Gox.lspDiagnostics());
+    okUnusedClean = !di2.some(d => String(d.message).indexOf("imported and not used") >= 0);
+  }
+  return JSON.stringify({ ok: okRefs && okFix && okFixClean && okUnused && okUnusedClean,
+    okRefs, okFix, okFixClean, okUnused, okUnusedClean });
+})()`;
+
 const PROVIDER_EXPR = `
 (async () => {
   const wait = ms => new Promise(r => setTimeout(r, ms));
@@ -218,9 +270,9 @@ const PROVIDER_EXPR = `
 })()`;
 
 (async () => {
-  const expr = mode === "stacking" ? STACKING_EXPR : (mode === "gsyntax" ? GSYNTAX_EXPR : (mode === "comp" ? COMP_EXPR : (mode === "sig" ? SIG_EXPR : (mode === "nav" ? NAV_EXPR : PROVIDER_EXPR))));
+  const expr = mode === "stacking" ? STACKING_EXPR : (mode === "gsyntax" ? GSYNTAX_EXPR : (mode === "comp" ? COMP_EXPR : (mode === "sig" ? SIG_EXPR : (mode === "nav" ? NAV_EXPR : (mode === "nav2" ? NAV2_EXPR : PROVIDER_EXPR)))));
   let url;
-  if (mode === "stacking" || mode === "gsyntax" || mode === "comp" || mode === "sig" || mode === "nav") {
+  if (mode === "stacking" || mode === "gsyntax" || mode === "comp" || mode === "sig" || mode === "nav" || mode === "nav2") {
     url = "file://" + target;
   } else {
     server = http.createServer((q, s) => {
@@ -276,7 +328,9 @@ const PROVIDER_EXPR = `
   if (pageErrs.length) console.log("PAGE_ERRORS", JSON.stringify(pageErrs.slice(0, 3)));
   let v = {};
   try { v = JSON.parse(String(out)); } catch {}
-  const pass = mode === "nav"
+  const pass = mode === "nav2"
+    ? !v.err && v.ok === true
+    : mode === "nav"
     ? !v.err && v.ok === true
     : mode === "sig"
     ? !v.err && v.ok === true

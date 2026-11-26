@@ -99,3 +99,18 @@ active 分别为 0/1，非调用位置返回 null；单测红→绿对照见
 只读全文视图）。回归：sig/comp/gsyntax/stacking 四探针全绿，全仓 25 包 ok、
 race 通过。已知边界：gox 组件包（widgets 等）在桌面端没有磁盘路径可跳，
 统一降级；浏览器端可跳（内嵌源含 gox 闭包）。
+
+## 引用与 QuickFix（P2）
+
+`Importer.References` 复用同一持久类型图：声明点（外部符号带 Pkg/File 内嵌源坐标）+
+用户文件全部使用点（SourceMap 回投 .gx）。`QuickFixes(src, diags, pkgNames)` 纯文本规则：
+`undefined: pkg` → 在 package 后/最后一个单行 import 后/import 块首插入 import；
+`"pkg" imported and not used` → 删该行。候选包名：浏览器 embedstd.Packages()，
+桌面 GOROOT/src 顶层清单。双端入口：`Gox.lspReferences/lspCodeActions`；
+`textDocument/references`、`textDocument/documentHighlight`、`textDocument/codeAction`、
+`workspace/symbol`（已打开文档）。
+
+实测（headless Chrome，`node scripts/selfcheck.js nav2 playground.html`）：
+`{"ok":true,"okRefs":true,"okFix":true,"okFixClean":true,"okUnused":true,"okUnusedClean":true}`
+——浏览器里真的执行"接受修复→重设源码→复诊"闭环，undefined 与未使用 import 均清零。
+完整能力矩阵与未做清单见 docs/lsp-roadmap.md。

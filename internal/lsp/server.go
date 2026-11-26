@@ -100,6 +100,10 @@ func (s *Server) handleRequest(req *RequestMessage, body []byte) (any, *RPCError
 				DocumentSymbolProvider:     true,
 				RenameProvider:             true,
 				DocumentFormattingProvider: true,
+				ReferencesProvider:         true,
+				DocumentHighlightProvider:  true,
+				CodeActionProvider:         true,
+				WorkspaceSymbolProvider:    true,
 			},
 			ServerInfo: ServerInfo{Name: "gox-lsp", Version: "0.1.0"},
 		}, nil
@@ -109,6 +113,14 @@ func (s *Server) handleRequest(req *RequestMessage, body []byte) (any, *RPCError
 		return s.definition(body)
 	case "textDocument/hover":
 		return s.hover(body)
+	case "textDocument/references":
+		return s.references(body)
+	case "textDocument/documentHighlight":
+		return s.documentHighlight(body)
+	case "textDocument/codeAction":
+		return s.codeAction(body)
+	case "workspace/symbol":
+		return s.workspaceSymbol(body)
 	case "textDocument/signatureHelp":
 		return s.signatureHelp(body)
 	case "textDocument/completion":

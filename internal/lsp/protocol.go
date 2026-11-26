@@ -72,6 +72,10 @@ type ServerCapabilities struct {
 	RenameProvider             bool                   `json:"renameProvider"`
 	DocumentFormattingProvider bool                   `json:"documentFormattingProvider"`
 	SemanticTokensProvider     *SemanticTokensOptions `json:"semanticTokensProvider,omitempty"`
+	ReferencesProvider         bool                   `json:"referencesProvider,omitempty"`
+	DocumentHighlightProvider  bool                   `json:"documentHighlightProvider,omitempty"`
+	CodeActionProvider         bool                   `json:"codeActionProvider,omitempty"`
+	WorkspaceSymbolProvider    bool                   `json:"workspaceSymbolProvider,omitempty"`
 }
 
 type CompletionOptions struct {

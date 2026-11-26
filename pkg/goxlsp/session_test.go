@@ -237,3 +237,60 @@ func TestImportPathCompletion(t *testing.T) {
 	}
 	t.Fatalf("import 补全应含 strings，got %d items", len(list.Items))
 }
+
+// TestReferencesAtStd 浏览器引用查找：fmt.Sprintf 处应含外部声明点与本地使用点。
+func TestReferencesAtStd(t *testing.T) {
+	if embedstd.Lookup() == nil {
+		t.Skip("embedstd 未生成")
+	}
+	s := New()
+	s.SetSource("package main\n\nimport \"fmt\"\n\nfunc main() {\n\ts := fmt.Sprintf(\"%d\", \"x\")\n\t_ = s\n}\n")
+	refs := s.ReferencesAt(5, 16)
+	if len(refs) < 2 {
+		t.Fatalf("引用数量: %+v", refs)
+	}
+	hasDef, hasUse := false, false
+	for _, r := range refs {
+		if r.IsDef && r.Pkg == "fmt" {
+			hasDef = true
+		}
+		if !r.IsDef {
+			hasUse = true
+		}
+	}
+	if !hasDef || !hasUse {
+		t.Fatalf("声明/使用点缺失: %+v", refs)
+	}
+}
+
+// TestCodeActionsAddImport 诊断驱动的 QuickFix：undefined: fmt → 补 import。
+func TestCodeActionsAddImport(t *testing.T) {
+	if embedstd.Lookup() == nil {
+		t.Skip("embedstd 未生成")
+	}
+	s := New()
+	s.SetSource("package main\n\nfunc main() {\n\ts := fmt.Sprintf(\"%d\", \"x\")\n\t_ = s\n}\n")
+	acts := s.CodeActions()
+	for _, a := range acts {
+		if strings.Contains(a.Title, "fmt") && a.Edit != nil && strings.Contains(a.Edit.Text, `import "fmt"`) {
+			return
+		}
+	}
+	t.Fatalf("应产出 import \"fmt\" 修复: %+v", acts)
+}
+
+// TestCodeActionsUnused 未使用 import → 删除该行修复。
+func TestCodeActionsUnused(t *testing.T) {
+	if embedstd.Lookup() == nil {
+		t.Skip("embedstd 未生成")
+	}
+	s := New()
+	s.SetSource("package main\n\nimport \"fmt\"\n\nfunc main() {\n\tprintln(1)\n}\n")
+	acts := s.CodeActions()
+	for _, a := range acts {
+		if strings.Contains(a.Title, "fmt") && a.Edit != nil && a.Edit.Delete && a.Edit.Line == 2 {
+			return
+		}
+	}
+	t.Fatalf("应产出删除修复: %+v", acts)
+}

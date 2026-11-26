@@ -297,6 +297,16 @@ func main() {
 		}
 		return lsp.StdSourceJSON(pkg, file)
 	}))
+	g.Set("lspReferences", js.FuncOf(func(this js.Value, args []js.Value) any {
+		line, col := 0, 0
+		if len(args) >= 2 {
+			line, col = args[0].Int(), args[1].Int()
+		}
+		return lsp.ReferencesJSON(line, col)
+	}))
+	g.Set("lspCodeActions", js.FuncOf(func(this js.Value, args []js.Value) any {
+		return lsp.CodeActionsJSON()
+	}))
 	g.Set("lspDefinition", js.FuncOf(func(this js.Value, args []js.Value) any {
 		line, col := 0, 0
 		if len(args) >= 2 {
