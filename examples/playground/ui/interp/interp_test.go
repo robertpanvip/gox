@@ -3,8 +3,8 @@ package interp
 import (
 	"os"
 	"path/filepath"
-	"testing"
 	"strings"
+	"testing"
 
 	"github.com/robertpanvip/gox/runtime/signal"
 
@@ -23,10 +23,16 @@ func TestInterpretSamples(t *testing.T) {
 		f := f
 		t.Run(filepath.Base(f), func(t *testing.T) {
 			srcBytes, err := os.ReadFile(f)
-			if err != nil { t.Fatal(err) }
+			if err != nil {
+				t.Fatal(err)
+			}
 			res, err := Interpret(string(srcBytes))
-			if err != nil { t.Fatalf("解释失败: %v", err) }
-			if res == nil || res.Instance == nil { t.Fatal("view() 未产出场景树") }
+			if err != nil {
+				t.Fatalf("解释失败: %v", err)
+			}
+			if res == nil || res.Instance == nil {
+				t.Fatal("view() 未产出场景树")
+			}
 			root := res.Instance.Root()
 			if root == nil || len(root.Children) == 0 {
 				t.Fatal("场景树为空")
@@ -36,9 +42,17 @@ func TestInterpretSamples(t *testing.T) {
 }
 
 func containsKind(n *gxscene.Node, kind string) bool {
-	if n == nil { return false }
-	if n.Kind == kind { return true }
-	for _, c := range n.Children { if containsKind(c, kind) { return true } }
+	if n == nil {
+		return false
+	}
+	if n.Kind == kind {
+		return true
+	}
+	for _, c := range n.Children {
+		if containsKind(c, kind) {
+			return true
+		}
+	}
 	return false
 }
 
@@ -50,10 +64,16 @@ func view() *gxscene.Instance {
     return <button onClick={inc}>Count: {count}</button>
 }`
 	res, err := Interpret(src)
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	root := res.Instance.Root()
-	if root == nil { t.Fatal("nil root") }
-	if !containsKind(root, "button") { t.Fatalf("场景树里没有 button 节点: %#v", root) }
+	if root == nil {
+		t.Fatal("nil root")
+	}
+	if !containsKind(root, "button") {
+		t.Fatalf("场景树里没有 button 节点: %#v", root)
+	}
 }
 
 // TestInterpretNestedElements 验证多层嵌套元素。
@@ -62,7 +82,9 @@ func TestInterpretNestedElements(t *testing.T) {
     return <div><span>hello</span><b>world</b></div>
 }`
 	res, err := Interpret(src)
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	root := res.Instance.Root()
 	if !containsKind(root, "div") || !containsKind(root, "span") || !containsKind(root, "b") {
 		t.Fatalf("嵌套元素缺失: %#v", root)
@@ -70,7 +92,9 @@ func TestInterpretNestedElements(t *testing.T) {
 }
 
 func TestInterpretRequiresView(t *testing.T) {
-	if _, err := Interpret("sig x = 1"); err == nil { t.Fatal("缺 view() 应报错") }
+	if _, err := Interpret("sig x = 1"); err == nil {
+		t.Fatal("缺 view() 应报错")
+	}
 }
 
 // TestInterpretReactive 验证点击事件真的改变 sig 并更新场景树文本——
@@ -82,7 +106,9 @@ func view() *gxscene.Instance {
     return <button onClick={inc}>Count: {count}</button>
 }`
 	res, err := Interpret(src)
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	res.Instance.BindLeafEffects(signal.Effect)
 	res.Instance.BindStructural(signal.Effect)
 	root := res.Instance.Root()
@@ -90,12 +116,20 @@ func view() *gxscene.Instance {
 	var btn *gxscene.Node
 	var find func(*gxscene.Node)
 	find = func(n *gxscene.Node) {
-		if n == nil { return }
-		if n.Kind == "button" { btn = n }
-		for _, c := range n.Children { find(c) }
+		if n == nil {
+			return
+		}
+		if n.Kind == "button" {
+			btn = n
+		}
+		for _, c := range n.Children {
+			find(c)
+		}
 	}
 	find(root)
-	if btn == nil { t.Fatal("找不到 button") }
+	if btn == nil {
+		t.Fatal("找不到 button")
+	}
 	// 派发点击
 	if !btn.Dispatch("onClick", gxscene.EventContext{}) {
 		t.Fatal("事件派发失败：handler 类型不对")
@@ -104,14 +138,65 @@ func view() *gxscene.Instance {
 	var texts []string
 	var collect func(*gxscene.Node)
 	collect = func(n *gxscene.Node) {
-		if n == nil { return }
-		if n.Type == gxscene.NodeText && n.Text != "" { texts = append(texts, n.Text) }
-		for _, c := range n.Children { collect(c) }
+		if n == nil {
+			return
+		}
+		if n.Type == gxscene.NodeText && n.Text != "" {
+			texts = append(texts, n.Text)
+		}
+		for _, c := range n.Children {
+			collect(c)
+		}
 	}
 	collect(root)
 	joined := ""
-	for _, tx := range texts { joined += tx }
+	for _, tx := range texts {
+		joined += tx
+	}
 	if !strings.Contains(joined, "1") {
 		t.Fatalf("点击后文本应包含 1，实际: %q (texts=%v)", joined, texts)
+	}
+}
+
+// println 输出通道回归：println/print/fmt.println/fmt.printf 的输出应投递到
+// 注册的 sink（playground 终端面板），未注册时回落标准输出。
+func TestPrintlnOutputSink(t *testing.T) {
+	var lines []string
+	SetOutput(func(s string) { lines = append(lines, s) })
+	defer SetOutput(nil)
+
+	res, err := Interpret(`package main
+import (
+    "fmt"
+    gxscene "github.com/robertpanvip/gox/runtime/scene"
+)
+sig n = 3
+func side() {
+    println("hello", "world")
+    print("no-newline ")
+    fmt.println("fmt-line", 42)
+    fmt.printf("x=%d %s\n", n, "str")
+}
+func view() *gxscene.Instance {
+    side()
+    return <div>ok</div>
+}
+`)
+	_ = res
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(lines, "")
+	if !strings.Contains(joined, "hello world\n") {
+		t.Errorf("println 应空格拼接并换行: %q", lines)
+	}
+	if !strings.Contains(joined, "no-newline ") {
+		t.Errorf("print 不应自动换行: %q", lines)
+	}
+	if !strings.Contains(joined, "fmt-line 42\n") {
+		t.Errorf("fmt.println 应空格拼接: %q", lines)
+	}
+	if !strings.Contains(joined, "x=3 str\n") {
+		t.Errorf("fmt.printf 应支持格式化: %q", lines)
 	}
 }

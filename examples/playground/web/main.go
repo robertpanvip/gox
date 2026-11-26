@@ -11,6 +11,7 @@
 package main
 
 import (
+	"strings"
 	"syscall/js"
 
 	gxweb "github.com/robertpanvip/gox-backend-web"
@@ -45,11 +46,21 @@ func main() {
 	// 且事件回调不再被同步绘制阻塞。必须在 Render 之前设置。
 	app.SetUIExecutor(win)
 
+	// 输出双通道：解释器的 println / print / fmt.* 输出同时进浏览器
+	// DevTools console（调试可查）与内置终端面板（页内可见）。
+	console := js.Global().Get("console")
+	interp.SetOutput(func(text string) {
+		console.Call("log", strings.TrimRight(text, "\n"))
+		ui.ConsolePrint(text)
+	})
+
 	// Run：解释当前编辑器源码生成场景树，替换预览后重渲染整棵树。
 	// 源码在包级 sig 中，重渲染不会丢失编辑内容；app.Render 会统一绑定响应式。
 	ui.SetRunHandler(func() {
+		ui.ConsoleMark("Run")
 		res, err := interp.Interpret(ui.EditorText())
 		if err != nil {
+			ui.ConsolePrint("运行错误: " + err.Error() + "\n")
 			ui.SetRunResult(nil, err.Error())
 		} else {
 			ui.SetRunResult(res.Instance, "")

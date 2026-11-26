@@ -1487,3 +1487,40 @@ func TestJSXFragmentSigFieldReadWrite(t *testing.T) {
 		})
 	}
 }
+
+// 遗留缺陷回归：函数值链上的 sig 字段裸读漏改写。
+// `state := callIt`（裸函数名 = 函数值）→ `t := state()` → `t.text` 的链首
+// 类型推断依赖绑定 Type——此前两档都不推断（state.Type 空、t.Type 空），
+// sig 字段读静默产出漏 () 的 t.text，运行期把 Signal 函数值当字符串用。
+// 现在 bindLHS 记录函数值类型并在函数值调用处剥出返回类型。
+func TestSigFieldReadThroughFuncValueChain(t *testing.T) {
+	src := `package main
+
+pub type Term struct {
+	sig text string
+}
+
+func getTerm() *Term {
+	return &Term{text: "hi"}
+}
+
+func callIt() *Term {
+	return getTerm()
+}
+
+func main() {
+	state := callIt
+	t := state()
+	println(t.text)
+}
+`
+	res, err := Compile("funcchain.gx", src)
+	if err != nil {
+		t.Fatalf("Compile 失败: %v", err)
+	}
+	got := res.GoSource
+	if !strings.Contains(got, "println(t.text())") {
+		t.Fatalf("函数值链上的 sig 字段读应补 ():\n%s", got)
+	}
+	assertNotContains(t, got, "println(t.text)\n", "不得残留漏 () 的读")
+}

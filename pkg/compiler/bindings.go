@@ -498,6 +498,83 @@ func calledFuncResult(toks []Token, from, to int, b *Bindings) string {
 	return strings.TrimSpace(strings.TrimPrefix(rt, "*"))
 }
 
+// funcValueAssignType 处理「函数值」两档 := 推断（sig 字段链首类型传播的前提）：
+//
+//  1. `state := callIt` —— 右值是裸函数名（不带括号），state 是函数值变量。
+//     绑定 Type 记为完整签名 "func(params) T"（参数可参与后续调用）。
+//  2. `t := state()` —— 右值是「函数值变量调用」，state 的绑定 Type 是
+//     "func(...) T"，剥出返回类型 T 作为 t 的绑定类型。
+//
+// 其余形态返回 ""（交回调用方降级）。
+func funcValueAssignType(toks []Token, from, to int, b *Bindings, scope *BindScope) string {
+	if b == nil || from < 0 || from >= to || toks[from].Kind != Ident || isGoKeyword(toks[from].Text) {
+		return ""
+	}
+	// 档 1：裸函数名（后面无 '(' 或右值仅此一个标识符）。
+	if lp := nextSigIn(toks, from+1, to); lp < 0 || toks[lp].Text != "(" {
+		if rt := b.FuncResult(toks[from].Text); rt != "" {
+			return "func() " + strings.TrimSpace(rt)
+		}
+		return ""
+	}
+	// 档 2：ident(...) 调用，但 ident 不是具名函数而是函数值变量。
+	lp := nextSigIn(toks, from+1, to)
+	if lp < 0 || toks[lp].Text != "(" {
+		return ""
+	}
+	if rp := matchDelim(toks, lp, "(", ")"); rp < 0 || rp >= to {
+		return ""
+	}
+	if b.FuncResult(toks[from].Text) != "" {
+		return "" // 具名函数调用：calledFuncResult 已处理
+	}
+	if bd := scopeLookupType(b, scope, toks[from].Text); strings.HasPrefix(bd, "func") {
+		if rt := funcSigResult(bd); rt != "" {
+			return strings.TrimSpace(strings.TrimPrefix(rt, "*"))
+		}
+	}
+	return ""
+}
+
+// funcSigResult 从 "func(params) result" 文本剥出 result 部分（取首个返回类型）。
+func funcSigResult(sig string) string {
+	// 找与 func( 配对的 ')'，其后到结尾（可含空格）是结果类型。
+	depth := 0
+	for i := 0; i < len(sig); i++ {
+		switch sig[i] {
+		case '(':
+			depth++
+		case ')':
+			depth--
+			if depth == 0 {
+				return strings.TrimSpace(sig[i+1:])
+			}
+		}
+	}
+	return ""
+}
+
+// scopeLookupType 沿 scope 链找 name 的绑定类型（供 bindLHS 期间引用先前声明）。
+// 同名多绑定时取最后一个（当前生效声明）。
+func scopeLookupType(b *Bindings, scope *BindScope, name string) string {
+	if b == nil || scope == nil {
+		return ""
+	}
+	var best *Binding
+	for s := scope; s != nil; s = s.Parent {
+		if cands := s.Bindings[name]; len(cands) > 0 {
+			best = cands[len(cands)-1]
+		}
+	}
+	if best != nil {
+		return best.Type
+	}
+	return ""
+}
+
+// matchDelimFrom 从 toks[from] 起找与 toks[from] 同层的 close。无匹配返回 -1。
+// （当前无调用方，保留供对称使用。）
+
 // prescanFuncSigs 在建绑定前独立走一遍，只收集具名函数的文本签名到 funcSigs。
 // 目的：`p := makeP()` 的 bindLHS 在建绑定时即可用 FuncResult("makeP") 回填 p 的
 // 类型，无需 makeP 定义在调用点之前（第十轮 P1-3）。不建任何 scope/binding。
@@ -814,6 +891,12 @@ func (b *Bindings) bindLHS(toks []Token, op int, scope *BindScope, kind BindingK
 		if !isRange {
 			if ft := calledFuncResult(toks, exprFrom, exprTo, b); ft != "" {
 				typ = ft
+			} else if fv := funcValueAssignType(toks, exprFrom, exprTo, b, scope); fv != "" {
+				// 函数值链：`state := callIt`（右值是裸函数名 = 函数值）记为
+				// "func(...) T"；`t := state()`（state 是函数值变量）剥出返回
+				// 类型 T。这两档是 sig 字段链首类型传播的前提——链首类型推断
+				// 只认绑定 Type，缺了会静默产出漏 () 的 sig 字段读。
+				typ = fv
 			}
 		}
 		if !isRange {

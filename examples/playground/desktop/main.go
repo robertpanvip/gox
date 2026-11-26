@@ -32,9 +32,14 @@ func main() {
 
 	// 桌面端 Run 与网页端同源：解释当前编辑器源码生成场景树，替换预览后
 	// 重渲染整棵树。源码在包级 sig 中，重建不丢编辑内容。
+	// 解释器输出接内置终端面板（页内 Console 显示 println 等）。
+	interp.SetOutput(ui.ConsolePrint)
+
 	ui.SetRunHandler(func() {
+		ui.ConsoleMark("Run")
 		res, err := interp.Interpret(ui.EditorText())
 		if err != nil {
+			ui.ConsolePrint("运行错误: " + err.Error() + "\n")
 			ui.SetRunResult(nil, err.Error())
 		} else {
 			ui.SetRunResult(res.Instance, "")

@@ -71,6 +71,25 @@ pub func SetRunResult(inst *gxscene.Instance, err string) {
     Signal.batch(func() { runningSig = false })
 }
 
+// ---- 输出终端（Console）----
+// 用户源码里的 println / print / fmt.println / fmt.print / fmt.printf 输出
+// 显示在这里。状态源是 widgets 内置 Terminal 组件（sig 驱动刷新）；
+// 装配层经 interp.SetOutput 把解释器的输出接到 ConsolePrint，web 端同时
+// 转发到浏览器 DevTools console。
+var consoleState = widgets.NewTerminal()
+
+pub func ConsolePrint(text string) {
+    consoleState.Print(text)
+}
+
+pub func ConsoleMark(label string) {
+    consoleState.RunMark(label)
+}
+
+pub func ConsoleClear() {
+    consoleState.Clear()
+}
+
 // RunInfo 返回运行状态文本（给状态栏展示）。
 pub func RunInfo() string {
     if runErr != "" { return "运行错误: " + runErr }
@@ -310,6 +329,9 @@ pub func Playground() *gxscene.Instance {
                     {demoPreview()}
                 </div>
                 <div style={{ color: RunInfoColor(), fontSize: widgets.FontFootnote }}>{RunInfo()}</div>
+                <div style={{ flexDirection: "column", gap: 4 }}>
+                    {widgets.Terminal(gxscene.Props{"state": consoleState, "height": "140", "title": "Console · println 输出"})}
+                </div>
             </div>
         </div>
         <div style={{ color: mutedColor(), fontSize: widgets.FontFootnote, padding: "12 16" }}>

@@ -28,17 +28,24 @@ func newStream(src string) *stream {
 }
 
 func (s *stream) cur() compiler.Token {
-	if s.i >= len(s.toks) { return compiler.Token{Kind: compiler.EOF} }
+	if s.i >= len(s.toks) {
+		return compiler.Token{Kind: compiler.EOF}
+	}
 	return s.toks[s.i]
 }
 func (s *stream) at(text string) bool { return s.cur().Text == text && s.cur().Kind != compiler.EOF }
 func (s *stream) next() compiler.Token {
 	t := s.cur()
-	if s.i < len(s.toks) { s.i++ }
+	if s.i < len(s.toks) {
+		s.i++
+	}
 	return t
 }
 func (s *stream) eat(text string) bool {
-	if s.at(text) { s.i++; return true }
+	if s.at(text) {
+		s.i++
+		return true
+	}
 	return false
 }
 func (s *stream) eof() bool { return s.cur().Kind == compiler.EOF }
@@ -48,81 +55,131 @@ func (s *stream) eof() bool { return s.cur().Kind == compiler.EOF }
 type Expr interface{ eval(*Env) Value }
 
 type litExpr struct{ v Value }
+
 func (e litExpr) eval(*Env) Value { return e.v }
 
 type identExpr struct{ name string }
+
 func (e identExpr) eval(env *Env) Value {
-	if c := env.lookup(e.name); c != nil { return c.Get() }
+	if c := env.lookup(e.name); c != nil {
+		return c.Get()
+	}
 	// 具名函数：事件属性 onClick={inc} 传函数原值（与编译器一致）。
-	if f := env.lookupFunc(e.name); f != nil { return f }
+	if f := env.lookupFunc(e.name); f != nil {
+		return f
+	}
 	// 内建标识符
 	switch e.name {
-	case "true": return true
-	case "false": return false
-	case "nil": return nil
+	case "true":
+		return true
+	case "false":
+		return false
+	case "nil":
+		return nil
 	}
 	return nil
 }
 
-type unaryExpr struct{ op string; x Expr }
+type unaryExpr struct {
+	op string
+	x  Expr
+}
+
 func (e unaryExpr) eval(env *Env) Value {
 	v := e.x.eval(env)
 	switch e.op {
-	case "!": return !toBool(v)
-	case "-": return -toFloat(v)
-	case "+": return toFloat(v)
+	case "!":
+		return !toBool(v)
+	case "-":
+		return -toFloat(v)
+	case "+":
+		return toFloat(v)
 	}
 	return nil
 }
 
-type binaryExpr struct{ op string; l, r Expr }
+type binaryExpr struct {
+	op   string
+	l, r Expr
+}
+
 func (e binaryExpr) eval(env *Env) Value {
 	// 短路
-	if e.op == "&&" { return toBool(e.l.eval(env)) && toBool(e.r.eval(env)) }
-	if e.op == "||" { return toBool(e.l.eval(env)) || toBool(e.r.eval(env)) }
+	if e.op == "&&" {
+		return toBool(e.l.eval(env)) && toBool(e.r.eval(env))
+	}
+	if e.op == "||" {
+		return toBool(e.l.eval(env)) || toBool(e.r.eval(env))
+	}
 	l := e.l.eval(env)
 	r := e.r.eval(env)
 	switch e.op {
 	case "+":
 		// 字符串拼接优先：任一侧是 string 就按字符串拼（GX 的 + 对 string 是拼接）。
-		if _, ok := l.(string); ok { return toStr(l) + toStr(r) }
-		if _, ok := r.(string); ok { return toStr(l) + toStr(r) }
+		if _, ok := l.(string); ok {
+			return toStr(l) + toStr(r)
+		}
+		if _, ok := r.(string); ok {
+			return toStr(l) + toStr(r)
+		}
 		return toFloat(l) + toFloat(r)
-	case "-": return toFloat(l) - toFloat(r)
-	case "*": return toFloat(l) * toFloat(r)
+	case "-":
+		return toFloat(l) - toFloat(r)
+	case "*":
+		return toFloat(l) * toFloat(r)
 	case "/":
 		d := toFloat(r)
-		if d == 0 { return 0.0 }
+		if d == 0 {
+			return 0.0
+		}
 		return toFloat(l) / d
 	case "%":
 		d := toInt(r)
-		if d == 0 { return 0 }
+		if d == 0 {
+			return 0
+		}
 		return toInt(l) % d
-	case "==": return equal(l, r)
-	case "!=": return !equal(l, r)
-	case "<": return toFloat(l) < toFloat(r)
-	case ">": return toFloat(l) > toFloat(r)
-	case "<=": return toFloat(l) <= toFloat(r)
-	case ">=": return toFloat(l) >= toFloat(r)
+	case "==":
+		return equal(l, r)
+	case "!=":
+		return !equal(l, r)
+	case "<":
+		return toFloat(l) < toFloat(r)
+	case ">":
+		return toFloat(l) > toFloat(r)
+	case "<=":
+		return toFloat(l) <= toFloat(r)
+	case ">=":
+		return toFloat(l) >= toFloat(r)
 	}
 	return nil
 }
 
 func equal(a, b Value) bool {
-	if s, ok := a.(string); ok { return s == toStr(b) }
+	if s, ok := a.(string); ok {
+		return s == toStr(b)
+	}
 	return toFloat(a) == toFloat(b)
 }
 
 // callExpr 函数调用：f(args) 或 selector.method(args)（method 由 selectorExpr 包装）。
-type callExpr struct{ fn Expr; args []Expr }
+type callExpr struct {
+	fn   Expr
+	args []Expr
+}
+
 func (e callExpr) eval(env *Env) Value {
 	// 内建函数按 callee 的标识名分派（method 调用由 methodExpr 单独处理）。
 	if id, ok := e.fn.(identExpr); ok {
-		if v := builtin(id.name, e.args, env); v != builtinNoMatch { return v }
+		if v := builtin(id.name, e.args, env); v != builtinNoMatch {
+			return v
+		}
 	}
 	fn := e.fn.eval(env)
 	args := make([]Value, len(e.args))
-	for i, a := range e.args { args[i] = a.eval(env) }
+	for i, a := range e.args {
+		args[i] = a.eval(env)
+	}
 	return callValue(fn, args, env)
 }
 
@@ -131,29 +188,58 @@ var builtinNoMatch = &struct{}{}
 func builtin(name string, args []Expr, env *Env) Value {
 	switch name {
 	case "len":
-		if len(args) == 0 { return 0 }
+		if len(args) == 0 {
+			return 0
+		}
 		v := args[0].eval(env)
 		switch x := v.(type) {
-		case string: return len([]rune(x))
-		case []Value: return len(x)
-		case []string: return len(x)
-		case []int: return len(x)
-		case map[string]Value: return len(x)
+		case string:
+			return len([]rune(x))
+		case []Value:
+			return len(x)
+		case []string:
+			return len(x)
+		case []int:
+			return len(x)
+		case map[string]Value:
+			return len(x)
 		}
 		return 0
 	case "string":
-		if len(args) == 0 { return "" }
+		if len(args) == 0 {
+			return ""
+		}
 		return toStr(args[0].eval(env))
 	case "int":
-		if len(args) == 0 { return 0 }
+		if len(args) == 0 {
+			return 0
+		}
 		return toInt(args[0].eval(env))
 	case "append":
-		if len(args) < 2 { return nil }
+		if len(args) < 2 {
+			return nil
+		}
 		base := toSlice(args[0].eval(env))
 		out := make([]Value, 0, len(base)+len(args)-1)
 		out = append(out, base...)
-		for _, a := range args[1:] { out = append(out, a.eval(env)) }
+		for _, a := range args[1:] {
+			out = append(out, a.eval(env))
+		}
 		return out
+	case "println", "print":
+		// 裸 println / print：GX 程序的输出终端（playground 面板 + 宿主转发）。
+		var b strings.Builder
+		for i, a := range args {
+			if i > 0 && name == "println" {
+				b.WriteString(" ")
+			}
+			b.WriteString(toStr(a.eval(env)))
+		}
+		if name == "println" {
+			b.WriteString("\n")
+		}
+		emitOutput(b.String())
+		return nil
 	case "fmt", "strconv":
 		// pkg 前缀在 selectorExpr 里处理；这里不匹配。
 		return builtinNoMatch
@@ -164,12 +250,20 @@ func builtin(name string, args []Expr, env *Env) Value {
 func callValue(fn Value, args []Value, env *Env) Value {
 	switch f := fn.(type) {
 	case *Function:
-		if f.Native != nil { return f.Native(args) }
+		if f.Native != nil {
+			return f.Native(args)
+		}
 		local := newEnv(f.Closure)
 		for i, p := range f.Params {
 			v := Value(nil)
-			if i < len(args) { v = args[i] }
-			if p.SigField { local.define(p.Name, v, true) } else { local.define(p.Name, v, false) }
+			if i < len(args) {
+				v = args[i]
+			}
+			if p.SigField {
+				local.define(p.Name, v, true)
+			} else {
+				local.define(p.Name, v, false)
+			}
 		}
 		return execBlock(f.Body, local)
 	case signalReader:
@@ -183,23 +277,61 @@ func callValue(fn Value, args []Value, env *Env) Value {
 type signalReader func() Value
 
 // selectorExpr 处理 a.b：字段访问 / 包函数调用 / 方法链。
-type selectorExpr struct{ obj Expr; name string }
+type selectorExpr struct {
+	obj  Expr
+	name string
+}
+
 func (e selectorExpr) eval(env *Env) Value {
 	obj := e.obj.eval(env)
 	if m, ok := obj.(map[string]Value); ok {
-		if v, ok2 := m[e.name]; ok2 { return deref(v) }
+		if v, ok2 := m[e.name]; ok2 {
+			return deref(v)
+		}
 	}
 	if id, ok := e.obj.(identExpr); ok {
 		switch id.name {
 		case "fmt":
+			// fmt.println / fmt.print / fmt.printf 是输出；fmt.sprint 及其余
+			// 保持既有拼接语义（示例代码大量使用 fmt.sprint）。
+			switch e.name {
+			case "println", "print":
+				return &Function{Native: func(a []Value) Value {
+					var b strings.Builder
+					for i, x := range a {
+						if i > 0 && e.name == "println" {
+							b.WriteString(" ")
+						}
+						b.WriteString(toStr(x))
+					}
+					if e.name == "println" {
+						b.WriteString("\n")
+					}
+					emitOutput(b.String())
+					return nil
+				}}
+			case "printf":
+				return &Function{Native: func(a []Value) Value {
+					if len(a) == 0 {
+						return nil
+					}
+					format := toStr(a[0])
+					emitOutput(goSprintf(format, a[1:]))
+					return nil
+				}}
+			}
 			return &Function{Native: func(a []Value) Value {
 				var b strings.Builder
-				for _, x := range a { b.WriteString(toStr(x)) }
+				for _, x := range a {
+					b.WriteString(toStr(x))
+				}
 				return b.String()
 			}}
 		case "strconv":
 			return &Function{Native: func(a []Value) Value {
-				if len(a) == 0 { return "" }
+				if len(a) == 0 {
+					return ""
+				}
 				return toStr(a[0])
 			}}
 		case "Signal":
@@ -210,34 +342,85 @@ func (e selectorExpr) eval(env *Env) Value {
 }
 
 func deref(v Value) Value {
-	if s, ok := v.(signalReader); ok { return s() }
+	if s, ok := v.(signalReader); ok {
+		return s()
+	}
 	return v
 }
 
 // methodExpr 方法链 x.method(args)：filter/map/reduce/String/computed/batch。
-type methodExpr struct{ recv Expr; name string; args []Expr }
+type methodExpr struct {
+	recv Expr
+	name string
+	args []Expr
+}
+
 func (e methodExpr) eval(env *Env) Value {
+	// 包级函数链 `pkg.fn(args)`：fmt.println / fmt.print / fmt.printf 输出，
+	// fmt.sprint 及其余保持拼接语义。语法上 `a.b(args)` 全部解析成 methodExpr
+	// （带括号即方法链），包级调用也走这里——fmt 分派必须在 recv 求值之前
+	// （fmt 不是变量，recv.eval 返回 nil）。
+	if id, ok := e.recv.(identExpr); ok && id.name == "fmt" {
+		switch e.name {
+		case "println", "print":
+			args := make([]Value, len(e.args))
+			for i, a := range e.args {
+				args[i] = a.eval(env)
+			}
+			var b strings.Builder
+			for i, x := range args {
+				if i > 0 && e.name == "println" {
+					b.WriteString(" ")
+				}
+				b.WriteString(toStr(x))
+			}
+			if e.name == "println" {
+				b.WriteString("\n")
+			}
+			emitOutput(b.String())
+			return nil
+		case "printf":
+			args := make([]Value, len(e.args))
+			for i, a := range e.args {
+				args[i] = a.eval(env)
+			}
+			if len(args) > 0 {
+				emitOutput(goSprintf(toStr(args[0]), args[1:]))
+			}
+			return nil
+		}
+	}
 	recv := e.recv.eval(env)
 	args := make([]Value, len(e.args))
-	for i, a := range e.args { args[i] = a.eval(env) }
+	for i, a := range e.args {
+		args[i] = a.eval(env)
+	}
 	switch e.name {
 	case "filter", "Filter":
 		src := toSlice(recv)
 		out := []Value{}
 		for _, item := range src {
-			if len(args) > 0 && toBool(callValue(args[0], []Value{item}, env)) { out = append(out, item) }
+			if len(args) > 0 && toBool(callValue(args[0], []Value{item}, env)) {
+				out = append(out, item)
+			}
 		}
 		return out
 	case "map", "Map":
 		src := toSlice(recv)
 		out := make([]Value, 0, len(src))
-		for _, item := range src { out = append(out, callValue(args[0], []Value{item}, env)) }
+		for _, item := range src {
+			out = append(out, callValue(args[0], []Value{item}, env))
+		}
 		return out
 	case "reduce", "Reduce":
 		src := toSlice(recv)
 		acc := Value(0)
-		if len(args) > 1 { acc = args[1] }
-		for _, item := range src { acc = callValue(args[0], []Value{acc, item}, env) }
+		if len(args) > 1 {
+			acc = args[1]
+		}
+		for _, item := range src {
+			acc = callValue(args[0], []Value{acc, item}, env)
+		}
 		return acc
 	case "String":
 		return toStr(recv)
@@ -253,45 +436,63 @@ func (e methodExpr) eval(env *Env) Value {
 
 // indexExpr a[i]
 type indexExpr struct{ obj, idx Expr }
+
 func (e indexExpr) eval(env *Env) Value {
 	obj := e.obj.eval(env)
 	i := toInt(e.idx.eval(env))
 	xs := toSlice(obj)
-	if i < 0 || i >= len(xs) { return nil }
+	if i < 0 || i >= len(xs) {
+		return nil
+	}
 	return deref(xs[i])
 }
 
 // structLitExpr T{field: val, ...} / []T{...} / map 字面量
 type structLitExpr struct {
 	typeName string
-	fields   []struct{ name string; expr Expr }
-	elems    []Expr // 数组字面量元素
-	isArray  bool
+	fields   []struct {
+		name string
+		expr Expr
+	}
+	elems   []Expr // 数组字面量元素
+	isArray bool
 }
+
 func (e structLitExpr) eval(env *Env) Value {
 	if e.isArray {
 		out := make([]Value, len(e.elems))
-		for i, x := range e.elems { out[i] = x.eval(env) }
+		for i, x := range e.elems {
+			out[i] = x.eval(env)
+		}
 		return out
 	}
 	m := make(map[string]Value)
-	for _, f := range e.fields { m[f.name] = f.expr.eval(env) }
+	for _, f := range e.fields {
+		m[f.name] = f.expr.eval(env)
+	}
 	return m
 }
 
 // templateExpr `text ${expr} ...`
-type templateExpr struct{ parts []Expr; lits []string }
+type templateExpr struct {
+	parts []Expr
+	lits  []string
+}
+
 func (e templateExpr) eval(env *Env) Value {
 	var b strings.Builder
 	for i, lit := range e.lits {
 		b.WriteString(lit)
-		if i < len(e.parts) { b.WriteString(toStr(e.parts[i].eval(env))) }
+		if i < len(e.parts) {
+			b.WriteString(toStr(e.parts[i].eval(env)))
+		}
 	}
 	return b.String()
 }
 
 // jsxExpr 在表达式里出现 JSX（lambda 返回值、view return）——延迟到 jsx.go 实现。
 type jsxExpr struct{ raw string }
+
 func (e jsxExpr) eval(env *Env) Value { return renderJSX(e.raw, env) }
 
 // lambdaExpr () => expr / (x T) => expr / func(...) {...}
@@ -300,6 +501,7 @@ type lambdaExpr struct {
 	body   Expr
 	stmts  []Stmt
 }
+
 func (e lambdaExpr) eval(env *Env) Value {
 	return &Function{Params: e.params, Body: e.stmts, Closure: env}
 }
@@ -319,7 +521,9 @@ func parseExpr(s *stream, minPrec int) Expr {
 	for !s.eof() {
 		op := s.cur().Text
 		p, ok := prec[op]
-		if !ok || p < minPrec { break }
+		if !ok || p < minPrec {
+			break
+		}
 		s.next()
 		right := parseExpr(s, p+1)
 		left = binaryExpr{op: op, l: left, r: right}
@@ -332,9 +536,11 @@ func parsePrefix(s *stream) Expr {
 	switch t.Kind {
 	case compiler.Number:
 		if strings.Contains(t.Text, ".") {
-			f, _ := strconv.ParseFloat(t.Text, 64); return litExpr{f}
+			f, _ := strconv.ParseFloat(t.Text, 64)
+			return litExpr{f}
 		}
-		n, _ := strconv.Atoi(t.Text); return litExpr{n}
+		n, _ := strconv.Atoi(t.Text)
+		return litExpr{n}
 	case compiler.String:
 		return litExpr{unquote(t.Text)}
 	case compiler.Template:
@@ -365,13 +571,19 @@ func parsePrefix(s *stream) Expr {
 		// func 字面量 func(x T) T { return ... }
 		params := parseParams(s)
 		// 跳过返回类型（到 '{'）
-		for !s.eof() && !s.at("{") { s.next() }
+		for !s.eof() && !s.at("{") {
+			s.next()
+		}
 		body := parseBlock(s)
 		return lambdaExpr{params: params, stmts: body}
 	case "[":
 		// []T{...} 数组字面量
-		if s.at("]") { s.next() }
-		for !s.eof() && !s.at("{") { s.next() }
+		if s.at("]") {
+			s.next()
+		}
+		for !s.eof() && !s.at("{") {
+			s.next()
+		}
 		return parseArrayLit(s)
 	case "{":
 		// 对象字面量 { key: val } （style 插值、struct 字段）
@@ -431,12 +643,14 @@ func parsePostfix(s *stream, base Expr) Expr {
 }
 
 type signalComputedExpr struct{ fn Expr }
+
 func (e signalComputedExpr) eval(env *Env) Value {
 	f := e.fn.eval(env)
 	return signal.Computed[Value](func() Value { return callValue(f, nil, env) })
 }
 
 type signalBatchExpr struct{ fn Expr }
+
 func (e signalBatchExpr) eval(env *Env) Value {
 	f := e.fn.eval(env)
 	signal.Batch(func() { callValue(f, nil, env) })
@@ -445,10 +659,14 @@ func (e signalBatchExpr) eval(env *Env) Value {
 
 func parseArgs(s *stream) []Expr {
 	args := []Expr{}
-	if !s.eat("(") { return args }
+	if !s.eat("(") {
+		return args
+	}
 	for !s.eof() && !s.at(")") {
 		args = append(args, parseExpr(s, 1))
-		if !s.eat(",") { break }
+		if !s.eat(",") {
+			break
+		}
 	}
 	s.eat(")")
 	return args
@@ -456,74 +674,114 @@ func parseArgs(s *stream) []Expr {
 
 func tryLambdaParams(s *stream) ([]Param, bool) {
 	params := []Param{}
-	if s.eat(")") { return params, true }
+	if s.eat(")") {
+		return params, true
+	}
 	for !s.eof() && !s.at(")") {
 		name := s.next().Text
-		if name == "," || name == ")" { break }
+		if name == "," || name == ")" {
+			break
+		}
 		typ := ""
-		if !s.at(",") && !s.at(")") { typ = s.next().Text }
+		if !s.at(",") && !s.at(")") {
+			typ = s.next().Text
+		}
 		params = append(params, Param{Name: name, Type: typ})
-		if !s.eat(",") { break }
+		if !s.eat(",") {
+			break
+		}
 	}
 	return params, s.eat(")")
 }
 
 func parseParams(s *stream) []Param {
 	params := []Param{}
-	if !s.eat("(") { return params }
+	if !s.eat("(") {
+		return params
+	}
 	for !s.eof() && !s.at(")") {
 		name := s.next().Text
 		typ := ""
-		if !s.at(",") && !s.at(")") { typ = s.next().Text }
+		if !s.at(",") && !s.at(")") {
+			typ = s.next().Text
+		}
 		params = append(params, Param{Name: name, Type: typ})
-		if !s.eat(",") { break }
+		if !s.eat(",") {
+			break
+		}
 	}
 	s.eat(")")
 	return params
 }
 
 func parseArrayLit(s *stream) Expr {
-	if !s.eat("{") { return litExpr{[]Value{}} }
+	if !s.eat("{") {
+		return litExpr{[]Value{}}
+	}
 	elems := []Expr{}
 	for !s.eof() && !s.at("}") {
 		elems = append(elems, parseExpr(s, 1))
-		if !s.eat(",") { break }
+		if !s.eat(",") {
+			break
+		}
 	}
 	s.eat("}")
 	return structLitExpr{isArray: true, elems: elems}
 }
 
 func parseStructLit(s *stream, typeName string) Expr {
-	if !s.eat("{") { return litExpr{map[string]Value{}} }
-	fields := []struct{ name string; expr Expr }{}
+	if !s.eat("{") {
+		return litExpr{map[string]Value{}}
+	}
+	fields := []struct {
+		name string
+		expr Expr
+	}{}
 	for !s.eof() && !s.at("}") {
 		name := s.next().Text
 		s.eat(":")
 		val := parseExpr(s, 1)
-		fields = append(fields, struct{ name string; expr Expr }{name, val})
-		if !s.eat(",") { break }
+		fields = append(fields, struct {
+			name string
+			expr Expr
+		}{name, val})
+		if !s.eat(",") {
+			break
+		}
 	}
 	s.eat("}")
 	return structLitExpr{typeName: typeName, fields: fields}
 }
 
 func parseObjectLit(s *stream) Expr {
-	if !s.eat("{") { return litExpr{map[string]Value{}} }
-	fields := []struct{ name string; expr Expr }{}
+	if !s.eat("{") {
+		return litExpr{map[string]Value{}}
+	}
+	fields := []struct {
+		name string
+		expr Expr
+	}{}
 	for !s.eof() && !s.at("}") {
 		name := unquote(s.next().Text)
 		s.eat(":")
 		val := parseExpr(s, 1)
-		fields = append(fields, struct{ name string; expr Expr }{name, val})
-		if !s.eat(",") { break }
+		fields = append(fields, struct {
+			name string
+			expr Expr
+		}{name, val})
+		if !s.eat(",") {
+			break
+		}
 	}
 	s.eat("}")
 	return structLitExpr{fields: fields}
 }
 
 func parseTemplate(raw string) Expr {
-	if len(raw) < 2 { return litExpr{""} }
-	inner := raw[1:len(raw)-1]
+	if len(raw) < 2 {
+		return litExpr{""}
+	}
+	inner := raw[1 : len(raw)-1]
 	lits := []string{}
 	parts := []Expr{}
 	start := 0
@@ -532,8 +790,12 @@ func parseTemplate(raw string) Expr {
 			lits = append(lits, inner[start:i])
 			depth, j := 1, i+2
 			for j < len(inner) && depth > 0 {
-				if inner[j] == '{' { depth++ }
-				if inner[j] == '}' { depth-- }
+				if inner[j] == '{' {
+					depth++
+				}
+				if inner[j] == '}' {
+					depth--
+				}
 				j++
 			}
 			exprSrc := inner[i+2 : j-1]
@@ -549,10 +811,14 @@ func parseTemplate(raw string) Expr {
 func unquote(s string) string {
 	if len(s) >= 2 && s[0] == '"' && s[len(s)-1] == '"' {
 		v, err := strconv.Unquote(s)
-		if err == nil { return v }
-		return s[1:len(s)-1]
+		if err == nil {
+			return v
+		}
+		return s[1 : len(s)-1]
 	}
-	if len(s) >= 2 && s[0] == '`' && s[len(s)-1] == '`' { return s[1:len(s)-1] }
+	if len(s) >= 2 && s[0] == '`' && s[len(s)-1] == '`' {
+		return s[1 : len(s)-1]
+	}
 	return s
 }
 
