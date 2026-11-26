@@ -125,6 +125,107 @@ func currentRunStamp() int { return runStamp }
 // SetSplitDragging 由装配层在分隔条按下/松开时切换高亮反馈。
  func SetSplitDragging(on bool) { Signal.Batch(func() { LayoutSplitActive(on )}) }
 
+// ---- 多标签编辑器（WebStorm 式 editor tabs）----
+// tabs/activeTabName 是响应面（tab 条 For 渲染）；文件内容缓存在普通 map，
+// 切换时读回，关闭即清理，避免结构 sig 装进切片的引用语义坑。
+
+var tabs = Signal.New([]string{})
+var activeTabName = Signal.New("")
+var tabSources = map[string]string{}
+var tabPaths = map[string]string{}
+
+func tabIndexOf(name string) int {
+    for i, n := range tabs() {
+        if n == name { return i }
+    }
+    return -1
+}
+
+ func TabNames() []string { return tabs() }
+ func ActiveTabName() string { return activeTabName() }
+
+func saveActiveTab() {
+    if activeTabName() != "" {
+        tabSources[activeTabName()] = EditorText()
+    }
+}
+
+// OpenTab 打开（或激活已开的）标签。同名复用不重复追加。
+ func OpenTab(name string, path string, source string) {
+    if name == "" { return }
+    if tabIndexOf(name) >= 0 {
+        SwitchTab(name)
+        return
+    }
+    saveActiveTab()
+    tabSources[name] = source
+    tabPaths[name] = path
+    tabs(append(tabs(), name))
+    activeTabName(name)
+    Signal.Batch(func() {
+        EditorSetText(source)
+        EditorHome()
+        EditorFocus()
+    })
+}
+
+ func SwitchTab(name string) {
+    if name == "" || name == activeTabName() { return }
+    if tabIndexOf(name) < 0 { return }
+    saveActiveTab()
+    activeTabName(name)
+    Signal.Batch(func() {
+        EditorSetText(tabSources[name])
+        EditorHome()
+        EditorFocus()
+    })
+}
+
+ func CloseTab(name string) {
+    idx := tabIndexOf(name)
+    if idx < 0 { return }
+    wasActive := activeTabName() == name
+    tabs(append(tabs()[:idx], tabs()[idx+1:]...))
+    tabSources[name] = ""
+    tabPaths[name] = ""
+    if !wasActive { return }
+    if len(tabs()) > 0 {
+        pick := idx - 1
+        if pick < 0 { pick = 0 }
+        if pick >= len(tabs()) { pick = len(tabs()) - 1 }
+        SwitchTab(tabs()[pick])
+    } else {
+        activeTabName("")
+        EditorSetText("")
+    }
+}
+
+ func CloseAllTabs() {
+    for len(tabs()) > 0 {
+        CloseTab(tabs()[0])
+    }
+}
+
+// ---- 底部工具窗标签（Terminal / Run / Problems 真切换）----
+
+var bottomTab = Signal.New("Terminal")
+
+ func SetBottomTab(t string) { bottomTab(t )}
+ func BottomTab() string { return bottomTab() }
+
+// problemsText 是 Problems 页数据源：当前 Run 的真实错误，没有就报无问题。
+func problemsText() string {
+    if runErr != "" { return "✗ " + runErr }
+    return "No problems detected"
+}
+
+// ---- 项目面板显隐（工具栏 folder 按钮的真动作）----
+
+var projectPanelVisible = Signal.New(true)
+
+ func SetProjectPanelVisible(v bool) { projectPanelVisible(v )}
+ func ToggleProjectPanel() { projectPanelVisible(!projectPanelVisible() )}
+
 // ---- 进程内终端（代码区下方，Run 输出落地于此）----
 // 与 gox-term 独立 shell 不同：这是 IDEA 的控制台面板，展示解释/构建输出。
 var terminalState = widgets.NewTerminal()
@@ -157,7 +258,20 @@ const termOutFont = "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
 // height 是静态 attr，无法响应信号，故这里不用该组件）。
 func TerminalView() *gxscene.Instance {
     // WebStorm 底部工具窗口：无圆角卡片、无 Mac 红黄绿灯，贴紧分隔条的细标签头。
-    return gxscene.Render(gxscene.Template{Ops:[]gxscene.Op{gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:0,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:1,},gxscene.Op{Code:gxscene.OpDynChild,Slot:2,},gxscene.Op{Code:gxscene.OpDynChild,Slot:3,},gxscene.Op{Code:gxscene.OpDynChild,Slot:4,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:5,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpDynChild,Slot:6,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:7,},gxscene.Op{Code:gxscene.OpDynChild,Slot:8,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpClose,},},N:9,}, func() any{ return gxscene.Style{FlexDirection:"column",Gap:"0",Overflow:"hidden",} }, func() any{ return gxscene.Style{FlexDirection:"row",Gap:"16",AlignItems:"center",Padding:"4 12",Background:panelBg(),} }, func() any{ return widgets.Text(gxscene.Props{"value": "Terminal", "size": termTabSize, "weight": "bold", "tone": accentColor()}) }, func() any{ return widgets.Text(gxscene.Props{"value": "Run", "size": termTabSize, "tone": "muted"}) }, func() any{ return widgets.Text(gxscene.Props{"value": "Problems", "size": termTabSize, "tone": "muted"}) }, func() any{ return gxscene.Style{FlexGrow:"1",} }, func() any{ return widgets.Text(gxscene.Props{"value": terminalLines(), "size": termTabSize, "tone": "muted"}) }, func() any{ return gxscene.Style{Background:canvasBg(),Padding:"6 12",Height:terminalHeightPx(),Overflow:"auto",FontSize:termTabSize,FontFamily:termOutFont,Color:widgets.UseToken("success")(),} }, func() any{ return widgets.Text(gxscene.Props{"value": terminalText(), "size": termTabSize, "tone": "muted"}) })
+    return gxscene.Render(gxscene.Template{Ops:[]gxscene.Op{gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:0,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:1,},gxscene.Op{Code:gxscene.OpDynChild,Slot:2,},gxscene.Op{Code:gxscene.OpDynChild,Slot:3,},gxscene.Op{Code:gxscene.OpDynChild,Slot:4,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:5,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpDynChild,Slot:6,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:7,},gxscene.Op{Code:gxscene.OpBranch,Slot:8,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpClose,},},N:9,}, func() any{ return gxscene.Style{FlexDirection:"column",Gap:"0",Overflow:"hidden",} }, func() any{ return gxscene.Style{FlexDirection:"row",Gap:"16",AlignItems:"center",Padding:"4 12",Background:panelBg(),} }, func() any{ return bottomTabItem("Terminal") }, func() any{ return bottomTabItem("Run") }, func() any{ return bottomTabItem("Problems") }, func() any{ return gxscene.Style{FlexGrow:"1",} }, func() any{ return widgets.Text(gxscene.Props{"value": terminalLines(), "size": termTabSize, "tone": "muted"}) }, func() any{ return gxscene.Style{Background:canvasBg(),Padding:"6 12",Height:terminalHeightPx(),Overflow:"auto",FontSize:termTabSize,FontFamily:termOutFont,Color:widgets.UseToken("success")(),} }, gxscene.BranchGetter(func() int{if bottomTab() == "Problems" { return 0 }
+return 1 }, func() *gxscene.Instance { return gxscene.Render(gxscene.Template{Ops:[]gxscene.Op{gxscene.Op{Code:gxscene.OpElem,Arg:"#frag",},gxscene.Op{Code:gxscene.OpDynChild,Slot:0,},gxscene.Op{Code:gxscene.OpClose,},},N:1,}, func() any{ return widgets.Text(gxscene.Props{"value": problemsText(), "size": termTabSize, "tone": "muted"}) }) }, func() *gxscene.Instance { return gxscene.Render(gxscene.Template{Ops:[]gxscene.Op{gxscene.Op{Code:gxscene.OpElem,Arg:"#frag",},gxscene.Op{Code:gxscene.OpDynChild,Slot:0,},gxscene.Op{Code:gxscene.OpClose,},},N:1,}, func() any{ return widgets.Text(gxscene.Props{"value": terminalText(), "size": termTabSize, "tone": "muted"}) }) }))
+}
+
+// bottomTabItem 底部工具窗标签：点击切换，激活态 accent 加粗。
+func bottomTabItem(label string) *gxscene.Instance {
+    act := bottomTab() == label
+    tone := "muted"
+    weight := "normal"
+    if act {
+        tone = accentColor()
+        weight = "bold"
+    }
+    return gxscene.Render(gxscene.Template{Ops:[]gxscene.Op{gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpEvent,Key:"onClick",Slot:0,},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:1,},gxscene.Op{Code:gxscene.OpDynChild,Slot:2,},gxscene.Op{Code:gxscene.OpClose,},},N:3,}, func() any{ return func() { SetBottomTab(label) } }, func() any{ return gxscene.Style{Padding:"2 6",Cursor:"pointer",BorderRadius:widgets.RadiusSmall,Hover:&gxscene.Style{Background:widgets.UseToken("panelalt")(),},} }, func() any{ return widgets.Text(gxscene.Props{"value": label, "size": termTabSize, "weight": weight, "tone": tone}) })
 }
 
 // ---- 示例库：元数据 + 源码文本（由 gen_samples.py 生成） ----
@@ -211,11 +325,10 @@ var sampleStore []Sample = buildSamples()
     runErr = ""
     Signal.Batch(func() {
         SampleIndex(i)
-        EditorSetText(xs[i].Source)
-        EditorHome()
-        EditorFocus()
         RunningSig(false)
     })
+    // 标签化：示例文件同样进 tab 条（磁盘模式点文件走 onProjectRowClick）。
+    OpenTab(xs[i].Name + ".gx", "", xs[i].Source)
 }
 
  func NextSample() { LoadSample(SampleIndex() + 1) }
@@ -486,9 +599,7 @@ func onProjectRowClick(n ProjectNode) {
                 content = projectFileReader(n.Path)
             }
             ProjectFileSelected(n.Path)
-            EditorSetText(content)
-            EditorHome()
-            EditorFocus()
+            OpenTab(n.Label, n.Path, content)
         } else {
             ProjectFileSelected("")
             LoadSample(n.Sample)
@@ -621,12 +732,7 @@ func menuItem(label string) *gxscene.Instance {
  func NewFile() {
     runInstance = nil
     runErr = ""
-    Signal.Batch(func() {
-        EditorSetText("package main\n\nfunc main() {\n    println(\"hello, gox\")\n}\n")
-        EditorHome()
-        EditorFocus()
-        RunningSig(false)
-    })
+    OpenTab("untitled.gx", "", "package main\n\nfunc main() {\n    println(\"hello, gox\")\n}\n")
 }
 
 // menuRow 菜单项：点击执行命令并收起菜单。
@@ -657,6 +763,12 @@ func menuTrigger(label string, name string) *gxscene.Instance {
     return gxscene.Render(gxscene.Template{Ops:[]gxscene.Op{gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpEvent,Key:"onClick",Slot:0,},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:1,},gxscene.Op{Code:gxscene.OpDynChild,Slot:2,},gxscene.Op{Code:gxscene.OpClose,},},N:3,}, func() any{ return func() { SetMenu(name) } }, func() any{ return gxscene.Style{Padding:"3 8",Cursor:"pointer",BorderRadius:widgets.RadiusSmall,Background:widgets.UseToken("panelalt")(),Hover:&gxscene.Style{Background:widgets.UseToken("panelalt")(),},} }, func() any{ return widgets.Text(gxscene.Props{"value": label, "size": widgets.FontFootnote, "tone": tone}) })
 }
 
+func editMenuContent() *gxscene.Instance {
+    return menuBox(func() any {
+        return gxscene.Render(gxscene.Template{Ops:[]gxscene.Op{gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:0,},gxscene.Op{Code:gxscene.OpDynChild,Slot:1,},gxscene.Op{Code:gxscene.OpDynChild,Slot:2,},gxscene.Op{Code:gxscene.OpDynChild,Slot:3,},gxscene.Op{Code:gxscene.OpClose,},},N:4,}, func() any{ return gxscene.Style{FlexDirection:"column",} }, func() any{ return menuRow("Undo", EditorUndo) }, func() any{ return menuRow("Redo", EditorRedo) }, func() any{ return menuRow("Select All", EditorSelectAll) })
+    })
+}
+
 func fileMenuContent() *gxscene.Instance {
     return menuBox(func() any {
         return gxscene.Render(gxscene.Template{Ops:[]gxscene.Op{gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:0,},gxscene.Op{Code:gxscene.OpDynChild,Slot:1,},gxscene.Op{Code:gxscene.OpDynChild,Slot:2,},gxscene.Op{Code:gxscene.OpDynChild,Slot:3,},gxscene.Op{Code:gxscene.OpClose,},},N:4,}, func() any{ return gxscene.Style{FlexDirection:"column",} }, func() any{ return menuRow("New File", NewFile) }, func() any{ return menuRow("Next Example", NextSample) }, func() any{ return menuRow("Previous Example", PrevSample) })
@@ -676,7 +788,7 @@ func runMenuContent() *gxscene.Instance {
 }
 
 func menuBar() *gxscene.Instance {
-    return gxscene.Render(gxscene.Template{Ops:[]gxscene.Op{gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:0,},gxscene.Op{Code:gxscene.OpDynChild,Slot:1,},gxscene.Op{Code:gxscene.OpDynChild,Slot:2,},gxscene.Op{Code:gxscene.OpDynChild,Slot:3,},gxscene.Op{Code:gxscene.OpDynChild,Slot:4,},gxscene.Op{Code:gxscene.OpDynChild,Slot:5,},gxscene.Op{Code:gxscene.OpDynChild,Slot:6,},gxscene.Op{Code:gxscene.OpDynChild,Slot:7,},gxscene.Op{Code:gxscene.OpDynChild,Slot:8,},gxscene.Op{Code:gxscene.OpDynChild,Slot:9,},gxscene.Op{Code:gxscene.OpDynChild,Slot:10,},gxscene.Op{Code:gxscene.OpDynChild,Slot:11,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:12,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpDynChild,Slot:13,},gxscene.Op{Code:gxscene.OpClose,},},N:14,}, func() any{ return gxscene.Style{FlexDirection:"row",AlignItems:"center",Gap:"14",Height:"30",Padding:"0 12",Background:chromeBg(),BorderWidth:widgets.HairlineWidth,Border:borderColor(),} }, func() any{ return menuPopup("File", "File", fileMenuContent) }, func() any{ return menuItem("Edit") }, func() any{ return menuPopup("View", "View", viewMenuContent) }, func() any{ return menuItem("Navigate") }, func() any{ return menuItem("Code") }, func() any{ return menuItem("Refactor") }, func() any{ return menuPopup("Run", "Run", runMenuContent) }, func() any{ return menuItem("Tools") }, func() any{ return menuItem("Git") }, func() any{ return menuItem("Window") }, func() any{ return menuItem("Help") }, func() any{ return gxscene.Style{FlexGrow:"1",} }, func() any{ return widgets.Text(gxscene.Props{"value": "GoX IDE", "size": widgets.FontFootnote, "tone": "muted"}) })
+    return gxscene.Render(gxscene.Template{Ops:[]gxscene.Op{gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:0,},gxscene.Op{Code:gxscene.OpDynChild,Slot:1,},gxscene.Op{Code:gxscene.OpDynChild,Slot:2,},gxscene.Op{Code:gxscene.OpDynChild,Slot:3,},gxscene.Op{Code:gxscene.OpDynChild,Slot:4,},gxscene.Op{Code:gxscene.OpDynChild,Slot:5,},gxscene.Op{Code:gxscene.OpDynChild,Slot:6,},gxscene.Op{Code:gxscene.OpDynChild,Slot:7,},gxscene.Op{Code:gxscene.OpDynChild,Slot:8,},gxscene.Op{Code:gxscene.OpDynChild,Slot:9,},gxscene.Op{Code:gxscene.OpDynChild,Slot:10,},gxscene.Op{Code:gxscene.OpDynChild,Slot:11,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:12,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpDynChild,Slot:13,},gxscene.Op{Code:gxscene.OpClose,},},N:14,}, func() any{ return gxscene.Style{FlexDirection:"row",AlignItems:"center",Gap:"14",Height:"30",Padding:"0 12",Background:chromeBg(),BorderWidth:widgets.HairlineWidth,Border:borderColor(),} }, func() any{ return menuPopup("File", "File", fileMenuContent) }, func() any{ return menuPopup("Edit", "Edit", editMenuContent) }, func() any{ return menuPopup("View", "View", viewMenuContent) }, func() any{ return menuItem("Navigate") }, func() any{ return menuItem("Code") }, func() any{ return menuItem("Refactor") }, func() any{ return menuPopup("Run", "Run", runMenuContent) }, func() any{ return menuItem("Tools") }, func() any{ return menuItem("Git") }, func() any{ return menuItem("Window") }, func() any{ return menuItem("Help") }, func() any{ return gxscene.Style{FlexGrow:"1",} }, func() any{ return widgets.Text(gxscene.Props{"value": "GoX IDE", "size": widgets.FontFootnote, "tone": "muted"}) })
 }
 
 func iconButton(name string, fn func()) *gxscene.Instance {
@@ -706,12 +818,24 @@ func breadcrumbText() string {
 }
 
 func ideToolbar() *gxscene.Instance {
-    return gxscene.Render(gxscene.Template{Ops:[]gxscene.Op{gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:0,},gxscene.Op{Code:gxscene.OpDynChild,Slot:1,},gxscene.Op{Code:gxscene.OpDynChild,Slot:2,},gxscene.Op{Code:gxscene.OpDynChild,Slot:3,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:4,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpDynChild,Slot:5,},gxscene.Op{Code:gxscene.OpDynChild,Slot:6,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:7,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpDynChild,Slot:8,},gxscene.Op{Code:gxscene.OpDynChild,Slot:9,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:10,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpDynChild,Slot:11,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:12,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpDynChild,Slot:13,},gxscene.Op{Code:gxscene.OpDynChild,Slot:14,},gxscene.Op{Code:gxscene.OpClose,},},N:15,}, func() any{ return gxscene.Style{FlexDirection:"row",AlignItems:"center",Gap:"6",Height:"36",Padding:"0 10",Background:chromeBg(),BorderWidth:widgets.HairlineWidth,Border:borderColor(),} }, func() any{ return iconButton("folder", ideNoop) }, func() any{ return iconButton("doc", ideNoop) }, func() any{ return iconButton("search", ideNoop) }, func() any{ return gxscene.Style{Width:"1",Height:"18",Background:borderColor(),} }, func() any{ return iconButton("chevron-left", PrevSample) }, func() any{ return iconButton("chevron-right", NextSample) }, func() any{ return gxscene.Style{Width:"1",Height:"18",Background:borderColor(),} }, func() any{ return runButton() }, func() any{ return iconButton("refresh", ideNoop) }, func() any{ return gxscene.Style{FlexGrow:"1",} }, func() any{ return widgets.Text(gxscene.Props{"value": breadcrumbText(), "size": widgets.FontFootnote, "tone": "muted"}) }, func() any{ return gxscene.Style{Width:"8",} }, func() any{ return iconButton("panel", ToggleTerminal) }, func() any{ return iconButton("moon", ToggleTheme) })
+    return gxscene.Render(gxscene.Template{Ops:[]gxscene.Op{gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:0,},gxscene.Op{Code:gxscene.OpDynChild,Slot:1,},gxscene.Op{Code:gxscene.OpDynChild,Slot:2,},gxscene.Op{Code:gxscene.OpDynChild,Slot:3,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:4,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpDynChild,Slot:5,},gxscene.Op{Code:gxscene.OpDynChild,Slot:6,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:7,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpDynChild,Slot:8,},gxscene.Op{Code:gxscene.OpDynChild,Slot:9,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:10,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpDynChild,Slot:11,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:12,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpDynChild,Slot:13,},gxscene.Op{Code:gxscene.OpDynChild,Slot:14,},gxscene.Op{Code:gxscene.OpClose,},},N:15,}, func() any{ return gxscene.Style{FlexDirection:"row",AlignItems:"center",Gap:"6",Height:"36",Padding:"0 10",Background:chromeBg(),BorderWidth:widgets.HairlineWidth,Border:borderColor(),} }, func() any{ return iconButton("folder", ToggleProjectPanel) }, func() any{ return iconButton("doc", NewFile) }, func() any{ return iconButton("search", ideNoop) }, func() any{ return gxscene.Style{Width:"1",Height:"18",Background:borderColor(),} }, func() any{ return iconButton("chevron-left", PrevSample) }, func() any{ return iconButton("chevron-right", NextSample) }, func() any{ return gxscene.Style{Width:"1",Height:"18",Background:borderColor(),} }, func() any{ return runButton() }, func() any{ return iconButton("refresh", TriggerRun) }, func() any{ return gxscene.Style{FlexGrow:"1",} }, func() any{ return widgets.Text(gxscene.Props{"value": breadcrumbText(), "size": widgets.FontFootnote, "tone": "muted"}) }, func() any{ return gxscene.Style{Width:"8",} }, func() any{ return iconButton("panel", ToggleTerminal) }, func() any{ return iconButton("moon", ToggleTheme) })
 }
 
 // editorTabBar 编辑器标签页：当前文件高亮 + 关闭图标，紧贴代码区顶部。
 func editorTabBar() *gxscene.Instance {
-    return gxscene.Render(gxscene.Template{Ops:[]gxscene.Op{gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:0,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:1,},gxscene.Op{Code:gxscene.OpDynChild,Slot:2,},gxscene.Op{Code:gxscene.OpDynChild,Slot:3,},gxscene.Op{Code:gxscene.OpDynChild,Slot:4,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:5,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpClose,},},N:6,}, func() any{ return gxscene.Style{FlexDirection:"row",AlignItems:"flex-end",Height:"32",Background:chromeBg(),BorderWidth:widgets.HairlineWidth,Border:borderColor(),} }, func() any{ return gxscene.Style{FlexDirection:"row",AlignItems:"center",Gap:"8",Height:"31",Padding:"0 12",Background:canvasBg(),BorderWidth:widgets.HairlineWidth,Border:borderColor(),} }, func() any{ return widgets.Icon(gxscene.Props{"name": "doc", "size": 14, "tone": "blue"}) }, func() any{ return widgets.Text(gxscene.Props{"value": currentFileName(), "size": widgets.FontFootnote, "tone": "text"}) }, func() any{ return widgets.Icon(gxscene.Props{"name": "close", "size": 12, "tone": "muted"}) }, func() any{ return gxscene.Style{FlexGrow:"1",} })
+    return gxscene.Render(gxscene.Template{Ops:[]gxscene.Op{gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:0,},gxscene.Op{Code:gxscene.OpFor,Slot:1,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:2,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpClose,},},N:3,}, func() any{ return gxscene.Style{FlexDirection:"row",AlignItems:"flex-end",Height:"32",Background:chromeBg(),BorderWidth:widgets.HairlineWidth,Border:borderColor(),} }, gxscene.ForGetterOfSignal[string](func() []string { return tabs() },nil,func(t func() string) *gxscene.Instance { return tabItem(t) }), func() any{ return gxscene.Style{FlexGrow:"1",} })
+}
+
+// tabItem 单个编辑器标签：激活高亮 + 点击切换 + 关闭。
+func tabItem(name func() string) *gxscene.Instance {
+    act := name() == activeTabName()
+    tone := "muted"
+    bg := chromeBg()
+    if act {
+        tone = "text"
+        bg = canvasBg()
+    }
+    return gxscene.Render(gxscene.Template{Ops:[]gxscene.Op{gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpEvent,Key:"onClick",Slot:0,},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:1,},gxscene.Op{Code:gxscene.OpDynChild,Slot:2,},gxscene.Op{Code:gxscene.OpDynChild,Slot:3,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpEvent,Key:"onClick",Slot:4,},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:5,},gxscene.Op{Code:gxscene.OpDynChild,Slot:6,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpClose,},},N:7,}, func() any{ return func() { SwitchTab(name()) } }, func() any{ return gxscene.Style{FlexDirection:"row",AlignItems:"center",Gap:"8",Height:"31",Padding:"0 12",Background:bg,BorderWidth:widgets.HairlineWidth,Border:borderColor(),Cursor:"pointer",} }, func() any{ return widgets.Icon(gxscene.Props{"name": "doc", "size": 14, "tone": "blue"}) }, func() any{ return widgets.Text(gxscene.Props{"value": name(), "size": widgets.FontFootnote, "tone": tone}) }, func() any{ return func() { CloseTab(name()) } }, func() any{ return gxscene.Style{Width:"16",Height:"16",AlignItems:"center",JustifyContent:"center",Cursor:"pointer",BorderRadius:"8",Hover:&gxscene.Style{Background:widgets.UseToken("panelalt")(),},} }, func() any{ return widgets.Icon(gxscene.Props{"name": "close", "size": 12, "tone": "muted"}) })
 }
 
 // toolStripe 最左侧工具窗口竖栏（Project / Search / VCS / Settings），纯展示导航。
@@ -735,7 +859,8 @@ func statusBar() *gxscene.Instance {
 // 左右分隔条 (gx-splitter-v) 调整 Project 宽度，水平分隔条 (gx-splitter-h) 调整 Terminal 高度。
 
  func Playground() *gxscene.Instance {
-    return gxscene.Render(gxscene.Template{Ops:[]gxscene.Op{gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:0,},gxscene.Op{Code:gxscene.OpDynChild,Slot:1,},gxscene.Op{Code:gxscene.OpDynChild,Slot:2,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:3,},gxscene.Op{Code:gxscene.OpDynChild,Slot:4,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:5,},gxscene.Op{Code:gxscene.OpDynChild,Slot:6,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpAttr,Arg:"gx-splitter-v",Key:"class",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:7,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:8,},gxscene.Op{Code:gxscene.OpDynChild,Slot:9,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:10,},gxscene.Op{Code:gxscene.OpDynChild,Slot:11,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpAttr,Arg:"gx-splitter-h",Key:"class",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:12,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpDynChild,Slot:13,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpDynChild,Slot:14,},gxscene.Op{Code:gxscene.OpClose,},},N:15,}, func() any{ return gxscene.Style{Background:canvasBg(),Color:textColor(),Padding:"0",FlexDirection:"column",Gap:"0",Width:"1400",Height:"860",Overflow:"hidden",} }, func() any{ return menuBar() }, func() any{ return ideToolbar() }, func() any{ return gxscene.Style{FlexDirection:"row",Gap:"0",FlexGrow:"1",Height:"768",} }, func() any{ return toolStripe() }, func() any{ return gxscene.Style{Background:panelBg(),Padding:"4 6",Width:projectWidthPx(),FlexShrink:"0",FlexDirection:"column",Gap:"4",BorderWidth:widgets.HairlineWidth,Border:borderColor(),Overflow:"hidden",} }, func() any{ return projectPanel() }, func() any{ return gxscene.Style{Width:"6",FlexShrink:"0",Cursor:"col-resize",Background:splitActiveBg(),Hover:&gxscene.Style{Background:accentColor(),},} }, func() any{ return gxscene.Style{FlexDirection:"column",Gap:"0",FlexGrow:"1",MinWidth:"0",} }, func() any{ return editorTabBar() }, func() any{ return gxscene.Style{FlexDirection:"column",Gap:"0",Height:editorAreaPx(),FlexShrink:"0",Overflow:"hidden",Background:canvasBg(),} }, func() any{ return Editor() }, func() any{ return gxscene.Style{Height:"6",FlexShrink:"0",Cursor:"row-resize",Background:splitActiveBg(),Hover:&gxscene.Style{Background:accentColor(),},} }, func() any{ return TerminalView() }, func() any{ return statusBar() })
+    return gxscene.Render(gxscene.Template{Ops:[]gxscene.Op{gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:0,},gxscene.Op{Code:gxscene.OpDynChild,Slot:1,},gxscene.Op{Code:gxscene.OpDynChild,Slot:2,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:3,},gxscene.Op{Code:gxscene.OpDynChild,Slot:4,},gxscene.Op{Code:gxscene.OpBranch,Slot:5,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:6,},gxscene.Op{Code:gxscene.OpDynChild,Slot:7,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:8,},gxscene.Op{Code:gxscene.OpDynChild,Slot:9,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpAttr,Arg:"gx-splitter-h",Key:"class",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:10,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpDynChild,Slot:11,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpDynChild,Slot:12,},gxscene.Op{Code:gxscene.OpClose,},},N:13,}, func() any{ return gxscene.Style{Background:canvasBg(),Color:textColor(),Padding:"0",FlexDirection:"column",Gap:"0",Width:"1400",Height:"860",Overflow:"hidden",} }, func() any{ return menuBar() }, func() any{ return ideToolbar() }, func() any{ return gxscene.Style{FlexDirection:"row",Gap:"0",FlexGrow:"1",Height:"768",} }, func() any{ return toolStripe() }, gxscene.BranchGetter(func() int{if projectPanelVisible() { return 0 }
+return 1 }, func() *gxscene.Instance { return gxscene.Render(gxscene.Template{Ops:[]gxscene.Op{gxscene.Op{Code:gxscene.OpElem,Arg:"#frag",},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:0,},gxscene.Op{Code:gxscene.OpDynChild,Slot:1,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpAttr,Arg:"gx-splitter-v",Key:"class",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:2,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpClose,},},N:3,}, func() any{ return gxscene.Style{Background:panelBg(),Padding:"4 6",Width:projectWidthPx(),FlexShrink:"0",FlexDirection:"column",Gap:"4",BorderWidth:widgets.HairlineWidth,Border:borderColor(),Overflow:"hidden",} }, func() any{ return projectPanel() }, func() any{ return gxscene.Style{Width:"6",FlexShrink:"0",Cursor:"col-resize",Background:splitActiveBg(),Hover:&gxscene.Style{Background:accentColor(),},} }) }, func() *gxscene.Instance { return gxscene.Render(gxscene.Template{Ops:[]gxscene.Op{gxscene.Op{Code:gxscene.OpElem,Arg:"#frag",},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpClose,},},N:0,}) }), func() any{ return gxscene.Style{FlexDirection:"column",Gap:"0",FlexGrow:"1",MinWidth:"0",} }, func() any{ return editorTabBar() }, func() any{ return gxscene.Style{FlexDirection:"column",Gap:"0",Height:editorAreaPx(),FlexShrink:"0",Overflow:"hidden",Background:canvasBg(),} }, func() any{ return Editor() }, func() any{ return gxscene.Style{Height:"6",FlexShrink:"0",Cursor:"row-resize",Background:splitActiveBg(),Hover:&gxscene.Style{Background:accentColor(),},} }, func() any{ return TerminalView() }, func() any{ return statusBar() })
 }
 // ---- 编辑器命令转发（装配层 ui.Editor* API 保持兼容）----
 

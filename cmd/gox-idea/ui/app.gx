@@ -125,6 +125,107 @@ pub func ToggleTerminal() { Signal.batch(func() { layoutTerminalOpen = !layoutTe
 // SetSplitDragging 由装配层在分隔条按下/松开时切换高亮反馈。
 pub func SetSplitDragging(on bool) { Signal.batch(func() { layoutSplitActive = on }) }
 
+// ---- 多标签编辑器（WebStorm 式 editor tabs）----
+// tabs/activeTabName 是响应面（tab 条 For 渲染）；文件内容缓存在普通 map，
+// 切换时读回，关闭即清理，避免结构 sig 装进切片的引用语义坑。
+
+sig tabs = []string{}
+sig activeTabName = ""
+var tabSources = map[string]string{}
+var tabPaths = map[string]string{}
+
+func tabIndexOf(name string) int {
+    for i, n := range tabs {
+        if n == name { return i }
+    }
+    return -1
+}
+
+pub func TabNames() []string { return tabs }
+pub func ActiveTabName() string { return activeTabName }
+
+func saveActiveTab() {
+    if activeTabName != "" {
+        tabSources[activeTabName] = EditorText()
+    }
+}
+
+// OpenTab 打开（或激活已开的）标签。同名复用不重复追加。
+pub func OpenTab(name string, path string, source string) {
+    if name == "" { return }
+    if tabIndexOf(name) >= 0 {
+        SwitchTab(name)
+        return
+    }
+    saveActiveTab()
+    tabSources[name] = source
+    tabPaths[name] = path
+    tabs = append(tabs, name)
+    activeTabName = name
+    Signal.batch(func() {
+        EditorSetText(source)
+        EditorHome()
+        EditorFocus()
+    })
+}
+
+pub func SwitchTab(name string) {
+    if name == "" || name == activeTabName { return }
+    if tabIndexOf(name) < 0 { return }
+    saveActiveTab()
+    activeTabName = name
+    Signal.batch(func() {
+        EditorSetText(tabSources[name])
+        EditorHome()
+        EditorFocus()
+    })
+}
+
+pub func CloseTab(name string) {
+    idx := tabIndexOf(name)
+    if idx < 0 { return }
+    wasActive := activeTabName == name
+    tabs = append(tabs[:idx], tabs[idx+1:]...)
+    tabSources[name] = ""
+    tabPaths[name] = ""
+    if !wasActive { return }
+    if len(tabs) > 0 {
+        pick := idx - 1
+        if pick < 0 { pick = 0 }
+        if pick >= len(tabs) { pick = len(tabs) - 1 }
+        SwitchTab(tabs[pick])
+    } else {
+        activeTabName = ""
+        EditorSetText("")
+    }
+}
+
+pub func CloseAllTabs() {
+    for len(tabs) > 0 {
+        CloseTab(tabs[0])
+    }
+}
+
+// ---- 底部工具窗标签（Terminal / Run / Problems 真切换）----
+
+sig bottomTab = "Terminal"
+
+pub func SetBottomTab(t string) { bottomTab = t }
+pub func BottomTab() string { return bottomTab }
+
+// problemsText 是 Problems 页数据源：当前 Run 的真实错误，没有就报无问题。
+func problemsText() string {
+    if runErr != "" { return "✗ " + runErr }
+    return "No problems detected"
+}
+
+// ---- 项目面板显隐（工具栏 folder 按钮的真动作）----
+
+sig projectPanelVisible = true
+
+pub func SetProjectPanelVisible(v bool) { projectPanelVisible = v }
+pub func ToggleProjectPanel() { projectPanelVisible = !projectPanelVisible }
+
 // ---- 进程内终端（代码区下方，Run 输出落地于此）----
 // 与 gox-term 独立 shell 不同：这是 IDEA 的控制台面板，展示解释/构建输出。
 var terminalState = widgets.NewTerminal()
@@ -161,17 +262,36 @@ func TerminalView() *gxscene.Instance {
         <div
             style={{ flexDirection: "row", gap: 16, alignItems: "center", padding: "4 12", background: panelBg() }}
         >
-            {widgets.Text(gxscene.Props{"value": "Terminal", "size": termTabSize, "weight": "bold", "tone": accentColor()})}
-            {widgets.Text(gxscene.Props{"value": "Run", "size": termTabSize, "tone": "muted"})}
-            {widgets.Text(gxscene.Props{"value": "Problems", "size": termTabSize, "tone": "muted"})}
+            {bottomTabItem("Terminal")}{bottomTabItem("Run")}{bottomTabItem("Problems")}
             <div style={{ flexGrow: 1 }}/>
             {widgets.Text(gxscene.Props{"value": terminalLines(), "size": termTabSize, "tone": "muted"})}
         </div>
         <div
             style={{ background: canvasBg(), padding: "6 12", height: terminalHeightPx(), overflow: "auto", fontSize: termTabSize, fontFamily: termOutFont, color: widgets.UseToken("success")() }}
         >
-            {widgets.Text(gxscene.Props{"value": terminalText(), "size": termTabSize, "tone": "muted"})}
+            if bottomTab == "Problems" {
+                {widgets.Text(gxscene.Props{"value": problemsText(), "size": termTabSize, "tone": "muted"})}
+            } else {
+                {widgets.Text(gxscene.Props{"value": terminalText(), "size": termTabSize, "tone": "muted"})}
+            }
         </div>
+    </div>
+}
+
+// bottomTabItem 底部工具窗标签：点击切换，激活态 accent 加粗。
+func bottomTabItem(label string) *gxscene.Instance {
+    act := bottomTab == label
+    tone := "muted"
+    weight := "normal"
+    if act {
+        tone = accentColor()
+        weight = "bold"
+    }
+    return <div
+        onClick={() => SetBottomTab(label)}
+        style={{ padding: "2 6", cursor: "pointer", borderRadius: widgets.RadiusSmall, hover: { background: widgets.UseToken("panelalt")() } }}
+    >
+        {widgets.Text(gxscene.Props{"value": label, "size": termTabSize, "weight": weight, "tone": tone})}
     </div>
 }
 
@@ -226,11 +346,10 @@ pub func loadSample(i int) {
     runErr = ""
     Signal.batch(func() {
         sampleIndex = i
-        EditorSetText(xs[i].source)
-        EditorHome()
-        EditorFocus()
         runningSig = false
     })
+    // 标签化：示例文件同样进 tab 条（磁盘模式点文件走 onProjectRowClick）。
+    OpenTab(xs[i].name + ".gx", "", xs[i].source)
 }
 
 pub func nextSample() { loadSample(sampleIndex + 1) }
@@ -521,9 +640,7 @@ func onProjectRowClick(n projectNode) {
                 content = projectFileReader(n.path)
             }
             projectFileSelected = n.path
-            EditorSetText(content)
-            EditorHome()
-            EditorFocus()
+            OpenTab(n.label, n.path, content)
         } else {
             projectFileSelected = ""
             loadSample(n.sample)
@@ -705,12 +822,7 @@ pub func MenuName() string { return openMenu }
 pub func NewFile() {
     runInstance = nil
     runErr = ""
-    Signal.batch(func() {
-        EditorSetText("package main\n\nfunc main() {\n    println(\"hello, gox\")\n}\n")
-        EditorHome()
-        EditorFocus()
-        runningSig = false
-    })
+    OpenTab("untitled.gx", "", "package main\n\nfunc main() {\n    println(\"hello, gox\")\n}\n")
 }
 
 // menuRow 菜单项：点击执行命令并收起菜单。
@@ -755,6 +867,16 @@ func menuTrigger(label string, name string) *gxscene.Instance {
     </div>
 }
 
+func editMenuContent() *gxscene.Instance {
+    return menuBox(func() any {
+        return <div style={{ flexDirection: "column" }}>
+            {menuRow("Undo", EditorUndo)}
+            {menuRow("Redo", EditorRedo)}
+            {menuRow("Select All", EditorSelectAll)}
+        </div>
+    })
+}
+
 func fileMenuContent() *gxscene.Instance {
     return menuBox(func() any {
         return <div style={{ flexDirection: "column" }}>
@@ -787,7 +909,7 @@ func menuBar() *gxscene.Instance {
     return <div
         style={{ flexDirection: "row", alignItems: "center", gap: 14, height: 30, padding: "0 12", background: chromeBg(), borderWidth: widgets.HairlineWidth, border: borderColor() }}
     >
-        {menuPopup("File", "File", fileMenuContent)}{menuItem("Edit")}{menuPopup("View", "View", viewMenuContent)}{menuItem("Navigate")}
+        {menuPopup("File", "File", fileMenuContent)}{menuPopup("Edit", "Edit", editMenuContent)}{menuPopup("View", "View", viewMenuContent)}{menuItem("Navigate")}
         {menuItem("Code")}{menuItem("Refactor")}{menuPopup("Run", "Run", runMenuContent)}{menuItem("Tools")}
         {menuItem("Git")}{menuItem("Window")}{menuItem("Help")}
         <div style={{ flexGrow: 1 }}/>
@@ -836,11 +958,11 @@ func ideToolbar() *gxscene.Instance {
     return <div
         style={{ flexDirection: "row", alignItems: "center", gap: 6, height: 36, padding: "0 10", background: chromeBg(), borderWidth: widgets.HairlineWidth, border: borderColor() }}
     >
-        {iconButton("folder", ideNoop)}{iconButton("doc", ideNoop)}{iconButton("search", ideNoop)}
+        {iconButton("folder", ToggleProjectPanel)}{iconButton("doc", NewFile)}{iconButton("search", ideNoop)}
         <div style={{ width: 1, height: 18, background: borderColor() }}/>
         {iconButton("chevron-left", prevSample)}{iconButton("chevron-right", nextSample)}
         <div style={{ width: 1, height: 18, background: borderColor() }}/>
-        {runButton()}{iconButton("refresh", ideNoop)}
+        {runButton()}{iconButton("refresh", TriggerRun)}
         <div style={{ flexGrow: 1 }}/>
         {widgets.Text(gxscene.Props{"value": breadcrumbText(), "size": widgets.FontFootnote, "tone": "muted"})}
         <div style={{ width: 8 }}/>
@@ -853,14 +975,34 @@ func editorTabBar() *gxscene.Instance {
     return <div
         style={{ flexDirection: "row", alignItems: "flex-end", height: 32, background: chromeBg(), borderWidth: widgets.HairlineWidth, border: borderColor() }}
     >
+        <For each={tabs}>
+            {(t string) => tabItem(t)}
+        </For>
+        <div style={{ flexGrow: 1 }}/>
+    </div>
+}
+
+// tabItem 单个编辑器标签：激活高亮 + 点击切换 + 关闭。
+func tabItem(name func() string) *gxscene.Instance {
+    act := name() == activeTabName
+    tone := "muted"
+    bg := chromeBg()
+    if act {
+        tone = "text"
+        bg = canvasBg()
+    }
+    return <div
+        onClick={() => SwitchTab(name())}
+        style={{ flexDirection: "row", alignItems: "center", gap: 8, height: 31, padding: "0 12", background: bg, borderWidth: widgets.HairlineWidth, border: borderColor(), cursor: "pointer" }}
+    >
+        {widgets.Icon(gxscene.Props{"name": "doc", "size": 14, "tone": "blue"})}
+        {widgets.Text(gxscene.Props{"value": name(), "size": widgets.FontFootnote, "tone": tone})}
         <div
-            style={{ flexDirection: "row", alignItems: "center", gap: 8, height: 31, padding: "0 12", background: canvasBg(), borderWidth: widgets.HairlineWidth, border: borderColor() }}
+            onClick={func() { CloseTab(name()) }}
+            style={{ width: 16, height: 16, alignItems: "center", justifyContent: "center", cursor: "pointer", borderRadius: 8, hover: { background: widgets.UseToken("panelalt")() } }}
         >
-            {widgets.Icon(gxscene.Props{"name": "doc", "size": 14, "tone": "blue"})}
-            {widgets.Text(gxscene.Props{"value": currentFileName(), "size": widgets.FontFootnote, "tone": "text"})}
             {widgets.Icon(gxscene.Props{"name": "close", "size": 12, "tone": "muted"})}
         </div>
-        <div style={{ flexGrow: 1 }}/>
     </div>
 }
 
@@ -923,15 +1065,19 @@ pub func Playground() *gxscene.Instance {
         {menuBar()}{ideToolbar()}
         <div style={{ flexDirection: "row", gap: 0, flexGrow: 1, height: 768 }}>
             {toolStripe()}
-            <div
-                style={{ background: panelBg(), padding: "4 6", width: projectWidthPx(), flexShrink: 0, flexDirection: "column", gap: 4, borderWidth: widgets.HairlineWidth, border: borderColor(), overflow: "hidden" }}
-            >
-                {projectPanel()}
-            </div>
-            <div
-                class="gx-splitter-v"
-                style={{ width: 6, flexShrink: 0, cursor: "col-resize", background: splitActiveBg(), hover: { background: accentColor() } }}
-            />
+            if projectPanelVisible {
+                <div
+                    style={{ background: panelBg(), padding: "4 6", width: projectWidthPx(), flexShrink: 0, flexDirection: "column", gap: 4, borderWidth: widgets.HairlineWidth, border: borderColor(), overflow: "hidden" }}
+                >
+                    {projectPanel()}
+                </div>
+                <div
+                    class="gx-splitter-v"
+                    style={{ width: 6, flexShrink: 0, cursor: "col-resize", background: splitActiveBg(), hover: { background: accentColor() } }}
+                />
+            } else {
+                <div/>
+            }
             <div style={{ flexDirection: "column", gap: 0, flexGrow: 1, minWidth: 0 }}>
                 {editorTabBar()}
                 <div
