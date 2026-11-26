@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# shim：ImageMagick import -window root PATH → 跨平台截图。
+# 只认脚本用到的 "-window root PATH" 形式，其余原样回退到真实 import。
+if [ "$1" = "-window" ] && [ "$2" = "root" ] && [ -n "${3:-}" ]; then
+  exec python3 "$(cd "$(dirname "$0")/.." && pwd)/gui_driver.py" screenshot "$3"
+fi
+exec /usr/bin/import "$@"

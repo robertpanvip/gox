@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# shim：把 xclip 原始命令行转发给跨平台驱动（stdin/stdout 为剪贴板内容）。
+exec python3 "$(cd "$(dirname "$0")/.." && pwd)/gui_driver.py" xclip "$@"

@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# shim：Windows 无 Xvfb，用真实桌面，因此这里 no-op。
+# 保持后台存活（脚本会把它当后台进程 kill），sleep 足够长即可。
+sleep 3600
