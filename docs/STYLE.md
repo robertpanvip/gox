@@ -264,3 +264,35 @@ Rust 端统一语义入口是 `text_effects.rs`（`parse_linear_gradient` / `gra
 - 新增组件单测：`widgets/` 下 context/theme + tooltip/form_container/timepicker/table/filepicker 各自 `_test.go`；FilePicker 用 mock Dialog 验证契约回传；Theme 测试覆盖令牌解析、`SetTheme` 驱动插槽重绘。
 - 窗口配置单测：`runtime/app/windowconfig_test.go`（默认值语义 / 三态 helper）、`backend/rust/go/windowconfig_test.go`（`decoratedC` 三态翻译）。
 - 端到端截图：`examples/skia-style-demo` 展示 absolute 徽标、阴影卡片、transition 进度条、1000 项虚拟滚动列表、5 个企业级组件、Context/Theme 切换区；`preview-enterprise.png` 与 `preview-context-theme.png` 两张确认。无边框配置经 `GX_NODECOR=1` 验证无系统标题栏、无崩溃。
+
+## 14. 三端消费矩阵：struct 白名单与后端实际消费面
+
+host（struct/JSX）是三端样式白名单的**上界**，但三端对同一属性的消费面 historically 存在差异。现状（2026-11 补齐后）：
+
+| 属性组 | Web/DOM | Skia/Yoga | Rust/Taffy |
+|---|---|---|---|
+| color/bg/width/height/font-size/padding/opacity | ✅ | ✅（1~4 值简写） | ✅（1~4 值简写） |
+| border/border-radius/box-shadow/transform/transition/animation | ✅ | ✅ | ✅ |
+| flex-direction/justify-content/align-items/gap | ✅ | ✅ | ✅ |
+| flex-wrap/align-content/row-gap/column-gap | ✅ | ✅ | ✅（修正：旧版拿 column-gap 顶替 gap） |
+| flex-grow/flex-shrink | ✅ | ✅ | ✅（显式 prop 覆盖 scrollable 默认值） |
+| margin（简写 + 四边）/ min/max-width/height | ✅ | ✅ | ✅ |
+| font-family / font-weight | ✅ | ✅（数值 ≥600 为粗体，font-weight 优先于 weight） | ✅（cosmic-text Weight） |
+| text-align / line-height / white-space | ✅ | ✅（绘制落笔 + measure 同口径） | ✅（对齐偏移 + Metrics.line_height） |
+| z-index | ✅ | ✅（绘制/命中顺序稳定排序） | ✅（emit 顺序稳定排序） |
+| pointer-events / cursor | ✅ | ✅（HitBox 过滤 + Cursor 字段 → glwindow 切换系统光标） | ✅（hitbox 过滤 + cursor 随命中框透出） |
+| 伪状态 hover/focus/active/disabled + ::selection | ✅ | ✅ | ✅ |
+
+### 三端一致的文本语义细节
+
+- **white-space**：默认（未声明/pre/pre-wrap）**逐字节渲染**（编辑器代码行缩进依赖原样空格）；显式 `normal`/`nowrap` 才折叠空白（连续空白 → 单空格、去首尾）。测量与绘制同口径（Go `collapseWhitespace` + `buildYogaTree` measure / Rust `collapse_whitespace` + `TextMeasure`）。
+- **line-height**：无单位数值（<4）按字号倍数、带 px 的数值按绝对像素；沿继承链传递。Skia 的 measure 高度与绘制基线共用 `textStyle.lineH()`；Rust 的 `TextMeasure.line_height` 与 glyphon `Metrics.line_height` 同源。
+- **text-align**：盒宽大于内容宽时 center/right 生效（Skia `alignOffset` + 落笔平移；Rust `align_offset` + TextDraw.x 偏移）。
+- **z-index**：只重排绘制/命中顺序，不影响布局；负值垫底、正值置顶、同值保持文档序（稳定排序）。
+- **pointer-events**：`none` 仅豁免节点**自身**命中（仍绘制），后代不受影响——与 CSS 命中语义一致。
+- **cursor**：CSS 关键字映射（pointer/hand→手型、text→I-beam、crosshair、ew-resize/ns-resize 等），由窗口集成层消费（Go `glwindow.updateHoverCursor` / Rust hitbox 第 9 元素）。
+
+### 验证
+
+- Go：`backend/skia/style_text_parity_test.go`（字重数值/优先级、text-align 落笔、line-height 行盒、空白折叠、z-index 绘制顺序、pointer-events 命中豁免、cursor 透出）。
+- Rust：`style.rs::parity_tests`（edges 简写/空白折叠/字重解析/对齐偏移/z-index 解析）+ `render.rs::parity_tests`（TextDraw 的对齐/行高/继承、z-index 绘制顺序、hitbox cursor/pointer-events、text_sig 字重失效）。

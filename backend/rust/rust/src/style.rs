@@ -49,6 +49,8 @@ pub struct Style {
     pub transform: Transform,
     pub shadow: Option<BoxShadow>,
     pub transition: Vec<TransitionItem>,
+    /// 绘制层级（z-index）：不影响 Taffy 布局，emit 时按值稳定排序绘制/命中顺序。
+    pub z_index: i32,
 }
 impl Default for Style {
     fn default() -> Self {
@@ -57,6 +59,7 @@ impl Default for Style {
             inset: [f32::NAN; 4], overflow: Overflow::Visible,
             scroll_top: 0.0, scroll_left: 0.0,
             transform: Transform::default(), shadow: None, transition: vec![],
+            z_index: 0,
         }
     }
 }
@@ -124,6 +127,72 @@ pub fn parse_px(s: &str) -> Option<f32> {
     s.trim().trim_end_matches("px").trim().parse::<f32>().ok()
 }
 
+/// CSS 1~4 值简写解析（padding/margin 通用）：1 值=四边，2 值=上下/左右，
+/// 3 值=上/左右/下，4 值=上右下左。返回 [top, right, bottom, left]。
+/// 任一分量非法则整体返回 None（与 Go 端 cssbox.Float32s 语义一致）。
+pub fn parse_edges(s: &str) -> Option<[f32; 4]> {
+    let parts: Vec<f32> = s.split_whitespace()
+        .map(|t| t.trim().trim_end_matches("px").trim().parse::<f32>())
+        .collect::<Result<_, _>>().ok()?;
+    match parts.len() {
+        1 => { let v = parts[0]; Some([v, v, v, v]) }
+        2 => Some([parts[0], parts[1], parts[0], parts[1]]),
+        3 => Some([parts[0], parts[1], parts[2], parts[1]]),
+        4 => Some([parts[0], parts[1], parts[2], parts[3]]),
+        _ => None,
+    }
+}
+
+/// CSS white-space:normal/nowrap 折叠语义：连续空白折叠成单个空格并去首尾。
+/// 默认（未声明/pre/pre-wrap）保持逐字节渲染——编辑器代码行缩进依赖原样空格。
+pub fn collapse_whitespace(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// 报告 white-space 值是否启用空白折叠。
+pub fn white_space_collapses(v: &str) -> bool {
+    matches!(v.trim().to_ascii_lowercase().as_str(), "normal" | "nowrap")
+}
+
+/// 从 props 解析字重：font-weight（CSS 标准）优先，weight（仓库历史约定）兜底。
+/// "bold"/"bolder" → 700；数值 100..900 原样（clamp 到合法区间）。未声明返回 None。
+pub fn font_weight_from_props(props: &std::collections::HashMap<String, String>) -> Option<u32> {
+    let raw = props.get("font-weight").or_else(|| props.get("weight"))?;
+    let t = raw.trim().to_ascii_lowercase();
+    if t.is_empty() { return None; }
+    if t == "bold" || t == "bolder" { return Some(700); }
+    if t == "normal" || t == "lighter" { return Some(400); }
+    let v: f32 = t.trim_end_matches("px").parse().ok()?;
+    Some(v.clamp(100.0, 900.0) as u32)
+}
+
+/// text-align 值 → 0=left/start（默认）、1=center、2=right/end。
+pub fn text_align_of(s: &str) -> u8 {
+    match s.trim().to_ascii_lowercase().as_str() {
+        "center" => 1,
+        "right" | "end" => 2,
+        _ => 0,
+    }
+}
+
+/// line-height 解析：无单位数值（<4，如 1.5）按字号倍数；带 px 的数值（>=4）
+/// 按绝对像素。返回 (倍数, 像素)，未设置/非法返回 (0.0, 0.0)。
+pub fn line_height_of(s: &str) -> (f32, f32) {
+    let Some(v) = parse_px(s) else { return (0.0, 0.0) };
+    if v <= 0.0 { return (0.0, 0.0); }
+    if v < 4.0 { (v, 0.0) } else { (0.0, v) }
+}
+
+/// CSS text-align 落笔偏移：内容宽 tw 小于盒宽 w 时 center/right 生效。
+pub fn align_offset(align: u8, w: f32, tw: f32) -> f32 {
+    if tw <= 0.0 || tw >= w { return 0.0; }
+    match align {
+        1 => (w - tw) / 2.0,
+        2 => w - tw,
+        _ => 0.0,
+    }
+}
+
 fn prop<'a>(n: &'a SceneNode, k: &str) -> Option<&'a str> {
     n.props.get(k).map(|s| s.as_str())
 }
@@ -159,6 +228,7 @@ pub fn parse_style(n: &SceneNode) -> Style {
         }
     }
     if let Some(v) = prop(n, "transition") { s.transition = parse_transition(v); }
+    if let Some(v) = prop(n, "z-index").and_then(num) { s.z_index = v as i32; }
     s
 }
 
@@ -718,5 +788,79 @@ mod tests {
         assert_eq!(out1.props["opacity"], "0.000");
         // 常驻树不被污染
         assert!(!n.props.contains_key("opacity"));
+    }
+}
+
+#[cfg(test)]
+mod parity_tests {
+    use super::*;
+    use crate::binprotocol::NodeType;
+
+    #[test]
+    fn parse_edges_shorthand() {
+        assert_eq!(parse_edges("10"), Some([10.0, 10.0, 10.0, 10.0]));
+        assert_eq!(parse_edges("10 20"), Some([10.0, 20.0, 10.0, 20.0]));
+        assert_eq!(parse_edges("1 2 3"), Some([1.0, 2.0, 3.0, 2.0]));
+        assert_eq!(parse_edges("1 2 3 4"), Some([1.0, 2.0, 3.0, 4.0]));
+        assert_eq!(parse_edges("10px 20px"), Some([10.0, 20.0, 10.0, 20.0]));
+        assert_eq!(parse_edges("junk"), None);
+        assert_eq!(parse_edges("1 2 x"), None);
+    }
+
+    #[test]
+    fn whitespace_collapse_semantics() {
+        assert_eq!(collapse_whitespace("  a \t b\nc  "), "a b c");
+        assert!(white_space_collapses("normal"));
+        assert!(white_space_collapses("NOWRAP"));
+        assert!(!white_space_collapses(""));
+        assert!(!white_space_collapses("pre"));
+        assert!(!white_space_collapses("pre-wrap"));
+    }
+
+    #[test]
+    fn font_weight_parsing() {
+        let mut p = std::collections::HashMap::new();
+        // font-weight 优先于 weight
+        p.insert("font-weight".into(), "500".into());
+        p.insert("weight".into(), "bold".into());
+        assert_eq!(font_weight_from_props(&p), Some(500));
+        p.insert("font-weight".into(), "bold".into());
+        assert_eq!(font_weight_from_props(&p), Some(700));
+        p.remove("font-weight");
+        assert_eq!(font_weight_from_props(&p), Some(700), "weight 兜底");
+        p.insert("weight".into(), "900".into());
+        assert_eq!(font_weight_from_props(&p), Some(900));
+        p.insert("weight".into(), "50".into());
+        assert_eq!(font_weight_from_props(&p), Some(100), "clamp 到 100");
+        p.insert("weight".into(), "normal".into());
+        assert_eq!(font_weight_from_props(&p), Some(400));
+    }
+
+    #[test]
+    fn text_align_line_height_helpers() {
+        assert_eq!(text_align_of("center"), 1);
+        assert_eq!(text_align_of("Right"), 2);
+        assert_eq!(text_align_of("end"), 2);
+        assert_eq!(text_align_of("start"), 0);
+        assert_eq!(text_align_of("junk"), 0);
+        assert_eq!(line_height_of("1.5"), (1.5, 0.0));
+        assert_eq!(line_height_of("24px"), (0.0, 24.0));
+        assert_eq!(line_height_of("30"), (0.0, 30.0), "无 px 的 30 视作绝对值");
+        assert_eq!(line_height_of("junk"), (0.0, 0.0));
+        assert!((align_offset(1, 100.0, 40.0) - 30.0).abs() < 0.01);
+        assert!((align_offset(2, 100.0, 40.0) - 60.0).abs() < 0.01);
+        assert_eq!(align_offset(0, 100.0, 40.0), 0.0);
+        assert_eq!(align_offset(1, 40.0, 40.0), 0.0, "内容填满盒时无偏移");
+    }
+
+    #[test]
+    fn z_index_parsed_into_style() {
+        let mut props = std::collections::HashMap::new();
+        props.insert("z-index".to_string(), "-5".to_string());
+        let n = crate::scene::SceneNode {
+            typ: NodeType::Div, kind: "div".into(), id: "n".into(), text: String::new(),
+            props, events: vec![], children: vec![],
+        };
+        assert_eq!(parse_style(&n).z_index, -5);
     }
 }

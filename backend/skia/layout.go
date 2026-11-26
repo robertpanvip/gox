@@ -64,9 +64,14 @@ type fontMeasurer func(text string, fontSize int, bold bool, family string) (wid
 
 // skiaMeasureFunc 返回绑定到指定文本/字体的 Yoga measure 回调。
 // Yoga 在 measure 时可能传入可用宽度（AtMost/Exactly），这里文本不换行，直接返回固有尺寸。
-func skiaMeasureFunc(text string, fontSize int, bold bool, family string, measure fontMeasurer) yoga.MeasureFunc {
+// lineHeight 是折算后的行盒高度（像素，0=默认 1.3 倍字号），必须与绘制端 paintText
+// 的 st.lineH() 同口径，否则布局高度与绘制基线错位。
+func skiaMeasureFunc(text string, fontSize int, bold bool, family string, lineHeight float32, measure fontMeasurer) yoga.MeasureFunc {
 	w := measure(text, fontSize, bold, family)
-	h := float32(fontSize) * 1.3
+	h := lineHeight
+	if h <= 0 {
+		h = float32(fontSize) * 1.3
+	}
 	return func(node *yoga.Node, width float32, widthMode yoga.MeasureMode,
 		height float32, heightMode yoga.MeasureMode) yoga.Size {
 		return yoga.Size{Width: w, Height: h}
@@ -187,7 +192,12 @@ func buildYogaTree(n *gxscene.Node, measure fontMeasurer, inherited textStyle) (
 
 	switch n.Type {
 	case gxscene.NodeText:
-		yn.SetMeasureFunc(skiaMeasureFunc(n.Text, eff.fontSize, eff.bold, eff.family, measure))
+		// white-space:normal/nowrap 与绘制端同口径折叠空白，保证测量与落笔一致。
+		text := n.Text
+		if whiteSpaceCollapses(eff.whiteSpace) {
+			text = collapseWhitespace(text)
+		}
+		yn.SetMeasureFunc(skiaMeasureFunc(text, eff.fontSize, eff.bold, eff.family, eff.lineH(), measure))
 		return yn, pairs
 	case gxscene.NodeFragment:
 		// 透明包装（#root/#frag/组件槽）：用 CSS display:contents 语义——自身不产生

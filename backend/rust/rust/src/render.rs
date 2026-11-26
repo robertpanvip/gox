@@ -5,7 +5,7 @@ use crate::binprotocol::NodeType;
 use crate::protocol::InputEvent;
 use glyphon::{
     Attrs, Buffer, Cache, Color, Family, FontSystem, Metrics, Resolution, Shaping, SwashCache,
-    TextArea, TextAtlas, TextBounds, TextRenderer, Viewport,
+    TextArea, TextAtlas, TextBounds, TextRenderer, Viewport, Weight,
 };
 use wgpu::{
     BindGroup, BindGroupDescriptor, BindGroupEntry, BindGroupLayoutDescriptor,
@@ -21,9 +21,11 @@ use wgpu::{
 };
 use winit::window::Window;
 
-// 文本测量上下文：继承后的字号 + 文本内容。Taffy 在布局期回调测宽。
+// 文本测量上下文：继承后的字号 + 行高（像素，0=默认 1.35×size）+ 文本内容。
+// Taffy 在布局期回调测宽。行高与折叠语义必须与 emit/绘制端同口径，否则
+// 布局高度与文字落点错位。
 #[derive(Clone)]
-struct TextMeasure { text: String, size: f32 }
+struct TextMeasure { text: String, size: f32, line_height: f32 }
 
 fn measure_text(
     known: taffy::geometry::Size<Option<f32>>,
@@ -34,11 +36,12 @@ fn measure_text(
         return taffy::geometry::Size { width: w, height: h };
     }
     let Some(c) = ctx else { return taffy::geometry::Size::ZERO; };
-    // CJK/全角按 1em，ASCII 按 0.56em，行高 1.35em。
+    // CJK/全角按 1em，ASCII 按 0.56em，行高 1.35em（或显式 line-height）。
     let w = c.text.chars()
         .map(|ch| if ch.is_ascii() { 0.56 } else { 1.0 })
         .sum::<f32>() * c.size;
-    taffy::geometry::Size { width: w, height: c.size * 1.35 }
+    let h = if c.line_height > 0.0 { c.line_height } else { c.size * 1.35 };
+    taffy::geometry::Size { width: w, height: h }
 }
 
 // ---------- 浮层（popover/modal/portal/scrim）协议辅助 ----------
@@ -348,6 +351,11 @@ struct TextDraw {
     selection: Option<SelectionDraw>,
     /// font-family 解析出的族名；None 表示默认 SansSerif。
     family: Option<String>,
+    /// font-weight 数值（100..900）；None 表示默认字重。纳入 text_sig：
+    /// 字重影响字形选择，必须重新 shape。
+    weight: Option<u32>,
+    /// line-height（像素，0=默认 1.35×size）：Metrics.line_height 决定行盒内基线。
+    line_height: f32,
     /// opacity（含声明式动画采样后的值）用于文字 alpha，1.0 为不透明。
     alpha: f32,
 }
@@ -406,6 +414,10 @@ fn text_sig(t: &TextDraw) -> String {
     // 字体族变化需重新 shape（等宽/比例字形的字形与度量不同）。
     if let Some(f) = &t.family {
         s.push_str(&format!("@fam{}", f));
+    }
+    // 字重影响字形选择，纳入签名；行高不影响字形可省略（跟随 Metrics）。
+    if let Some(wgt) = t.weight {
+        s.push_str(&format!("@w{}", wgt));
     }
     if !t.spans.is_empty() {
         s.push('@');
@@ -529,7 +541,8 @@ struct DisplayList {
     /// 需要显示滚动条的容器几何（由 emit 计算内容高度后生成）
     scrollbars: Vec<ScrollBar>,
     /// (x, y, w, h, node_id, event, is_overlay, clip)
-    hitboxes: Vec<(f32, f32, f32, f32, String, String, bool, ClipRect)>,
+    // 第 9 元素是节点 cursor 属性（CSS cursor 样式，宿主消费）。
+    hitboxes: Vec<(f32, f32, f32, f32, String, String, bool, ClipRect, String)>,
     /// (x, y, w, h, node_id)
     inputs: Vec<(f32, f32, f32, f32, String)>,
 }
@@ -602,11 +615,58 @@ impl DisplayList {
                 _ => None,
             }
         }
+        fn wrap_of(s: Option<&str>) -> FlexWrap {
+            match s.unwrap_or("").trim().to_ascii_lowercase().as_str() {
+                "wrap" => FlexWrap::Wrap,
+                "wrap-reverse" => FlexWrap::WrapReverse,
+                _ => FlexWrap::NoWrap,
+            }
+        }
+        fn align_content_of(s: Option<&str>) -> Option<AlignContent> {
+            match s.unwrap_or("").trim().to_ascii_lowercase().as_str() {
+                "center" => Some(AlignContent::Center),
+                "flex-start" | "start" => Some(AlignContent::FlexStart),
+                "flex-end" | "end" => Some(AlignContent::FlexEnd),
+                "space-between" => Some(AlignContent::SpaceBetween),
+                "space-around" => Some(AlignContent::SpaceAround),
+                "space-evenly" => Some(AlignContent::SpaceEvenly),
+                "stretch" => Some(AlignContent::Stretch),
+                _ => None,
+            }
+        }
 
         // 把可见子节点摊平（Fragment 透明），记录 (Taffy 节点, 原 SceneNode 引用)。
         // 同时收集节点的绘制属性，布局算完后统一生成 DisplayList。
         struct BuildCtx {
             taffy: TaffyTree<TextMeasure>,
+        }
+
+        /// 文本相关继承链（CSS 继承语义）：字重 / text-align / line-height(px) /
+        /// white-space 折叠。build（测量）与 emit（绘制）共用同一份继承口径。
+        #[derive(Clone, Copy, Default)]
+        struct TextInherit {
+            weight: Option<u32>,
+            align: u8,
+            line_h: f32,
+            collapse_ws: bool,
+        }
+
+        impl TextInherit {
+            /// 节点自身 props 覆盖继承值（font-weight/text-align/line-height/
+            /// white-space 均为 CSS 继承属性）。
+            fn derive(props: &std::collections::HashMap<String, String>, size: f32, parent: Self) -> Self {
+                let line_h = props.get("line-height").and_then(|s| {
+                    let (f, px) = crate::style::line_height_of(s);
+                    if f > 0.0 { Some(f * size) } else if px > 0.0 { Some(px) } else { None }
+                }).or(if parent.line_h > 0.0 { Some(parent.line_h) } else { None })
+                    .unwrap_or(0.0);
+                Self {
+                    weight: crate::style::font_weight_from_props(props).or(parent.weight),
+                    align: props.get("text-align").map(|s| crate::style::text_align_of(s)).unwrap_or(parent.align),
+                    line_h,
+                    collapse_ws: props.get("white-space").map(|s| crate::style::white_space_collapses(s)).unwrap_or(parent.collapse_ws),
+                }
+            }
         }
 
         fn build(
@@ -617,24 +677,65 @@ impl DisplayList {
             inherited_color: (u8, u8, u8),
             inherited_size: f32,
             avail_w: f32, avail_h: f32,
+            tinh: TextInherit,
         ) -> taffy::NodeId {
             let p = |k: &str| node.props.get(k).map(|s| s.as_str());
             let color = p("color").map(parse_color).unwrap_or(inherited_color);
             let size = p("font-size").and_then(parse_px).unwrap_or(inherited_size);
+            let my_tinh = TextInherit::derive(&node.props, size, tinh);
 
             if node.typ == NodeType::Text {
                 let mut ts = Style::default();
                 // overflow 容器的子树不参与压缩，否则内容被压进视口、永不溢出，
                 // 滚动与滚动条都失效（标准滚动容器语义：子项 flex-shrink:0）。
                 if parent_scrollable { ts.flex_shrink = 0.0; }
+                // white-space:normal/nowrap 与绘制端同口径折叠空白。
+                let text = if my_tinh.collapse_ws {
+                    crate::style::collapse_whitespace(&node.text)
+                } else {
+                    node.text.clone()
+                };
                 return ctx.taffy.new_leaf_with_context(
                     ts,
-                    TextMeasure { text: node.text.clone(), size },
+                    TextMeasure { text, size, line_height: my_tinh.line_h },
                 ).expect("taffy text leaf");
             }
 
-            let pad = p("padding").and_then(parse_px).unwrap_or(0.0);
-            let gap = p("gap").or_else(|| p("column-gap")).and_then(parse_px).unwrap_or(0.0);
+            // padding：1~4 值 CSS 简写（与 Skia/Web 对齐）；负值无意义裁到 0。
+            let zero = length(0.0);
+            let pad_rect: taffy::geometry::Rect<taffy::style::LengthPercentage> =
+                p("padding").and_then(crate::style::parse_edges)
+                .map(|e| Rect {
+                    top: length(e[0].max(0.0)), right: length(e[1].max(0.0)),
+                    bottom: length(e[2].max(0.0)), left: length(e[3].max(0.0)),
+                })
+                .unwrap_or(Rect { top: zero, right: zero, bottom: zero, left: zero });
+            // margin：1~4 值简写 + 四边单独覆盖（CSS 级联顺序），负值裁到 0。
+            // taffy 的 margin 是 Rect<LengthPercentageAuto>，与 padding 类型不同。
+            let auto_zero = taffy::style_helpers::length(0.0);
+            let mut margin_rect: taffy::geometry::Rect<taffy::style::LengthPercentageAuto> =
+                p("margin").and_then(crate::style::parse_edges)
+                .map(|e| Rect {
+                    top: length(e[0].max(0.0)), right: length(e[1].max(0.0)),
+                    bottom: length(e[2].max(0.0)), left: length(e[3].max(0.0)),
+                })
+                .unwrap_or(Rect { top: auto_zero, right: auto_zero, bottom: auto_zero, left: auto_zero });
+            for (i, key) in ["margin-top", "margin-right", "margin-bottom", "margin-left"].iter().enumerate() {
+                if let Some(v) = p(key).and_then(parse_px) {
+                    let d = length(v.max(0.0));
+                    match i {
+                        0 => margin_rect.top = d,
+                        1 => margin_rect.right = d,
+                        2 => margin_rect.bottom = d,
+                        _ => margin_rect.left = d,
+                    }
+                }
+            }
+            // gap：简写兜底双轴；row-gap/column-gap 分别覆盖纵向/横向（CSS 语义，
+            // 修正旧实现拿 column-gap 顶替 gap 用的问题）。
+            let gap_base = p("gap").and_then(parse_px);
+            let col_gap = p("column-gap").and_then(parse_px).or(gap_base).unwrap_or(0.0);
+            let row_gap = p("row-gap").and_then(parse_px).or(gap_base).unwrap_or(0.0);
             // absolute：浮层/遮罩（gx-role）或显式 position:absolute 都脱离父 flex 流。
             // 浮层位置由第二遍按锚点矩形单独计算；通用 absolute 用 inset 由 Taffy 定位。
             let st = crate::style::parse_style(node);
@@ -642,17 +743,25 @@ impl DisplayList {
             let mut style = Style {
                 position: if is_abs { Position::Absolute } else { Position::Relative },
                 flex_direction: dir_of(p("flex-direction").unwrap_or("column")),
-                padding: Rect {
-                    left: length(pad), right: length(pad),
-                    top: length(pad), bottom: length(pad),
-                },
-                gap: Size { width: length(gap), height: length(gap) },
+                padding: pad_rect,
+                margin: margin_rect,
+                gap: Size { width: length(col_gap), height: length(row_gap) },
                 align_items: align_of(p("align-items")),
+                align_content: align_content_of(p("align-content")),
+                flex_wrap: wrap_of(p("flex-wrap")),
                 justify_content: justify_of(p("justify-content")),
                 // overflow 容器的直接子项不压缩，保证内容可溢出 → 滚动可生效。
                 flex_shrink: if parent_scrollable { 0.0 } else { 1.0 },
                 ..Default::default()
             };
+            // 显式 flex-grow / flex-shrink 属性覆盖默认（补齐与 Skia/Web 的消费差）。
+            if let Some(v) = p("flex-grow").and_then(parse_px) { style.flex_grow = v.max(0.0); }
+            if let Some(v) = p("flex-shrink").and_then(parse_px) { style.flex_shrink = v.max(0.0); }
+            // min/max 尺寸约束。
+            if let Some(v) = p("min-width").and_then(parse_px) { style.min_size.width = length(v); }
+            if let Some(v) = p("min-height").and_then(parse_px) { style.min_size.height = length(v); }
+            if let Some(v) = p("max-width").and_then(parse_px) { style.max_size.width = length(v); }
+            if let Some(v) = p("max-height").and_then(parse_px) { style.max_size.height = length(v); }
             // inset：top/right/bottom/left（NaN=auto 跳过）。与 Skia 语义一致。
             if is_abs {
                 let i = st.inset;
@@ -679,14 +788,14 @@ impl DisplayList {
             flatten(node, &mut kids);
             let child_scrollable = st.overflow != crate::style::Overflow::Visible;
             let child_nodes: Vec<taffy::NodeId> = kids.iter()
-                .map(|c| build(ctx, c, false, child_scrollable, color, size, avail_w, avail_h))
+                .map(|c| build(ctx, c, false, child_scrollable, color, size, avail_w, avail_h, my_tinh))
                 .collect();
 
             ctx.taffy.new_with_children(style, &child_nodes).expect("taffy container")
         }
 
         let mut ctx = BuildCtx { taffy };
-        let root_node = build(&mut ctx, root, true, false, (226, 232, 240), 16.0, avail_w, avail_h);
+        let root_node = build(&mut ctx, root, true, false, (226, 232, 240), 16.0, avail_w, avail_h, TextInherit::default());
         ctx.taffy.compute_layout_with_measure(
             root_node,
             Size { width: AvailableSpace::Definite(avail_w), height: AvailableSpace::Definite(avail_h) },
@@ -778,6 +887,7 @@ impl DisplayList {
             inherited_gradient: Option<crate::text_effects::LinearGradient>,
             inherited_selection: Option<SelectionDraw>,
             inherited_family: Option<String>,
+            tinh: TextInherit,
         ) -> f32 {
             // 主树遍历时跳过浮层子树（它们由后续的遮罩/浮层遍单独绘制，保证层级）。
             if skip_overlays && is_overlay(node) {
@@ -797,6 +907,8 @@ impl DisplayList {
             let my_selection = parse_selection(&node.props).or(inherited_selection);
             // font-family 与渐变同理：父 span 声明的字体族继承给文本子节点。
             let my_family = parse_font_family(&node.props).or(inherited_family);
+            // 文本继承链（字重/对齐/行高/空白折叠），与 build 的测量口径一致。
+            let my_tinh = TextInherit::derive(&node.props, size, tinh);
             let lay = ctx.taffy.layout(tnode).expect("taffy layout");
             // 浮层根用第二遍算出的目标坐标；其余节点沿用 Taffy 相对坐标累加。
             let (x, y) = overrides.get(&node.id).copied()
@@ -825,13 +937,26 @@ impl DisplayList {
 
             if node.typ == NodeType::Text {
                 // y 是 Taffy 算出的文本行盒顶部；glyphon 会用 Buffer 的 Metrics
-                // (font_size, line_height=1.35×size) 自行处理行盒内基线，故这里不加
+                // (font_size, line_height) 自行处理行盒内基线，故这里不加
                 // 任何 size 比例的魔法偏移——否则紧凑容器（如 Input 高 20px）里文字会偏下。
+                let line_h = if my_tinh.line_h > 0.0 { my_tinh.line_h } else { size * 1.35 };
+                // white-space:normal/nowrap 与测量端同口径折叠空白。
+                let text = if my_tinh.collapse_ws {
+                    crate::style::collapse_whitespace(&node.text)
+                } else {
+                    node.text.clone()
+                };
+                // text-align：盒宽大于内容宽时按 center/right 平移（近似测宽与
+                // measure_text 同口径：ASCII 0.56em / 其它 1em）。
+                let tw = text.chars()
+                    .map(|ch| if ch.is_ascii() { 0.56 } else { 1.0 })
+                    .sum::<f32>() * size;
+                let dx = crate::style::align_offset(my_tinh.align, w, tw);
                 if !clip_rejects(my_clip, x, y, size * 4.0, size * 1.35) {
                     // 统一渐变文字：按 ch 边界把文本切成着色分段，glyphon 逐 span 上色。
                     // 无渐变时 spans 为空 → 走 default_color 快路径，零额外分配。
                     let mut spans = my_gradient.as_ref()
-                        .map(|g| crate::text_effects::gradient_spans(&node.text, g, color))
+                        .map(|g| crate::text_effects::gradient_spans(&text, g, color))
                         .unwrap_or_default();
                     // 三端统一 selection：用本节点或父 span 继承的 selection 协议，
                     // 选中区间前景覆盖 base 分段。
@@ -839,16 +964,17 @@ impl DisplayList {
                     if let Some(sel) = &selection {
                         if let Some(fg) = sel.color {
                             spans = crate::text_effects::selection_spans(
-                                &node.text, &spans, color, sel.start, sel.end, fg);
+                                &text, &spans, color, sel.start, sel.end, fg);
                         }
                     }
                     dl.texts.push(TextDraw {
-                        id: node.id.clone(), text: node.text.clone(), x, y, size, color,
+                        id: node.id.clone(), text, x: x + dx, y, size, color,
                         clip: my_clip, spans, selection, family: my_family.clone(),
                         alpha: st.opacity,
+                        weight: my_tinh.weight, line_height: my_tinh.line_h,
                     });
                 }
-                return y + size * 1.35;
+                return y + line_h;
             }
 
             if node.typ == NodeType::Div {
@@ -910,10 +1036,18 @@ impl DisplayList {
                         video_id: if is_video { node.id.clone() } else { String::new() },
                     });
                 }
+                // pointer-events:none：节点自身不作为鼠标目标（仍绘制，后代照常
+                // 命中——CSS 命中语义）；cursor 随命中框透出供宿主切换系统光标。
+                let pe_none = node.props.get("pointer-events")
+                    .map(|s| s.trim().eq_ignore_ascii_case("none"))
+                    .unwrap_or(false);
                 if let Some(ev) = node.events.iter().find(|e| e.starts_with("on")) {
-                    dl.hitboxes.push((x, y, w, h, node.id.clone(), ev.clone(), is_overlay(node), my_clip));
+                    if !pe_none {
+                        dl.hitboxes.push((x, y, w, h, node.id.clone(), ev.clone(), is_overlay(node), my_clip,
+                            node.props.get("cursor").cloned().unwrap_or_default()));
+                    }
                 }
-                if node.props.contains_key("gx-input-id") {
+                if node.props.contains_key("gx-input-id") && !pe_none {
                     dl.inputs.push((x, y, w, h, node.id.clone()));
                 }
             }
@@ -921,9 +1055,17 @@ impl DisplayList {
             let mut kids: Vec<&crate::scene::SceneNode> = Vec::new();
             flat_children(node, &mut kids);
             let mut subtree_bottom = y + h; // 至少到自身底边
-            for (i, c) in kids.iter().enumerate() {
-                let child_tnode = ctx.taffy.child_at_index(tnode, i).expect("taffy child");
-                let cb = emit(c, child_tnode, ctx, dl, color, size, child_ox, child_oy, overrides, avail_w, avail_h, skip_overlays, my_clip, my_gradient.clone(), my_selection.clone(), my_family.clone());
+            // z-index：按值稳定排序绘制/命中顺序（负值垫底、正值置顶，同值保持
+            // 文档序）。Taffy 子节点顺序不变，按原始下标取 child_tnode。
+            let ordered: Vec<(usize, &crate::scene::SceneNode)> = {
+                let mut v: Vec<(usize, &crate::scene::SceneNode)> =
+                    kids.iter().enumerate().map(|(i, c)| (i, *c)).collect();
+                v.sort_by_key(|&(_, c)| crate::style::parse_style(c).z_index);
+                v
+            };
+            for &(orig_i, c) in ordered.iter() {
+                let child_tnode = ctx.taffy.child_at_index(tnode, orig_i).expect("taffy child");
+                let cb = emit(c, child_tnode, ctx, dl, color, size, child_ox, child_oy, overrides, avail_w, avail_h, skip_overlays, my_clip, my_gradient.clone(), my_selection.clone(), my_family.clone(), my_tinh);
                 if cb > subtree_bottom {
                     subtree_bottom = cb;
                 }
@@ -949,25 +1091,26 @@ impl DisplayList {
 
         // 第一遍：主树，跳过浮层子树。
         emit(root, root_node, &ctx, &mut dl, (226, 232, 240), 16.0, 0.0, 0.0,
-            &overrides, avail_w, avail_h, true, None, None, None, None);
+            &overrides, avail_w, avail_h, true, None, None, None, None, TextInherit::default());
         // 第二遍：遮罩（拦截外部点击）。
         for ov in overlays.iter().filter(|o| is_scrim(o.node)) {
             emit(ov.node, ov.tnode, &ctx, &mut dl, (226, 232, 240), 16.0, 0.0, 0.0,
-                &overrides, avail_w, avail_h, false, None, None, None, None);
+                &overrides, avail_w, avail_h, false, None, None, None, None, TextInherit::default());
         }
         // 第三遍：内容浮层 popover → modal → portal（最上层），按角色分层保证层级稳定。
         for role in ["popover", "modal", "portal"] {
             for ov in overlays.iter().filter(|o| gx_role(o.node) == role) {
                 emit(ov.node, ov.tnode, &ctx, &mut dl, (226, 232, 240), 16.0, 0.0, 0.0,
-                    &overrides, avail_w, avail_h, false, None, None, None, None);
+                    &overrides, avail_w, avail_h, false, None, None, None, None, TextInherit::default());
             }
         }
         dl
     }
 
     /// 命中测试：浮层/遮罩优先于普通内容；同级内面积最小的包含点命中。
-    fn hit(&self, x: f32, y: f32) -> Option<&(f32, f32, f32, f32, String, String, bool, ClipRect)> {
-        type Hit<'a> = &'a (f32, f32, f32, f32, String, String, bool, ClipRect);
+    /// 第 9 元素是 cursor 形状（宿主据此切换系统光标）。
+    fn hit(&self, x: f32, y: f32) -> Option<&(f32, f32, f32, f32, String, String, bool, ClipRect, String)> {
+        type Hit<'a> = &'a (f32, f32, f32, f32, String, String, bool, ClipRect, String);
         fn min_area<'a, I: Iterator<Item = Hit<'a>>>(items: I) -> Option<Hit<'a>> {
             items.min_by(|a, b| (a.2 * a.3).partial_cmp(&(b.2 * b.3)).unwrap_or(std::cmp::Ordering::Equal))
         }
@@ -1597,11 +1740,18 @@ struct VSOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f };
             let shaped = shaped_idx.len();
             for i in shaped_idx {
                 let t = &dl.texts[i];
-                let mut b = Buffer::new(&mut self.font_system, Metrics::new(t.size, t.size * 1.35));
+                let lh = if t.line_height > 0.0 { t.line_height } else { t.size * 1.35 };
+                let mut b = Buffer::new(&mut self.font_system, Metrics::new(t.size, lh));
                 b.set_size(&mut self.font_system, Some(700.0), Some(80.0));
                 let attrs = match &t.family {
                     Some(f) => Attrs::new().family(Family::Name(f)),
                     None => Attrs::new().family(Family::SansSerif),
+                };
+                // font-weight：cosmic-text 按字重挑字形（400=常规 / 700=粗体），
+                // 与 Skia 的 FontStyleBold、Web 的 font-weight 数值语义对齐。
+                let attrs = match t.weight {
+                    Some(w) => attrs.weight(Weight(w as u16)),
+                    None => attrs,
                 };
                 if t.spans.is_empty() {
                     // 快路径：普通单色文字，颜色走 TextArea.default_color。
@@ -1694,7 +1844,7 @@ struct VSOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f };
 
     /// 点击命中 → 生成 click 事件 JSON
     pub fn hit_click(&self, x: f32, y: f32) -> Option<InputEvent> {
-        self.display.hit(x, y).map(|(_, _, _, _, id, ev, _, _)| InputEvent {
+        self.display.hit(x, y).map(|(_, _, _, _, id, ev, _, ..)| InputEvent {
             kind: "click".into(),
             node_id: id.clone(),
             event: ev.clone(),
@@ -1899,7 +2049,7 @@ mod text_sig_tests {
     fn td(id: &str, text: &str, size: f32) -> TextDraw {
         TextDraw {
             id: id.into(), text: text.into(), x: 0.0, y: 0.0, size,
-            color: (0, 0, 0), clip: None, spans: vec![], selection: None, family: None, alpha: 1.0,
+            color: (0, 0, 0), clip: None, spans: vec![], selection: None, family: None, weight: None, line_height: 0.0, alpha: 1.0,
         }
     }
 
@@ -2144,7 +2294,7 @@ mod selection_tests {
     fn selection_in_text_sig_forces_reshaping() {
         let base = TextDraw {
             id: "x".into(), text: "abcd".into(), x: 0.0, y: 0.0, size: 13.0,
-            color: (0, 0, 0), clip: None, spans: vec![], selection: None, family: None, alpha: 1.0,
+            color: (0, 0, 0), clip: None, spans: vec![], selection: None, family: None, weight: None, line_height: 0.0, alpha: 1.0,
         };
         let mut a = base.clone();
         let mut b = base;
@@ -2190,10 +2340,116 @@ mod selection_tests {
     fn font_family_in_text_sig_forces_reshaping() {
         let base = TextDraw {
             id: "x".into(), text: "abcd".into(), x: 0.0, y: 0.0, size: 13.0,
-            color: (0, 0, 0), clip: None, spans: vec![], selection: None, family: None, alpha: 1.0,
+            color: (0, 0, 0), clip: None, spans: vec![], selection: None, family: None, weight: None, line_height: 0.0, alpha: 1.0,
         };
         let mut mono = base.clone();
         mono.family = Some("DejaVu Sans Mono".into());
         assert_ne!(text_sig(&base), text_sig(&mono), "字体族变化应触发重新 shape");
+    }
+}
+
+#[cfg(test)]
+mod parity_tests {
+    use super::*;
+    use crate::binprotocol::NodeType;
+    use crate::scene::SceneNode;
+
+    fn div(id: &str, props: &[(&str, &str)], children: Vec<SceneNode>) -> SceneNode {
+        SceneNode {
+            typ: NodeType::Div, kind: "div".into(), id: id.into(), text: String::new(),
+            props: props.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
+            events: vec![], children,
+        }
+    }
+
+    fn text(id: &str, text: &str, props: &[(&str, &str)]) -> SceneNode {
+        SceneNode {
+            typ: NodeType::Text, kind: "#text".into(), id: id.into(), text: text.into(),
+            props: props.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
+            events: vec![], children: vec![],
+        }
+    }
+
+    // ---- Taffy 布局映射 ----
+
+    #[test]
+    fn hitboxes_expose_cursor_and_skip_pointer_events() {
+        let mut btn = div("btn", &[("width", "50"), ("height", "20"), ("cursor", "pointer")], vec![]);
+        btn.events = vec!["on-click".into()];
+        let mut pe = div("pe", &[("width", "50"), ("height", "20"), ("pointer-events", "none")], vec![]);
+        pe.events = vec!["on-click".into()];
+        let root = div("root", &[("width", "200"), ("height", "60"), ("flex-direction", "row")], vec![btn, pe]);
+        let dl = DisplayList::from_scene(&root, 400.0, 200.0);
+        assert_eq!(dl.hitboxes.len(), 1, "pointer-events:none 不登记命中框");
+        let hb = &dl.hitboxes[0];
+        assert_eq!(hb.4, "btn");
+        assert_eq!(hb.8, "pointer", "cursor 随命中框透出");
+    }
+
+    #[test]
+    fn text_align_and_whitespace_and_weight_in_text_draws() {
+        let root = div("root", &[("width", "100"), ("text-align", "center"),
+                                ("white-space", "normal"), ("font-weight", "700")],
+            vec![text("t", "a   b", &[])]);
+        let dl = DisplayList::from_scene(&root, 200.0, 100.0);
+        assert_eq!(dl.texts.len(), 1);
+        let t = &dl.texts[0];
+        assert_eq!(t.text, "a b", "white-space:normal 折叠空白");
+        assert_eq!(t.weight, Some(700), "font-weight 进入 TextDraw");
+        // 近似宽 = (0.56*2 + 1*1空格?) "a b" = a(0.56)+空格(0.56)+b(0.56) = 1.68em*16=26.88
+        let tw = t.text.chars().map(|c| if c.is_ascii() { 0.56 } else { 1.0 }).sum::<f32>() * t.size;
+        let want_dx = (100.0 - tw) / 2.0;
+        assert!((t.x - want_dx).abs() < 0.5, "center 落笔 x = {}, want ≈{}", t.x, want_dx);
+    }
+
+    #[test]
+    fn line_height_overrides_text_draw() {
+        let root = div("root", &[("width", "100"), ("line-height", "2")],
+            vec![text("t", "hi", &[])]);
+        let dl = DisplayList::from_scene(&root, 200.0, 100.0);
+        let t = &dl.texts[0];
+        assert!((t.line_height - 32.0).abs() < 0.1, "line-height:2 × 16px = 32, got {}", t.line_height);
+    }
+
+    #[test]
+    fn line_height_inherits_from_parent() {
+        // text 子节点自身无 line-height，应继承父容器的 1.5。
+        let root = div("root", &[("width", "100"), ("line-height", "1.5")],
+            vec![div("wrap", &[], vec![text("t", "hi", &[])])]);
+        let dl = DisplayList::from_scene(&root, 200.0, 100.0);
+        let t = &dl.texts[0];
+        assert!((t.line_height - 24.0).abs() < 0.1, "继承 1.5×16=24, got {}", t.line_height);
+    }
+
+    #[test]
+    fn z_index_reorders_paint_order() {
+        let mk = |id: &str, bg: &str, z: Option<&str>| {
+            let mut props = vec![("width", "30"), ("height", "10"), ("bg", bg)];
+            let mut p: Vec<(&str, &str)> = props.drain(..).collect();
+            if let Some(zv) = z { p.push(("z-index", zv)); }
+            div(id, &p, vec![])
+        };
+        let root = div("root", &[("width", "60"), ("height", "60")], vec![
+            mk("a", "#010101", Some("5")),
+            mk("b", "#020202", None),
+            mk("c", "#030303", Some("-1")),
+        ]);
+        let dl = DisplayList::from_scene(&root, 100.0, 100.0);
+        // 绘制顺序：c(-1) → b(0) → a(5)，同值保持文档序。
+        let bgs: Vec<(u8, u8, u8)> = dl.shapes.iter().filter(|s| s.bg_present).map(|s| s.bg).collect();
+        assert_eq!(bgs, vec![(0x03, 0x03, 0x03), (0x02, 0x02, 0x02), (0x01, 0x01, 0x01)],
+            "z-index 应重排绘制顺序: {:?}", bgs);
+    }
+
+    #[test]
+    fn text_sig_includes_weight() {
+        let mut t = TextDraw {
+            id: "t".into(), text: "hi".into(), x: 0.0, y: 0.0, size: 16.0,
+            color: (0, 0, 0), clip: None, spans: vec![], selection: None, family: None,
+            weight: None, line_height: 0.0, alpha: 1.0,
+        };
+        assert!(!text_sig(&t).contains("@w"));
+        t.weight = Some(700);
+        assert!(text_sig(&t).contains("@w700"), "字重变化应触发重新 shape");
     }
 }

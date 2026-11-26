@@ -76,6 +76,17 @@ const (
 	propMinHeight  = "min-height"
 	propMaxHeight  = "max-height"
 
+	// 文本排版（text-align / white-space 继承语义见 paint.go textStyle）
+	propTextAlign  = "text-align"
+	propLineHeight = "line-height"
+	propWhiteSpace = "white-space"
+
+	// 交互与层级
+	propZIndex       = "z-index"
+	propPointerEvent = "pointer-events"
+	propCursor       = "cursor"
+	propFontWeight   = "font-weight"
+
 	// 外边距（四边单独 + 1~4 值简写）
 	propMargin       = "margin"
 	propMarginTop    = "margin-top"
@@ -260,6 +271,9 @@ type style struct {
 	maxHeight  float32
 	// 四边外边距 [top,right,bottom,left]，0=未设置（负外边距不支持）。
 	margin edges
+
+	// 绘制层级：z-index 非零时子节点按值稳定排序绘制（负值在后绘制者之下）。
+	zIndex int
 }
 
 func defaultStyle() style {
@@ -358,6 +372,10 @@ func parseStyle(props map[string]any) style {
 	}
 	if v, ok := propNum(props[propMarginLeft]); ok && v > 0 {
 		s.margin[3] = float32(v)
+	}
+	// z-index：绘制层级（不影响布局）。非整数/负值以外照常解析。
+	if v, ok := propNum(props[propZIndex]); ok {
+		s.zIndex = int(v)
 	}
 	if v, ok := propString(props[propWeight]); ok {
 		s.bold = strings.EqualFold(v, "bold") || v == "700"
@@ -857,4 +875,99 @@ func easingValue(e easing, t float32) float32 {
 		// cubic-bezier(.25,.1,.25,1) 的近似
 		return t * t * (3 - 2*t)
 	}
+}
+
+// cssWeightBold 判断字重值是否按粗体渲染：接收 "weight" / "font-weight" 属性值，
+// "bold" 与 >=600 的数值（100..900，含 "600" 字符串）为粗体；其余（normal/400 等）常规。
+// 与 Web 端 font-weight 数值语义对齐，补齐桌面端只认 "bold"/"700" 的缺口。
+func cssWeightBold(v string) bool {
+	t := strings.TrimSpace(strings.ToLower(v))
+	if t == "bold" || t == "bolder" {
+		return true
+	}
+	if n, ok := propNum(t); ok {
+		return n >= 600
+	}
+	return false
+}
+
+// weightIsBoldFromProps 检查 props 里的 font-weight 与 weight 两个键（后者是
+// 本仓库历史约定，前者与 Web/CSS 对齐）；font-weight 优先。
+func weightIsBoldFromProps(props map[string]any) bool {
+	if props == nil {
+		return false
+	}
+	if v, ok := propString(props[propFontWeight]); ok && strings.TrimSpace(v) != "" {
+		return cssWeightBold(v)
+	}
+	if v, ok := propString(props[propWeight]); ok && strings.TrimSpace(v) != "" {
+		return cssWeightBold(v)
+	}
+	return false
+}
+
+// textAlignOf 把 text-align 值映射为对齐方式：0=left/start（默认）、1=center、2=right/end。
+// 未知值回落 left（与 CSS 兼容行为一致）。
+func textAlignOf(v string) int {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "center":
+		return 1
+	case "right", "end":
+		return 2
+	default:
+		return 0
+	}
+}
+
+// lineHeightOf 解析 line-height：无单位数值（<4，如 1.5）按字号倍数；
+// 带 px 的数值（>=4，如 24 或 "24px"）按绝对像素。返回（倍数, 像素），
+// 未设置时返回 (0, 0)。解析失败静默回退（与其它属性的容错原则一致）。
+func lineHeightOf(v string) (factor, px float32) {
+	n, ok := propNum(v)
+	if !ok || n <= 0 {
+		return 0, 0
+	}
+	if n < 4 {
+		return float32(n), 0
+	}
+	return 0, float32(n)
+}
+
+// collapseWhitespace 按 CSS white-space:normal 语义折叠空白：连续空白折叠成
+// 单个空格，并去掉首尾空白。仅当节点显式声明 white-space:normal/nowrap 时应用，
+// 默认（未设置/pre/pre-wrap）保持逐字节渲染——编辑器代码行的缩进与对齐依赖它。
+func collapseWhitespace(text string) string {
+	return strings.Join(strings.Fields(text), " ")
+}
+
+// whiteSpaceCollapses 报告 white-space 值是否启用空白折叠语义。
+func whiteSpaceCollapses(v string) bool {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "normal", "nowrap":
+		return true
+	default:
+		return false
+	}
+}
+
+// pointerEventsNone 报告节点是否声明 pointer-events:none（CSS 语义：该节点自身
+// 不作为鼠标目标，但仍参与绘制；后代节点不受影响、仍可命中——与 Web 一致）。
+func pointerEventsNone(props map[string]any) bool {
+	if props == nil {
+		return false
+	}
+	v, ok := propString(props[propPointerEvent])
+	if !ok {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(v), "none")
+}
+
+// cursorOf 取节点 cursor 属性值（空串=默认箭头，由窗口层决定具体形状）。
+func cursorOf(props map[string]any) string {
+	if props == nil {
+		return ""
+	}
+	v, _ := propString(props[propCursor])
+	return strings.TrimSpace(v)
 }

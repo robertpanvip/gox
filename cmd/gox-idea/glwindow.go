@@ -87,6 +87,11 @@ type glWindow struct {
 	// openGL() 创建、Run() drain、Close() 停止。
 	uiLoop *loop.Queue
 	wd     *loop.Watchdog
+
+	// hoverCursor：当前悬停命中框的 cursor 形状（""=默认箭头）。只在主线程回调
+	// 里读写；标准光标对象按形状惰性创建、复用（GLFW cursor 是可复用句柄）。
+	hoverCursor string
+	cursors     map[string]*glfw.Cursor
 }
 
 var _ gxapp.Window = (*glWindow)(nil)
@@ -277,6 +282,8 @@ func (g *glWindow) Open(cfg gxapp.WindowConfig) error {
 	// （与 web 端 pointermove 同语义）。
 	win.SetCursorPosCallback(func(w *glfw.Window, x, y float64) {
 		if w.GetMouseButton(glfw.MouseButtonLeft) != glfw.Press {
+			// 悬停：按命中框 cursor 属性切换系统光标（消费 CSS cursor 样式）。
+			g.updateHoverCursor(w, float32(x), float32(y))
 			return
 		}
 		if g.splitDrag {
@@ -303,6 +310,12 @@ func (g *glWindow) Open(cfg gxapp.WindowConfig) error {
 	win.SetFramebufferSizeCallback(func(w *glfw.Window, width, height int) {
 		g.resizeToWindow()
 		g.markDirty()
+	})
+	// 光标离开窗口：恢复默认箭头。
+	win.SetCursorEnterCallback(func(w *glfw.Window, entered bool) {
+		if !entered {
+			g.setHoverCursor(w, "")
+		}
 	})
 
 	g.resizeToWindow()
@@ -455,6 +468,67 @@ func (g *glWindow) paintNow() {
 	// （等价于每帧调用 ForceRedraw）。动画消失后自动停帧，不产生空转开销。
 	// 与 FramePresenter 的像素级脏矩形叠加：动画帧进来后仍只重画光标那一小条。
 	g.dirty = skia.HasActiveAnimation(g.root)
+}
+
+// updateHoverCursor 按最近一帧命中框的 cursor 属性切换系统光标（消费 CSS cursor 样式）。
+// cursor 是 CSS 继承属性：在所有包含该点的命中框里按面积从小到大找第一个声明了
+// cursor 的框（最内层有效值）；都没有则恢复默认箭头。
+func (g *glWindow) updateHoverCursor(w *glfw.Window, px, py float32) {
+	g.mu.Lock()
+	hits := append([]skia.HitBox(nil), g.hits...)
+	g.mu.Unlock()
+	type cand struct {
+		shape string
+		area  float32
+	}
+	var best cand
+	for i := range hits {
+		if !hits[i].Contains(px, py) || hits[i].Cursor == "" {
+			continue
+		}
+		area := hits[i].W * hits[i].H
+		if best.shape == "" || area < best.area {
+			best = cand{hits[i].Cursor, area}
+		}
+	}
+	g.setHoverCursor(w, best.shape)
+}
+
+// setHoverCursor 切换系统光标形状（""=默认箭头）；相同形状幂等跳过。
+// 标准光标对象按形状惰性创建并跨帧复用。
+func (g *glWindow) setHoverCursor(w *glfw.Window, shape string) {
+	if g.hoverCursor == shape {
+		return
+	}
+	g.hoverCursor = shape
+	if g.cursors == nil {
+		g.cursors = make(map[string]*glfw.Cursor)
+	}
+	shape = strings.ToLower(strings.TrimSpace(shape))
+	if shape == "" || shape == "default" || shape == "auto" {
+		shape = "arrow"
+	}
+	c, ok := g.cursors[shape]
+	if !ok {
+		var std glfw.StandardCursor
+		switch shape {
+		case "pointer", "hand":
+			std = glfw.HandCursor
+		case "text":
+			std = glfw.IBeamCursor
+		case "crosshair":
+			std = glfw.CrosshairCursor
+		case "ew-resize", "col-resize":
+			std = glfw.HResizeCursor
+		case "ns-resize", "row-resize":
+			std = glfw.VResizeCursor
+		default:
+			std = glfw.ArrowCursor // wait/progress/move 等暂按箭头处理
+		}
+		c = glfw.CreateStandardCursor(std)
+		g.cursors[shape] = c
+	}
+	w.SetCursor(c)
 }
 
 // onMouseButton 把鼠标点击映射到场景节点：命中矩形（面积最小优先）→ 焦点处理 → 冒泡派发 onClick。

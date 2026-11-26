@@ -2,6 +2,7 @@ package skia
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"unicode/utf8"
 
@@ -92,6 +93,9 @@ type HitBox struct {
 	ClipX, ClipY float32
 	ClipW, ClipH float32
 	HasClip      bool
+	// cursor 属性值（""/default/pointer/text/wait...）：真实窗口集成层据此
+	// 把系统光标切换为对应形状（消费 Web 端 cursor:xxx 样式）。
+	Cursor string
 }
 
 // Contains 报告屏幕点 (px,py) 是否落在该矩形内（含祖先裁剪检查）。
@@ -110,7 +114,17 @@ func hitFrom(n *gxscene.Node, box layoutBox) HitBox {
 		Node: n, X: box.X, Y: box.Y, W: box.W, H: box.H,
 		ClipX: box.ClipX, ClipY: box.ClipY, ClipW: box.ClipW, ClipH: box.ClipH,
 		HasClip: box.HasClip,
+		Cursor:  cursorOf(n.Props),
 	}
+}
+
+// hitAppend 把节点登记进命中矩形列表；pointer-events:none 的节点自身跳过
+// （仍绘制，后代节点照常登记——与 CSS 命中语义一致）。
+func (p *painter) hitAppend(n *gxscene.Node, box layoutBox) {
+	if p.hits == nil || pointerEventsNone(n.Props) {
+		return
+	}
+	*p.hits = append(*p.hits, hitFrom(n, box))
 }
 
 // paintFrame 为一帧做布局并绘制整棵树。入口（Window.Draw / PaintTo）调用它。
@@ -187,6 +201,42 @@ type textStyle struct {
 	fontSize int
 	bold     bool
 	family   string // 已解析的本机字体族名（空串=系统默认）
+	// text-align（CSS 继承属性）：0=left/start、1=center、2=right/end。
+	align int
+	// line-height：factor>0 按字号倍数，px>0 按绝对像素；两者都 0 表示未设置
+	//（回落 1.3 倍的历史行高）。
+	lineHeightFactor float32
+	lineHeightPx     float32
+	// white-space 原始值（空串=默认逐字节渲染，与 pre 等效）。
+	whiteSpace string
+}
+
+// lineH 返回以 fontSize 折算后的行盒高度（像素）。
+func (st textStyle) lineH() float32 {
+	switch {
+	case st.lineHeightFactor > 0:
+		return float32(st.fontSize) * st.lineHeightFactor
+	case st.lineHeightPx > 0:
+		return st.lineHeightPx
+	default:
+		return float32(st.fontSize) * 1.3
+	}
+}
+
+// alignOffset 计算在宽 w 的行盒里按对齐方式落笔的水平偏移：
+// 内容宽 tw 小于盒宽时 center/right 生效，否则 0（与 CSS text-align 一致）。
+func alignOffset(align int, w, tw float32) float32 {
+	if tw <= 0 || tw >= w {
+		return 0
+	}
+	switch align {
+	case 1:
+		return (w - tw) / 2
+	case 2:
+		return w - tw
+	default:
+		return 0
+	}
 }
 
 // inheritedStyle 从节点自身 Props 覆盖继承样式，返回本节点有效的文本样式。
@@ -208,12 +258,24 @@ func inheritedStyle(n *gxscene.Node, parent textStyle) textStyle {
 		if v, ok := propString(n.Props[propFontFamily]); ok && v != "" {
 			s.family = pickFontFamily(v)
 		}
-		if v, ok := propString(n.Props[propWeight]); ok {
-			if strings.EqualFold(v, "bold") || v == "700" {
-				s.bold = true
-			} else {
-				s.bold = false
+		// 字重：font-weight（CSS 标准）优先，weight（仓库历史约定）兜底；
+		// 数值 100..900 按 >=600 为粗体，与 Web 语义一致。
+		if _, ok := n.Props[propFontWeight]; ok {
+			s.bold = weightIsBoldFromProps(n.Props)
+		}
+		if _, ok := n.Props[propWeight]; ok {
+			s.bold = weightIsBoldFromProps(n.Props)
+		}
+		if v, ok := propString(n.Props[propTextAlign]); ok {
+			s.align = textAlignOf(v)
+		}
+		if v, ok := propString(n.Props[propLineHeight]); ok && strings.TrimSpace(v) != "" {
+			if f, px := lineHeightOf(v); f > 0 || px > 0 {
+				s.lineHeightFactor, s.lineHeightPx = f, px
 			}
+		}
+		if v, ok := propString(n.Props[propWhiteSpace]); ok {
+			s.whiteSpace = v
 		}
 	}
 	return s
@@ -266,7 +328,27 @@ func (p *painter) paintChildrenClipped(n *gxscene.Node, box layoutBox, eff textS
 		clip := sk.RectMakeXYWH(box.X, box.Y, box.W, maxF(box.H, 1))
 		p.canvas.ClipRect(clip, sk.ClipOpIntersect, false)
 	}
-	for _, c := range n.Children {
+	// z-index：按值稳定排序绘制顺序（负值垫底、正值置顶，同值保持文档序）。
+	// 布局仍按文档流（Yoga 不感知），只重排绘制/命中优先级——与 CSS 近似语义一致。
+	children := n.Children
+	if len(children) > 1 {
+		hasZ := false
+		for _, c := range children {
+			if parseStyle(c.Props).zIndex != 0 {
+				hasZ = true
+				break
+			}
+		}
+		if hasZ {
+			sorted := make([]*gxscene.Node, len(children))
+			copy(sorted, children)
+			sort.SliceStable(sorted, func(i, j int) bool {
+				return parseStyle(sorted[i].Props).zIndex < parseStyle(sorted[j].Props).zIndex
+			})
+			children = sorted
+		}
+	}
+	for _, c := range children {
 		// 父节点带 rich-text 或用渐变给文字着色时，分段着色已由 paintElement 一次绘制；
 		// 跳过纯文本子节点，避免普通单色文字覆盖在上面（同时抵消正确着色）。
 		// 普通渐变背景节点不跳过——其文本子节点应正常绘制在渐变背景之上。
@@ -442,7 +524,7 @@ func (p *painter) paintElement(n *gxscene.Node, box layoutBox) {
 		*p.log = append(*p.log, DrawOp{Kind: "rect", Name: n.Kind, X: box.X, Y: box.Y, W: box.W, H: box.H, ARGB: s.bg})
 	}
 	if p.hits != nil {
-		*p.hits = append(*p.hits, hitFrom(n, box))
+		p.hitAppend(n, box)
 	}
 }
 
@@ -495,10 +577,17 @@ func (p *painter) paintShadow(sh boxShadow, box layoutBox, radius float32) {
 func argbColor(a, r, g, b uint32) sk.Color { return sk.Color(argb(a, r, g, b)) }
 
 // paintText 画文本节点：位置/尺寸由 Yoga 的 measure 回调给出，文字基线按字号定位。
-// 样式来自祖先链继承（color/font-size/weight），因为文本节点自身 Props 通常为空。
+// 样式来自祖先链继承（color/font-size/weight/text-align/line-height/white-space），
+// 因为文本节点自身 Props 通常为空。
 func (p *painter) paintText(n *gxscene.Node, box layoutBox, st textStyle) {
 	if n.Text == "" {
 		return
+	}
+	// white-space:normal/nowrap 折叠空白（CSS 语义）；默认保持逐字节渲染，
+	// 编辑器代码行的缩进依赖原样空格。
+	text := n.Text
+	if whiteSpaceCollapses(st.whiteSpace) {
+		text = collapseWhitespace(text)
 	}
 	// 富文本（语法高亮）：一行的分段着色数据挂在 rich-text 属性上。逐段用各自
 	// 颜色绘制，段内再按字体回退切 run；落笔 x 累加 widths，与测量口径一致。
@@ -506,21 +595,22 @@ func (p *painter) paintText(n *gxscene.Node, box layoutBox, st textStyle) {
 		p.paintRichText(n, rt, box, st)
 		lineH := box.H
 		if lineH <= 0 {
-			lineH = float32(st.fontSize) * 1.3
+			lineH = st.lineH()
 		}
 		*p.log = append(*p.log, DrawOp{Kind: "text", Name: n.Text, X: box.X, Y: box.Y, W: box.W, H: lineH, ARGB: st.color})
-		if p.hits != nil {
-			hb := hitFrom(n, box)
-			hb.H = lineH
-			*p.hits = append(*p.hits, hb)
-		}
+		p.hitAppend(n, box)
 		return
 	}
+	// dx 是 text-align 的落笔偏移；shouldDraw 为 false（脏区外）时保持 0，
+	// 日志/hits 仍按盒坐标记录（与历史行为一致）。
+	var dx float32
 	if p.shouldDraw(box) {
 		paint := sk.NewPaint()
 		paint.SetColor(sk.Color(st.color))
 		paint.SetAntiAlias(true)
-		baseline := box.Y + float32(st.fontSize)
+		// 行高：显式 line-height 时基线在行盒内垂直居中（默认 1.3 倍行为不变）。
+		lineH := st.lineH()
+		baseline := box.Y + float32(st.fontSize) + (lineH-float32(st.fontSize)*1.3)/2
 
 		// selection 标量协议（三端统一）：纯文本节点可挂 selection-range="s:e"，
 		// 配合 &::selection 子表对 [s,e) rune 区间画背景、覆盖前景色。
@@ -550,7 +640,7 @@ func (p *painter) paintText(n *gxscene.Node, box layoutBox, st textStyle) {
 		var segs []seg
 		x := box.X
 		runePos := 0
-		for _, r := range splitRuns(n.Text, st.fontSize, st.bold, st.family) {
+		for _, r := range splitRuns(text, st.fontSize, st.bold, st.family) {
 			if r.text == "" || r.font.IsNil() {
 				runePos += utf8.RuneCountInString(r.text)
 				continue
@@ -560,6 +650,9 @@ func (p *painter) paintText(n *gxscene.Node, box layoutBox, st textStyle) {
 			x += w
 			runePos += utf8.RuneCountInString(r.text)
 		}
+		// text-align：盒宽大于内容宽时按 center/right 平移全部段（含选区背景）。
+		dx = alignOffset(st.align, box.W, x-box.X)
+
 		// 选区背景（先画，被文字覆盖）。
 		if hasSelBg {
 			for _, s := range segs {
@@ -569,13 +662,13 @@ func (p *painter) paintText(n *gxscene.Node, box layoutBox, st textStyle) {
 				}
 				// 按 rune 在该段内的占比估算像素区间（等宽假设与测量口径足够接近）。
 				frac0, frac1 := float32(b0-s.r0)/float32(s.r1-s.r0), float32(b1-s.r0)/float32(s.r1-s.r0)
-				rx, rw := s.x0+s.w*frac0, s.w*(frac1-frac0)
+				rx, rw := s.x0+dx+s.w*frac0, s.w*(frac1-frac0)
 				bgPaint := sk.NewPaint()
 				bgPaint.SetColor(sk.Color(selBg))
 				bgPaint.SetAntiAlias(true)
-				p.canvas.DrawRect(sk.RectMakeXYWH(rx, box.Y, rw, float32(st.fontSize)*1.35), bgPaint)
+				p.canvas.DrawRect(sk.RectMakeXYWH(rx, box.Y, rw, lineH), bgPaint)
 				bgPaint.Delete()
-				*p.log = append(*p.log, DrawOp{Kind: "selection", Name: n.Text[b0Bytes(n.Text, b0):b0Bytes(n.Text, b1)], X: rx, Y: box.Y, W: rw, H: float32(st.fontSize) * 1.35, ARGB: selBg})
+				*p.log = append(*p.log, DrawOp{Kind: "selection", Name: text[b0Bytes(text, b0):b0Bytes(text, b1)], X: rx, Y: box.Y, W: rw, H: lineH, ARGB: selBg})
 			}
 		}
 		// 文字：与选区区间相交的 run 用选区前景色，其余用继承色。
@@ -587,21 +680,18 @@ func (p *painter) paintText(n *gxscene.Node, box layoutBox, st textStyle) {
 			} else {
 				paint.SetColor(sk.Color(st.color))
 			}
-			p.canvas.DrawString(s.text, s.x0, baseline, s.font, paint)
+			p.canvas.DrawString(s.text, s.x0+dx, baseline, s.font, paint)
 		}
 		paint.Delete()
 	}
 
 	lineH := box.H
 	if lineH <= 0 {
-		lineH = float32(st.fontSize) * 1.3
+		lineH = st.lineH()
 	}
-	*p.log = append(*p.log, DrawOp{Kind: "text", Name: n.Text, X: box.X, Y: box.Y, W: box.W, H: lineH, ARGB: st.color})
-	if p.hits != nil {
-		hb := hitFrom(n, box)
-		hb.H = lineH
-		*p.hits = append(*p.hits, hb)
-	}
+	// X 记录实际落笔起点（text-align 偏移后的位置；dx=0 时与历史行为一致）。
+	*p.log = append(*p.log, DrawOp{Kind: "text", Name: text, X: box.X + dx, Y: box.Y, W: box.W, H: lineH, ARGB: st.color})
+	p.hitAppend(n, box)
 }
 
 func maxInt(a, b int) int { if a > b { return a }; return b }
@@ -685,6 +775,9 @@ func (p *painter) paintRichText(n *gxscene.Node, rt gxscene.RichText, box layout
 		segs = append(segs, richSeg{text: span.Text, col: col, sel: isSel, x0: segStart, width: x - segStart, runs: runs})
 		runePos += spanRunes
 	}
+	// text-align：盒宽大于内容宽时按 center/right 平移整行（编辑器行盒与内容
+	// 等宽，偏移自然为 0，不影响既有渲染）。
+	dx := alignOffset(st.align, box.W, x-box.X)
 
 	// 选区背景：先画所有选中段，保证被后续文字覆盖。
 	if hasSelBg {
@@ -695,9 +788,9 @@ func (p *painter) paintRichText(n *gxscene.Node, rt gxscene.RichText, box layout
 			bgPaint := sk.NewPaint()
 			bgPaint.SetColor(sk.Color(selBg))
 			bgPaint.SetAntiAlias(true)
-			p.canvas.DrawRect(sk.RectMakeXYWH(seg.x0, box.Y, seg.width, lineH), bgPaint)
+			p.canvas.DrawRect(sk.RectMakeXYWH(seg.x0+dx, box.Y, seg.width, lineH), bgPaint)
 			bgPaint.Delete()
-			*p.log = append(*p.log, DrawOp{Kind: "selection", Name: seg.text, X: seg.x0, Y: box.Y, W: seg.width, H: lineH, ARGB: selBg})
+			*p.log = append(*p.log, DrawOp{Kind: "selection", Name: seg.text, X: seg.x0+dx, Y: box.Y, W: seg.width, H: lineH, ARGB: selBg})
 		}
 	}
 
@@ -706,7 +799,7 @@ func (p *painter) paintRichText(n *gxscene.Node, rt gxscene.RichText, box layout
 	defer paint.Delete()
 	paint.SetAntiAlias(true)
 	for _, seg := range segs {
-		segX := seg.x0
+		segX := seg.x0 + dx
 		for _, r := range seg.runs {
 			if r.text == "" || r.font.IsNil() {
 				continue
