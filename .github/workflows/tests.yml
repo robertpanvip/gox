@@ -1,0 +1,55 @@
+# GX 仓库测试工作流：根模块 + 三端后端（Web/Skia/Rust）+ 三端一致性矩阵。
+#
+# 三端一致性矩阵（scripts/threeway-parity.sh）消费 testdata/threeway/cases.json，
+# 任一端样式属性未实现 / 传值错误 / 语义漂移都会在该步骤失败并点名具体用例。
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: Go + Rust + 三端一致性矩阵
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 Go（版本随 go.mod）
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: 安装 Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: 缓存 Rust 构建产物
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: backend/rust/rust
+
+      - name: 根模块测试（runtime / scene / widgets / cmd …）
+        run: go test -count=1 ./...
+
+      - name: Rust 渲染后端单测
+        run: cargo test --manifest-path backend/rust/rust/Cargo.toml
+
+      - name: 构建 Rust 静态库（供 cgo 适配层链接）
+        run: cargo build --release --manifest-path backend/rust/rust/Cargo.toml
+
+      - name: Rust 适配层（cgo）测试
+        working-directory: backend/rust/go
+        run: go test -count=1 ./...
+
+      - name: Skia 后端全量测试
+        working-directory: backend/skia
+        run: go test -count=1 ./...
+
+      - name: Web 后端全量测试（native，memDriver 镜像）
+        working-directory: backend/web
+        run: go test -count=1 ./...
+
+      - name: 三端一致性矩阵（Web/DOM × Skia/Yoga × Rust/Taffy）
+        run: bash scripts/threeway-parity.sh
