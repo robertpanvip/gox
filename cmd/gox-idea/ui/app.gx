@@ -1117,6 +1117,24 @@ func statusBar() *gxscene.Instance {
 // [菜单栏 / 工具栏] → [工具竖栏 | Project 面板 | ⋮ | (代码区标签 / 编辑器 / ─ / Terminal)] → [状态栏]
 // 左右分隔条 (gx-splitter-v) 调整 Project 宽度，水平分隔条 (gx-splitter-h) 调整 Terminal 高度。
 
+// editorAndTerminal 是右侧「标签 / 代码 / 水平分隔条 / 终端」组合。
+// 抽成函数是为了让项目面板显隐的两个分支各自给出完整的主区子树——
+// 若把 if 直接放在 row flex 内，编译器生成的 #frag 节点会成为 row 的直接
+// 子项，交叉轴对齐把它推到容器底部，导致垂直分隔条命中框跑到 y=834。
+func editorAndTerminal() *gxscene.Instance {
+    return <div style={{ flexDirection: "column", gap: 0, flexGrow: 1, minWidth: 0 }}>
+        {editorTabBar()}
+        <div style={{ flexDirection: "column", gap: 0, height: editorAreaPx(), flexShrink: 0, overflow: "hidden", background: canvasBg() }}>
+            {Editor()}
+        </div>
+        <div
+            class="gx-splitter-h"
+            style={{ height: 6, flexShrink: 0, cursor: "row-resize", background: splitActiveBg(), hover: { background: accentColor() } }}
+        />
+        {TerminalView()}
+    </div>
+}
+
 pub func Playground() *gxscene.Instance {
     return <div
         onClick={func(e gxscene.EventContext) { openMenu = "" }}
@@ -1132,35 +1150,26 @@ pub func Playground() *gxscene.Instance {
         }}
     >
         {menuBar()}{ideToolbar()}
-        <div style={{ flexDirection: "row", gap: 0, flexGrow: 1, height: 768 }}>
-            {toolStripe()}
-            if projectPanelVisible {
+        if projectPanelVisible {
+            <div style={{ flexDirection: "row", gap: 0, flexGrow: 1, height: 768 }}>
+                {toolStripe()}
                 <div
-                    style={{ background: panelBg(), padding: "4 6", width: projectWidthPx(), flexShrink: 0, flexDirection: "column", gap: 4, borderWidth: widgets.HairlineWidth, border: borderColor(), overflow: "hidden" }}
+                    style={{ background: panelBg(), padding: "4 6", width: projectWidthPx(), height: 768, flexShrink: 0, flexDirection: "column", gap: 4, borderWidth: widgets.HairlineWidth, border: borderColor(), overflow: "hidden" }}
                 >
                     {projectPanel()}
                 </div>
                 <div
                     class="gx-splitter-v"
-                    style={{ width: 6, flexShrink: 0, cursor: "col-resize", background: splitActiveBg(), hover: { background: accentColor() } }}
+                    style={{ width: 6, height: 768, flexShrink: 0, cursor: "col-resize", background: splitActiveBg(), hover: { background: accentColor() } }}
                 />
-            } else {
-                <div/>
-            }
-            <div style={{ flexDirection: "column", gap: 0, flexGrow: 1, minWidth: 0 }}>
-                {editorTabBar()}
-                <div
-                    style={{ flexDirection: "column", gap: 0, height: editorAreaPx(), flexShrink: 0, overflow: "hidden", background: canvasBg() }}
-                >
-                    {Editor()}
-                </div>
-                <div
-                    class="gx-splitter-h"
-                    style={{ height: 6, flexShrink: 0, cursor: "row-resize", background: splitActiveBg(), hover: { background: accentColor() } }}
-                />
-                {TerminalView()}
+                {editorAndTerminal()}
             </div>
-        </div>
+        } else {
+            <div style={{ flexDirection: "row", gap: 0, flexGrow: 1, height: 768 }}>
+                {toolStripe()}
+                {editorAndTerminal()}
+            </div>
+        }
         {statusBar()}
     </div>
 }

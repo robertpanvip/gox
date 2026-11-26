@@ -64,6 +64,10 @@ type glWindow struct {
 	frameCache skia.FrameCache
 
 	// 编辑器选区交互状态。GLFW 回调都在主线程（Run 的 WaitEvents 循环里）串行执行，无需加锁。
+	scrollEvents   atomic.Int64 // 测试钩子：累计收到的滚轮回调次数，用于区分「事件没到」与「滚动逻辑没生效」
+	lastScrollYOff    float64 // 测试钩子：最近一次滚轮回调的 yoff，诊断事件参数是否为 0
+	lastScrollBefore  float64 // 测试钩子：滚动转发前后的偏移，定位「转发没生效/被回写」
+	lastScrollAfter   float64
 	dragging   bool      // 左键按住拖拽选择中
 	clickTime  time.Time // 上次按下时刻/位置：双击、三击判定
 	clickX     float64
@@ -275,7 +279,11 @@ func (g *glWindow) Open(cfg gxapp.WindowConfig) error {
 	// 滚轮 → 虚拟滚动窗口移动。GLFW yoff 正为向上滚，因此取负号转成"向下为正行数"。
 	// 编辑器的受控 scrollTop 由 ui.EditorScrollLines 写入，光标跟随 effect 不参与。
 	win.SetScrollCallback(func(w *glfw.Window, xoff, yoff float64) {
+		g.scrollEvents.Add(1)
+		g.lastScrollYOff = yoff
+		g.lastScrollBefore = ui.DebugScrollTop()
 		ui.EditorScrollLines(-yoff * 3)
+		g.lastScrollAfter = ui.DebugScrollTop()
 		g.markDirty()
 	})
 	// 光标移动：分隔条拖拽调整区域尺寸；否则左键按住时扩展编辑器选区
@@ -751,6 +759,33 @@ func (g *glWindow) Close() error {
 }
 
 // Config 实现 gxapp.Window。
+// DebugSplitters 返回当前帧里分隔条的真实命中框，供 GUI E2E 脚本按实际坐标
+// 拖动——避免脚本写死布局常量，分隔条位置随主题/尺寸/项目宽度变化时仍稳定。
+// 调用方必须在 UI 线程（glWindow.Post）调用。
+func (g *glWindow) DebugSplitters() []map[string]any {
+	g.mu.Lock()
+	hits := append([]skia.HitBox(nil), g.hits...)
+	g.mu.Unlock()
+	out := []map[string]any{}
+	for _, h := range hits {
+		if h.Node == nil || h.Node.Props == nil {
+			continue
+		}
+		cls, _ := h.Node.Props["class"].(string)
+		if cls != "gx-splitter-v" && cls != "gx-splitter-h" {
+			continue
+		}
+		out = append(out, map[string]any{
+			"axis": cls[len("gx-splitter-"):],
+			"x":    h.X,
+			"y":    h.Y,
+			"w":    h.W,
+			"h":    h.H,
+		})
+	}
+	return out
+}
+
 func (g *glWindow) Config() gxapp.WindowConfig { return g.cfg }
 
 // Frames 返回已绘制帧数（观测用）。

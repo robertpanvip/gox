@@ -8,9 +8,11 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/robertpanvip/gox-idea/ui"
 	"github.com/robertpanvip/gox-idea/ui/interp"
@@ -53,6 +55,42 @@ func main() {
 	// P2 宿主接线：Loop 作为 UIExecutor 注入，帧请求/后台 Dispatch/微任务
 	// 全部进入共享 Loop 队列，由 Run() 在 GLFW 线程 drain 执行。
 	app.SetUIExecutor(win)
+
+	// GUI 端到端测试钩子：设置 GOX_IDEA_STATE_FILE 后，每 100ms 把 UI 状态
+	// 快照写到指定文件，供脚本在真实鼠标/键盘操作后硬断言（拖动分隔条、
+	// 滚轮滚动、选区、主题、Run 等状态进程外不可见）。快照在 UI 线程生成，
+	// 避免与编辑器编辑并发；未设置环境变量时完全不启用，正常用户零开销。
+	if stateFile := os.Getenv("GOX_IDEA_STATE_FILE"); stateFile != "" {
+		go func() {
+			ticker := time.NewTicker(100 * time.Millisecond)
+			defer ticker.Stop()
+			for range ticker.C {
+				path := stateFile
+				if err := win.Post(func() {
+					// 合并 UI 状态与分隔条真实命中框（脚本据此拖动，不写死坐标）。
+					data := ui.DebugStateJSON()
+					var snap map[string]any
+					if json.Unmarshal(data, &snap) == nil {
+						snap["splitters"] = win.DebugSplitters()
+						snap["scroll_events"] = win.scrollEvents.Load()
+						snap["last_scroll_yoff"] = win.lastScrollYOff
+						snap["last_scroll_before"] = win.lastScrollBefore
+						snap["last_scroll_after"] = win.lastScrollAfter
+						if merged, err := json.Marshal(snap); err == nil {
+							data = merged
+						}
+					}
+					// 原子替换：E2E 脚本随时可能读到文件，避免读到截断的半截 JSON。
+					tmp := path + ".tmp"
+					if os.WriteFile(tmp, data, 0644) == nil {
+						_ = os.Rename(tmp, path)
+					}
+				}); err != nil {
+					return
+				}
+			}
+		}()
+	}
 
 	// 分隔条拖拽改变布局尺寸时，动态子树内部的 height/width 变化在增量帧
 	// 后端不产生有效刷新，注入完整重绘回调重建场景树（拖拽频率低，开销可接受）。

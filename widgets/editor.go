@@ -50,6 +50,7 @@ type EditorState struct {
     scrollTop Signal.Signal[float64] // 受控滚动偏移（虚拟滚动的窗口起点）
     viewH Signal.Signal[int]     // 视口高度（px），默认 editorViewportHeight；宿主可运行时调整（IDE 布局随终端伸缩）
     scrollTopVal  float64     // scrollTop 的非响应式镜像：供 effect 读而不订阅（避免跟随回环）
+    programmaticScroll bool   // 程序化写 scrollTop 期间为 true：屏蔽 VirtualList on-scroll 的锚定回写，避免旧值把新值覆盖
     charWidth Signal.Signal[float64]
     wideWidth Signal.Signal[float64]
     caretSettled Signal.Signal[bool]
@@ -73,7 +74,7 @@ func NewEditorState(source string) *EditorState {
     doc := Rope.Of(source) // 只构造一次：LineCount 与文本权威共用同一棵根
     lc := doc.LineCount()
     st := &EditorState{
-        sourceCode:    Signal.LockedGetterShared("sf:source:3288",func() string { return source },
+        sourceCode:    Signal.LockedGetterShared("sf:source:3436",func() string { return source },
 func(__v string) { source = __v },
 ),
         doc:           doc, // 单次构造：LineCount 与文本权威共用同一棵根
@@ -82,7 +83,7 @@ func(__v string) { source = __v },
         selAnchorLine: Signal.New(0),
         selAnchorCol:  Signal.New(0),
         focused:       Signal.New(false),
-        lineCount:     Signal.LockedGetterShared("sf:lc:3495",func() int { return lc },
+        lineCount:     Signal.LockedGetterShared("sf:lc:3643",func() int { return lc },
 func(__v int) { lc = __v },
 ),
         scrollTop:     Signal.New(0.0),
@@ -855,13 +856,21 @@ func (s *EditorState) caretTopVisible() float64 { return s.caretTop() - s.scroll
 // 关键：短文档（内容放得下）时 maxScroll=0，scrollTop 被强制归 0——否则
 // 切换示例后残留上一个长文档的滚动偏移，会让短文档顶部留白、看着像"没占满
 // 代码块就开始滚动"。
+// ScrollTop 返回当前受控滚动偏移（px）。供 GUI E2E 快照读取——用命中行号
+// 反推滚动会被光标跟随干扰，直接读偏移才能稳定断言滚轮确实改变了视图。
+func (s *EditorState) ScrollTop() float64 { return s.scrollTopVal }
+
 func (s *EditorState) SetScrollTop(v float64) {
     if v < 0 { v = 0 }
     maxScroll := float64(s.lineCount() * editorRowHeight) - float64(s.viewH())
     if maxScroll < 0 { maxScroll = 0 }
     if v > maxScroll { v = maxScroll }
     s.scrollTopVal = v // 先更新镜像，effect 读到的是最新值
+    // 程序化写入期间屏蔽 VirtualList 的 on-scroll 锚定回写：否则它用旧 scrollTop
+    // 覆盖新值，表现为「光标停在文末时滚轮滚不动」（实测 390 -> 0 被拉回 390）。
+    s.programmaticScroll = true
     Signal.Batch(func() { s.scrollTop( v )})
+    s.programmaticScroll = false
 }
 
 // SetViewportHeight 设置编辑器视口高度（px）。外层容器高 = 视口 + 上下 padding 12。
@@ -889,6 +898,8 @@ func (s *EditorState) ScrollLines(lines float64) {
 // （非响应式镜像）而非 scrollTop()——这样跟随 effect 只订阅 cursorLine，
 // 用户主动滚动（on-scroll 写 scrollTop）不会被拉回，避免回环。
 func (s *EditorState) ensureCursorVisible() {
+    // 程序化滚动期间不跟随光标：用户主动滚动时允许光标离开视口。
+    if s.programmaticScroll { return }
     top := float64(s.cursorLine() * editorRowHeight)
     bottom := top + editorRowHeight
     st := s.scrollTopVal
@@ -1287,7 +1298,7 @@ func Editor(st *EditorState) *gxscene.Instance {
         "viewport-height": func() any { return st.viewH() },
         "scroll-top":      func() any { return st.scrollTop() },
         "render-item":     func(i int) *gxscene.Instance { return st.lineView(i) },
-        "on-scroll":       func(v any) { if f, ok := v.(float64); ok { st.SetScrollTop(f) } },
+        "on-scroll":       func(v any) { if !st.programmaticScroll { if f, ok := v.(float64); ok { st.SetScrollTop(f) } } },
         "overscan":        editorOverscan,
         "bg":              st.color("bg"),
     })

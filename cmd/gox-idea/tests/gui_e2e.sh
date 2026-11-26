@@ -67,7 +67,7 @@ assert_eq() {
 # ---- 场景 1：点击 <div 的 v 后按空格，空格应落在 v 之后（">" 前） ----
 # 编辑器第 10 行 "    return <div>Hello, {name}!</div>"。
 # 点击坐标自适应：从编辑器实测字宽算出 v 后（col 15）的屏幕 x，避免写死像素
-# 在不同字体/修复前后失效。代码文字起点固定为 356（行盒 X=306 + gutter 42 + margin 8），
+# 在不同字体/修复前后失效。代码文字起点固定为 362（右侧区 X=306 + 行盒 6 + gutter 42 + margin 8），
 # 行高 22，第 10 行（idx 9）中心 y=311。这些是 gox-idea WebStorm 布局的固定值。
 echo "== 场景1：点击定位 =="
 BASE=$(read_editor | sed -n '10p')
@@ -76,7 +76,7 @@ echo "  基线第10行: $BASE"
 # 用 skia 实测等宽字 advance（与编辑器注入口径一致）算 col 15 的 x。
 CHAR_W=$(cd "$(dirname "$0")/.." && GOTOOLCHAIN=go1.27.4 go run ./tests/charwidth.go 2>/dev/null)
 if [ -z "$CHAR_W" ]; then CHAR_W=7.8267; fi
-CLICK_X=$(python3 -c "print(int(round(356 + 15 * $CHAR_W)))")
+CLICK_X=$(python3 -c "print(int(round(362 + 15 * $CHAR_W)))")
 echo "  实测字宽=$CHAR_W 点击 col15 的 x=$CLICK_X"
 
 DISPLAY="$DISP" xdotool mousemove "$CLICK_X" 311 click 1 >/dev/null 2>&1
