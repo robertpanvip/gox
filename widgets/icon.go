@@ -44,7 +44,10 @@ func parseIconProps(props gxscene.Props) IconOptions {
 		if tone == "" {
 			tone = "primary"
 		}
-		o.Color = appleToneColor(tone)
+		o.Color = semanticToneColor(tone)
+		if o.Color == "" {
+			o.Color = appleToneColor(tone)
+		}
 	}
 	if v := gxicon.NumString(gxscene.Prop(props, "stroke-width")()); v != "" {
 		if f, err := strconv.ParseFloat(v, 32); err == nil && f > 0 {
@@ -104,6 +107,26 @@ func iconFromSVG(svg string, props gxscene.Props) *gxscene.Instance {
 //
 // name 为空时返回 nil，插槽会渲染成空子树——这样组件可以按需省略图标。
 // 颜色在构建期经 appleToneColor 解析为当前主题色，主题切换时组件整体重建即更新。
+// semanticToneColor 把语义令牌名解析成当前主题色；非语义名返回空串。
+// 必须走 Theme* 全局（随主题切换更新），不能用静态色表——否则暗色主题里
+// "onaccent" 这类令牌会掉进 toneColor 的 ThemeAccent 兜底，在强调色背景上
+// 画出一模一样的蓝色（选中行图标隐形就是这个坑）。
+func semanticToneColor(tone string) string {
+	switch tone {
+	case "muted":
+		return ThemeMuted
+	case "text":
+		return ThemeText
+	case "faint":
+		return ThemeFaint
+	case "onaccent":
+		return ThemeOnAccent
+	case "panel":
+		return ThemePanel
+	}
+	return ""
+}
+
 func iconNode(name string, size float64, tone string) *gxscene.Instance {
 	if name == "" {
 		return nil
@@ -116,19 +139,7 @@ func iconNode(name string, size float64, tone string) *gxscene.Instance {
 	}
 	// 语义令牌名先解析成当前主题色，再交给 SVG 解析器（后者只认颜色字面量
 	// 或语义 tone；这里显式传色，保证浅色主题下图标也是浅色适配）。
-	color := ""
-	switch tone {
-	case "muted":
-		color = ThemeMuted
-	case "text":
-		color = ThemeText
-	case "faint":
-		color = ThemeFaint
-	case "onaccent":
-		color = ThemeOnAccent
-	case "panel":
-		color = ThemePanel
-	}
+	color := semanticToneColor(tone)
 	if color != "" {
 		return Icon(gxscene.Props{"name": name, "size": size, "color": color})
 	}

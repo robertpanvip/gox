@@ -277,8 +277,11 @@ type style struct {
 }
 
 func defaultStyle() style {
+	// padding 默认 0：与 Web/DOM、Rust/Taffy 三端一致。历史上这里默认 4px，
+	// 但那是 Skia 独有的隐式内边距——所有紧凑容器（12×14 的折叠箭头槽等）
+	// 内容区被悄悄压缩，子元素溢出错位；Web/Rust 从无此行为。
 	return style{
-		color: argb(255, 0, 0, 0), fontSize: 16, padding: edges{4, 4, 4, 4},
+		color: argb(255, 0, 0, 0), fontSize: 16,
 		opacity: 1, transform: transformSpec{scale: 1},
 	}
 }

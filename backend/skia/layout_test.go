@@ -335,13 +335,13 @@ func TestFlexGrowFillsRemainingSpace(t *testing.T) {
 		boxNode("grow", map[string]any{"flex-grow": 1, "height": 100}),
 	)
 	cache := computeLayout(root, 800, 200, fixedMeasure)
-	// 根节点默认 padding 4，内容区 800-8=792，grow = 792-300 = 492。
+	// 默认 padding 已归零（三端一致），内容区 800，grow = 800-300 = 500。
 	grow := cache[root.Children[1]]
-	if !near(grow.W, 492, 0.5) {
-		t.Errorf("flex-grow 子节点宽 = %.1f, want 492 (792-300)", grow.W)
+	if !near(grow.W, 500, 0.5) {
+		t.Errorf("flex-grow 子节点宽 = %.1f, want 500 (800-300)", grow.W)
 	}
-	if !near(grow.X, 304, 0.5) {
-		t.Errorf("flex-grow 子节点 X = %.1f, want 304", grow.X)
+	if !near(grow.X, 300, 0.5) {
+		t.Errorf("flex-grow 子节点 X = %.1f, want 300", grow.X)
 	}
 }
 
@@ -358,9 +358,9 @@ func TestFlexShrinkZeroPreventsShrink(t *testing.T) {
 	if !near(fixed.W, 400, 0.5) {
 		t.Errorf("flex-shrink=0 子节点应保持 400, got %.1f", fixed.W)
 	}
-	// 根默认 padding 4：内容区 492，fixed=400，shrinkable 压缩到 92。
-	if !near(shrink.W, 92, 0.5) {
-		t.Errorf("flex-shrink=1 子节点应压缩到 92, got %.1f", shrink.W)
+	// 默认 padding 归零：内容区 500，fixed=400，shrinkable 压缩到 100。
+	if !near(shrink.W, 100, 0.5) {
+		t.Errorf("flex-shrink=1 子节点应压缩到 100, got %.1f", shrink.W)
 	}
 }
 

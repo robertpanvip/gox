@@ -26,10 +26,19 @@ pub func Card(props gxscene.Props) *gxscene.Instance {
 	}
 
 	// 标题行 + 内容区。标题为空时仍保留空 span 占位，维持稳定的插槽结构。
-	return <div gx-role="card" bg={ThemePanel} border={ThemeBorder} border-width="1"
-		border-radius={RadiusCard} box-shadow={ShadowCard} padding={pad}
-		flex-direction="column" gap="8" width={width()}>
-		<span color={toneColor(tone())} font-size="12" weight="bold">{title()}</span>
-		<span>{children()}</span>
-	</div>
+	return <div
+     gx-role="card"
+     bg={ThemePanel}
+     border={ThemeBorder}
+     border-width="1"
+     border-radius={RadiusCard}
+     box-shadow={ShadowCard}
+     padding={pad}
+     flex-direction="column"
+     gap="8"
+     width={width()}
+ >
+     <span color={toneColor(tone())} font-size="12" weight="bold">{title()}</span>
+     <span>{children()}</span>
+ </div>
 }

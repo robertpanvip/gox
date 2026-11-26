@@ -577,6 +577,10 @@ func projectRowIcon(n projectNode) *gxscene.Instance {
     if n.isDir {
         return widgets.Icon(gxscene.Props{"name": "folder", "size": 15, "tone": "yellow"})
     }
+    // 选中行背景是 accent 蓝，doc 图标同样用 onaccent 提亮，避免蓝图标配蓝底隐形。
+    if projectRoot == "" && n.sample == SampleIndex() {
+        return widgets.Icon(gxscene.Props{"name": "doc", "size": 15, "tone": "onaccent"})
+    }
     return widgets.Icon(gxscene.Props{"name": "doc", "size": 15, "tone": "blue"})
 }
 

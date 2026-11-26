@@ -77,6 +77,11 @@ func toneColor(tone string) string {
 	if c, ok := tones[tone]; ok {
 		return c
 	}
+	// 语义令牌（onaccent/text/muted/…）走当前主题全局，避免"onaccent 兜底成
+	// accent 蓝"导致强调色背景上的元素隐形（与 semanticToneColor 同源语义）。
+	if c := semanticToneColor(tone); c != "" {
+		return c
+	}
 	return ThemeAccent
 }
 

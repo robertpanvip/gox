@@ -32,10 +32,10 @@ func itemLabel(i int) string { return []string{"A", "B", "C", "D"}[i] }
 func TestScrollOffsetApplied(t *testing.T) {
 	vp := overflowTree(30)
 	cache := computeLayout(vp, 800, 600, fixedMeasure2)
-	// 无滚动时第一个子节点 y ≈ padding 4；滚动 30 后应上移 30 → ≈ -26
+	// 无滚动时第一个子节点 y=0（默认 padding 已归零）；滚动 30 后应上移到 ≈ -30
 	first := cache[vp.Children[0]]
-	if !near(first.Y, 4-30, 2) {
-		t.Errorf("首个子节点 y=%.1f want ≈-26 (4-30)", first.Y)
+	if !near(first.Y, -30, 2) {
+		t.Errorf("首个子节点 y=%.1f want ≈-30", first.Y)
 	}
 	// 裁剪矩形 = viewport 矩形 (0,0,100,50)
 	if !first.HasClip || !near(first.ClipW, 100, 1) || !near(first.ClipH, 50, 1) {
@@ -47,7 +47,7 @@ func TestScrollHitClip(t *testing.T) {
 	vp := overflowTree(30)
 	cache := computeLayout(vp, 800, 600, fixedMeasure2)
 	first := cache[vp.Children[0]] // 滚出视口上方
-	// 点落在第一子节点原位置 y=-26..4，但视口裁剪 0..50 → y=-10 应被裁掉
+	// 点落在第一子节点原位置 y=-30..0，但视口裁剪 0..50 → y=-10 应被裁掉
 	if first.visibleContains(50, -10) {
 		t.Error("视口上方的子节点不应被命中（已滚出裁剪区）")
 	}
