@@ -104,7 +104,8 @@ func (s *Server) handleRequest(req *RequestMessage, body []byte) (any, *RPCError
 				DocumentFormattingProvider: true,
 				ReferencesProvider:         true,
 				DocumentHighlightProvider:  true,
-				CodeActionProvider:         true,
+				CodeActionProvider:         &CodeActionOptions{CodeActionKinds: []string{"quickfix", "source.organizeImports"}},
+				DiagnosticProvider:         &DiagnosticOptions{},
 				WorkspaceSymbolProvider:    true,
 			},
 			ServerInfo: ServerInfo{Name: "gox-lsp", Version: "0.1.0"},
@@ -131,6 +132,8 @@ func (s *Server) handleRequest(req *RequestMessage, body []byte) (any, *RPCError
 		return s.inlayHints(body)
 	case "completionItem/resolve":
 		return s.completionResolve(body)
+	case "textDocument/diagnostic":
+		return s.pullDiagnostic(body)
 	case "workspace/symbol":
 		return s.workspaceSymbol(body)
 	case "textDocument/signatureHelp":

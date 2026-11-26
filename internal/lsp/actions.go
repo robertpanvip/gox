@@ -177,6 +177,21 @@ func (s *Server) codeAction(body []byte) (any, *RPCError) {
 			Edit:  &WorkspaceEdit{Changes: map[string][]TextEdit{p.TextDocument.URI: edits}},
 		})
 	}
+	// organizeImports：纯词法整理动作，与诊断无关、常驻提供（有变更才出现）
+	if oedits, ok := typecheck.OrganizeImports(d.Text); ok {
+		oes := make([]TextEdit, 0, len(oedits))
+		for _, oe := range oedits {
+			oes = append(oes, TextEdit{
+				Range:   Range{Start: Position{Line: oe.StartLine - 1}, End: Position{Line: oe.EndLine}},
+				NewText: oe.Text,
+			})
+		}
+		out = append(out, CodeAction{
+			Title: "organize imports",
+			Kind:  "source.organizeImports",
+			Edit:  &WorkspaceEdit{Changes: map[string][]TextEdit{p.TextDocument.URI: oes}},
+		})
+	}
 	return out, nil
 }
 

@@ -95,10 +95,11 @@ type Reference struct {
 
 // TextEdit 最小行编辑：Delete=true 删除 Line 行；否则在 Line/Col 前插入 Text。0 基。
 type TextEdit struct {
-	Line   int    `json:"line"`
-	Col    int    `json:"col,omitempty"`
-	Text   string `json:"text,omitempty"`
-	Delete bool   `json:"delete,omitempty"`
+	Line    int    `json:"line"`
+	Col     int    `json:"col,omitempty"`
+	Text    string `json:"text,omitempty"`
+	Delete  bool   `json:"delete,omitempty"`
+	EndLine int    `json:"endLine,omitempty"` // 0 基 end-exclusive，区域替换（organize 用）
 }
 
 // CodeAction QuickFix 动作（title + 单条编辑）。

@@ -38,23 +38,35 @@ func (s *Session) ReferencesAt(line, col int) []Reference {
 // ReferencesJSON 返回引用 JSON（不适用时 null）。
 func (s *Session) ReferencesJSON(line, col int) string { return marshal(s.ReferencesAt(line, col)) }
 
-// CodeActions 基于当前诊断产出 QuickFix（补/删 import；0 基 .gx 文本坐标）。
+// CodeActions 产出 QuickFix：诊断类（补/删 import）+ organizeImports（纯词法，
+// 有变更才出现）。TextEdit.Line 为 0 基起始行，EndLine 为 0 基 end-exclusive。
 func (s *Session) CodeActions() []CodeAction {
-	if len(s.diags) == 0 {
-		return nil
-	}
-	raw := make([]typecheck.RawDiag, 0, len(s.diags))
-	for _, d := range s.diags {
-		raw = append(raw, typecheck.RawDiag{Line: d.Range.Start.Line + 1, Msg: d.Message})
-	}
-	fixes := typecheck.QuickFixes(s.src, raw, embedstd.Packages())
-	out := make([]CodeAction, 0, len(fixes))
-	for _, f := range fixes {
-		if f.DeleteLine > 0 {
-			out = append(out, CodeAction{Title: f.Title, Edit: &TextEdit{Line: f.DeleteLine - 1, Delete: true}})
-			continue
+	out := make([]CodeAction, 0, 4)
+	if len(s.diags) > 0 {
+		raw := make([]typecheck.RawDiag, 0, len(s.diags))
+		for _, d := range s.diags {
+			raw = append(raw, typecheck.RawDiag{Line: d.Range.Start.Line + 1, Msg: d.Message})
 		}
-		out = append(out, CodeAction{Title: f.Title, Edit: &TextEdit{Line: f.InsertLine - 1, Text: f.InsertText}})
+		fixes := typecheck.QuickFixes(s.src, raw, embedstd.Packages())
+		for _, f := range fixes {
+			if f.DeleteLine > 0 {
+				out = append(out, CodeAction{Title: f.Title, Edit: &TextEdit{Line: f.DeleteLine - 1, Delete: true}})
+				continue
+			}
+			out = append(out, CodeAction{Title: f.Title, Edit: &TextEdit{Line: f.InsertLine - 1, Text: f.InsertText}})
+		}
+	}
+	if oedits, ok := typecheck.OrganizeImports(s.src); ok {
+		for _, oe := range oedits {
+			out = append(out, CodeAction{Title: "organize imports", Edit: &TextEdit{
+				Line:    oe.StartLine - 1,
+				EndLine: oe.EndLine,
+				Text:    oe.Text,
+			}})
+		}
+	}
+	if len(out) == 0 {
+		return nil
 	}
 	return out
 }

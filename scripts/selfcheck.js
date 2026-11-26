@@ -306,6 +306,41 @@ const NAV3_EXPR = `
   }
 })()`;
 
+// 探针 M：organizeImports 浏览器闭环——动作生成、应用后 fmt 在前、且幂等再生成不再出现。
+const ORG_EXPR = `
+(async () => {
+  const wait = ms => new Promise(r => setTimeout(r, ms));
+  const deadline = Date.now() + 40000;
+  while (!(window.Gox && window.Gox.setSource && window.Gox.lspDiagnostics)) {
+    if (Date.now() > deadline) return JSON.stringify({ err: 'Gox 超时未就绪' });
+    await wait(250);
+  }
+  await wait(600);
+  if (typeof Gox.lspCodeActions !== 'function') return JSON.stringify({ err: 'no-lspCodeActions' });
+  const srcD = 'package main\\n\\nimport "strings"\\nimport "fmt"\\n\\nfunc main() {\\n\\t_ = fmt.Sprint(strings.ToUpper("x"))\\n}\\n';
+  Gox.setSource(srcD);
+  await wait(900);
+  const acts = JSON.parse(Gox.lspCodeActions());
+  if (!acts || !acts.some(a => String(a.title) === 'organize imports')) return JSON.stringify({ err: 'no-organize-action', raw: JSON.stringify(acts).slice(0, 160) });
+  const orga = acts && acts.find(a => String(a.title) === 'organize imports' && a.edit && String(a.edit.text).indexOf('import (') >= 0);
+  let okApply = false, okIdem = false, sorted = false;
+  if (orga) {
+    const ls = srcD.split('\\n');
+    const ins = String(orga.edit.text).replace(/\\n$/, '').split('\\n');
+    ls.splice(orga.edit.line, orga.edit.endLine - orga.edit.line, ...ins);
+    const next = ls.join('\\n');
+    sorted = next.indexOf('import (') >= 0 && next.indexOf('"fmt"') < next.indexOf('"strings"');
+    Gox.setSource(next);
+    await wait(900);
+    const acts2 = JSON.parse(Gox.lspCodeActions());
+    okApply = true;
+    okIdem = !(acts2 && acts2.some(a => String(a.title) === 'organize imports'));
+  }
+  return JSON.stringify({ ok: !!(orga && okApply && okIdem && sorted),
+    hasOrga: !!orga, okApply, okIdem, sorted });
+})()`;
+
+
 const PROVIDER_EXPR = `
 (async () => {
   const wait = ms => new Promise(r => setTimeout(r, ms));
@@ -329,9 +364,9 @@ const PROVIDER_EXPR = `
 })()`;
 
 (async () => {
-  const expr = mode === "stacking" ? STACKING_EXPR : (mode === "gsyntax" ? GSYNTAX_EXPR : (mode === "comp" ? COMP_EXPR : (mode === "sig" ? SIG_EXPR : (mode === "nav" ? NAV_EXPR : (mode === "nav2" ? NAV2_EXPR : (mode === "p1" ? P1_EXPR : (mode === "nav3" ? NAV3_EXPR : PROVIDER_EXPR)))))));
+  const expr = mode === "stacking" ? STACKING_EXPR : (mode === "gsyntax" ? GSYNTAX_EXPR : (mode === "comp" ? COMP_EXPR : (mode === "sig" ? SIG_EXPR : (mode === "nav" ? NAV_EXPR : (mode === "nav2" ? NAV2_EXPR : (mode === "p1" ? P1_EXPR : (mode === "nav3" ? NAV3_EXPR : (mode === "org" ? ORG_EXPR : PROVIDER_EXPR))))))));
   let url;
-  if (mode === "stacking" || mode === "gsyntax" || mode === "comp" || mode === "sig" || mode === "nav" || mode === "nav2" || mode === "p1" || mode === "nav3") {
+  if (mode === "stacking" || mode === "gsyntax" || mode === "comp" || mode === "sig" || mode === "nav" || mode === "nav2" || mode === "p1" || mode === "nav3" || mode === "org") {
     url = "file://" + target;
   } else {
     server = http.createServer((q, s) => {
@@ -387,7 +422,9 @@ const PROVIDER_EXPR = `
   if (pageErrs.length) console.log("PAGE_ERRORS", JSON.stringify(pageErrs.slice(0, 3)));
   let v = {};
   try { v = JSON.parse(String(out)); } catch {}
-  const pass = mode === "nav3"
+  const pass = mode === "org"
+    ? !v.err && v.ok === true
+    : mode === "nav3"
     ? !v.err && v.ok === true
     : mode === "p1"
     ? !v.err && v.ok === true

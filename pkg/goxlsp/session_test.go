@@ -423,3 +423,16 @@ func TestImplementationLocalJSON(t *testing.T) {
 		t.Fatalf("implementations: %+v", ds)
 	}
 }
+
+// TestCodeActionsOrganize 浏览器 organizeImports：连续单行 import 合并排序动作。
+func TestCodeActionsOrganize(t *testing.T) {
+	s := New()
+	s.SetSource("package main\n\nimport \"strings\"\nimport \"fmt\"\n\nfunc main() { _, _ = strings.Builder{}, fmt.Println }\n")
+	acts := s.CodeActions()
+	for _, a := range acts {
+		if a.Edit != nil && strings.Contains(a.Edit.Text, "import (") && strings.Contains(a.Edit.Text, `"fmt"`) && a.Edit.EndLine == 4 {
+			return
+		}
+	}
+	t.Fatalf("缺 organize 动作: %+v", acts)
+}

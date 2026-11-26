@@ -75,7 +75,8 @@ type ServerCapabilities struct {
 	InlayHintProvider          bool                   `json:"inlayHintProvider,omitempty"`
 	ReferencesProvider         bool                   `json:"referencesProvider,omitempty"`
 	DocumentHighlightProvider  bool                   `json:"documentHighlightProvider,omitempty"`
-	CodeActionProvider         bool                   `json:"codeActionProvider,omitempty"`
+	CodeActionProvider         *CodeActionOptions     `json:"codeActionProvider,omitempty"`
+	DiagnosticProvider         *DiagnosticOptions     `json:"diagnosticProvider,omitempty"`
 	WorkspaceSymbolProvider    bool                   `json:"workspaceSymbolProvider,omitempty"`
 	TypeDefinitionProvider     bool                   `json:"typeDefinitionProvider,omitempty"`
 	ImplementationProvider     bool                   `json:"implementationProvider,omitempty"`
@@ -256,4 +257,30 @@ type InlayHint struct {
 	Position Position `json:"position"`
 	Label    string   `json:"label"`
 	Kind     int      `json:"kind,omitempty"`
+}
+
+// ---- organize / pull diagnostics（3.17）----
+
+// CodeActionOptions 声明支持的 codeAction 种类。
+type CodeActionOptions struct {
+	CodeActionKinds []string `json:"codeActionKinds,omitempty"`
+}
+
+// DiagnosticOptions 拉取式诊断能力（v1 仅文档级，两项依赖声明 false）。
+type DiagnosticOptions struct {
+	InterFileDependencies bool `json:"interFileDependencies"`
+	WorkspaceDiagnostics  bool `json:"workspaceDiagnostics"`
+}
+
+// DiagnosticParams textDocument/diagnostic 入参。
+type DiagnosticParams struct {
+	TextDocument TextDocumentIdentifier `json:"textDocument"`
+	PreviousID   string                 `json:"previousResultId,omitempty"`
+}
+
+// DiagnosticReport 拉取式诊断报告。
+type DiagnosticReport struct {
+	Kind     string       `json:"kind"` // full | unchanged
+	ResultID string       `json:"resultId,omitempty"`
+	Items    []Diagnostic `json:"items"`
 }
