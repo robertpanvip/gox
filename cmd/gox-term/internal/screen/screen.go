@@ -144,6 +144,29 @@ func (s *Screen) InAlt() bool { return s.inAlt }
 // Cursor 返回当前光标位置（0 基）。
 func (s *Screen) Cursor() (int, int) { return s.x, s.y }
 
+// LineLeftOfCursor 返回当前光标行、光标左侧的可见文本（不含光标处字符）。
+// 用于旁路补全：shell 会把用户输入回显到网格，这里读出的就是"当前行已输入内容"。
+// 宽字符（CJK）占位格 Cont 被跳过，因此结果与视觉列一致。
+func (s *Screen) LineLeftOfCursor() string {
+	if s.y < 0 || s.y >= len(s.buf) {
+		return ""
+	}
+	row := s.buf[s.y]
+	var b strings.Builder
+	for x := 0; x < s.x && x < len(row); x++ {
+		c := row[x]
+		if c.Cont {
+			continue
+		}
+		if c.Ch == 0 || c.Ch < 0x20 {
+			b.WriteByte(' ')
+		} else {
+			b.WriteRune(c.Ch)
+		}
+	}
+	return strings.TrimRight(b.String(), " ")
+}
+
 // Resize 调整屏幕尺寸：保留左上角重叠区域内容，钳制光标与滚动区。
 func (s *Screen) Resize(cols, rows int) {
 	if cols < 1 {

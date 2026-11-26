@@ -119,6 +119,8 @@ func (m *Model) viewBody(w, h int) string {
 	if len(lines) == 0 {
 		lines = make([]string, h)
 	}
+	// 旁路补全浮层覆盖到光标行附近（alt-screen / 回滚时由 overlay 内部跳过）。
+	lines = m.overlayCompletion(lines, w, h)
 	var out []string
 	for _, ln := range lines[:h] {
 		// 屏幕模拟器输出的行宽恰为 cols（== w），此处只补齐主题背景。

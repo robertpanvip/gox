@@ -9,6 +9,7 @@ package session
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -73,6 +74,11 @@ func shellName(shell string) string {
 	return shell
 }
 
+// NewStub 构造一个不启动进程的桩会话，供 UI 层单元测试注入。
+func NewStub(id int, name string) *Session {
+	return &Session{ID: id, Name: name}
+}
+
 // readLoop 把 PTY 输出持续投递给 UI；shell 退出（EOF/错误）时发一次 ExitedMsg。
 func (s *Session) readLoop() {
 	buf := make([]byte, 4096)
@@ -115,6 +121,9 @@ func (s *Session) Write(p []byte) (int, error) {
 	if s.exited {
 		return 0, io.EOF
 	}
+	if s.ptmx == nil { // 桩会话（测试用），吞掉写入
+		return len(p), nil
+	}
 	return s.ptmx.Write(p)
 }
 
@@ -140,6 +149,22 @@ func (s *Session) Exited() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.exited
+}
+
+// CWD 返回 shell 进程当前工作目录（Linux 读 /proc/<pid>/cwd，macOS 回退到启动目录）。
+// 用于补全引擎按当前目录扫描项目文件与符号；失败返回空串由上层兜底。
+func (s *Session) CWD() string {
+	if s.cmd == nil || s.cmd.Process == nil {
+		return ""
+	}
+	if p, err := os.Readlink(fmt.Sprintf("/proc/%d/cwd", s.cmd.Process.Pid)); err == nil {
+		return p
+	}
+	if s.cmd.Dir != "" {
+		return s.cmd.Dir
+	}
+	wd, _ := os.Getwd()
+	return wd
 }
 
 // Close 结束 shell 并关闭 PTY。

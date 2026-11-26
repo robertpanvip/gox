@@ -193,3 +193,21 @@ func TestCJKScrollback(t *testing.T) {
 		t.Fatalf("scrollback = %q, want 中文", got)
 	}
 }
+
+func TestLineLeftOfCursor(t *testing.T) {
+	s := New(40, 3)
+	s.Write([]byte("user@host:~$ git sta"))
+	if got := s.LineLeftOfCursor(); got != "user@host:~$ git sta" {
+		t.Fatalf("LineLeftOfCursor = %q", got)
+	}
+	// 退格后应变短
+	s.Write([]byte{'\b', '\b'})
+	if got := s.LineLeftOfCursor(); got != "user@host:~$ git s" {
+		t.Fatalf("退格后 = %q", got)
+	}
+	// 光标定位到中间：只读左侧
+	s.Write([]byte("\x1b[1;6H"))
+	if got := s.LineLeftOfCursor(); got != "user@" {
+		t.Fatalf("定位后左侧 = %q", got)
+	}
+}

@@ -3,9 +3,11 @@ package app
 
 import (
 	"fmt"
+	"os"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/robertpanvip/gox-term/internal/complete"
 	"github.com/robertpanvip/gox-term/internal/screen"
 	"github.com/robertpanvip/gox-term/internal/session"
 	"github.com/robertpanvip/gox-term/internal/theme"
@@ -30,14 +32,26 @@ type Model struct {
 	autoScroll bool
 
 	statusMsg string
+
+	// 旁路补全状态：shell 行编辑保持权威，这里只做"读取屏幕→弹候选→回发采纳"。
+	compEngine *complete.Engine
+	compOpen   bool
+	compCands  []complete.Candidate
+	compSel    int
+	compSeq    int    // 延迟查询序号，丢弃过期定时器
+	compStart  int    // 浮层在终端可见行的起始行（-1 表示未显示）
+	homeDir    string // 补全取不到 shell cwd 时的兜底目录
 }
 
 // New 构建 Model（不立即建会话，等 Init 拿到 prog 后建）。
 func New(dark bool, shell string) *Model {
+	wd, _ := os.Getwd()
 	m := &Model{
 		theme: theme.New(toMode(dark)), shell: shell,
 		autoScroll: true, screens: map[int]*screen.Screen{},
+		homeDir: wd, compStart: -1,
 	}
+	m.compEngine = complete.NewEngine(wd)
 	return m
 }
 
@@ -136,6 +150,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		return m.handleKey(msg)
 
+	case tea.MouseMsg:
+		return m.handleMouse(msg)
+
+	case completionTickMsg:
+		m.refreshCompletion(msg.id, msg.seq)
+		return m, nil
+
 	case session.OutputMsg:
 		// 把 PTY 字节喂给对应会话的 VT 模拟器——这是让 vim/htop 正常显示的关键。
 		// 解析必须在 UI 线程完成，避免与渲染并发读写网格。
@@ -163,6 +184,31 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	key := msg.String()
+
+	// 补全浮层打开时，导航/采纳键优先归补全使用。
+	if m.compOpen {
+		switch key {
+		case "up":
+			m.moveCompletionSel(-1)
+			return m, nil
+		case "down":
+			m.moveCompletionSel(1)
+			return m, nil
+		case "tab", "enter", "ctrl+y":
+			return m, m.acceptCompletion(m.compSel)
+		case "esc":
+			m.closeCompletion()
+			return m, nil
+		default:
+			// 数字快选：1..9 直接采纳对应候选。
+			if len(key) == 1 && key[0] >= '1' && key[0] <= '9' {
+				idx := int(key[0] - '1')
+				if idx < len(m.compCands) {
+					return m, m.acceptCompletion(idx)
+				}
+			}
+		}
+	}
 
 	// 全局控制键（在转发给 shell 之前拦截）。
 	switch key {
@@ -205,8 +251,26 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		m.scrollBack = 0
 		m.autoScroll = true
+		// 可打印字符 / 退格 / 方向键可能改变当前行，安排一次延迟补全查询。
+		if isCompletionRelevant(msg) {
+			return m, m.bumpCompletion()
+		}
 	}
 	return m, nil
+}
+
+// isCompletionRelevant 判断按键是否可能改变 shell 当前输入行，值得触发补全查询。
+func isCompletionRelevant(msg tea.KeyMsg) bool {
+	if len(msg.Runes) > 0 {
+		return true
+	}
+	switch msg.String() {
+	case "backspace", "delete", "left", "right", "home", "end", "ctrl+a", "ctrl+e", "ctrl+u", "ctrl+w":
+		return true
+	}
+	// 单个可打印 ASCII（keyBytesFromString 已覆盖特殊键，剩下的是普通字符）。
+	k := msg.String()
+	return len(k) == 1 && k[0] >= 0x20 && k[0] < 0x7f
 }
 
 // keyBytes 把 tea.KeyMsg 编码为终端按键序列。
