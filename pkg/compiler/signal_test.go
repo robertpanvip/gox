@@ -492,7 +492,9 @@ func TestNoRawSignalAPITypeNamesAllowed(t *testing.T) {
 		name, src string
 	}{
 		{"param-generic", "package main\nimport Signal \"github.com/robertpanvip/gox/runtime/signal\"\nfunc f(s Signal.Signal[int]) int { return s() }"},
-		{"return-generic", "package main\nimport Signal \"github.com/robertpanvip/gox/runtime/signal\"\nfunc f() Signal.Signal[int] { return Signal.New(0) }"},
+		// 构造器不可手写（含 import 后的别名路径），函数体用 nil 返回——
+		// 本用例的目的只是验证返回类型位置的 Signal.Signal[T] 放行。
+		{"return-generic", "package main\nimport Signal \"github.com/robertpanvip/gox/runtime/signal\"\nfunc f() Signal.Signal[int] { return nil }"},
 		{"param-plain-alias", "package main\nimport \"github.com/robertpanvip/gox/runtime/signal\"\nfunc f(s Signal.Signal[int]) int { return s() }"},
 		{"owner-type", "package main\nimport Signal \"github.com/robertpanvip/gox/runtime/signal\"\nfunc f(o Signal.Owner) {}"},
 	}
@@ -616,6 +618,48 @@ func TestNoExplicitSigFieldChainCall(t *testing.T) {
 	for _, tc := range allowed {
 		t.Run("allow_"+tc.name, func(t *testing.T) {
 			compileOK(t, "chain.gx", tc.src)
+		})
+	}
+}
+
+// 遗留缺陷回归（问题 3 / 方案 B）：早期版本只认字面 "Signal" 包名，且
+// BkImport 绑定命中即放行——用户用任意别名（显式 Signal / 无别名 signal /
+// 自定义 sr）导入 signal runtime 后，Signal.New/Effect/Batch 等底层构造器
+// 全部绕过检查。Binding 增加 ImportPath 后按 import 身份判定，别名路径全部堵死。
+func TestNoRawSignalAPIImportAliasBlocked(t *testing.T) {
+	cases := []struct{ name, src, wantName string }{
+		{"explicit-Signal-alias", "package main\nimport Signal \"github.com/robertpanvip/gox/runtime/signal\"\nfunc main() { n := Signal.New(1); _ = n() }", "Signal.New"},
+		{"no-alias-lowercase-pkg", "package main\nimport \"github.com/robertpanvip/gox/runtime/signal\"\nfunc main() { n := signal.New(1); _ = n() }", "signal.New"},
+		{"custom-alias", "package main\nimport sr \"github.com/robertpanvip/gox/runtime/signal\"\nfunc main() { sr.Effect(func() {}) }", "sr.Effect"},
+		{"custom-alias-batch", "package main\nimport sr \"github.com/robertpanvip/gox/runtime/signal\"\nfunc main() { sr.Batch(func() {}) }", "sr.Batch"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			_, err := Compile("alias.gx", c.src)
+			if err == nil {
+				t.Fatalf("别名导入后的手写 %s 应被禁止", c.wantName)
+			}
+			if !strings.Contains(err.Error(), "不允许直接调用底层 API "+c.wantName) {
+				t.Errorf("错误信息应点名 %s，got: %v", c.wantName, err)
+			}
+		})
+	}
+}
+
+// 别名导入后的合法用法不受影响：类型位置（sr.Signal[int]）、小写语法糖
+// （Signal.computed/effect）、用户同名变量遮蔽（Signal := Holder{...}）。
+func TestNoRawSignalAPIImportAliasLegalUses(t *testing.T) {
+	cases := []struct{ name, src, want string }{
+		{"alias-type-position", "package main\nimport sr \"github.com/robertpanvip/gox/runtime/signal\"\nfunc f(s sr.Signal[int]) int { return s() }\nfunc main() {}", "sr.Signal[int]"},
+		{"alias-lowercase-sugar", "package main\nimport Signal \"github.com/robertpanvip/gox/runtime/signal\"\nfunc main() { sig n = 1; c := Signal.computed(() => n); _ = c }", "Signal.Computed("},
+		{"shadow-by-local-var", "package main\ntype Holder struct{ New int }\nfunc main() { Signal := Holder{New: 1}; _ = Signal.New }", "Holder{New: 1}"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := compileOK(t, "legal.gx", c.src)
+			if !strings.Contains(got, c.want) {
+				t.Errorf("产物应包含 %q:\n%s", c.want, got)
+			}
 		})
 	}
 }

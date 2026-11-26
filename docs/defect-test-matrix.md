@@ -69,6 +69,7 @@
 | D4 | JSX 事件体/插值内的 sig 深写完全不检测（片段是重新词法化的整体 token） | `lexExprScene` 片段改写后按已解析的 effective sig 集合复跑深写检查，坐标回投 JSX 根 | `TestSignalDeepWriteJSXEventBody` | `signal-deep-write` |
 | D5 | is 守卫只支持最简形态：复合条件 `v is int && len(v) > 0` 硬报错、selector 守卫 `b.val is int` 不支持 | 守卫位于条件首位且尾部只有 `&&` 链时：comma-ok 前置 + 尾部 recv 读替换 + then 块收窄；selector 守卫块内链读替换为收窄临时变量（写目标保持字段赋值）；`\|\|` 破坏收窄语义保持报错 | `TestTypeGuardCompoundAndTail` / `TestTypeGuardCompoundTailOnlyUse` / `TestTypeGuardCompoundOrRejected` / `TestTypeGuardSelectorEndToEnd` | 产物：`; ok && <tail>` |
 | D6 | struct 字段联合类型漏擦除：`pub val int \| string` 因字段解析的 pub 前缀偏移产出非法 Go `Val int \| string` | `fieldRoots` 剥 pub 关键字后再走两标识符启发式 | `TestUnionEraseStructFieldWithPub` | 产物：`Val any` |
+| D7 | 底层 API 别名绕过：检查器只认字面 `Signal` 包名且 BkImport 命中即放行——任意别名（显式 Signal / 无别名 signal / 自定义 sr）导入 signal runtime 后 `Signal.New/Effect/Batch` 全部绕过 | 方案 B：`Binding` 增加 `ImportPath`（scanImport 回填），`checkNoRawSignalAPI` 按 import 身份判定包名引用，别名路径全堵死；类型位置 / 小写语法糖 / 同名变量遮蔽照常放行 | `TestNoRawSignalAPIImportAliasBlocked` / `TestNoRawSignalAPIImportAliasLegalUses` | 错误：`不允许直接调用底层 API sr.Effect` |
 
 ## 运行
 

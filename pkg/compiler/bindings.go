@@ -90,6 +90,12 @@ type Binding struct {
 	// 的 var 声明其作用域从「声明语句结束」开始，因此 `x := x + 1` 右侧的 x
 	// 应引用外层绑定。这类声明会把 VisibleFrom 设到语句右端，ResolveAt 据此排除。
 	VisibleFrom Pos
+
+	// ImportPath 仅 BkImport 绑定使用：该包名/别名对应的 import 路径字面量。
+	// 供按「包身份」而非「包名」判定的检查器使用——用户可用任意别名导入
+	// signal runtime（import Signal / signal / s ...），只认字面 "Signal" 的
+	// 检查会被别名绕过；解析到绑定后查 ImportPath 才能覆盖所有别名形态。
+	ImportPath string
 }
 
 // setVisibleFrom 设置绑定的可见起点。nil 安全、NoPos 忽略。
@@ -747,7 +753,10 @@ func (b *Bindings) scanImport(toks []Token, ii, end int, scope *BindScope) int {
 			if toks[k].Kind == String {
 				lit := stringsTrim(toks[k].Text, "\"`")
 				if lit == quoted {
-					b.addBinding(tokIdent(sp.pkg, toks[k].Pos), BkImport, scope, "")
+					bd := b.addBinding(tokIdent(sp.pkg, toks[k].Pos), BkImport, scope, "")
+					if bd != nil {
+						bd.ImportPath = lit // 回填路径：供按包身份判定的检查器解析别名
+					}
 					break
 				}
 			}

@@ -42,24 +42,28 @@ import (
 // 失去透明改写、占位包名被重命名触发 Signal2 未定义、被 sig 字段二次包装
 // 类型错等一系列问题——这些正是第六、七轮反复打补丁的根因。禁止手写即可归零。
 //
-// 判据：`Signal . <大写开头标识符>` 形态，且 Signal 是「包名引用」而非用户同名变量：
-//   - 只认用户手写的 token（IsGen==false）——编译器生成的 Signal.New/Computed/Signal[T]
-//     都带 IsGen，避免误报自身产物（第九轮 P2-A）；
-//   - 对命中的 Signal 用 Bindings.ResolveAt 查绑定：命中局部/参数/字段/类型等
-//     任何用户绑定（如 `Signal := Holder{New:"v"}`）→ 是合法的同名字段访问，放行；
-//     查不到绑定 → 是包名引用，用户手写底层 API，报错；
-//   - 首字母小写（computed/effect/createRoot 等）是语法糖，放行。
+// 判据：`pkg . <大写开头标识符>` 形态，且 pkg 是「signal runtime 的包名引用」
+// 而非用户同名变量。包名按「import 身份」判定而非字面 "Signal"（方案 B）：
+//   - ident 解析到 BkImport 绑定且 ImportPath 指向 signal runtime → 任意别名
+//     （import Signal / 无别名 signal / 自定义 s）都在覆盖范围内——早期版本
+//     只认字面 "Signal"，且 BkImport 命中即放行，恰好是别名绕过的后门；
+//   - 无绑定但名为 Signal → 隐式占位包名（编译器 ReconcileImports 时注入
+//     import），同样是包名引用；
+//   - 解析到其他绑定（局部/参数/字段，如 `Signal := Holder{New:"v"}`）→
+//     合法的同名字段访问，放行；
+//   - 首字母小写成员（computed/effect/createRoot 等）是语法糖，放行；
+//   - 类型位置放行：Signal.Signal[T] / Signal.Owner 等是 signal 包的「类型名」
+//     而非底层构造器（泛型组件签名需要），判据是成员名在类型白名单且其后
+//     不是调用括号 '('；
+//   - 只认用户手写的 token（IsGen==false）——编译器生成的 Signal.New/Computed/
+//     Signal[T] 都带 IsGen，避免误报自身产物（第九轮 P2-A）。
 //
 // 调用时机：必须在 transformSignals 之后（Bindings 可用）、transformExternal 之前
 // （小写语法糖尚未还原成大写）。详见 pipeline.go 调用点注释。
 func checkNoRawSignalAPI(toks []Token, b *Bindings) error {
 	for i := 0; i < len(toks); i++ {
-		if !toks[i].is("Signal") || toks[i].IsGen {
-			continue // 编译器生成物放行
-		}
-		// 用户同名变量/字段/参数：按绑定放行（Signal := Holder{...}; Signal.New）。
-		if b != nil && b.ResolveAt("Signal", toks[i].Pos) != nil {
-			continue
+		if toks[i].Kind != Ident || toks[i].IsGen || isGoKeyword(toks[i].Text) {
+			continue // 编译器生成物 / 非标识符 / 关键字放行
 		}
 		dot := nextSig(toks, i+1)
 		if dot < 0 || toks[dot].Text != "." {
@@ -69,17 +73,45 @@ func checkNoRawSignalAPI(toks []Token, b *Bindings) error {
 		if name < 0 || toks[name].Kind != Ident || !startsUpper(toks[name].Text) {
 			continue
 		}
-		// 类型位置放行：Signal.Signal[T] / Signal.Owner / Signal.Vec[T] 等是
-		// signal 包的「类型名」而非底层构造器。它们在函数签名、字段类型、
-		// 类型断言里合法出现（尤其泛型组件如 Context[T] 的 Signal.Signal[T]）。
-		// 判据：成员名是 signal 包已知导出类型，且其后不是调用括号 '('。
+		// 包名身份判定（见函数注释）。
+		pkgRef := false
+		if b != nil {
+			if bd := b.ResolveAt(toks[i].Text, toks[i].Pos); bd != nil {
+				if bd.Kind != BkImport || !isSignalImportPath(bd.ImportPath) {
+					continue // 用户同名变量/其他包的 import：合法访问，放行
+				}
+				pkgRef = true // signal runtime 的 import（任意别名）
+			} else if toks[i].is("Signal") {
+				pkgRef = true // 隐式占位包名，编译器后续注入 import
+			}
+		} else if toks[i].is("Signal") {
+			pkgRef = true
+		}
+		if !pkgRef {
+			continue
+		}
+		// 类型白名单且非调用 → 类型位置引用，放行；其余大写成员一律拦截。
 		if isSignalTypeName(toks[name].Text) && !isCallParen(toks, name+1) {
 			continue
 		}
-		return fmt.Errorf("%d:%d: 不允许直接调用底层 API Signal.%s；源信号请用 `sig n = v`，派生用 `Signal.computed(() => expr)`，副作用用 `Signal.effect(() => {...})`",
-			toks[name].Pos.Line, toks[name].Pos.Col, toks[name].Text)
+		// Effect 函数值接线放行：view.BindReactive(signal.Effect) 是官方启动
+		// 接线用法（jsxspp-context 等示例），传的是运行时回调函数本身、不构造
+		// 任何信号，不绕过编译器改写。调用形态 signal.Effect(...) 仍拦截——
+		// 创建 effect 必须走 Signal.effect 语法糖。
+		if toks[name].Text == "Effect" && !isCallParen(toks, name+1) {
+			continue
+		}
+		return fmt.Errorf("%d:%d: 不允许直接调用底层 API %s.%s；源信号请用 `sig n = v`，派生用 `%s.computed(() => expr)`，副作用用 `%s.effect(() => {...})`",
+			toks[name].Pos.Line, toks[name].Pos.Col, toks[i].Text, toks[name].Text, toks[i].Text, toks[i].Text)
 	}
 	return nil
+}
+
+// isSignalImportPath 判断 import 路径是否指向 signal runtime。
+// 用后缀而非完整路径判定：module 名可由编译入口覆盖（CompileWithModule），
+// 但 runtime/signal 的子路径固定。
+func isSignalImportPath(path string) bool {
+	return strings.HasSuffix(path, "/runtime/signal")
 }
 
 // isSignalTypeName 判断标识符是否为 runtime/signal 包的导出类型名。
