@@ -2,6 +2,8 @@
 #
 # test job（矩阵 ubuntu + windows）：
 #   - 全量 Go 测试（Windows 下先装 mingw，cgo 包才能编译）
+#   - 全 module 测试（根 ./... 覆盖不到的嵌套 module：playground/gox-tui/
+#     gox-term/gox-idea/backend/*；含 TUI 真 PTY E2E 与 Playground UI E2E）
 #   - Playground 按功能 E2E（Playwright + Chromium，用例清单见
 #     scripts/e2e/playground_features.py 的 CASES；Windows 侧先允许失败，
 #     稳定后去掉 continue-on-error 转为硬门禁）
@@ -54,6 +56,20 @@ jobs:
         if: runner.os == 'Windows'
         shell: msys2 {0}
         run: go test ./... -count=1
+
+      # 根 `go test ./...` 只覆盖主 module；go.work 里的嵌套 module
+      # （playground / gox-tui / gox-term / gox-idea / backend/*）不在 ./... 内。
+      # 统一入口自动发现并逐个跑：含 TUI 真 PTY E2E、Playground UI E2E、
+      # gox-idea 全部单测与 E2E。Rust 后端静态库未编译时自动跳过。
+      - name: 全 module 单测（Linux 硬门禁）
+        if: runner.os == 'Linux'
+        run: bash scripts/e2e/run_all_module_tests.sh
+
+      - name: 全 module 单测（Windows 观察）
+        if: runner.os == 'Windows'
+        continue-on-error: true
+        shell: msys2 {0}
+        run: bash scripts/e2e/run_all_module_tests.sh
 
       - name: 安装 Playwright（Python，Linux）
         if: runner.os == 'Linux'
