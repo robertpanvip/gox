@@ -67,6 +67,7 @@ type ServerCapabilities struct {
 	DefinitionProvider         bool                   `json:"definitionProvider"`
 	HoverProvider              bool                   `json:"hoverProvider"`
 	CompletionProvider         *CompletionOptions     `json:"completionProvider,omitempty"`
+	SignatureHelpProvider      *SignatureHelpOptions  `json:"signatureHelpProvider,omitempty"`
 	DocumentSymbolProvider     bool                   `json:"documentSymbolProvider"`
 	RenameProvider             bool                   `json:"renameProvider"`
 	DocumentFormattingProvider bool                   `json:"documentFormattingProvider"`
@@ -197,4 +198,27 @@ type Diagnostic struct {
 	Source   string  `json:"source"`
 	Message  string  `json:"message"`
 	Code     *string `json:"code,omitempty"`
+}
+
+// SignatureInformation 一条候选签名（LSP textDocument/signatureHelp 兼容子集）。
+type SignatureInformation struct {
+	Label      string                 `json:"label"`
+	Parameters []ParameterInformation `json:"parameters,omitempty"`
+}
+
+// ParameterInformation 参数在 Label 内的字节区间。
+type ParameterInformation struct {
+	Label [2]int `json:"label"`
+}
+
+// SignatureHelp 签名帮助返回体；空 signatures 表示不适用。
+type SignatureHelp struct {
+	Signatures      []SignatureInformation `json:"signatures"`
+	ActiveSignature int                    `json:"activeSignature"`
+	ActiveParameter int                    `json:"activeParameter"`
+}
+
+// SignatureHelpOptions 签名帮助触发字符声明。
+type SignatureHelpOptions struct {
+	TriggerCharacters []string `json:"triggerCharacters,omitempty"`
 }

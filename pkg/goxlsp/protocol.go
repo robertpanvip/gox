@@ -49,3 +49,21 @@ type DocumentSymbol struct {
 	Range          Range  `json:"range"`
 	SelectionRange Range  `json:"selectionRange"`
 }
+
+// SignatureInformation 一条候选签名（LSP textDocument/signatureHelp 兼容子集）。
+type SignatureInformation struct {
+	Label      string                 `json:"label"`
+	Parameters []ParameterInformation `json:"parameters,omitempty"`
+}
+
+// ParameterInformation 参数在 Label 内的字节区间。
+type ParameterInformation struct {
+	Label [2]int `json:"label"`
+}
+
+// SignatureHelp 签名帮助返回体；空 signatures 表示不适用。
+type SignatureHelp struct {
+	Signatures      []SignatureInformation `json:"signatures"`
+	ActiveSignature int                    `json:"activeSignature"`
+	ActiveParameter int                    `json:"activeParameter"`
+}

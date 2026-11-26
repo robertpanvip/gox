@@ -96,6 +96,7 @@ func (s *Server) handleRequest(req *RequestMessage, body []byte) (any, *RPCError
 				DefinitionProvider:         true,
 				HoverProvider:              true,
 				CompletionProvider:         &CompletionOptions{TriggerCharacters: []string{"."}},
+				SignatureHelpProvider:      &SignatureHelpOptions{TriggerCharacters: []string{"(", ","}},
 				DocumentSymbolProvider:     true,
 				RenameProvider:             true,
 				DocumentFormattingProvider: true,
@@ -108,6 +109,8 @@ func (s *Server) handleRequest(req *RequestMessage, body []byte) (any, *RPCError
 		return s.definition(body)
 	case "textDocument/hover":
 		return s.hover(body)
+	case "textDocument/signatureHelp":
+		return s.signatureHelp(body)
 	case "textDocument/completion":
 		return s.completion(body)
 	case "textDocument/documentSymbol":

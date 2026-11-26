@@ -276,6 +276,13 @@ func main() {
 		}
 		return lsp.CompleteJSON(line, col)
 	}))
+	g.Set("lspSignature", js.FuncOf(func(this js.Value, args []js.Value) any {
+		line, col := 0, 0
+		if len(args) >= 2 {
+			line, col = args[0].Int(), args[1].Int()
+		}
+		return lsp.SignatureJSON(line, col)
+	}))
 	g.Set("lspHover", js.FuncOf(func(this js.Value, args []js.Value) any {
 		line, col := 0, 0
 		if len(args) >= 2 {

@@ -117,6 +117,31 @@ const COMP_EXPR = `
     fallbackItems: (fb.items || []).length });
 })()`;
 
+// 探针 E：参数签名提示——fmt.Sprintf 括号后/逗号后分别要求 active 0/1；
+// 非调用上下文必须返回 null（宿主降级），Label 必须含真实参数名。
+const SIG_EXPR = `
+(async () => {
+  const wait = ms => new Promise(r => setTimeout(r, ms));
+  const deadline = Date.now() + 40000;
+  while (!(window.Gox && window.Gox.setSource && window.Gox.lspDiagnostics)) {
+    if (Date.now() > deadline) return JSON.stringify({ err: "Gox 超时未就绪" });
+    await wait(250);
+  }
+  await wait(600);
+  if (typeof Gox.lspSignature !== "function") return JSON.stringify({ err: "no-lspSignature" });
+  const src = 'package main\\n\\nimport "fmt"\\n\\nfunc f() {\\n\\tfmt.Sprintf("%d", "x")\\n\\t_ = 0\\n}\\n';
+  Gox.setSource(src);
+  await wait(900);
+  const s1 = JSON.parse(Gox.lspSignature(5, 13));
+  const s2 = JSON.parse(Gox.lspSignature(5, 19));
+  const s3 = JSON.parse(Gox.lspSignature(6, 3));
+  const ok1 = !!(s1 && s1.signatures && s1.signatures.length === 1 && s1.activeParameter === 0
+    && String(s1.signatures[0].label).indexOf("format string") >= 0);
+  const ok2 = !!(s2 && s2.activeParameter === 1);
+  const label = s1 && s1.signatures && s1.signatures[0] ? String(s1.signatures[0].label).slice(0, 64) : "";
+  return JSON.stringify({ ok: !!(ok1 && ok2 && s3 === null), label });
+})()`;
+
 const PROVIDER_EXPR = `
 (async () => {
   const wait = ms => new Promise(r => setTimeout(r, ms));
@@ -140,9 +165,9 @@ const PROVIDER_EXPR = `
 })()`;
 
 (async () => {
-  const expr = mode === "stacking" ? STACKING_EXPR : (mode === "gsyntax" ? GSYNTAX_EXPR : (mode === "comp" ? COMP_EXPR : PROVIDER_EXPR));
+  const expr = mode === "stacking" ? STACKING_EXPR : (mode === "gsyntax" ? GSYNTAX_EXPR : (mode === "comp" ? COMP_EXPR : (mode === "sig" ? SIG_EXPR : PROVIDER_EXPR)));
   let url;
-  if (mode === "stacking" || mode === "gsyntax" || mode === "comp") {
+  if (mode === "stacking" || mode === "gsyntax" || mode === "comp" || mode === "sig") {
     url = "file://" + target;
   } else {
     server = http.createServer((q, s) => {
@@ -198,7 +223,9 @@ const PROVIDER_EXPR = `
   if (pageErrs.length) console.log("PAGE_ERRORS", JSON.stringify(pageErrs.slice(0, 3)));
   let v = {};
   try { v = JSON.parse(String(out)); } catch {}
-  const pass = mode === "comp"
+  const pass = mode === "sig"
+    ? !v.err && v.ok === true
+    : mode === "comp"
     ? !v.err && v.typeHit === true && v.kind === 2 && v.fallbackItems > 0
     : mode === "stacking"
     ? !v.err && v.selW > 0 && v.topIsCodeLine === true

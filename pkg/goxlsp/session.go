@@ -334,3 +334,48 @@ func isComponentName(name string) bool {
 }
 
 func isComponentKind(kind int) bool { return kind == 12 || kind == 5 || kind == 10 }
+
+// SignatureAt 在光标最近非空白为 '(' 或 ',' 且类型层就绪时，解析所在调用的
+// 签名帮助；其余情形返回 nil（客户端隐藏提示，行为零变化）。坐标 LSP 约定 0 基。
+func (s *Session) SignatureAt(line, col int) *SignatureHelp {
+	if s.timp == nil || s.goSrc == "" || s.smap == nil {
+		return nil
+	}
+	ls := s.lines()
+	if line < 0 || line >= len(ls) || col <= 0 || col > len(ls[line]) {
+		return nil
+	}
+	k := col
+	for k > 0 && (ls[line][k-1] == ' ' || ls[line][k-1] == '\t') {
+		k--
+	}
+	if k == 0 {
+		return nil
+	}
+	if ch := ls[line][k-1]; ch != '(' && ch != ',' {
+		return nil
+	}
+	gp, ok := s.smap.GxToGo(line+1, k)
+	if !ok {
+		return nil
+	}
+	off := goByteOffset(s.goSrc, gp.Line, gp.Column)
+	if off < 0 || off >= len(s.goSrc) {
+		return nil
+	}
+	if ch := s.goSrc[off]; ch != '(' && ch != ',' {
+		return nil
+	}
+	cs, ok := s.timp.Signature(s.goSrc, off+1)
+	if !ok {
+		return nil
+	}
+	si := SignatureInformation{Label: cs.Label}
+	for _, rg := range cs.Params {
+		si.Parameters = append(si.Parameters, ParameterInformation{Label: rg})
+	}
+	return &SignatureHelp{Signatures: []SignatureInformation{si}, ActiveParameter: cs.Active}
+}
+
+// SignatureJSON 返回签名帮助 JSON；不适用时为 null（客户端按空处理）。
+func (s *Session) SignatureJSON(line, col int) string { return marshal(s.SignatureAt(line, col)) }

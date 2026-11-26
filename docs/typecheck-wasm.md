@@ -51,3 +51,23 @@ gox-lsp / CLI `gox check -check`。
 实测（headless Chrome 158，`node scripts/selfcheck.js comp playground.html`）：
 `{"typeHit":true,"kind":2,"detail":"func(s string) string","fallbackItems":17}`
 ——*strings.Replacer 上补出 Replace 方法带真实签名，非点号路径 17 项候选不丢。
+
+## 参数签名提示（signature help）
+
+光标位于调用实参区（触发字符 `(` / `,`）时，浏览器与桌面 LSP 均给出真实签名：
+
+- 核心：`internal/typecheck/signature.go`——对未写完的调用，截断光标后缀、注入占位
+  实参 `GxSigX_`，并按未闭合括号栈（类型感知配对，跳过字符串/注释/字面量）倒序补齐
+  闭合符，还原成可解析 probe；再从持久 Importer 的类型图读取被调 `*types.Signature`。
+  Label 与各参数字节区间遵循 LSP `ParameterInformation.label` 约定；active 为顶层
+  逗号数并随可变参数钳位。内建函数（append/len 等）在 go/types 无公开签名访问器，
+  按"无提示"降级，不猜测。
+- 浏览器：`Gox.lspSignature(line, col)`（`pkg/goxlsp`，数据源 embedstd）。
+- 桌面：`textDocument/signatureHelp`，触发字符已在 initialize 注册（数据源本机 GOROOT）。
+- 零回归契约：非调用上下文 / 类型层缺席 / 坐标映射失败 → null 或空 help，
+  编辑器隐藏提示即可。
+
+实测（headless Chrome 158，`node scripts/selfcheck.js sig playground.html`）：
+`{"ok":true,"label":"Sprintf(format string, a ...any) string"}`——括号后与逗号后的
+active 分别为 0/1，非调用位置返回 null；单测红→绿对照见
+`internal/typecheck/signature_test.go`。

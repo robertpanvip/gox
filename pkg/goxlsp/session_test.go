@@ -165,3 +165,27 @@ func TestCompleteTypeMember(t *testing.T) {
 		t.Fatalf("b. 类型补全应含 Replace: %v", labels)
 	}
 }
+
+// TestSignatureAtTyped 浏览器会话层的签名接线：fmt.Sprintf 第 1/2 参数处
+// 分别 active=0/1；非调用位置返回 nil。embedstd 缺席时跳过（缺席=零变化）。
+func TestSignatureAtTyped(t *testing.T) {
+	if embedstd.Lookup() == nil {
+		t.Skip("embedstd 未生成，类型层缺席（预期行为）")
+	}
+	s := New()
+	s.SetSource("package main\n\nimport \"fmt\"\n\nfunc f() {\n\tfmt.Sprintf(\"%d\", \"x\")\n\t_ = 0\n}\n")
+	h := s.SignatureAt(5, 13) // 紧跟 '(' 之后（LSP character 13）
+	if h == nil || len(h.Signatures) == 0 || h.ActiveParameter != 0 {
+		t.Fatalf("第一参数签名不符: %+v", h)
+	}
+	if !strings.Contains(h.Signatures[0].Label, "format string") {
+		t.Fatalf("签名标签不符: %q", h.Signatures[0].Label)
+	}
+	h2 := s.SignatureAt(5, 19) // 逗号+空格之后
+	if h2 == nil || h2.ActiveParameter != 1 {
+		t.Fatalf("第二参数应 active=1: %+v", h2)
+	}
+	if h3 := s.SignatureAt(6, 3); h3 != nil {
+		t.Fatalf("非调用上下文应返回 nil: %+v", h3)
+	}
+}
