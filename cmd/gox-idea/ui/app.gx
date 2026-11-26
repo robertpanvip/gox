@@ -936,8 +936,7 @@ func menuTrigger(label string, name string) *gxscene.Instance {
 func editMenuContent() *gxscene.Instance {
     return menuBox(func() any {
         return <div style={{ flexDirection: "column" }}>
-            {menuRow("Undo", EditorUndo)}
-            {menuRow("Redo", EditorRedo)}
+            {menuRow("Undo", EditorUndo)}{menuRow("Redo", EditorRedo)}
             {menuRow("Select All", EditorSelectAll)}
         </div>
     })
@@ -946,8 +945,7 @@ func editMenuContent() *gxscene.Instance {
 func fileMenuContent() *gxscene.Instance {
     return menuBox(func() any {
         return <div style={{ flexDirection: "column" }}>
-            {menuRow("New File", NewFile)}
-            {menuRow("Next Example", nextSample)}
+            {menuRow("New File", NewFile)}{menuRow("Next Example", nextSample)}
             {menuRow("Previous Example", prevSample)}
         </div>
     })
@@ -956,8 +954,7 @@ func fileMenuContent() *gxscene.Instance {
 func viewMenuContent() *gxscene.Instance {
     return menuBox(func() any {
         return <div style={{ flexDirection: "column" }}>
-            {menuRow("Toggle Terminal Panel", ToggleTerminal)}
-            {menuRow("Switch Theme", ToggleTheme)}
+            {menuRow("Toggle Terminal Panel", ToggleTerminal)}{menuRow("Switch Theme", ToggleTheme)}
         </div>
     })
 }
@@ -965,8 +962,7 @@ func viewMenuContent() *gxscene.Instance {
 func runMenuContent() *gxscene.Instance {
     return menuBox(func() any {
         return <div style={{ flexDirection: "column" }}>
-            {menuRow("Run Current Example", TriggerRun)}
-            {menuRow("Clear Console", TerminalClear)}
+            {menuRow("Run Current Example", TriggerRun)}{menuRow("Clear Console", TerminalClear)}
         </div>
     })
 }
@@ -975,8 +971,9 @@ func menuBar() *gxscene.Instance {
     return <div
         style={{ flexDirection: "row", alignItems: "center", gap: 14, height: 30, padding: "0 12", background: chromeBg(), borderWidth: widgets.HairlineWidth, border: borderColor() }}
     >
-        {menuPopup("File", "File", fileMenuContent)}{menuPopup("Edit", "Edit", editMenuContent)}{menuPopup("View", "View", viewMenuContent)}{menuItem("Navigate")}
-        {menuItem("Code")}{menuItem("Refactor")}{menuPopup("Run", "Run", runMenuContent)}{menuItem("Tools")}
+        {menuPopup("File", "File", fileMenuContent)}{menuPopup("Edit", "Edit", editMenuContent)}
+        {menuPopup("View", "View", viewMenuContent)}{menuItem("Navigate")}{menuItem("Code")}
+        {menuItem("Refactor")}{menuPopup("Run", "Run", runMenuContent)}{menuItem("Tools")}
         {menuItem("Git")}{menuItem("Window")}{menuItem("Help")}
         <div style={{ flexGrow: 1 }}/>
         {widgets.Text(gxscene.Props{"value": "GoX IDE", "size": widgets.FontFootnote, "tone": "muted"})}
@@ -1025,7 +1022,8 @@ func ideToolbar() *gxscene.Instance {
     return <div
         style={{ flexDirection: "row", alignItems: "center", gap: 6, height: 36, padding: "0 10", background: chromeBg(), borderWidth: widgets.HairlineWidth, border: borderColor() }}
     >
-        {iconButton("folder", ToggleProjectPanel)}{iconButton("doc", NewFile)}{iconButton("search", ideNoop)}
+        {iconButton("folder", ToggleProjectPanel)}{iconButton("doc", NewFile)}
+        {iconButton("search", ideNoop)}
         <div style={{ width: 1, height: 18, background: borderColor() }}/>
         {iconButton("chevron-left", prevSample)}{iconButton("chevron-right", nextSample)}
         <div style={{ width: 1, height: 18, background: borderColor() }}/>
