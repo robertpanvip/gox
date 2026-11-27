@@ -146,8 +146,8 @@ var DarkTheme = Theme{
 	SyntaxText: "#d4d4d4", SyntaxKeyword: "#c586c0", SyntaxString: "#ce9178",
 	SyntaxNumber: "#b5cea8", SyntaxComment: "#6a9955", SyntaxTag: "#569cd6",
 	SyntaxAttr: "#9cdcfe", SyntaxPunct: "#808080",
-	EditorBg: "#1e1e1e", EditorGutter: "#858585", EditorActive: "#2a2d3a",
-	EditorCaret: "#aeafad", EditorSelect: "#264f7899", EditorSelectSolid: "#264f78", EditorSelectFg: "#ffffff",
+	EditorBg: "#233239", EditorGutter: "#5d6f76", EditorActive: "#2c454a",
+	EditorCaret: "#80cbc4", EditorSelect: "#2c454a99", EditorSelectSolid: "#2c454a", EditorSelectFg: "#ffffff",
 }
 
 // LightTheme 是 Apple macOS HIG 浅色主题（系统色精确取值）。
