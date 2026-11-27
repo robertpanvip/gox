@@ -82,8 +82,8 @@ const (
 	AppleMaterialReg   = "#3a3a3ce6" // regular：卡片/弹窗（90%）
 	AppleMaterialThick = "#1e1e1ef2" // thick：模态面板（95%）
 	AppleScrim         = "#00000099" // 60% 黑遮罩
-	AppleHairline      = "#ffffff1f" // 12% 白高光描边
-	LightHairline      = "#00000014" // 浅色模式高光描边
+	AppleHairline      = "#ffffff14" // 8% 白高光描边（WebStorm 像素评审：面板分隔近不可见）
+	LightHairline      = "#0000000d" // 5% 黑（对齐参照图近乎无界的浅色分隔）
 )
 
 // ---- 连续圆角标度（Apple HIG radius scale）----
