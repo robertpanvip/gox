@@ -8,16 +8,10 @@ use glyphon::{
     TextArea, TextAtlas, TextBounds, TextRenderer, Viewport, Weight,
 };
 use wgpu::{
-    BindGroup, BindGroupDescriptor, BindGroupEntry, BindGroupLayoutDescriptor,
-    BindGroupLayoutEntry, BindingResource, BindingType, BlendState, ColorTargetState,
-    CommandEncoderDescriptor, CompositeAlphaMode, DeviceDescriptor, Extent3d, FragmentState,
-    Instance, InstanceDescriptor, LoadOp, MultisampleState, Operations, Origin3d,
-    PipelineLayoutDescriptor, PresentMode, PrimitiveState, RenderPassColorAttachment,
-    RenderPassDescriptor, RenderPipeline, RenderPipelineDescriptor, RequestAdapterOptions,
-    SamplerBindingType, SamplerDescriptor, ShaderModuleDescriptor, ShaderSource,
-    SurfaceConfiguration, TextureAspect, TextureDescriptor, TextureDimension, TextureFormat,
-    TextureSampleType, TextureUsages, TextureViewDimension, TextureViewDescriptor,
-    TexelCopyBufferLayout, TexelCopyTextureInfo, VertexState,
+    CommandEncoderDescriptor, CompositeAlphaMode, DeviceDescriptor, Instance,
+    InstanceDescriptor, LoadOp, MultisampleState, Operations, PresentMode,
+    RenderPassColorAttachment, RenderPassDescriptor, RequestAdapterOptions,
+    SurfaceConfiguration, TextureFormat, TextureUsages, TextureViewDescriptor,
 };
 use winit::window::Window;
 
@@ -123,95 +117,76 @@ fn flat_children<'a>(n: &'a crate::scene::SceneNode, out: &mut Vec<&'a crate::sc
     }
 }
 
-fn align_up(v: u32, a: u32) -> u32 {
-    (v + a - 1) / a * a
-}
-
-/// box-shadow 的多层半透明圆角矩形近似（与 Skia 端 paintShadow 同算法）。
-fn paint_shadow_tiny(
-    pm: &mut tiny_skia::Pixmap,
-    s: &ShapeDraw,
-    sh: &crate::style::BoxShadow,
-) {
-    use tiny_skia::{Color, FillRule, Paint, Transform};
-    if sh.blur <= 0.0 && sh.spread <= 0.0 && sh.offset_x == 0.0 && sh.offset_y == 0.0 {
-        return;
-    }
-    let base_a = if sh.color.3 > 0 { sh.color.3 as f32 } else { 90.0 };
-    const LAYERS: i32 = 6;
-    for i in (1..=LAYERS).rev() {
-        let t = i as f32 / LAYERS as f32;
-        let expand = sh.spread + sh.blur * t;
-        let x = s.x + sh.offset_x - expand;
-        let y = s.y + sh.offset_y - expand;
-        let w = s.w + 2.0 * expand;
-        let h = s.h.max(1.0) + 2.0 * expand;
-        if w <= 0.0 || h <= 0.0 { continue; }
-        let a = (base_a * (1.0 - t) / LAYERS as f32 * 1.8).clamp(0.0, 255.0) as u8;
-        if let Some(path) = round_rect_path(x, y, w, h, s.radius + expand) {
-            let mut p = Paint::default();
-            p.set_color(Color::from_rgba8(sh.color.0, sh.color.1, sh.color.2, a));
-            p.anti_alias = true;
-            // 阴影也受祖先 overflow 裁剪：用交集矩形限制绘制范围。
-            if let Some((cx, cy, cw, ch)) = s.clip {
-                let ix = x.max(cx); let iy = y.max(cy);
-                let ir = (x + w).min(cx + cw); let ib = (y + h).min(cy + ch);
-                if ir <= ix || ib <= iy { continue; }
-            }
-            pm.fill_path(&path, &p, FillRule::Winding, Transform::identity(), None);
-        }
-    }
-}
-
-fn round_rect_path(x: f32, y: f32, w: f32, h: f32, r: f32) -> Option<tiny_skia::Path> {
-    use tiny_skia::PathBuilder;
-    let r = r.min(w / 2.0).min(h / 2.0);
-    let mut pb = PathBuilder::new();
-    pb.move_to(x + r, y);
-    pb.line_to(x + w - r, y);
-    pb.quad_to(x + w, y, x + w, y + r);
-    pb.line_to(x + w, y + h - r);
-    pb.quad_to(x + w, y + h, x + w - r, y + h);
-    pb.line_to(x + r, y + h);
-    pb.quad_to(x, y + h, x, y + h - r);
-    pb.line_to(x, y + r);
-    pb.quad_to(x, y, x + r, y);
-    pb.close();
-    pb.finish()
-}
-
-/// 把统一语义的 CSS linear-gradient 转成 tiny-skia shader。
-/// 角度换算对齐 CSS：0°=向上，90°=向右，180°=向下；渐变线穿过盒子中心，
-/// 长度取盒子在渐变方向上的投影（与 Go paintGradientBackgroundShader 同算法）。
-fn gradient_shader(
+/// 把统一语义的 CSS linear-gradient 归一化成 GPU 渐变模型（方向向量 +
+/// 0..1 色标）。角度换算对齐 CSS：0°=向上，90°=向右，180°=向下；渐变线
+/// 穿过盒子中心，长度取盒子在渐变方向上的投影（与 Go
+/// paintGradientBackgroundShader / GPU shader 同算法，GPU 端按 quad 宽高
+/// 自行求 len，这里只负责方向与色标）。
+fn gradient_model(
     g: &crate::text_effects::LinearGradient,
-    box_rect: (f32, f32, f32, f32),
-) -> Option<tiny_skia::Shader<'static>> {
-    use tiny_skia::{Color, GradientStop, Point, SpreadMode, Transform};
-    let (x, y, w, h) = box_rect;
-    if w <= 0.0 || h <= 0.0 || g.stops.is_empty() {
+    box_w: f32, box_h: f32,
+) -> Option<gx_gpu::Grad> {
+    if box_w <= 0.0 || box_h <= 0.0 || g.stops.is_empty() {
         return None;
     }
-    let rad = g.angle.to_radians();
-    // CSS 角度以"向上"为 0 顺时针，转成方向向量 (dx, dy)（屏幕 y 向下）。
-    let dx = rad.sin();
-    let dy = -rad.cos();
-    let cx = x + w / 2.0;
-    let cy = y + h / 2.0;
-    // 渐变线长度 = 盒子宽高在方向上的投影绝对值之和。
-    let len = (w * dx.abs() + h * dy.abs()) * 0.5;
-    let start = Point::from_xy(cx - dx * len, cy - dy * len);
-    let end = Point::from_xy(cx + dx * len, cy + dy * len);
-
-    let stops: Vec<GradientStop> = g.stops.iter().map(|s| {
-        let pos = s.offset.unwrap_or_else(|| {
-            // ch 边界型色段无百分比：按最大 end_ch 归一化，保持相对位置。
-            let max_ch = g.stops.last().map(|x| x.end_ch.max(1)).unwrap_or(1) as f32;
-            s.end_ch as f32 / max_ch
-        });
-        GradientStop::new(pos, Color::from_rgba8(s.color.0, s.color.1, s.color.2, s.color.3))
+    let (dx, dy) = gx_gpu::css_angle_to_dir(g.angle);
+    // ch 边界型色段无百分比：按最大 end_ch 归一化，保持相对位置。
+    let max_ch = g.stops.last().map(|x| x.end_ch.max(1)).unwrap_or(1) as f32;
+    let stops: Vec<[f32; 5]> = g.stops.iter().map(|s| {
+        let pos = s.offset.unwrap_or_else(|| s.end_ch as f32 / max_ch);
+        [pos.clamp(0.0, 1.0),
+         s.color.0 as f32, s.color.1 as f32, s.color.2 as f32, s.color.3 as f32]
     }).collect();
-    tiny_skia::LinearGradient::new(start, end, stops, SpreadMode::Pad, Transform::identity())
+    Some(gx_gpu::Grad { dx, dy, stops })
+}
+
+/// object-fit：把 iw×ih 源映射进 (rx,ry,rw,rh)（与旧 draw_image_fit_impl
+/// 同算法）。返回 (dst_rect, uv_window)。fill 铺满；contain 完整放入；
+/// cover 铺满并溢出盒外（溢出部分由祖先 scissor 裁剪，与旧实现一致）。
+fn fit_rect(
+    iw: f32, ih: f32, fit: ObjectFit,
+    rx: f32, ry: f32, rw: f32, rh: f32,
+) -> ([f32; 4], [f32; 4]) {
+    if iw <= 0.0 || ih <= 0.0 || rw <= 0.0 || rh <= 0.0 {
+        return ([0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0]);
+    }
+    if fit == ObjectFit::Fill {
+        return ([rx, ry, rw, rh], [0.0, 0.0, iw, ih]);
+    }
+    let ar = iw / ih;
+    let bar = rw / rh;
+    let (dx, dy, dw, dh) = if fit == ObjectFit::Contain {
+        if ar > bar {
+            (rx, ry + (rh - rw / ar) / 2.0, rw, rw / ar)
+        } else {
+            (rx + (rw - rh * ar) / 2.0, ry, rh * ar, rh)
+        }
+    } else { // Cover
+        if ar > bar {
+            (rx + (rw - rh * ar) / 2.0, ry, rh * ar, rh)
+        } else {
+            (rx, ry + (rh - rw / ar) / 2.0, rw, rw / ar)
+        }
+    };
+    ([dx, dy, dw, dh], [0.0, 0.0, iw, ih])
+}
+
+/// canvas 指令列表的内容哈希（逻辑纹理键——emit 每帧重新 decode 产生新
+/// Arc，指针不稳定；内容哈希保证同一指令串跨帧拿到同一纹理 id）。
+fn canvas_ops_key(ops: &[crate::canvas::CanvasOp]) -> u64 {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut h = DefaultHasher::new();
+    for op in ops {
+        op.op.hash(&mut h);
+        for v in [op.x, op.y, op.w, op.h, op.cx, op.cy, op.r, op.x1, op.y1, op.x2, op.y2, op.radius, op.stroke_width] {
+            v.to_bits().hash(&mut h);
+        }
+        for st in [&op.d, &op.fill, &op.stroke] {
+            st.hash(&mut h);
+        }
+    }
+    h.finish()
 }
 
 fn parse_color(s: &str) -> (u8, u8, u8) {
@@ -585,7 +560,7 @@ impl DisplayList {
         collect_videos(root, &mut vspecs);
         crate::video::sync(&vspecs);
 
-        let mut taffy: TaffyTree<TextMeasure> = TaffyTree::new();
+        let taffy: TaffyTree<TextMeasure> = TaffyTree::new();
 
         fn dir_of(s: &str) -> FlexDirection {
             match s {
@@ -1130,16 +1105,33 @@ impl DisplayList {
 
 // ---------- Renderer ----------
 
+/// GPU 纹理缓存条目（Renderer 侧一级缓存）：按内容 key 索引，data 持 Arc
+/// 跨帧保活；GPU/CPU 后端还有 (id, key) 二级去重，内容未变零上传。
+struct TexEntry {
+    id: u32,
+    w: u32,
+    h: u32,
+    premul: bool,
+    data: std::sync::Arc<Vec<u8>>,
+    /// true=图片（key=源 Pixmap 指针，跨帧常驻）；false=视频帧/canvas 光栅
+    /// （key 含帧序/代数，本帧不再引用即淘汰）。
+    persistent: bool,
+}
+
 pub struct Renderer {
     device: wgpu::Device,
     queue: wgpu::Queue,
     surface: wgpu::Surface<'static>,
     config: SurfaceConfiguration,
-    bg_texture: wgpu::Texture,
-    bg_bind: BindGroup,
-    blit_pipeline: RenderPipeline,
-    bg_pixels: Vec<u8>,
-    bg_bpr: u32,
+    /// GPU quad 管线（gx_gpu crate：三端统一 WGSL，GPU 优先）。
+    gpu: gx_gpu::QuadGpu,
+    /// 纹理一级缓存：内容 key → 条目。
+    tex_cache: std::collections::HashMap<u64, TexEntry>,
+    /// 逻辑键（图片源指针 / 视频节点 id 哈希 / canvas 内容哈希）→ 纹理 id。
+    tex_ids: std::collections::HashMap<u64, u32>,
+    next_tex_id: u32,
+    /// 重建代数（canvas 光栅缓存键成分）。
+    rebuild_gen: u64,
     width: u32,
     height: u32,
 
@@ -1202,7 +1194,9 @@ impl Renderer {
             .await
             .expect("request_device");
         let surface = instance.create_surface(window.clone()).expect("create_surface");
-        let fmt = TextureFormat::Bgra8UnormSrgb;
+        // Bgra8Unorm（非 sRGB target）：写入即显示，gamma 空间混合——与
+        // tiny-skia/Skia raster 旧管线同口径，也避免 glyphon 文本双次提亮。
+        let fmt = TextureFormat::Bgra8Unorm;
         let config = SurfaceConfiguration {
             usage: TextureUsages::RENDER_ATTACHMENT,
             format: fmt,
@@ -1215,99 +1209,6 @@ impl Renderer {
         };
         surface.configure(&device, &config);
 
-        let bpr = align_up(w * 4, 256);
-        let bg_pixels = vec![0u8; (bpr * h) as usize];
-        let bg_texture = device.create_texture(&TextureDescriptor {
-            label: Some("bg"),
-            size: Extent3d { width: w, height: h, depth_or_array_layers: 1 },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: TextureDimension::D2,
-            format: TextureFormat::Rgba8Unorm,
-            usage: TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
-        let bg_view = bg_texture.create_view(&TextureViewDescriptor::default());
-        let sampler = device.create_sampler(&SamplerDescriptor {
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            ..Default::default()
-        });
-        let shader = device.create_shader_module(ShaderModuleDescriptor {
-            label: Some("blit"),
-            source: ShaderSource::Wgsl(
-                r#"
-struct VSOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f };
-@vertex fn vs(@builtin(vertex_index) i: u32) -> VSOut {
-  var p = array<vec2f,3>(vec2f(-1.,-1.), vec2f(3.,-1.), vec2f(-1.,3.));
-  var uv = array<vec2f,3>(vec2f(0.,1.), vec2f(2.,1.), vec2f(0.,-1.));
-  var o: VSOut; o.pos = vec4f(p[i],0.,1.); o.uv = uv[i]; return o;
-}
-@group(0) @binding(0) var t: texture_2d<f32>;
-@group(0) @binding(1) var s: sampler;
-@fragment fn fs(in: VSOut) -> @location(0) vec4f { return textureSample(t, s, in.uv); }
-"#.into(),
-            ),
-        });
-        let bgl = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
-            label: Some("blit-bgl"),
-            entries: &[
-                BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: BindingType::Texture {
-                        sample_type: TextureSampleType::Float { filterable: true },
-                        view_dimension: TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: BindingType::Sampler(SamplerBindingType::Filtering),
-                    count: None,
-                },
-            ],
-        });
-        let layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
-            label: Some("blit-pl"),
-            bind_group_layouts: &[&bgl],
-            push_constant_ranges: &[],
-        });
-        let blit_pipeline = device.create_render_pipeline(&RenderPipelineDescriptor {
-            label: Some("blit"),
-            layout: Some(&layout),
-            vertex: VertexState {
-                module: &shader,
-                entry_point: Some("vs"),
-                buffers: &[],
-                compilation_options: Default::default(),
-            },
-            primitive: PrimitiveState::default(),
-            depth_stencil: None,
-            multisample: MultisampleState::default(),
-            fragment: Some(FragmentState {
-                module: &shader,
-                entry_point: Some("fs"),
-                compilation_options: Default::default(),
-                targets: &[Some(ColorTargetState {
-                    format: fmt,
-                    blend: Some(BlendState::REPLACE),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            cache: None,
-            multiview: None,
-        });
-        let bg_bind = device.create_bind_group(&BindGroupDescriptor {
-            label: Some("bg-bind"),
-            layout: &bgl,
-            entries: &[
-                BindGroupEntry { binding: 0, resource: BindingResource::TextureView(&bg_view) },
-                BindGroupEntry { binding: 1, resource: BindingResource::Sampler(&sampler) },
-            ],
-        });
 
         let mut font_system = FontSystem::new();
         for path in [
@@ -1328,9 +1229,15 @@ struct VSOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f };
         let mut atlas = TextAtlas::new(&device, &queue, &cache, fmt);
         let text_renderer = TextRenderer::new(&mut atlas, &device, MultisampleState::default(), None);
 
+        let gpu = gx_gpu::QuadGpu::new(device.clone(), queue.clone(), fmt);
         Renderer {
             device, queue, surface, config,
-            bg_texture, bg_bind, blit_pipeline, bg_pixels, bg_bpr: bpr, width: w, height: h,
+            gpu,
+            tex_cache: std::collections::HashMap::new(),
+            tex_ids: std::collections::HashMap::new(),
+            next_tex_id: 1,
+            rebuild_gen: 0,
+            width: w, height: h,
             font_system, swash_cache, viewport, atlas, text_renderer,
             scene: None,
             bg: (11, 16, 32),
@@ -1437,109 +1344,54 @@ struct VSOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f };
         }
     }
 
-    /// 按 object-fit 把图片绘制进 (rx,ry,rw,rh)，radius>0 时用圆角 Mask 裁剪。
-    fn draw_image_fit_impl(
-        pm: &mut tiny_skia::Pixmap,
-        pix: &tiny_skia::Pixmap,
-        fit: ObjectFit,
-        rx: f32, ry: f32, rw: f32, rh: f32, radius: f32,
-    ) {
-        let iw = pix.width() as f32;
-        let ih = pix.height() as f32;
-        if iw <= 0.0 || ih <= 0.0 || rw <= 0.0 || rh <= 0.0 {
-            return;
-        }
-        // 计算目标区（object-fit）：fill 铺满；contain 完整放入；cover 铺满并裁剪。
-        let (dx, dy, dw, dh) = if fit == ObjectFit::Fill {
-            (rx, ry, rw, rh)
-        } else {
-            let ar = iw / ih;
-            let bar = rw / rh;
-            if fit == ObjectFit::Contain {
-                if ar > bar {
-                    let h = rw / ar;
-                    (rx, ry + (rh - h) / 2.0, rw, h)
-                } else {
-                    let w = rh * ar;
-                    (rx + (rw - w) / 2.0, ry, w, rh)
-                }
-            } else { // Cover
-                if ar > bar {
-                    let w = rh * ar;
-                    (rx + (rw - w) / 2.0, ry, w, rh)
-                } else {
-                    let h = rw / ar;
-                    (rx, ry + (rh - h) / 2.0, rw, h)
-                }
+    // ---------- GPU 帧构建（GpuFrame：GPU/CPU 后端共用的纯数据） ----------
+
+    /// 注册/获取纹理：logical 键 → 稳定 id；content key 变化 → 新上传条目
+    /// （GPU/CPU 后端按 (id, key) 二级去重，内容未变零拷贝）。
+    #[allow(clippy::too_many_arguments)]
+    fn ensure_tex(
+        &mut self,
+        frame: &mut gx_gpu::GpuFrame,
+        logical: u64,
+        content: u64,
+        w: u32, h: u32, premul: bool,
+        data: std::sync::Arc<Vec<u8>>,
+        persistent: bool,
+    ) -> u32 {
+        let id = match self.tex_ids.get(&logical) {
+            Some(v) => *v,
+            None => {
+                let id = self.next_tex_id;
+                self.next_tex_id += 1;
+                self.tex_ids.insert(logical, id);
+                id
             }
         };
-        let dw_i = dw.max(1.0) as u32;
-        let dh_i = dh.max(1.0) as u32;
-        // 缩放绘制到与目标同尺寸的临时 Pixmap（draw_pixmap 用 Transform 缩放）。
-        let mut tmp = match tiny_skia::Pixmap::new(dw_i, dh_i) {
-            Some(v) => v,
-            None => return,
-        };
-        let sx = dw / iw;
-        let sy = dh / ih;
-        let ts = tiny_skia::Transform::from_scale(sx, sy);
-        tmp.draw_pixmap(
-            0, 0, pix.as_ref(),
-            &tiny_skia::PixmapPaint::default(),
-            ts, None,
-        );
-        let paint = tiny_skia::PixmapPaint::default();
-        if radius > 0.0 {
-            // 圆角：生成同形状 Mask，按目标区合成。
-            if let Some(path) = round_rect_path(0.0, 0.0, dw_i as f32, dh_i as f32, radius) {
-                let mut mask = tiny_skia::Mask::new(dw_i, dh_i).unwrap();
-                mask.fill_path(
-                    &path,
-                    tiny_skia::FillRule::Winding,
-                    true,
-                    tiny_skia::Transform::identity(),
-                );
-                pm.draw_pixmap(
-                    dx as i32, dy as i32, tmp.as_ref(), &paint,
-                    tiny_skia::Transform::identity(), Some(&mask),
-                );
-                return;
-            }
+        let cached = self.tex_cache.get(&content).map(|e| e.id == id).unwrap_or(false);
+        if !cached {
+            self.tex_cache.insert(content, TexEntry {
+                id, w, h, premul, data: data.clone(), persistent,
+            });
         }
-        pm.draw_pixmap(
-            dx as i32, dy as i32, tmp.as_ref(), &paint,
-            tiny_skia::Transform::identity(), None,
-        );
+        frame.uploads.push(gx_gpu::TexUpload { id, key: content, w, h, data, premul });
+        id
     }
 
-    /// 把苹果风格滚动条画进主 Pixmap：thumb 圆角、半透明，随 alpha 淡入淡出。
-    /// track 本身不画底色（macOS overlay 滚动条平时不可见，仅滚动时浮现 thumb）。
-    fn paint_scrollbars(&self, pm: &mut tiny_skia::Pixmap, bars: &[ScrollBar]) {
-        use tiny_skia::{Color, FillRule, Paint, Transform};
-        for b in bars {
-            let alpha = self.scrollbar_alpha; // 淡入淡出由 render 阶段统一驱动
-            if alpha <= 0.01 { continue; }
-            let r = SB_TRACK_W * 0.5; // 圆头（胶囊形）
-            if let Some(path) = round_rect_path(b.x, b.thumb_y, SB_TRACK_W, b.thumb_h, r) {
-                let a = (alpha * 0.55 * 255.0) as u8; // 半透明（macOS thumb 约 0.4~0.6）
-                let mut p = Paint::default();
-                p.set_color(Color::from_rgba8(120, 120, 128, a)); // 中性灰
-                p.anti_alias = true;
-                pm.fill_path(&path, &p, FillRule::Winding, Transform::identity(), None);
-            }
-        }
-    }
-
-    fn paint_shapes(&mut self, dl: &DisplayList, bg: (u8, u8, u8)) {
-        use tiny_skia::{Color, FillRule, Paint, Pixmap, Stroke, Transform};
-        let bpr = self.bg_bpr as usize;
-        let mut pm = Pixmap::new(self.width, self.height).unwrap();
-        pm.fill(Color::from_rgba8(bg.0, bg.1, bg.2, 255));
+    /// 把 DisplayList 编译成 GpuFrame。绘制序与旧 tiny-skia 管线逐 shape 一致：
+    /// shadow → bg → gradient → img/video → canvas → border；随后 selection
+    /// 背景、滚动条 thumb（overlay）；glyphon 文本由 render 在同一 pass 最后叠加。
+    fn build_gpu_frame(&mut self, dl: &DisplayList) -> gx_gpu::GpuFrame {
+        let mut f = gx_gpu::GpuFrame::new(
+            self.width, self.height,
+            [self.bg.0 as f32, self.bg.1 as f32, self.bg.2 as f32, 255.0],
+        );
+        let mut used_keys: Vec<u64> = Vec::new();
         for s in &dl.shapes {
             if s.w <= 0.0 || s.h <= 0.0 {
                 continue;
             }
-            // 与祖先 overflow 裁剪矩形求交；完全在外则跳过。
+            let clip = gx_gpu::clip_of(s.clip);
+            // 与祖先 overflow 裁剪矩形求交；完全在外则跳过（与旧管线同口径）。
             let (rx, ry, rw, rh) = match clip_rect_xywh(s.clip, s.x, s.y, s.w, s.h) {
                 Some(v) => v,
                 None => continue,
@@ -1547,92 +1399,120 @@ struct VSOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f };
             if rw <= 0.0 || rh <= 0.0 {
                 continue;
             }
-            // box-shadow：多层半透明圆角矩形近似（与 Skia 端同算法）。
+            // box-shadow：6 层半透明圆角矩形近似（与 Skia 端 paintShadow 同
+            // 算法）；几何不裁（旧实现仅做剔除），溢出由 scissor/交集裁剪兜底。
             if let Some(sh) = &s.shadow {
-                paint_shadow_tiny(&mut pm, s, sh);
+                let base_a = if sh.color.3 > 0 { sh.color.3 as f32 } else { 90.0 };
+                const LAYERS: i32 = 6;
+                for i in (1..=LAYERS).rev() {
+                    let t = i as f32 / LAYERS as f32;
+                    let expand = sh.spread + sh.blur * t;
+                    let sx = s.x + sh.offset_x - expand;
+                    let sy = s.y + sh.offset_y - expand;
+                    let sw = s.w + 2.0 * expand;
+                    let shh = s.h.max(1.0) + 2.0 * expand;
+                    if sw <= 0.0 || shh <= 0.0 {
+                        continue;
+                    }
+                    let a = (base_a * (1.0 - t) / LAYERS as f32 * 1.8).clamp(0.0, 255.0);
+                    f.quad([sx, sy, sw, shh], clip,
+                        [sh.color.0 as f32, sh.color.1 as f32, sh.color.2 as f32, a],
+                        s.radius + expand, 0.0);
+                }
             }
-            if let Some(path) = round_rect_path(rx, ry, rw, rh, s.radius) {
-                if s.bg_present {
-                    let mut p = Paint::default();
-                    // opacity 作用于元素整体：声明式 blink 动画采样后写进 st.opacity，
-                    // 此处按 alpha 淡入淡出（对齐 Skia paintElement / Web CSS opacity）。
-                    let a = (s.alpha.clamp(0.0, 1.0) * 255.0) as u8;
-                    p.set_color(Color::from_rgba8(s.bg.0, s.bg.1, s.bg.2, a));
-                    p.anti_alias = true;
-                    pm.fill_path(&path, &p, FillRule::Winding, Transform::identity(), None);
+            if s.bg_present {
+                // opacity 作用于元素整体：声明式 blink 动画采样后写进 st.opacity，
+                // 此处按 alpha 淡入淡出（对齐 Skia paintElement / Web CSS opacity）。
+                let a = (s.alpha.clamp(0.0, 1.0) * 255.0) as f32;
+                f.quad([rx, ry, rw, rh], clip,
+                    [s.bg.0 as f32, s.bg.1 as f32, s.bg.2 as f32, a], s.radius, 0.0);
+            }
+            // 通用 linear-gradient 背景：与 Go 桌面端 paintGradientBackgroundShader
+            // 路径一致；GPU 端按 quad 尺寸求渐变线长度。
+            if let Some(g) = &s.bg_gradient {
+                if let Some(grad) = gradient_model(g, rw, rh) {
+                    f.gradient([rx, ry, rw, rh], clip, s.radius, grad);
                 }
-                // 通用 linear-gradient 背景：一次构造 shader + 一次 fill_path，
-                // 与 Go 桌面端 paintGradientBackgroundShader 路径一致（无逐像素条带）。
-                if let Some(g) = &s.bg_gradient {
-                    if let Some(shader) = gradient_shader(g, (rx, ry, rw, rh)) {
-                        let mut p = Paint::default();
-                        p.shader = shader;
-                        p.anti_alias = true;
-                        pm.fill_path(&path, &p, FillRule::Winding, Transform::identity(), None);
-                    }
+            }
+            // img 原语：解码按 src 缓存（image.rs），纹理按源指针跨帧常驻，
+            // 只上传一次（旧管线每帧全屏上传，此处为净收益）。
+            if let Some((pix, fit)) = &s.img {
+                let (dst, uv) = fit_rect(pix.width() as f32, pix.height() as f32, *fit, rx, ry, rw, rh);
+                if dst[2] > 0.0 && dst[3] > 0.0 {
+                    let logical = std::sync::Arc::as_ptr(pix) as u64;
+                    let id = self.ensure_tex(&mut f, logical, logical,
+                        pix.width(), pix.height(), true,
+                        std::sync::Arc::new(pix.data().to_vec()), true);
+                    f.tex(dst, clip, id, uv, s.radius, 1.0);
                 }
-                // img：object-fit 缩放绘制，圆角时用同形状 Mask 裁剪，与 Skia 端一致。
-                if let Some((pix, fit)) = &s.img {
-                    Self::draw_image_fit_impl(&mut pm, pix, *fit, rx, ry, rw, rh, s.radius);
+            }
+            // video 原语：ffmpeg 解码的当前帧，contain 缩放 + 圆角裁剪；
+            // 新帧序号变化触发重上传（同帧不重传）。
+            if let Some(vf) = &s.video {
+                let logical = {
+                    use std::collections::hash_map::DefaultHasher;
+                    use std::hash::{Hash, Hasher};
+                    let mut h = DefaultHasher::new();
+                    s.video_id.hash(&mut h);
+                    h.finish()
+                };
+                let content = logical ^ crate::video::frame_seq().rotate_left(1);
+                let id = self.ensure_tex(&mut f, logical, content,
+                    vf.w.max(1), vf.h.max(1), true,
+                    std::sync::Arc::new(vf.data.clone()), false);
+                let (dst, uv) = fit_rect(vf.w as f32, vf.h as f32, ObjectFit::Contain, rx, ry, rw, rh);
+                if dst[2] > 0.0 && dst[3] > 0.0 {
+                    used_keys.push(content);
+                    f.tex(dst, clip, id, uv, s.radius, 1.0);
                 }
-                // video：ffmpeg 解码的当前帧，按 contain 缩放绘制 + 圆角裁剪。
-                if let Some(frame) = &s.video {
-                    if let Some(size) = tiny_skia::IntSize::from_wh(frame.w, frame.h) {
-                    if let Some(pix) = tiny_skia::Pixmap::from_vec(
-                        frame.data.clone(), size,
-                    ) {
-                        Self::draw_image_fit_impl(&mut pm, &pix, ObjectFit::Contain, rx, ry, rw, rh, s.radius);
-                    }
-                    }
+            }
+            // canvas 原语：命令式指令光栅到本盒纹理（坐标相对裁剪盒左上，
+            // 与旧实现 paint(pm, ops, rx, ry) 的落点语义一致）。
+            if let Some(ops) = &s.canvas {
+                let cw = rw.max(1.0) as u32;
+                let chh = rh.max(1.0) as u32;
+                if let Some(mut tmp) = tiny_skia::Pixmap::new(cw, chh) {
+                    crate::canvas::paint(&mut tmp, ops, 0.0, 0.0);
+                    let logical = canvas_ops_key(ops);
+                    let content = logical ^ self.rebuild_gen.rotate_left(32);
+                    let id = self.ensure_tex(&mut f, logical, content, cw, chh, true,
+                        std::sync::Arc::new(tmp.data().to_vec()), false);
+                    used_keys.push(content);
+                    f.tex([rx, ry, rw, rh], clip, id,
+                        [0.0, 0.0, cw as f32, chh as f32], s.radius, 1.0);
                 }
-                // canvas 原语：命令式指令画到主 pm，坐标相对本节点裁剪后的盒。
-                if let Some(ops) = &s.canvas {
-                    crate::canvas::paint(&mut pm, ops, rx, ry);
-                }
-                if let Some((c, bw)) = s.border {
-                    let mut p = Paint::default();
-                    p.set_color(Color::from_rgba8(c.0, c.1, c.2, 255));
-                    pm.stroke_path(
-                        &path,
-                        &p,
-                        &Stroke { width: bw, ..Default::default() },
-                        Transform::identity(),
-                        None,
-                    );
-                }
+            }
+            // 描边：带心环（GPU band / CPU stroke 同几何）；旧实现强制不透明。
+            if let Some((c, bw)) = s.border {
+                f.quad([rx, ry, rw, rh], clip,
+                    [c.0 as f32, c.1 as f32, c.2 as f32, 255.0], s.radius, bw);
             }
         }
         // 三端统一 selection：在文字层之前画选区背景矩形（glyphon 文字随后绘制）。
         // 区间是 rune 索引，用与 measure_text 一致的估算口径换算像素宽度。
         for t in &dl.texts {
-            let Some(sel) = &t.selection else { continue; };
+            let Some(sel) = &t.selection else { continue };
             let (sx0, sx1) = selection_px_range(&t.text, sel.start, sel.end, t.size);
             if sx1 <= sx0 { continue; }
-            let (rx, ry, rw, rh) = match clip_rect_xywh(t.clip, t.x + sx0, t.y, sx1 - sx0, t.size * 1.35) {
-                Some(v) => v, None => continue,
-            };
+            let Some((rx, ry, rw, rh)) = clip_rect_xywh(t.clip, t.x + sx0, t.y, sx1 - sx0, t.size * 1.35)
+            else { continue };
             if rw <= 0.0 || rh <= 0.0 { continue; }
-            let path = match round_rect_path(rx, ry, rw, rh, 0.0) { Some(v) => v, None => continue };
-            let mut p = Paint::default();
-            p.set_color(Color::from_rgba8(sel.bg.0, sel.bg.1, sel.bg.2, sel.bg.3));
-            p.anti_alias = true;
-            pm.fill_path(&path, &p, FillRule::Winding, Transform::identity(), None);
+            f.quad([rx, ry, rw, rh], gx_gpu::clip_of(t.clip),
+                [sel.bg.0 as f32, sel.bg.1 as f32, sel.bg.2 as f32, sel.bg.3 as f32],
+                0.0, 0.0);
         }
         // 苹果风格滚动条画在内容之上（overlay），参与整体淡入淡出。
-        if !dl.scrollbars.is_empty() {
-            self.paint_scrollbars(&mut pm, &dl.scrollbars);
+        if self.scrollbar_alpha > 0.01 {
+            let a = (self.scrollbar_alpha * 0.55 * 255.0) as f32;
+            for b in &dl.scrollbars {
+                f.quad([b.x, b.thumb_y, SB_TRACK_W, b.thumb_h], [0.0, 0.0, 0.0, 0.0],
+                    [120.0, 120.0, 128.0, a], SB_TRACK_W * 0.5, 0.0);
+            }
         }
-        let src = pm.data();
-        for y in 0..self.height as usize {
-            let row = &src[y * self.width as usize * 4..(y + 1) * self.width as usize * 4];
-            self.bg_pixels[y * bpr..y * bpr + self.width as usize * 4].copy_from_slice(row);
-        }
-        self.queue.write_texture(
-            TexelCopyTextureInfo { texture: &self.bg_texture, mip_level: 0, origin: Origin3d::ZERO, aspect: TextureAspect::All },
-            &self.bg_pixels,
-            TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(self.bg_bpr), rows_per_image: Some(self.height) },
-            Extent3d { width: self.width, height: self.height, depth_or_array_layers: 1 },
-        );
+        // 淘汰本帧未引用的非持久纹理（视频旧帧 / canvas 旧代）。
+        let used: std::collections::HashSet<u64> = used_keys.into_iter().collect();
+        self.tex_cache.retain(|k, e| e.persistent || used.contains(k));
+        f
     }
 
     /// 事件驱动重绘：渲染完成后判断场景是否仍有"会随时间自行变化"的内容。
@@ -1682,11 +1562,15 @@ struct VSOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f };
             self.frame_dirty = true;
         }
         let need_rebuild = self.frame_dirty || animating || self.cached_areas_dirty;
+        self.rebuild_gen = self.rebuild_gen.wrapping_add(1);
 
         self.viewport.update(&self.queue, Resolution { width: self.config.width, height: self.config.height });
 
+        // 帧数据来源：重建帧用新 DisplayList，静止帧沿用上一帧
+        // （纯数据构建，成本低；GPU 端 (id,key) 去重保证零纹理上传）。
+        let src: DisplayList;
         if need_rebuild {
-            // —— 有变化 / 动画中：全量重算布局、背景光栅化、文本整形 ——
+            // —— 有变化 / 动画中：全量重算布局、GPU 帧数据、文本整形 ——
             let animated = self.animator.apply(scene);
             // 伪状态样式：按当前 hover/focus/active 命中把对应子表覆盖进
             // 临时树（不改常驻镜像树）。disabled 由节点自身属性判定、优先级最高。
@@ -1697,7 +1581,6 @@ struct VSOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f };
                 self.focused_id.as_deref(),
             );
             let dl = DisplayList::from_scene(&styled, self.width as f32, self.height as f32);
-            let bg = self.bg;
 
             // 滚动条淡入淡出：以首个滚动条的 thumb_y 作为滚动位置信号。
             // 位置变化（或首次出现）视为活动 → alpha 拉满并刷新时间戳。
@@ -1726,7 +1609,7 @@ struct VSOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f };
             self.display = dl.clone();
             // 导出本帧实测尺寸供回流（无变化帧沿用上一帧，PublishMeasured 会去重）。
             self.pending_measured = dl.measured.clone();
-            self.paint_shapes(&dl, bg);
+            src = dl;
 
             // 字形增量复用（按稳定 node_id）：
             // glyphon 的 Buffer 只取决于 (文本, 字号)，与坐标/颜色无关。每帧按
@@ -1736,10 +1619,10 @@ struct VSOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f };
             // 需要 shape，其余全部命中——比"整段签名一致才全复用"精确得多，且对
             // 任意内容变化帧都生效（不再限于纯滚动帧）。动画改的是坐标/颜色时
             // 签名不变可安全复用；若真改了字号/文本，签名变化会触发重新 shape。
-            let (shaped_idx, evicted) = plan_glyphs(&dl.texts, &self.glyph_cache);
+            let (shaped_idx, evicted) = plan_glyphs(&src.texts, &self.glyph_cache);
             let shaped = shaped_idx.len();
             for i in shaped_idx {
-                let t = &dl.texts[i];
+                let t = &src.texts[i];
                 let lh = if t.line_height > 0.0 { t.line_height } else { t.size * 1.35 };
                 let mut b = Buffer::new(&mut self.font_system, Metrics::new(t.size, lh));
                 b.set_size(&mut self.font_system, Some(700.0), Some(80.0));
@@ -1771,13 +1654,19 @@ struct VSOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f };
                 self.glyph_cache.remove(&id);
             }
             #[cfg(debug_assertions)]
-            if shaped > 0 || shaped < dl.texts.len() {
+            if shaped > 0 || shaped < src.texts.len() {
                 eprintln!("[rust-backend] glyph reuse: {} reused, {} shaped",
-                    dl.texts.len().saturating_sub(shaped), shaped);
+                    src.texts.len().saturating_sub(shaped), shaped);
             }
             self.frame_dirty = false;
             self.cached_areas_dirty = false;
+        } else {
+            src = self.display.clone();
         }
+
+        // GpuFrame：GPU 形状纯数据（shadow/bg/渐变/纹理/描边/selection/滚动条），
+        // 由 gx_gpu 的 GPU 管线执行；CPU 后端可接管同一份数据（打包期选型）。
+        let frame = self.build_gpu_frame(&src);
 
         // 从当前 DisplayList + 按 ID 缓存的 buffers 组装 areas（有无变化都要做，因为 prepare 每帧消费 areas）。
         let areas: Vec<TextArea> = self.display.texts.iter().filter_map(|t| {
@@ -1826,15 +1715,23 @@ struct VSOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f };
                 color_attachments: &[Some(RenderPassColorAttachment {
                     view: &view,
                     resolve_target: None,
-                    ops: Operations { load: LoadOp::Clear(wgpu::Color::BLACK), store: wgpu::StoreOp::Store },
+                    ops: Operations {
+                    load: LoadOp::Clear(wgpu::Color {
+                        r: (frame.clear[0] / 255.0) as f64,
+                        g: (frame.clear[1] / 255.0) as f64,
+                        b: (frame.clear[2] / 255.0) as f64,
+                        a: (frame.clear[3] / 255.0) as f64,
+                    }),
+                    store: wgpu::StoreOp::Store,
+                },
                 })],
                 depth_stencil_attachment: None,
                 timestamp_writes: None,
                 occlusion_query_set: None,
             });
-            pass.set_pipeline(&self.blit_pipeline);
-            pass.set_bind_group(0, &self.bg_bind, &[]);
-            pass.draw(0..3, 0..1);
+            // GPU quad 管线画图形（gx_gpu crate，三端统一 WGSL），
+            // 随后在同一 pass 叠加 glyphon 文本。
+            self.gpu.draw(&mut pass, &frame);
             self.text_renderer.render(&self.atlas, &self.viewport, &mut pass).unwrap();
         }
         self.queue.submit(Some(enc.finish()));
@@ -2144,14 +2041,34 @@ mod text_sig_tests {
     }
 
     #[test]
-    fn gradient_shader_builds_for_linear_gradient() {
+    fn gradient_model_builds_for_linear_gradient() {
         let g = crate::text_effects::parse_linear_gradient(
             "linear-gradient(90deg, #ff0000 0%, #0000ff 100%)",
         ).unwrap();
-        // 90°=水平渐变；盒子 200x100。shader 应成功构造（非退化、色标 ≥2）。
-        assert!(gradient_shader(&g, (10.0, 10.0, 200.0, 100.0)).is_some());
-        // 退化盒子不构造 shader。
-        assert!(gradient_shader(&g, (0.0, 0.0, 0.0, 100.0)).is_none());
+        // 90°=向右；盒子 200x100。归一化模型应给出方向（1,0）与 2 个色标。
+        let m = gradient_model(&g, 200.0, 100.0).unwrap();
+        assert!((m.dx - 1.0).abs() < 1e-6 && m.dy.abs() < 1e-6);
+        assert_eq!(m.stops.len(), 2);
+        assert!((m.stops[0][0] - 0.0).abs() < 1e-6);
+        assert!((m.stops[1][0] - 1.0).abs() < 1e-6);
+        // 退化盒子不出模型。
+        assert!(gradient_model(&g, 0.0, 100.0).is_none());
+    }
+
+    #[test]
+    fn fit_rect_matches_object_fit_semantics() {
+        use crate::render::ObjectFit;
+        // fill：铺满盒子。
+        let (d, uv) = fit_rect(100.0, 50.0, ObjectFit::Fill, 0.0, 0.0, 200.0, 200.0);
+        assert_eq!(d, [0.0, 0.0, 200.0, 200.0]);
+        assert_eq!(uv, [0.0, 0.0, 100.0, 50.0]);
+        // contain：2:1 源放 1:1 盒 → 高度受限，水平居中。
+        let (d, _) = fit_rect(100.0, 50.0, ObjectFit::Contain, 0.0, 0.0, 100.0, 100.0);
+        assert!((d[3] - 50.0).abs() < 1e-6 && (d[2] - 100.0).abs() < 1e-6);
+        assert!((d[1] - 25.0).abs() < 1e-6);
+        // cover：2:1 源盖 1:1 盒 → 宽度溢出，水平居中（溢出由 scissor 裁）。
+        let (d, _) = fit_rect(100.0, 50.0, ObjectFit::Cover, 0.0, 0.0, 100.0, 100.0);
+        assert!((d[2] - 200.0).abs() < 1e-6 && (d[0] + 50.0).abs() < 1e-6);
     }
 
     #[test]

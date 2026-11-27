@@ -679,11 +679,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "be136d9dacc2a13cc70bb6c8f902b414fb2641f8db1314637c6b7933411a8f82"
 
 [[package]]
+name = "gx_gpu"
+version = "0.1.0"
+dependencies = [
+ "pollster",
+ "raw-window-handle",
+ "wgpu",
+]
+
+[[package]]
 name = "gxbackend_rust"
 version = "0.1.0"
 dependencies = [
  "cosmic-text",
  "glyphon",
+ "gx_gpu",
  "pollster",
  "serde",
  "serde_json",
