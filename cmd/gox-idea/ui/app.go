@@ -9,6 +9,7 @@ import (
     "os"
     "path/filepath"
     "strconv"
+    "strings"
     demos "github.com/robertpanvip/gox-idea/ui/demos"
     Signal "github.com/robertpanvip/gox/runtime/signal"
     gxscene "github.com/robertpanvip/gox/runtime/scene"
@@ -174,6 +175,7 @@ func saveActiveTab() {
     saveActiveTab()
     tabSources[name] = source
     tabPaths[name] = path
+    if path != "" { ProjectFileSelected(path )}
     tabs(append(tabs(), name))
     activeTabName(name)
     Signal.Batch(func() {
@@ -454,6 +456,8 @@ var projectFileReader func(string) string = nil
     for i := 0; i < len(nodes); i = i + 1 {
         if nodes[i].IsDir { keys = append(keys, nodes[i].Path) }
     }
+    // 根目录自身必须入展开集：root 直接子文件的 parent=root，缺此键则永不可见。
+    keys = append(keys, root)
     Signal.Batch(func() {
         ProjectExpanded(keys)
         ProjectDirSelected("")
@@ -551,6 +555,7 @@ func expandAllGroups() {
         for i := 0; i < len(nodes); i = i + 1 {
             if nodes[i].IsDir { keys = append(keys, nodes[i].Path) }
         }
+        keys = append(keys, projectRoot)
         Signal.Batch(func() { ProjectExpanded(keys )})
         return
     }
@@ -717,13 +722,17 @@ func projectChevron(n ProjectNode) *gxscene.Instance {
 
 func projectRowIcon(n ProjectNode) *gxscene.Instance {
     if n.IsDir {
-        return widgets.Icon(gxscene.Props{"name": "folder", "size": 15, "tone": "yellow"})
+        // New UI：目录图标为中性灰轮廓文件夹，不再用黄色拟物。
+        if n.Expanded {
+            return widgets.Icon(gxscene.Props{"name": "folder", "size": 16, "tone": "muted"})
+        }
+        return widgets.Icon(gxscene.Props{"name": "folder", "size": 16, "tone": "faint"})
     }
-    // 选中行背景是 accent 蓝，doc 图标同样用 onaccent 提亮，避免蓝图标配蓝底隐形。
+    // 选中行背景是 accent 蓝，图标用 onaccent 提亮，避免蓝图标配蓝底隐形。
     if projectRoot == "" && n.Sample == SampleIndex() {
-        return widgets.Icon(gxscene.Props{"name": "doc", "size": 15, "tone": "onaccent"})
+        return widgets.Icon(gxscene.Props{"name": "doc", "size": 16, "tone": "onaccent"})
     }
-    return widgets.Icon(gxscene.Props{"name": "doc", "size": 15, "tone": "blue"})
+    return widgets.Icon(gxscene.Props{"name": "doc", "size": 16, "tone": projectIconTone(n.Label)})
 }
 
 // 可见性用 style 叶子属性（position/opacity/padding/margin）表达，避免结构型
@@ -731,7 +740,7 @@ func projectRowIcon(n ProjectNode) *gxscene.Instance {
 // 注意 Skia 布局忽略 height=0（if s.height > 0 才 SetHeight），故用 absolute 脱离流。
 func projectRowPadding(n ProjectNode) string {
     if !projectNodeVisible(n) { return "0" }
-    return "3 8"
+    return "2 0"
 }
 func projectRowMargin(n ProjectNode) string {
     if !projectNodeVisible(n) { return "0" }
@@ -752,8 +761,30 @@ func projectRowOpacity(n ProjectNode) string {
     return "1"
 }
 
+// projectIconTone 文件图标按扩展名语义分色（对齐 WebStorm New UI 图标体系：
+// 一眼识别技术栈）。返回 widgets Icon 的 tone 名。
+// 精确取最后一个点后缀，避免 .md/.mod 前缀误撞。
+func projectIconTone(name string) string {
+    lower := strings.ToLower(name)
+    if strings.HasSuffix(lower, "_test.go") { return "green" }
+    dot := strings.LastIndexByte(lower, '.')
+    if dot < 0 { return "muted" }
+    switch lower[dot:] {
+    case ".go": return "cyan"
+    case ".md": return "green"
+    case ".json": return "yellow"
+    case ".mod", ".sum": return "faint"
+    case ".gx": return "purple"
+    case ".svg", ".xml", ".html": return "orange"
+    case ".ts", ".js": return "blue"
+    }
+    return "muted"
+}
+
 func projectRow(n ProjectNode) *gxscene.Instance {
-    return gxscene.Render(gxscene.Template{Ops:[]gxscene.Op{gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:0,},gxscene.Op{Code:gxscene.OpEvent,Key:"onClick",Slot:1,},gxscene.Op{Code:gxscene.OpDynChild,Slot:2,},gxscene.Op{Code:gxscene.OpDynChild,Slot:3,},gxscene.Op{Code:gxscene.OpDynChild,Slot:4,},gxscene.Op{Code:gxscene.OpClose,},},N:5,}, func() any{ return gxscene.Style{Background:projectRowBg(n),Position:projectRowPosition(n),Top:"-9999",Opacity:projectRowOpacity(n),Padding:projectRowPadding(n),MarginBottom:projectRowMargin(n),MarginLeft:strconv.Itoa(n.Depth * 12),BorderRadius:widgets.RadiusSmall,FlexDirection:"row",AlignItems:"center",Gap:"6",Cursor:"pointer",Overflow:"hidden",Hover:&gxscene.Style{Background:widgets.UseToken("panelalt")(),},} }, func() any{ return func() { onProjectRowClick(n) } }, func() any{ return projectChevron(n) }, func() any{ return projectRowIcon(n) }, func() any{ return projectRowText(n) })
+    // New UI 树行为贴边块状高亮：整行不再 marginLeft 缩进（那会让选中背景
+    // 悬空不齐），层级用行内 spacer 承担。
+    return gxscene.Render(gxscene.Template{Ops:[]gxscene.Op{gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpAttr,Arg:"gx-tree-row",Key:"class",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:0,},gxscene.Op{Code:gxscene.OpEvent,Key:"onClick",Slot:1,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:2,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpDynChild,Slot:3,},gxscene.Op{Code:gxscene.OpDynChild,Slot:4,},gxscene.Op{Code:gxscene.OpDynChild,Slot:5,},gxscene.Op{Code:gxscene.OpClose,},},N:6,}, func() any{ return gxscene.Style{Background:projectRowBg(n),Position:projectRowPosition(n),Top:"-9999",Opacity:projectRowOpacity(n),Padding:projectRowPadding(n),MarginBottom:projectRowMargin(n),FlexDirection:"row",AlignItems:"center",Gap:"6",Cursor:"pointer",Overflow:"hidden",Hover:&gxscene.Style{Background:widgets.UseToken("panelalt")(),},} }, func() any{ return func() { onProjectRowClick(n) } }, func() any{ return gxscene.Style{Width:strconv.Itoa((n.Depth - 1) * 16),Height:"23",FlexShrink:"0",} }, func() any{ return projectChevron(n) }, func() any{ return projectRowIcon(n) }, func() any{ return projectRowText(n) })
 }
 
 // projectPanel WebStorm 风格左侧项目面板：标题 + 展开/折叠全部 + 文件树。

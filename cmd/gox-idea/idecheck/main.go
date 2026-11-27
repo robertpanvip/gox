@@ -632,6 +632,54 @@ var features = []Feature{
 		back := countRows()
 		return expect(back <= before+2, "再点应还原单栏, back="+strconv.Itoa(back))
 	}},
+	{"H3", "树行盒等宽（选中背景贴边，缩进走行内）", func(h *Harness) error {
+		var rowXs []float64
+		for i := range h.hits {
+			n := h.hits[i].Node
+			if n == nil || n.Props == nil {
+				continue
+			}
+			lbl, _ := n.Props["data-line"].(string)
+			_ = lbl
+			if cls, _ := n.Props["class"].(string); cls == "gx-tree-row" && h.hits[i].W > 20 {
+				rowXs = append(rowXs, float64(h.hits[i].X))
+			}
+		}
+		if len(rowXs) < 2 {
+			return fmt.Errorf("树行命中不足: %d", len(rowXs))
+		}
+		mn, mx := rowXs[0], rowXs[0]
+		for _, x := range rowXs[1:] {
+			if x < mn {
+				mn = x
+			}
+			if x > mx {
+				mx = x
+			}
+		}
+		return expect(mx-mn <= 1.0, fmt.Sprintf("不同层级行盒 x 应一致(全宽背景), 差=%.1f", mx-mn))
+	}},
+	{"T1", "树行盒跨层级同x（选中高亮贴边前提）", func(h *Harness) error {
+		var xs []float64
+		for i := range h.hits {
+			n := h.hits[i].Node
+			if n == nil || n.Props == nil {
+				continue
+			}
+			if cls, _ := n.Props["class"].(string); cls == "gx-tree-row" && h.hits[i].W > 60 {
+				xs = append(xs, float64(h.hits[i].X))
+			}
+		}
+		if len(xs) < 3 {
+			return fmt.Errorf("树行不足: %d", len(xs))
+		}
+		mn, mx := xs[0], xs[0]
+		for _, x := range xs[1:] {
+			if x < mn { mn = x }
+			if x > mx { mx = x }
+		}
+		return expect(mx-mn <= 1.0, fmt.Sprintf("行盒x应一致, 差=%.1f", mx-mn))
+	}},
 }
 
 // iconMisalign 扫描场景树：所有 canvas 图标节点（Icon 组件产物）相对其父

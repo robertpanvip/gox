@@ -172,8 +172,8 @@ sleep 0.3
 DISPLAY="$DISP" xdotool key ctrl+Home >/dev/null 2>&1
 sleep 0.4
 DISPLAY="$DISP" import -window "$WID" /tmp/e2e_split_before.png 2>/dev/null
-# 竖向分隔条在 x=266..272（projectWidth 266 起）；y 取中部空白
-DISPLAY="$DISP" xdotool mousemove 269 400 mousedown 1 >/dev/null 2>&1
+# 竖向分隔条真实位置 x=306..312（活动条40 + 面板266）；269 落在树行内会假绿
+DISPLAY="$DISP" xdotool mousemove 303 400 mousedown 1 >/dev/null 2>&1
 sleep 0.4
 DISPLAY="$DISP" xdotool mousemove_relative -- 70 0 >/dev/null 2>&1
 sleep 0.3
@@ -190,7 +190,7 @@ else
   echo "  [FAIL] 分隔条拖拽无布局响应（变化像素 ${SDIFF:-0}）"; FAIL=$((FAIL+1))
 fi
 # 复位：拖回原宽（同一路径反向）
-DISPLAY="$DISP" xdotool mousemove 409 400 mousedown 1 >/dev/null 2>&1
+DISPLAY="$DISP" xdotool mousemove 443 400 mousedown 1 >/dev/null 2>&1
 sleep 0.3
 DISPLAY="$DISP" xdotool mousemove_relative -- -70 0 >/dev/null 2>&1
 sleep 0.2
