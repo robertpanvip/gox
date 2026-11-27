@@ -103,7 +103,8 @@ type Backend interface {
 类型——接入层接口本身保持后端无关。
 
 demo 接入现状：examples/desktop-demo、examples/widget-showcase、rustbackend cmd（demo /
-gradcheck / overlaydemo / startupbench）均已切 `Use(接口值)` 路径。
+gradcheck / overlaydemo / startupbench）、examples/wasm-demo、examples/web-widget-showcase
+（gxweb.NewBackend，挂 "#app" DOM 容器）均已切 `Use(接口值)` 路径。
 Window 的可选扩展（UIExecutor / WindowBinder）由 Host 装配时按能力探测注入，后端无需转发。
 
 首版语义：每次 `Render` = 一扇独立窗口 + 独立 App（独立场景树 / signal Runtime）；

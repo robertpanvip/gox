@@ -52,15 +52,14 @@ func view() any {
 }
 
 func main() {
-	win := gxweb.MustOpen("#app")
-	app, err := gxapp.OpenWith(gxapp.WindowConfig{Title: "gox wasm demo", Backend: "web"}, win)
+	// 接入层装配：gx.use(Backend) → Use(接口值) + 逐窗 Render（与桌面后端同一路径）。
+	handle := gxapp.Use(gxweb.NewBackend())
+	app, err := handle.Render(view,
+		gxapp.WindowConfig{Title: "gox wasm demo", Width: 1200, Height: 800})
 	if err != nil {
 		panic(err)
 	}
-	defer app.Close()
-	if err := app.Render(view); err != nil {
-		panic(err)
-	}
+	defer handle.Close()
 	// Web 后端无自己的事件循环：Run 立即返回，页面靠 DOM 事件持续驱动。
 	if err := app.Run(); err != nil {
 		panic(err)
