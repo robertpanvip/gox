@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	skia "github.com/robertpanvip/gox-backend-skia"
+	skia "github.com/robertpanvip/gox-backend-rust"
 	"github.com/robertpanvip/gox-idea/ui"
 	"github.com/robertpanvip/gox/widgets"
 )

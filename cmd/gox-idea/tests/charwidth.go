@@ -5,7 +5,7 @@ package main
 import (
 	"fmt"
 
-	skia "github.com/robertpanvip/gox-backend-skia"
+	skia "github.com/robertpanvip/gox-backend-rust"
 	"github.com/robertpanvip/gox/widgets"
 )
 

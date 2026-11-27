@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	skia "github.com/robertpanvip/gox-backend-skia"
+	rb "github.com/robertpanvip/gox-backend-rust"
 )
 
 // 本文件是「GUI 缺陷自动化检测」的编辑器逻辑层探针。
@@ -13,21 +13,16 @@ import (
 
 const probeCodeFontStack = "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
 
-// TestEditorWidthsInjectedMatchesSkia 检测「字宽未注入」缺陷：
-// 编辑器 caret 渲染与点击命中用的字符宽度，必须与 Skia 实际绘制宽度一致。
-// 若装配层（main.go）漏掉字宽注入，编辑器沿用默认 7.83，而 Skia 实测等宽字体
-// 单格并非此值，偏差累积后表现为「点击 div 落点偏移、拖选到行尾只复制到前半段」。
-func TestEditorWidthsInjectedMatchesSkia(t *testing.T) {
+// TestEditorWidthsInjectedMatchesRenderer 检测「字宽未注入」缺陷：
+// 编辑器 caret 渲染与点击命中用的字符宽度，必须与绘制端实际宽度一致。
+// V2 测量端（rb.MeasureEditorAdvances，glyphon 真实 shaping）与绘制端字形
+// 完全同源；若装配层（main.go）漏掉字宽注入，编辑器沿用默认 7.83，而等宽
+// 字体 13px 实测单格并非此值，偏差累积后表现为「点击 div 落点偏移、拖选到
+// 行尾只复制到前半段」。
+func TestEditorWidthsInjectedMatchesRenderer(t *testing.T) {
 	const fontSize = 13
-	// 环境守卫：CI runner 若未装 CJK 字体，Skia 对「中」只能回退到 tofu
-	// 字形宽（与编辑器内置的 CJK 双格宽必然不符），此时测的是环境而非
-	// 装配层缺陷，跳过。
-	if !skia.HasCJKFont() {
-		t.Skip("系统未安装 CJK 字体，宽字符宽度对齐无从验证")
-	}
-	// Skia 实测的绘制端真实字宽（绘制端用 pickFontFamily 解析字体栈后的口径）。
-	skiaNarrow := float64(skia.MeasureTextWidth("0000000000", fontSize, false, probeCodeFontStack) / 10)
-	skiaWide := float64(skia.MeasureTextWidth("中中中", fontSize, false, probeCodeFontStack) / 3)
+	// 渲染端实测的绘制端真实字宽（与绘制端同一 shaping 管线）。
+	rendererNarrow, rendererWide := rb.MeasureEditorAdvances(probeCodeFontStack, fontSize)
 
 	// 当前编辑器实际使用的字宽（装配层是否注入，读这里可知）。
 	editorNarrow := PrefixWidth("0", 1)
@@ -35,20 +30,19 @@ func TestEditorWidthsInjectedMatchesSkia(t *testing.T) {
 
 	// 容差 0.3px：允许实测舍入与跨平台 minor 差异，但 7.83 vs 7.2 这类
 	// 足以造成明显错位的偏差会被抓出。
-	if diff := editorNarrow - skiaNarrow; diff > 0.3 || diff < -0.3 {
-		t.Fatalf("抓到缺陷：编辑器窄字符宽 %.4f 与 Skia 绘制宽 %.4f 不符（差 %.4f）——main.go 漏注入字宽？", editorNarrow, skiaNarrow, diff)
+	if diff := editorNarrow - rendererNarrow; diff > 0.3 || diff < -0.3 {
+		t.Fatalf("抓到缺陷：编辑器窄字符宽 %.4f 与绘制端宽 %.4f 不符（差 %.4f）——main.go 漏注入字宽？", editorNarrow, rendererNarrow, diff)
 	}
-	if diff := editorWide - skiaWide; diff > 0.3 || diff < -0.3 {
-		t.Fatalf("抓到缺陷：编辑器宽字符宽 %.4f 与 Skia 绘制宽 %.4f 不符（差 %.4f）", editorWide, skiaWide, diff)
+	if diff := editorWide - rendererWide; diff > 0.3 || diff < -0.3 {
+		t.Fatalf("抓到缺陷：编辑器宽字符宽 %.4f 与绘制端宽 %.4f 不符（差 %.4f）", editorWide, rendererWide, diff)
 	}
 }
 
-// TestCaretPickRoundTripWithMeasuredWidths 注入 Skia 实测字宽后，验证
+// TestCaretPickRoundTripWithMeasuredWidths 注入渲染端实测字宽后，验证
 // PickColumn(PrefixWidth(col)) 能精确还原每一列——这是「点击落点正确」的核心不变量。
 func TestCaretPickRoundTripWithMeasuredWidths(t *testing.T) {
 	const fontSize = 13
-	narrow := float64(skia.MeasureTextWidth("0000000000", fontSize, false, probeCodeFontStack) / 10)
-	wide := float64(skia.MeasureTextWidth("中中中", fontSize, false, probeCodeFontStack) / 3)
+	narrow, wide := rb.MeasureEditorAdvances(probeCodeFontStack, fontSize)
 	SetCharWidth(narrow)
 	SetWideWidth(wide)
 
