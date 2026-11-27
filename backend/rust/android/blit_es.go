@@ -1,4 +1,6 @@
-package main
+//go:build android
+
+package androidbackend
 
 // GLES 2.0 版的 CPU raster 显示端：像素缓冲上传为纹理，全屏四边形 blit 到
 // EGL 默认 framebuffer。与桌面端 blit.go（GL 3.3 core，gl_VertexID 无 VBO

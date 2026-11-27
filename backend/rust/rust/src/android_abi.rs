@@ -154,3 +154,10 @@ pub extern "C" fn gx_android_destroy(host: *mut AndroidHost) {
         drop(Box::from_raw(host));
     }
 }
+
+/// C ABI 版本探针（供 Go 侧 InitBackend 预检静态库/符号是否齐全）。
+/// 返回静态 'static 字符串，Go 侧只读取、不释放。
+#[no_mangle]
+pub extern "C" fn gx_android_version() -> *const std::os::raw::c_char {
+    b"gxbackend-android 0.1.0\0".as_ptr() as *const std::os::raw::c_char
+}

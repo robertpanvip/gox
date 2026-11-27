@@ -3,6 +3,7 @@ go 1.27.2
 use (
 	.
 	./backend/rust/go
+	./backend/rust/android
 	./backend/skia
 	./backend/web
 	./third_party/skia

@@ -1,3 +1,5 @@
+//go:build android
+
 package main
 
 // 本文件与 Web 端的 injectCharWidth 对齐：桌面端启动时用 Skia 实测编辑器

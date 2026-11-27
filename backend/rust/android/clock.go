@@ -1,4 +1,6 @@
-package main
+//go:build android
+
+package androidbackend
 
 import (
 	"sync"
@@ -8,7 +10,7 @@ import (
 	"github.com/robertpanvip/gox/runtime/scheduler"
 )
 
-// paintClock 把 x/mobile 的 paint.Event（系统 Choreographer / vsync 驱动）
+// PaintClock 把 x/mobile 的 paint.Event（系统 Choreographer / vsync 驱动）
 // 适配为 scheduler.FrameClock（BACKEND_ARCHITECTURE_V2 阶段 1 的 Android 实现）。
 //
 // RequestFrame：置 pending 并向事件循环 Send 一次 paint.Event（CAS 去重，
@@ -17,7 +19,7 @@ import (
 // 动画续帧：drawNowErr 内的 RAF scheduleRAFNext → Scheduler.RequestFrame →
 // 本时钟再次 Send paint.Event，形成 vsync 对齐的动画循环，取代原来
 // hasPendingPaint 直发 paint.Event 的旁路机制（后者仍保留兜底，见 main.go）。
-type paintClock struct {
+type PaintClock struct {
 	send    func() // 发送 paint.Event 的回调（由 main 注入 a.Send 包装）
 	pending atomic.Bool
 
@@ -27,17 +29,24 @@ type paintClock struct {
 	frameID uint64
 }
 
-func newPaintClock(send func()) *paintClock {
-	return &paintClock{send: send}
+func NewPaintClock(send func()) *PaintClock {
+	return &PaintClock{send: send}
 }
 
-func (c *paintClock) Now() time.Duration {
+// SetSend 注入/替换 paint.Event 发送回调（装配层拿到 App 后才能提供 a.Send）。
+func (c *PaintClock) SetSend(fn func()) {
+	c.mu.Lock()
+	c.send = fn
+	c.mu.Unlock()
+}
+
+func (c *PaintClock) Now() time.Duration {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.last
 }
 
-func (c *paintClock) OnFrame(fn func(scheduler.FrameTime)) {
+func (c *PaintClock) OnFrame(fn func(scheduler.FrameTime)) {
 	c.mu.Lock()
 	c.fn = fn
 	c.mu.Unlock()
@@ -45,7 +54,7 @@ func (c *paintClock) OnFrame(fn func(scheduler.FrameTime)) {
 
 // RequestFrame 置 pending 并 Send 一次 paint.Event；pending 已置位时不再发送
 // （已排队的事件到达时会带走本次变更——Scheduler 读 dirty 而非 pending）。
-func (c *paintClock) RequestFrame() {
+func (c *PaintClock) RequestFrame() {
 	if c.pending.Swap(true) {
 		return
 	}
@@ -54,15 +63,15 @@ func (c *paintClock) RequestFrame() {
 	}
 }
 
-func (c *paintClock) CancelFrame() { c.pending.Store(false) }
+func (c *PaintClock) CancelFrame() { c.pending.Store(false) }
 
 // Pending 报告是否有未消费的帧预约（main.go 判断是否需要继续自发 paint）。
-func (c *paintClock) Pending() bool { return c.pending.Load() }
+func (c *PaintClock) Pending() bool { return c.pending.Load() }
 
 // emit 在 paint.Event 处理里调用：派发一次 OnFrame。
 // dirty 门控在 Scheduler 内——空闲帧回调直接空跑，paintNow 的 dirty 短路
 // 保证不发生 CPU raster 与纹理上传。
-func (c *paintClock) emit() {
+func (c *PaintClock) emit() {
 	c.pending.Store(false)
 	now := time.Duration(time.Now().UnixNano())
 	c.mu.Lock()
