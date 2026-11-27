@@ -564,45 +564,36 @@ GX 源码 ─lex→ token ─Analyze→ side table（符号 / 联合 / 收窄，
 
 ## 目录结构
 
+> **核心语言库已拆仓**：编译器（`pkg/compiler`）、LSP（`cmd/gox-lsp`、`internal/lsp`）、C-ABI（`bindings/cabi`）、运行时（`runtime/*`）、组件库（`widgets/*`）与语言层 `.gx` 示例现均在 [gox-core](https://github.com/robertpanvip/gox-core) 仓。本仓只保留后端实现、命令行工具与平台示例。两仓需相邻放置（`replace ... => ../gox-core`）。
+
 ```
 gox/
-├── cmd/
-│   ├── gox/            CLI：build / union / typeguard / jsx / pub / enum /
-│   │                       collections / sourcemap / map-lookup / lsp-map / lsp / test
-│   └── gox-lsp/        独立 LSP server 入口（stdin/stdout JSON-RPC）
-├── pkg/                对外稳定 API
-│   ├── compiler/       转译引擎：词法 / union / typeguard / JSX / pub / enum / scope / external / collections / pipeline
-│   └── sourcemap/      双向位置映射（无业务依赖）
-├── internal/           工具内部实现
-│   ├── check/          GX 类型检查器：go/parser AST + side table + 7 类诊断规则
-│   ├── lsp/            LSP 协议 / server / 诊断 / 符号映射 / 重命名
-│   └── buildcheck/     真实 go build 检查（可取消 + LRU）
-├── bindings/cabi/      C-ABI 共享库（供 IDEA 插件经 JNA 调用）
+├── cmd/                本仓命令行工具（各自独立 module）
+│   ├── gox-tui/        TUI（module gox-tui）
+│   ├── gox-idea/       IDEA 配套 UI（module gox-idea）
+│   └── gox-term/       终端（module gox-term）
 ├── backend/            可独立拆分的后端实现（统一契约 Contract + Adapter）
-│   ├── skia/           Go Backend（module gox-backend-skia）
-│   └── rust/           Rust Backend（Go Adapter + Rust Runtime + Wire 协议）
-├── examples/           .gx 示例（含 jsxscene.gx）
-├── testdata/           golden 产物 + LSP 端到端驱动脚本
-├── docs/               设计与集成文档
-└── runtime/            运行时组件
-    ├── scene/          opcode 模板 + 常驻场景树 + 细粒度 Update（JSX 后端）
-    ├── app/            窗口外壳 + Owner/Cleanup + 响应式重绘
-    ├── sig/         Signal / Computed / Effect / Batch
-    └── list/           List[T] + 泛型 Map/Filter/Reduce 运行时
+│   ├── rust/           Rust Backend（Go Adapter + Rust Runtime + Wire 协议）
+│   ├── skia/           Skia Backend（module gox-backend-skia）
+│   ├── web/            Web/wasm Backend（module gox-backend-web）
+│   └── gpu/            GPU 抽象层
+├── third_party/skia/   Skia 绑定（module gox-skia）
+├── examples/           平台示例（依赖后端；纯语言 .gx 示例在 gox-core）
+├── scripts/            构建与一致性校验脚本
+└── testdata/           threeway 三端一致性用例（golden / LSP 脚本在 gox-core）
 ```
 
-分层：`pkg` 是对外稳定 API，`internal` 仅供本仓库 cmd 使用；IDEA 插件等前端通过 `bindings/cabi` 或直接 import `pkg` 接入，不碰 `internal`。
+后端均只依赖 `gox-core` 的 `gxapp.Backend` 契约，`go list -deps` 确认 core 对后端零编译依赖。
 
 详细文档：[语言规范](docs/language-spec.md) · [架构](docs/architecture.md) · [后端架构（契约与拆分）](docs/backend-architecture.md) · [后端接入（host + 协议）](docs/backend-integration.md) · [JNA 集成](docs/CABI.md)
 
 ## 构建与使用
 
 ```bash
-make build          # gox、gox-lsp、libgox.so（需 Go 1.27+）
-make test           # 24 项转译自检 + go test ./...
-make lsp-test       # LSP 单元测试 + 端到端脚本
+make build          # gox-tui、gox-idea、gox-term（需 Go 1.27+）
+make test           # 逐个后端/工具模块运行 go test ./...
 
-gox build demo.gx -o out.go                       # 转译
+gox build demo.gx -o out.go                       # 转译（CLI 在 gox-core 仓）
 gox build demo.gx -check -module example.com/app \
     -replace example.com/app=/path/to/runtime     # 转译 + 真实编译检查（错误回投 .gx）
 gox sourcemap demo.gx -o map.json                 # sourcemap

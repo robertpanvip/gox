@@ -1,41 +1,32 @@
-# GoX 构建与测试入口（需 Go 1.27+）
+# GoX 后端 / 命令行工具构建与测试入口（需 Go 1.27+）
+# 核心语言库（编译器、LSP、widgets、runtime）已拆至 gox-core 仓，
+# 本 Makefile 只负责本仓保留的后端模块与命令行工具。
 GO := go
 TOOLCHAIN := GOTOOLCHAIN=go1.27.4
 CGO := CGO_ENABLED=1
-# GX 组件转译用的工具链（.gx → .go）。与 widgets/*.gx 的编译产物保持一致。
-GXTOOLCHAIN ?= GOTOOLCHAIN=go1.27.4
 
-.PHONY: build test lsp-test clean all gxbuild
+# 本仓含 Go 源码的模块（顶层 module 仅作 go.work 容器，无包）。
+MODULES := backend/rust/go backend/skia backend/web cmd/gox-tui cmd/gox-idea cmd/gox-term
+
+.PHONY: build test clean all
 
 all: build
 
-## build: 构建 gox、gox-lsp、libgox.so
+## build: 构建三个命令行工具（各自独立 module）
 build:
-	$(TOOLCHAIN) $(GO) build -o gox ./cmd/gox
-	$(TOOLCHAIN) $(GO) build -o gox-lsp ./cmd/gox-lsp
-	$(TOOLCHAIN) $(CGO) $(GO) build -buildmode=c-shared -o libgox.so ./bindings/cabi
-	@echo "构建完成: gox gox-lsp libgox.so"
+	$(TOOLCHAIN) $(GO) build -o gox-tui ./cmd/gox-tui
+	$(TOOLCHAIN) $(GO) build -o gox-idea ./cmd/gox-idea
+	$(TOOLCHAIN) $(GO) build -o gox-term ./cmd/gox-term
+	@echo "构建完成: gox-tui gox-idea gox-term"
 
-## test: 转译测试（内置 24 项自检）+ Go 单元测试
+## test: 逐个模块运行测试（go.work 的 ./... 不递归匹配子模块）
 test:
-	$(TOOLCHAIN) $(GO) run ./cmd/gox test
-	$(TOOLCHAIN) $(GO) test ./...
-
-## lsp-test: LSP 端到端驱动脚本
-lsp-test:
-	$(TOOLCHAIN) $(GO) test ./internal/lsp/... -v
-	bash testdata/lsp-e2e.sh
-
-## gxbuild: 把 widgets 下所有 .gx 源转译为同目录同名 .go（GX 组件库自举）
-## 每当修改 widgets/*.gx 后必须执行，保持提交产物与源同步。
-gxbuild:
-	@for f in widgets/*.gx; do \
-	  [ -f "$$f" ] || continue; \
-	  echo "转译 $$f -> $${f%.gx}.go"; \
-	  $(GXTOOLCHAIN) $(GO) run ./cmd/gox build "$$f" -o "$${f%.gx}.go" || exit 1; \
+	@set -e; for m in $(MODULES); do \
+	  echo "==> $$m"; \
+	  (cd $$m && $(TOOLCHAIN) $(GO) test ./...) || exit 1; \
 	done
-	@echo "GX 组件转译完成"
+	@echo "全部模块测试通过"
 
 ## clean: 清理构建产物
 clean:
-	rm -f gox gox-lsp libgox.so libgox.h
+	rm -f gox-tui gox-idea gox-term
