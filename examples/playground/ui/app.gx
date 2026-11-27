@@ -11,7 +11,7 @@ import (
     demos "github.com/robertpanvip/gox-playground/ui/demos"
     Signal "github.com/robertpanvip/gox-core/runtime/signal"
     gxscene "github.com/robertpanvip/gox-core/runtime/scene"
-    widgets "github.com/robertpanvip/gox/widgets"
+    widgets "github.com/robertpanvip/gox-sample/widgets"
 )
 
 // ---- 编辑器实例（widgets.Editor 公共组件）----

@@ -24,11 +24,11 @@ xvfb-run -a go run .
 ## 后端预制控件库（widgets）
 
 **所有 KPI 卡片、徽章、进度条、输入框、按钮都不是业务手写的样式**——它们来自
-skia 后端独立 module 里的预制组件库 `github.com/robertpanvip/gox/widgets`。
+skia 后端独立 module 里的预制组件库 `github.com/robertpanvip/gox-sample/widgets`。
 业务 JSX 只描述语义，外观（配色/圆角/描边/间距/字号）全部预制在后端：
 
 ```jsx
-import widgets "github.com/robertpanvip/gox/widgets"
+import widgets "github.com/robertpanvip/gox-sample/widgets"
 
 <widgets.row gap="14">
   <widgets.card title="REQUESTS" tone="cyan" width="196">…</widgets.card>

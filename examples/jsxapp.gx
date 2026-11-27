@@ -11,7 +11,7 @@
 package main
 
 import (
-    gxapp "github.com/robertpanvip/gox/runtime/app"
+    gxapp "github.com/robertpanvip/gox-sample/runtime/app"
 )
 
 func main() {

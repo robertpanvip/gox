@@ -92,7 +92,7 @@ pub func render(name string) any {
 // 构建：gox build demo.gxpackage main
 
 import (
-    gxscene "github.com/robertpanvip/gox/runtime/scene"
+    gxscene "github.com/robertpanvip/gox-sample/runtime/scene"
     "fmt"
 )
 
@@ -146,8 +146,8 @@ scene 核心**不依赖**任何响应式库——`BindReactive(effect)` 接受�
 
 ```gx
 // gox build demo.gximport (
-    gxscene "github.com/robertpanvip/gox/runtime/scene"
-    "github.com/robertpanvip/gox/runtime/signal"
+    gxscene "github.com/robertpanvip/gox-sample/runtime/scene"
+    "github.com/robertpanvip/gox-sample/runtime/signal"
 )
 
 func main() {
@@ -180,7 +180,7 @@ func main() {
 强类型形态复用了[对象字面量](#11-对象字面量)的「省略类型名 + 期望类型补全 + 校验」机制：JSX 编译期生成裸对象字面量 `Card({title:"x", n:42})`，transpiler 从 `func Card(props CardProps)` 签名推断期望类型 `CardProps`，补全为 `Card(CardProps{...})`，并校验——**字段拼错、类型不符、缺字段都会编译报错（带 GX 坐标）**。
 
 ```gx
-// gox build demo.gximport gxscene "github.com/robertpanvip/gox/runtime/scene"
+// gox build demo.gximport gxscene "github.com/robertpanvip/gox-sample/runtime/scene"
 
 type CardProps struct {
     title string
@@ -233,7 +233,7 @@ API：`CompileScene` / `CompileSceneWithModule`（对应默认的 `Compile` / `C
 | `app.render(build)` | 参数：**建树函数** `() => <App/>`（编译为 `func() any`，返回 `*gxscene.Instance`） | 在根 Owner 下建树、画首帧、完成响应式接线 |
 
 ```gx
-// gox build demo.gximport gxapp "github.com/robertpanvip/gox/runtime/app"
+// gox build demo.gximport gxapp "github.com/robertpanvip/gox-sample/runtime/app"
 
 app, err := gxapp.open({ title: "Demo", width: 800, height: 600 })
 if err != nil { panic(err) }
@@ -332,7 +332,7 @@ total := nums.filter(even).reduce(0, func(acc, x int) int { return acc + x })
 
 - `List[T]` 与 `[]T` 底层相同，可双向赋值；标准库返回的 `[]T` 也能用方法。
 - **不误伤**：数组 `[3]T`、索引 `a[i]`、切片表达式 `a[1:2]`、`map[K]V`、`Foo[T]` 都不是切片类型形态，不会被提升。
-- 用 `-module` 指定运行时 import 路径（默认 `github.com/robertpanvip/gox` → `.../runtime/list`）。运行时见 [`runtime/list/`](runtime/list/)。
+- 用 `-module` 指定运行时 import 路径（默认 `github.com/robertpanvip/gox-sample` → `.../runtime/list`）。运行时见 [`runtime/list/`](runtime/list/)。
 - **按需提升**：同一文件里出现 `.map` / `.filter` / `.reduce` 链式调用时才把 `[]T` 提升为 `list.List[T]`；没有链式调用的文件 `[]T` 原样保留（避免污染函数签名、凭空引入 runtime/list 依赖）。`gx:nocollections` 注释可整文件强制跳过集合变换。
 
 ## 6. is 类型守卫

@@ -1,6 +1,6 @@
 // 跨文件共享 Context：同一个 Context 实例，跨文件导出，不同子树各有各的值。
 // 构建：gox build examples/crossfile-context/main.gx -root examples/crossfile-context \
-//       -replace github.com/robertpanvip/gox=<gox 本地路径> -check
+//       -replace github.com/robertpanvip/gox-sample=<gox 本地路径> -check
 //
 // 机制：GX 跨文件模块用 pub 导出符号，调用方写小写源名（theme.labelCtx /
 // theme.Provide），编译器查导出表还原成大写。pub var 导出的是同一个 Context
@@ -10,8 +10,8 @@ package main
 
 import (
     "example.com/crossfilectx/theme"
-    gxscene "github.com/robertpanvip/gox/runtime/scene"
-    "github.com/robertpanvip/gox/runtime/signal"
+    gxscene "github.com/robertpanvip/gox-sample/runtime/scene"
+    "github.com/robertpanvip/gox-sample/runtime/signal"
     "fmt"
 )
 

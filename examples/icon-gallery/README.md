@@ -30,4 +30,4 @@ go run .
 
 - `app.gx` — GX 源（唯一手写源）
 - `main.go` — `gox build` 生成的转译产物
-- `go.mod` — 独立模块，`replace github.com/robertpanvip/gox => ../..`
+- `go.mod` — 独立模块，`replace github.com/robertpanvip/gox-sample => ../..`

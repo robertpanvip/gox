@@ -1,4 +1,4 @@
-module github.com/robertpanvip/gox
+module github.com/robertpanvip/gox-sample
 
 go 1.27
 

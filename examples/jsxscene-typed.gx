@@ -13,7 +13,7 @@
 package main
 
 import (
-    gxscene "github.com/robertpanvip/gox/runtime/scene"
+    gxscene "github.com/robertpanvip/gox-sample/runtime/scene"
     "fmt"
 )
 
