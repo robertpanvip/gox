@@ -259,14 +259,69 @@ func TestHostCloseWindowIsolation(t *testing.T) {
 	}
 }
 
-// Use 引用未注册后端：Render 明确报错，不产生半开窗口。
-func TestUseUnknownBackendErrors(t *testing.T) {
-	h := Use("no-such-backend-xyz")
+// UseNamed 引用未注册后端：Render 明确报错，不产生半开窗口。
+// 核心路径 Use(接口值) 不做名字分发——本测试只覆盖注册表便利层的错误路径。
+func TestUseNamedUnknownBackendErrors(t *testing.T) {
+	h := UseNamed("no-such-backend-xyz")
 	if _, err := h.Render(func() any { return stubText("x") }, WindowConfig{Title: "x"}); err == nil {
 		t.Fatal("未注册后端的 Render 应报错")
 	}
 	if len(h.Host().Windows()) != 0 {
 		t.Fatal("失败的 Render 不应残留窗口")
+	}
+}
+
+// Use 接口注入：接入层只依赖 Backend 接口形状，后端实现即可插拔。
+type fakeBackend struct{ n int }
+
+func (f *fakeBackend) Name() string { return "fake" }
+
+func (f *fakeBackend) NewWindow(cfg WindowConfig) (Window, error) {
+	f.n++
+	return &stubWindow{}, nil
+}
+
+// Use(接口值) 多窗渲染：每窗调用一次 Backend.NewWindow，窗口归 Host 管理。
+func TestUseBackendInterface(t *testing.T) {
+	b := &fakeBackend{}
+	h := Use(b)
+	a1, err := h.Render(func() any { return stubText("A") }, WindowConfig{Title: "A"})
+	if err != nil {
+		t.Fatalf("render A: %v", err)
+	}
+	a2, err := h.Render(func() any { return stubText("B") }, WindowConfig{Title: "B"})
+	if err != nil {
+		t.Fatalf("render B: %v", err)
+	}
+	if b.n != 2 {
+		t.Fatalf("每窗应调用一次 NewWindow, got %d", b.n)
+	}
+	if len(h.Host().Windows()) != 2 {
+		t.Fatalf("Host 应有 2 个窗口, got %d", len(h.Host().Windows()))
+	}
+	if err := h.Run(); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if err := h.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	_ = a1
+	_ = a2
+}
+
+// 故障归因走 Backend.Name()（复用 close_concurrency_test.go 的 closeErrWindow 桩）：注册表后端名经 BackendFunc 注入 Host。
+func TestBackendNameFaultAttribution(t *testing.T) {
+	Register("fake-attrib", func(cfg WindowConfig) (Window, error) {
+		return &closeErrWindow{err: sentinelCloseErr{}}, nil
+	})
+	var got Fault
+	host := NewHost(WithFaultHandler(func(f Fault) { got = f }))
+	if _, err := host.OpenBackendWindow(WindowConfig{Title: "x", Backend: "fake-attrib"}); err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	_ = host.Close() // Close 报错触发归因
+	if got.Backend != "fake-attrib" {
+		t.Fatalf("Fault.Backend 应为后端名, got %q", got.Backend)
 	}
 }
 

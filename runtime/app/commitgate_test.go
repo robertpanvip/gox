@@ -72,8 +72,8 @@ func (w *scanningWindow) Draw(r *gxscene.Node) error {
 	_, err := io.WriteString(io.Discard, (gxscene.TextBackend{}).Paint(r))
 	return err
 }
-func (w *scanningWindow) Run() error                 { return nil }
-func (w *scanningWindow) Close() error               { return nil }
+func (w *scanningWindow) Run() error           { return nil }
+func (w *scanningWindow) Close() error         { return nil }
 func (w *scanningWindow) Config() WindowConfig { return w.cfg }
 
 // TestConcurrentMutationAndDraw 复现评审 P0：一个 goroutine 持续写 signal 触发
@@ -122,15 +122,16 @@ func TestConcurrentMutationAndDraw(t *testing.T) {
 
 // frameWindow 实现 FramePresenter，记录收到的帧。
 type frameWindow struct {
-	cfg   WindowConfig
-	mu    sync.Mutex
+	cfg    WindowConfig
+	mu     sync.Mutex
 	frames []*Frame
 }
+
 func (w *frameWindow) Open(c WindowConfig) error { w.cfg = c; return nil }
 func (w *frameWindow) Draw(*gxscene.Node) error  { return nil } // 不应被调用
-func (w *frameWindow) Run() error                 { return nil }
-func (w *frameWindow) Close() error               { return nil }
-func (w *frameWindow) Config() WindowConfig       { return w.cfg }
+func (w *frameWindow) Run() error                { return nil }
+func (w *frameWindow) Close() error              { return nil }
+func (w *frameWindow) Config() WindowConfig      { return w.cfg }
 func (w *frameWindow) Present(f *Frame) error {
 	w.mu.Lock()
 	cp := *f
@@ -150,9 +151,13 @@ func TestFramePresenterReceivesFrame(t *testing.T) {
 	inst.EnableChanges()
 	w := &frameWindow{}
 	app, err := OpenWith(DefaultConfig(), w)
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer app.Close()
-	if err := app.Render(func() any { return inst }); err != nil { t.Fatal(err) }
+	if err := app.Render(func() any { return inst }); err != nil {
+		t.Fatal(err)
+	}
 
 	// 首帧（Render 同步绘制）+ 一次 signal 写入触发的帧。
 	val("B")
@@ -179,7 +184,9 @@ func TestFramePresenterReceivesFrame(t *testing.T) {
 	last := w.frames[len(w.frames)-1]
 	hasText := false
 	for _, c := range last.Changes {
-		if c.Kind == gxscene.ChangeSetText { hasText = true }
+		if c.Kind == gxscene.ChangeSetText {
+			hasText = true
+		}
 	}
 	if !hasText {
 		t.Fatalf("更新帧应携带 SetText 增量, changes=%v", last.Changes)

@@ -9,7 +9,7 @@ import (
 //
 // 对应 GX 接入形态（GX 编译产物落到 Use / Handle.Render / Handle.Run 三行）：
 //
-//	app := gxapp.Use("rust")                                  // gx.use(Backend)
+//	app := gxapp.Use(rb.NewBackend())                        // gx.use(Backend)：接口注入
 //	app.Render(func() any { return ui.App() }, gxapp.WindowConfig{ // app.render(() => <App/>, {...})
 //		Title: "Main Window", Width: 1200, Height: 800,
 //	})
@@ -17,6 +17,10 @@ import (
 //		Title: "Settings", Width: 600, Height: 400,
 //	})
 //	app.Run() // 统一主循环：全部窗口退出才返回
+//
+// 后端可插拔模型：gxapp 只定义 Backend 接口形状（backend.go），具体后端实现
+// 它并注入 Use——不做字符串分发，核心不依赖任何具体后端。注册表（UseNamed）
+// 只是接口注入之上的可选便利层。
 //
 // 模型（ui-loop-p4-multiwindows.md §3 的首版落地）：
 //   - Host 持有窗口集合，每窗一个独立 App（独立场景树 / signal Runtime / 生命周期），
@@ -32,7 +36,7 @@ import (
 // Fault 是一次窗口级故障的归因记录（Run panic / 关闭失败）。
 type Fault struct {
 	WindowID  int    // Host 内的窗口序号
-	Backend   string // 窗口所属后端名（Use 注入或 OpenBackendWindow 的 cfg.Backend）
+	Backend   string // 窗口所属后端标识（Backend.Name()）
 	Phase     string // "run" / "close"
 	Panic     any    // recover 捕获的 panic 值（nil 表示非 panic 故障）
 	Recovered bool   // 恒为 true：Host 已隔离，未向上传播
@@ -86,7 +90,7 @@ func NewHost(opts ...HostOption) *Host {
 // WindowBinder 通知后端启用增量。
 func (h *Host) OpenWindow(cfg WindowConfig, win Window) (*App, error) {
 	cfg = cfg.normalize()
-	entry, err := h.openEntry(cfg, "", win, nil)
+	entry, err := h.openEntry(cfg, nil, win)
 	if err != nil {
 		return nil, err
 	}
@@ -94,20 +98,35 @@ func (h *Host) OpenWindow(cfg WindowConfig, win Window) (*App, error) {
 }
 
 // OpenBackendWindow 按 cfg.Backend 从注册表选后端并打开窗口。语义同 OpenBackend，
-// 但窗口纳入 Host 管理（可多开）。
+// 但窗口纳入 Host 管理（可多开）。注册表是接口注入之上的可选便利层。
 func (h *Host) OpenBackendWindow(cfg WindowConfig) (*App, error) {
 	cfg = cfg.normalize()
-	entry, err := h.openEntry(cfg, cfg.Backend, nil, nil)
+	b, err := backendFromRegistry(cfg.Backend)
+	if err != nil {
+		return nil, err
+	}
+	entry, err := h.openEntry(cfg, b, nil)
 	if err != nil {
 		return nil, err
 	}
 	return entry.app, nil
 }
 
-// openEntry 公共装配路径：解析后端 → Open → 建 App → 注入 UIExecutor → 登记。
-// factory 非空时优先生效（UseFactory / 内部使用）；backend 非空时走注册表；
-// 两者都空则用内置 Headless。
-func (h *Host) openEntry(cfg WindowConfig, backend string, win Window, factory BackendFactory) (*hostWindow, error) {
+// backendFromRegistry 按注册表名查后端并包装为 Backend 接口值。
+func backendFromRegistry(name string) (Backend, error) {
+	if name == "" || name == "headless" {
+		return nil, nil // nil Backend → openEntry 走内置 Headless
+	}
+	f, ok := lookupBackend(name)
+	if !ok {
+		return nil, fmt.Errorf("gxapp: 未注册的 Backend %q（已注册: %v）", name, Backends())
+	}
+	return BackendFunc{NameStr: name, NewWindowF: f}, nil
+}
+
+// openEntry 公共装配路径：backend.NewWindow → Open → 建 App → 注入 UIExecutor → 登记。
+// backend 为 nil 时用内置 Headless（无头测试 / 纯逻辑验收）。
+func (h *Host) openEntry(cfg WindowConfig, backend Backend, win Window) (*hostWindow, error) {
 	h.mu.Lock()
 	if h.closed {
 		h.mu.Unlock()
@@ -118,31 +137,22 @@ func (h *Host) openEntry(cfg WindowConfig, backend string, win Window, factory B
 	h.mu.Unlock()
 
 	if win == nil {
-		if factory != nil {
-			w, ferr := factory(cfg)
-			if ferr != nil {
-				return nil, fmt.Errorf("gxapp: 创建 Backend %q 失败: %w", backend, ferr)
-			}
-			if w == nil {
-				return nil, fmt.Errorf("gxapp: Backend %q 的工厂返回 nil", backend)
-			}
-			win = w
-		} else if backend != "" && backend != "headless" {
-			f, ok := lookupBackend(backend)
-			if !ok {
-				return nil, fmt.Errorf("gxapp: 未注册的 Backend %q（已注册: %v）", backend, Backends())
-			}
-			w, ferr := f(cfg)
-			if ferr != nil {
-				return nil, fmt.Errorf("gxapp: 创建 Backend %q 失败: %w", backend, ferr)
-			}
-			if w == nil {
-				return nil, fmt.Errorf("gxapp: Backend %q 的工厂返回 nil", backend)
-			}
-			win = w
-		} else {
+		if backend == nil {
 			win = &HeadlessWindow{}
+		} else {
+			w, werr := backend.NewWindow(cfg)
+			if werr != nil {
+				return nil, fmt.Errorf("gxapp: 创建 Backend %q 窗口失败: %w", backend.Name(), werr)
+			}
+			if w == nil {
+				return nil, fmt.Errorf("gxapp: Backend %q 的 NewWindow 返回 nil", backend.Name())
+			}
+			win = w
 		}
+	}
+	backendName := ""
+	if backend != nil {
+		backendName = backend.Name()
 	}
 
 	app, err := OpenWith(cfg, win)
@@ -155,7 +165,7 @@ func (h *Host) openEntry(cfg WindowConfig, backend string, win Window, factory B
 		app.SetUIExecutor(exec)
 	}
 
-	entry := &hostWindow{id: id, backend: backend, app: app, win: win}
+	entry := &hostWindow{id: id, backend: backendName, app: app, win: win}
 	h.mu.Lock()
 	if h.closed {
 		h.mu.Unlock()
@@ -279,19 +289,41 @@ func (h *Host) reportFault(w *hostWindow, phase string, p any) {
 // 非并发安全：Render / Run / Close 应在装配 goroutine（通常 main）串行调用。
 type Handle struct {
 	h       *Host
-	backend string // 注册表后端名；空串 = 使用注入工厂或 headless
-	factory BackendFactory
+	backend Backend // nil = 内置 Headless（无头测试）
+	badName error   // UseNamed 延迟到 Render 报的注册表错误
 }
 
-// Use 是 GX `gx.use(Backend)` 的 Go 落点：按注册表后端名返回窗口组句柄。
-// 后端必须已 Register（或用 "headless" / UseFactory 注入实现）。
-func Use(backend string) *Handle {
+// Use 是 GX `gx.use(Backend)` 的 Go 落点：注入后端接口实现，返回窗口组句柄。
+//
+// 后端实现形状（gxapp.Backend，见 backend.go）：
+//
+//	type RustBackend struct{}
+//	func (RustBackend) Name() string { return "rust" }
+//	func (RustBackend) NewWindow(cfg gxapp.WindowConfig) (gxapp.Window, error) {
+//	    return NewWindow(), nil
+//	}
+//
+// 核心不做字符串分发；UseNamed（注册表名）只是便利层。传 nil 等价 headless。
+func Use(backend Backend) *Handle {
 	return &Handle{h: NewHost(), backend: backend}
 }
 
-// UseFactory 用注入工厂构造句柄（未注册后端 / 测试桩 / 第三方 Window 实现）。
+// UseFactory 用注入工厂构造句柄（测试桩 / 第三方 Window 实现的便捷入口）。
+// 本质是 BackendFunc 适配到 Backend 接口。
 func UseFactory(factory BackendFactory) *Handle {
-	return &Handle{h: NewHost(), factory: factory}
+	return Use(BackendFunc{NewWindowF: factory})
+}
+
+// UseNamed 按注册表后端名构造句柄（Register 之后的可选便利层）。
+// 核心接入路径是 Use(接口值)；名字分发只用于集中装配场景。
+func UseNamed(name string) *Handle {
+	h := NewHost()
+	b, err := backendFromRegistry(name)
+	if err != nil {
+		// 延迟报错到 Render（保持 Use 无错误返回的接入形态）。
+		return &Handle{h: h, badName: err}
+	}
+	return &Handle{h: h, backend: b}
 }
 
 // Host 返回底层宿主（Windows() 快照、故障回调等高级用法）。
@@ -303,8 +335,10 @@ func (hd *Handle) Host() *Host { return hd.h }
 // 若后端实现 WindowBinder（rustbackend），Render 完成后自动 BindApp 启用增量流。
 func (hd *Handle) Render(build func() any, cfg WindowConfig) (*App, error) {
 	cfg = cfg.normalize()
-	cfg.Backend = hd.backend
-	entry, err := hd.h.openEntry(cfg, hd.backend, nil, hd.factory)
+	if hd.badName != nil {
+		return nil, hd.badName
+	}
+	entry, err := hd.h.openEntry(cfg, hd.backend, nil)
 	if err != nil {
 		return nil, err
 	}

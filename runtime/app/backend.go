@@ -57,6 +57,46 @@ import (
 // 传入的是已规范化的配置；工厂可据此选择具体窗口实现。
 type BackendFactory func(cfg WindowConfig) (Window, error)
 
+// ---- Backend 接入接口（gx.use(Backend) 的注入点）----
+//
+// 接入层的后端可插拔走接口注入：gxapp 只定义接口形状，具体后端实现它并在
+// 装配处传入（gxapp.Use(rb.NewBackend())）。核心不 import 任何具体后端，
+// 也不做字符串分发——注册表（Register / UseNamed）只是建立在接口注入之上的
+// 可选便利层，供集中装配与测试桩替换。
+
+// Backend 是后端接入接口：接入层只依赖这个形状。
+type Backend interface {
+	// Name 返回后端标识（故障归因 Fault.Backend / 调试输出用）。
+	Name() string
+	// NewWindow 为一扇窗口创建 Window 实例。Host 多窗口下每窗调用一次，
+	// 后端可据此为每窗分配独立资源（事件循环 / 渲染上下文）。
+	// 返回的 Window 生命周期：Host 依次 Open → Draw → Run → Close。
+	NewWindow(cfg WindowConfig) (Window, error)
+}
+
+// BackendFunc 是 Backend 的函数适配器：已有 BackendFactory（注册表工厂 /
+// 测试桩）无需改造即可作为接口值注入。
+type BackendFunc struct {
+	NameStr    string
+	NewWindowF BackendFactory
+}
+
+// Name 实现 Backend.Name。
+func (b BackendFunc) Name() string {
+	if b.NameStr == "" {
+		return "backend"
+	}
+	return b.NameStr
+}
+
+// NewWindow 实现 Backend.NewWindow。
+func (b BackendFunc) NewWindow(cfg WindowConfig) (Window, error) {
+	if b.NewWindowF == nil {
+		return &HeadlessWindow{}, nil
+	}
+	return b.NewWindowF(cfg)
+}
+
 // ---- Backend 注册表 ----
 //
 // 核心只持有「名字 → 工厂」的映射，不 import 任何具体后端。装配层（main /

@@ -118,24 +118,24 @@ type Window interface {
 type App struct {
 	win           Window
 	cfg           WindowConfig
-	inst          *gxscene.Instance   // render 前为 nil
-	owner         *signal.Owner       // render 建树的根 Owner：组件内 effect/computed/cleanup 归属它
-	runtime       *signal.Runtime     // 本 App 专属的 UI 任务运行时（多 App 隔离）
-	globalLease   *signal.GlobalLease // 对默认 Runtime 的兼容桥接租约（GX Signal.safe）
-	dispatcher    FrameDispatcher     // 帧重绘派发器（默认 InlineDispatcher）
+	inst          *gxscene.Instance    // render 前为 nil
+	owner         *signal.Owner        // render 建树的根 Owner：组件内 effect/computed/cleanup 归属它
+	runtime       *signal.Runtime      // 本 App 专属的 UI 任务运行时（多 App 隔离）
+	globalLease   *signal.GlobalLease  // 对默认 Runtime 的兼容桥接租约（GX Signal.safe）
+	dispatcher    FrameDispatcher      // 帧重绘派发器（默认 InlineDispatcher）
 	frameClock    scheduler.FrameClock // 可选：平台帧时钟（BACKEND_ARCHITECTURE_V2 阶段 1）
 	frameSched    *scheduler.Scheduler // 可选：统一帧调度器（启用后重绘走 clock 对齐 vsync）
-	unFlush       func()              // 注销帧边界 hook（T1.2）
-	drawPending   atomic.Bool         // 一批 effect 内是否发生需要重绘的变化（预留给 Dispatcher 精确化；并发写用原子）
-	lastDrawErr   error               // 最近一次 Draw 的错误（T2.2）
-	errHook       func(error)         // 可选：Draw 错误回调
-	commit        *commitGate         // 串行化 Scene Mutation 与 Backend Draw（Host 评审 P0）
-	stateMu       sync.Mutex          // 保护 errHook / lastDrawErr / frameVersion / needsFullSync 的并发读写
-	closed        atomic.Bool         // 并发安全的关闭标记（Run/Close/Draw 契约）
-	closeOnce     sync.Once           // 保证 Close 幂等且只释放一次资源
-	closeErr      error               // 保存首次 Close 的结果，供并发/重复调用一致返回（评审 P2）
-	frameVersion  uint64              // 单调递增的提交序号（Frame 契约）
-	needsFullSync bool                // 上次 Present 失败后置位：下帧要求后端全量重建（Frame 契约）
+	unFlush       func()               // 注销帧边界 hook（T1.2）
+	drawPending   atomic.Bool          // 一批 effect 内是否发生需要重绘的变化（预留给 Dispatcher 精确化；并发写用原子）
+	lastDrawErr   error                // 最近一次 Draw 的错误（T2.2）
+	errHook       func(error)          // 可选：Draw 错误回调
+	commit        *commitGate          // 串行化 Scene Mutation 与 Backend Draw（Host 评审 P0）
+	stateMu       sync.Mutex           // 保护 errHook / lastDrawErr / frameVersion / needsFullSync 的并发读写
+	closed        atomic.Bool          // 并发安全的关闭标记（Run/Close/Draw 契约）
+	closeOnce     sync.Once            // 保证 Close 幂等且只释放一次资源
+	closeErr      error                // 保存首次 Close 的结果，供并发/重复调用一致返回（评审 P2）
+	frameVersion  uint64               // 单调递增的提交序号（Frame 契约）
+	needsFullSync bool                 // 上次 Present 失败后置位：下帧要求后端全量重建（Frame 契约）
 	rendered      bool
 
 	// RAF（requestAnimationFrame）调度状态，见 capabilities.go：
