@@ -61,8 +61,8 @@ type BackendFactory func(cfg WindowConfig) (Window, error)
 //
 // 接入层的后端可插拔走接口注入：gxapp 只定义接口形状，具体后端实现它并在
 // 装配处传入（gxapp.Use(rb.NewBackend())）。核心不 import 任何具体后端，
-// 也不做字符串分发——注册表（Register / UseNamed）只是建立在接口注入之上的
-// 可选便利层，供集中装配与测试桩替换。
+// 也不做字符串分发——Use(接口值) 是唯一接入路径；注册表（Register /
+// OpenBackend）是窗口级装配的遗留便利层，与接入层无关。
 
 // Backend 是后端接入接口：接入层只依赖这个形状。
 type Backend interface {
@@ -74,27 +74,23 @@ type Backend interface {
 	NewWindow(cfg WindowConfig) (Window, error)
 }
 
-// BackendFunc 是 Backend 的函数适配器：已有 BackendFactory（注册表工厂 /
-// 测试桩）无需改造即可作为接口值注入。
-type BackendFunc struct {
-	NameStr    string
-	NewWindowF BackendFactory
+// registryBackend 是 Backend 的包内适配器：把注册表工厂包装成接口值，
+// 只服务 Host.OpenBackendWindow（注册表便利层），不是接入路径——接入唯一
+// 路径是 Use(接口值)。
+type registryBackend struct {
+	name    string
+	factory BackendFactory
 }
 
 // Name 实现 Backend.Name。
-func (b BackendFunc) Name() string {
-	if b.NameStr == "" {
-		return "backend"
-	}
-	return b.NameStr
-}
+func (b registryBackend) Name() string { return b.name }
 
 // NewWindow 实现 Backend.NewWindow。
-func (b BackendFunc) NewWindow(cfg WindowConfig) (Window, error) {
-	if b.NewWindowF == nil {
+func (b registryBackend) NewWindow(cfg WindowConfig) (Window, error) {
+	if b.factory == nil {
 		return &HeadlessWindow{}, nil
 	}
-	return b.NewWindowF(cfg)
+	return b.factory(cfg)
 }
 
 // ---- Backend 注册表 ----

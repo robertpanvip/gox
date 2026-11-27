@@ -79,6 +79,7 @@ app.run()                                →  app.Run()   // 全部窗口退出�
 
 ```go
 // gxapp 只定义接口形状，后端实现它即可插拔；核心不依赖任何具体后端。
+// Use(接口值) 是唯一接入路径——没有工厂函数、没有按名字分发。
 type Backend interface {
     Name() string                                             // 故障归因 / 调试标识
     NewWindow(cfg WindowConfig) (Window, error)               // 每窗一次，独立实例
@@ -86,8 +87,7 @@ type Backend interface {
 ```
 
 后端侧实现（rustbackend/backend.go 为参考）：`type Backend struct{}` + `Name() string` +
-`NewWindow(cfg) (Window, error)`。便利入口：`UseFactory(BackendFactory)`（工厂适配）、
-`UseNamed("rust")`（注册表名，仅集中装配场景；核心路径不做字符串分发）。
+`NewWindow(cfg) (Window, error)`。
 Window 的可选扩展（UIExecutor / WindowBinder）由 Host 装配时按能力探测注入，后端无需转发。
 
 首版语义：每次 `Render` = 一扇独立窗口 + 独立 App（独立场景树 / signal Runtime）；

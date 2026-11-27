@@ -79,17 +79,26 @@ func stubText(title string) *gxscene.Instance {
 	})
 }
 
+// titleBackend：按窗口标题挑 Window 的测试桩后端（接口注入用）。
+type titleBackend struct{ byTitle map[string]Window }
+
+func (b titleBackend) Name() string { return "title-stub" }
+
+func (b titleBackend) NewWindow(cfg WindowConfig) (Window, error) {
+	if w, ok := b.byTitle[cfg.Title]; ok {
+		return w, nil
+	}
+	return &stubWindow{}, nil
+}
+
 // gx.use(Backend) → 逐窗 render：两扇窗各自独立 App/场景树/signal Runtime，
 // 互不串扰；每窗 Render 后自动 BindApp（WindowBinder）。
 func TestHandleRenderMultipleWindowsIndependent(t *testing.T) {
 	w1, w2 := &stubWindow{}, &stubWindow{}
-	factory := func(cfg WindowConfig) (Window, error) {
-		if cfg.Title == "Main Window" {
-			return w1, nil
-		}
-		return w2, nil
-	}
-	app := UseFactory(factory)
+	app := Use(titleBackend{byTitle: map[string]Window{
+		"Main Window": w1,
+		"Settings":    w2,
+	}})
 
 	a1, err := app.Render(func() any { return stubText("main") }, WindowConfig{Title: "Main Window", Width: 1200, Height: 800})
 	if err != nil {
@@ -142,12 +151,7 @@ func contains(s, sub string) bool {
 // signal 串扰隔离：窗口 A 写 signal 只重绘 A，B 的绘制次数不变。
 func TestHandleSignalIsolationBetweenWindows(t *testing.T) {
 	w1, w2 := &stubWindow{}, &stubWindow{}
-	app := UseFactory(func(cfg WindowConfig) (Window, error) {
-		if cfg.Title == "A" {
-			return w1, nil
-		}
-		return w2, nil
-	})
+	app := Use(titleBackend{byTitle: map[string]Window{"A": w1, "B": w2}})
 	count := signal.New(0)
 	var a2 *App
 	// 动态子节点（getter）才是响应式通道：静态 OpChildText 只在构建期求值一次。
@@ -259,18 +263,6 @@ func TestHostCloseWindowIsolation(t *testing.T) {
 	}
 }
 
-// UseNamed 引用未注册后端：Render 明确报错，不产生半开窗口。
-// 核心路径 Use(接口值) 不做名字分发——本测试只覆盖注册表便利层的错误路径。
-func TestUseNamedUnknownBackendErrors(t *testing.T) {
-	h := UseNamed("no-such-backend-xyz")
-	if _, err := h.Render(func() any { return stubText("x") }, WindowConfig{Title: "x"}); err == nil {
-		t.Fatal("未注册后端的 Render 应报错")
-	}
-	if len(h.Host().Windows()) != 0 {
-		t.Fatal("失败的 Render 不应残留窗口")
-	}
-}
-
 // Use 接口注入：接入层只依赖 Backend 接口形状，后端实现即可插拔。
 type fakeBackend struct{ n int }
 
@@ -309,7 +301,7 @@ func TestUseBackendInterface(t *testing.T) {
 	_ = a2
 }
 
-// 故障归因走 Backend.Name()（复用 close_concurrency_test.go 的 closeErrWindow 桩）：注册表后端名经 BackendFunc 注入 Host。
+// 故障归因走 Backend.Name()（复用 close_concurrency_test.go 的 closeErrWindow 桩）：注册表后端名包装为 Backend 接口注入 Host。
 func TestBackendNameFaultAttribution(t *testing.T) {
 	Register("fake-attrib", func(cfg WindowConfig) (Window, error) {
 		return &closeErrWindow{err: sentinelCloseErr{}}, nil

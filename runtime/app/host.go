@@ -19,8 +19,8 @@ import (
 //	app.Run() // 统一主循环：全部窗口退出才返回
 //
 // 后端可插拔模型：gxapp 只定义 Backend 接口形状（backend.go），具体后端实现
-// 它并注入 Use——不做字符串分发，核心不依赖任何具体后端。注册表（UseNamed）
-// 只是接口注入之上的可选便利层。
+// 它并注入 Use——唯一接入路径，不做字符串分发、没有工厂/注册表便利层，
+// 核心不依赖任何具体后端。
 //
 // 模型（ui-loop-p4-multiwindows.md §3 的首版落地）：
 //   - Host 持有窗口集合，每窗一个独立 App（独立场景树 / signal Runtime / 生命周期），
@@ -121,7 +121,7 @@ func backendFromRegistry(name string) (Backend, error) {
 	if !ok {
 		return nil, fmt.Errorf("gxapp: 未注册的 Backend %q（已注册: %v）", name, Backends())
 	}
-	return BackendFunc{NameStr: name, NewWindowF: f}, nil
+	return registryBackend{name: name, factory: f}, nil
 }
 
 // openEntry 公共装配路径：backend.NewWindow → Open → 建 App → 注入 UIExecutor → 登记。
@@ -290,7 +290,6 @@ func (h *Host) reportFault(w *hostWindow, phase string, p any) {
 type Handle struct {
 	h       *Host
 	backend Backend // nil = 内置 Headless（无头测试）
-	badName error   // UseNamed 延迟到 Render 报的注册表错误
 }
 
 // Use 是 GX `gx.use(Backend)` 的 Go 落点：注入后端接口实现，返回窗口组句柄。
@@ -303,27 +302,9 @@ type Handle struct {
 //	    return NewWindow(), nil
 //	}
 //
-// 核心不做字符串分发；UseNamed（注册表名）只是便利层。传 nil 等价 headless。
+// 传 nil 等价内置 headless（无头测试）。
 func Use(backend Backend) *Handle {
 	return &Handle{h: NewHost(), backend: backend}
-}
-
-// UseFactory 用注入工厂构造句柄（测试桩 / 第三方 Window 实现的便捷入口）。
-// 本质是 BackendFunc 适配到 Backend 接口。
-func UseFactory(factory BackendFactory) *Handle {
-	return Use(BackendFunc{NewWindowF: factory})
-}
-
-// UseNamed 按注册表后端名构造句柄（Register 之后的可选便利层）。
-// 核心接入路径是 Use(接口值)；名字分发只用于集中装配场景。
-func UseNamed(name string) *Handle {
-	h := NewHost()
-	b, err := backendFromRegistry(name)
-	if err != nil {
-		// 延迟报错到 Render（保持 Use 无错误返回的接入形态）。
-		return &Handle{h: h, badName: err}
-	}
-	return &Handle{h: h, backend: b}
 }
 
 // Host 返回底层宿主（Windows() 快照、故障回调等高级用法）。
@@ -335,9 +316,6 @@ func (hd *Handle) Host() *Host { return hd.h }
 // 若后端实现 WindowBinder（rustbackend），Render 完成后自动 BindApp 启用增量流。
 func (hd *Handle) Render(build func() any, cfg WindowConfig) (*App, error) {
 	cfg = cfg.normalize()
-	if hd.badName != nil {
-		return nil, hd.badName
-	}
 	entry, err := hd.h.openEntry(cfg, hd.backend, nil)
 	if err != nil {
 		return nil, err
