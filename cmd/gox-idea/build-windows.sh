@@ -29,16 +29,21 @@ if command -v cygpath >/dev/null 2>&1; then
   BIND_SRC="$(cygpath -u "$(dirname "$BIND_SRC")")/yoga-go-binding@v0.1.0"
 fi
 [ -d "$BIND_SRC" ] || { echo "未找到 yoga-go-binding 缓存: $BIND_SRC"; exit 1; }
-rm -rf /tmp/yoga-win-binding
-cp -r "$BIND_SRC" /tmp/yoga-win-binding
-chmod -R u+w /tmp/yoga-win-binding
-cp /tmp/yoga-win/libyogacore.a /tmp/yoga-win-binding/lib/libyogacore.a
+# 绑定副本必须放在 go.mod 同目录并用相对路径挂 replace：Windows 版 go.exe
+# 对 "/tmp/..." 这类不带盘符的路径不认作绝对（filepath.IsAbs=false），
+# 会拼接到 go.mod 所在目录去找，导致 "cannot find the path specified"。
+# 相对路径 replace 的解析基准正是 go.mod 所在目录，MSYS2 与原生 Windows 一致。
+rm -rf "$IDEA_DIR/tmp/yoga-win-binding"
+mkdir -p "$IDEA_DIR/tmp"
+cp -r "$BIND_SRC" "$IDEA_DIR/tmp/yoga-win-binding"
+chmod -R u+w "$IDEA_DIR/tmp/yoga-win-binding"
+cp /tmp/yoga-win/libyogacore.a "$IDEA_DIR/tmp/yoga-win-binding/lib/libyogacore.a"
 
 cd "$IDEA_DIR"
 cp go.mod /tmp/gox-idea-go.mod.bak
-restore() { cp /tmp/gox-idea-go.mod.bak go.mod; }
+restore() { cp /tmp/gox-idea-go.mod.bak go.mod; rm -rf "$IDEA_DIR/tmp/yoga-win-binding"; }
 trap restore EXIT
-echo "replace github.com/ahati/yoga-go-binding => /tmp/yoga-win-binding" >> go.mod
+echo "replace github.com/ahati/yoga-go-binding => ./tmp/yoga-win-binding" >> go.mod
 
 echo "[3/4] 编译 gox-idea.exe（GUI 子系统 + 全静态）..."
 CGO_ENABLED=1 GOOS=windows GOARCH=amd64 \

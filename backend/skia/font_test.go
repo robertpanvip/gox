@@ -9,6 +9,11 @@ import (
 // TestResolveFontCJK：主字体 sans-serif 缺中文/日文字形，resolveFont 必须
 // 选出能覆盖它们的 CJK fallback 字体；纯 ASCII 仍用主字体。
 func TestResolveFontCJK(t *testing.T) {
+	// CI runner 等环境可能没装任何 CJK 字体：届时 resolveFont 无字可选，
+	// 跳过而不是误报回归（ HasCJKFont 测的是环境，不是代码）。
+	if !HasCJKFont() {
+		t.Skip("系统未安装 CJK 字体，无法验证 fallback 选择逻辑")
+	}
 	primary := resolveFont('a', 16, false, "")
 	if primary.IsNil() {
 		t.Fatal("主字体不应为 nil")
@@ -36,6 +41,9 @@ func TestResolveFontCJK(t *testing.T) {
 // TestSplitRunsMixed：中英混排切成多段，每段各自字体覆盖其文本，且拼接后
 // 与原文一致（不丢字、不重字）。
 func TestSplitRunsMixed(t *testing.T) {
+	if !HasCJKFont() {
+		t.Skip("系统未安装 CJK 字体，无法验证混排分Run逻辑")
+	}
 	text := "Hello中文World"
 	runs := splitRuns(text, 16, false, "")
 	if len(runs) < 3 {

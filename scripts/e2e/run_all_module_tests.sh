@@ -36,6 +36,22 @@ for m in $MODULES; do
     continue
   fi
 
+  # GUI 模块：桌面 cgo 依赖（go-gl/glfw 要 X11 头文件、go-gl/gl 要 pkg-config gl、
+  # x/mobile 要 GLES3 头文件）。精简环境（CI runner 默认无这些 dev 包）下
+  # 连编译期都过不去，跳过而不是误报构建失败——装好依赖的环境仍然全跑。
+  if [ "$m" = "examples/playground" ] || [ "$m" = "cmd/gox-idea" ]; then
+    missing=""
+    [ -f /usr/include/X11/Xlib.h ] || missing="$missing libx11-dev"
+    [ -f /usr/include/GLES3/gl3.h ] || missing="$missing libgles2-mesa-dev"
+    pkg-config --exists gl 2>/dev/null || missing="$missing libgl-dev/pkg-config"
+    if [ -n "$missing" ]; then
+      echo ""
+      echo "================ module: $m —— SKIP（缺 GUI 编译依赖:$missing，apt 安装后全跑） ================"
+      SKIP=$((SKIP+1))
+      continue
+    fi
+  fi
+
   echo ""
   echo "================ module: $m （$n 个测试文件） ================"
   if (cd "$m" && go test ./... -count=1); then

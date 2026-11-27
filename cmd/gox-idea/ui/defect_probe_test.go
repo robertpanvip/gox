@@ -19,6 +19,12 @@ const probeCodeFontStack = "ui-monospace, SFMono-Regular, Menlo, Consolas, monos
 // 单格并非此值，偏差累积后表现为「点击 div 落点偏移、拖选到行尾只复制到前半段」。
 func TestEditorWidthsInjectedMatchesSkia(t *testing.T) {
 	const fontSize = 13
+	// 环境守卫：CI runner 若未装 CJK 字体，Skia 对「中」只能回退到 tofu
+	// 字形宽（与编辑器内置的 CJK 双格宽必然不符），此时测的是环境而非
+	// 装配层缺陷，跳过。
+	if !skia.HasCJKFont() {
+		t.Skip("系统未安装 CJK 字体，宽字符宽度对齐无从验证")
+	}
 	// Skia 实测的绘制端真实字宽（绘制端用 pickFontFamily 解析字体栈后的口径）。
 	skiaNarrow := float64(skia.MeasureTextWidth("0000000000", fontSize, false, probeCodeFontStack) / 10)
 	skiaWide := float64(skia.MeasureTextWidth("中中中", fontSize, false, probeCodeFontStack) / 3)
