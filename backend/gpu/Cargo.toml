@@ -36,6 +36,10 @@ default = ["gpu"]
 gpu = ["dep:wgpu", "dep:raw-window-handle", "dep:pollster"]
 # CPU 软光栅后端（tiny-skia；GPU 不可用/无头/超小包体场景）。
 cpu = ["dep:tiny-skia"]
+# WebGPU 后端（阶段 6）：wasm32-unknown-unknown 浏览器目标。wgpu 在 wasm 上
+# 默认只启用 webgl 兜底；显式开启 webgpu 才走原生 WebGPU 管线（同一份 WGSL）。
+#   cargo check --target wasm32-unknown-unknown --features webgpu
+webgpu = ["gpu", "wgpu/webgpu"]
 
 [dependencies]
 tiny-skia = { version = "0.11", optional = true }

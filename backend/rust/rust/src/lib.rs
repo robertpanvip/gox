@@ -32,8 +32,14 @@ mod scene;
 mod style;
 mod text_effects;
 mod video;
+// 平台 SurfaceProvider（阶段 5/6）：由外部宿主（NDK/JNI、iOS 工程、浏览器
+// JS glue）构造与消费，本 crate 内部（除测试）不构造——抑制 dead_code。
+#[allow(dead_code)]
 mod android_surface;
+#[allow(dead_code)]
 mod ios_surface;
+#[allow(dead_code)]
+mod web_surface;
 
 #[cfg(test)]
 mod tests_surface;

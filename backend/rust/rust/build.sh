@@ -17,7 +17,10 @@ echo "[rust-backend] cargo build --release ..."
 cargo build --release
 
 # 找到本次产出的 libgxbackend_rust-*.a（cargo 在 deps/ 下），逐个剥离 bitcode section。
-mapfile -t LIBS < <(find target/release/deps -maxdepth 1 -name 'libgxbackend_rust-*.a' -type f)
+# 同时剥离依赖 crate 的归档（libgx_gpu-*.a 等）：rustc 链接 staticlib 时这些
+# 依赖产物也会进入 cgo 链接扫描范围，只剥主库会让 Go 报错转移（实测踩坑：
+# "disallowed LTO section" 逐个文件出现——libgx_gpu → libgxbackend_rust-<hash>）。
+mapfile -t LIBS < <(find target/release/deps -maxdepth 1 \( -name 'libgxbackend_rust-*.a' -o -name 'libgx_gpu-*.a' \) -type f)
 if [ "${#LIBS[@]}" -eq 0 ]; then
   echo "[rust-backend] ERROR: 未找到 libgxbackend_rust-*.a" >&2
   exit 1
