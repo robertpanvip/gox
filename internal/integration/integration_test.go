@@ -1251,7 +1251,6 @@ func main() {
 	}
 }
 
-
 // GX 语言层 Context/Provider 端到端：小写 .use()/.provider() 还原为 Go API、
 // Provider 子树隔离、sig 驱动 value 响应式穿透 consumer。对应 examples/jsxapp-context.gx。
 func TestIntegrationContextProvider(t *testing.T) {
