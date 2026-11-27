@@ -255,7 +255,7 @@ uint64（gxscene.NodeID，NoNode=0 保留值），旧协议把它字符串化进
 | 1 | 统一帧调度（FrameClock/FrameScheduler + 三平台时钟接入） | ✅ 已完成 |
 | 2 | Wire 背压 + FullSync 自动恢复 | ✅ 已完成 |
 | 3 | Rust Renderer 从 winit 解耦，Surface 注入 | ✅ 完成：SurfaceProvider 注入 + 契约测试 + paint/util 模块拆分 + 布局缓存（2.0×）+ emit 指令缓存（累计 2.76×）+ GRX3 协议（NodeID uint64 直传） |
-| 4 | Desktop 正式迁移（Windows 优先；验证 60/120/144Hz；对比 Skia） | 待做 |
+| 4 | Desktop 正式迁移（Windows 优先；验证 60/120/144Hz；对比 Skia） | 🟡 无头语义验证完成：loopClock 零平台依赖（wake/now 注入）+ 8 项无头验收（合并/唤醒去重/空闲零绘制/Delta 精度/续帧/暂停恢复，60/120/144Hz 模拟节拍全过）；硬件 vsync 实测待真机 |
 | 5 | Android 原生 Surface + iOS 首次技术验证（Go Framework 集成 + C ABI 链接） | 待做 |
 | 6 | WebGPU（Rust→WASM，保留 DOM Driver） | 待做 |
 
