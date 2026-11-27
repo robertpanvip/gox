@@ -28,4 +28,3 @@ replace github.com/robertpanvip/gox-backend-skia => ../../skia
 replace github.com/robertpanvip/gox-skia => ../../../third_party/skia
 
 // Android NDK 下的 yoga-go-binding 本地 stub（与 playground 同款）。
-replace github.com/ahati/yoga-go-binding => /tmp/yoga-android-binding-amd64
