@@ -272,6 +272,7 @@ func (b *ideBridge) onKey(ev rb.InputEvent) {
 	ctrl := hasMod(ev, "ctrl")
 	shift := hasMod(ev, "shift")
 	key := strings.ToLower(ev.Text)
+	inputLogf("key text=%q mods=%q ctrl=%v", ev.Text, ev.Mods, ctrl)
 
 	if ctrl {
 		switch key {
@@ -343,8 +344,13 @@ func (b *ideBridge) onKey(ev rb.InputEvent) {
 }
 
 // onIMECommit 可打印字符（含 CJK）插入编辑器；过滤控制字符（\t 保留，
-// Tab 缩进是既有行为），与旧 CharCallback 同规则。
+// Tab 缩进是既有行为），与旧 CharCallback 同规则。Ctrl/Alt 组合键的字符
+// 不插入——它们是快捷键（Ctrl+A/C/V/X 已在 onKey 消费），字符回放会破坏
+// 选区语义（如 Ctrl+A 全选后 ime 'a' 又把选区替换成单字符）。
 func (b *ideBridge) onIMECommit(ev rb.InputEvent) {
+	if hasMod(ev, "ctrl") || hasMod(ev, "alt") || hasMod(ev, "super") {
+		return
+	}
 	for _, ch := range ev.Text {
 		if (ch < 0x20 && ch != '\t') || ch == 0x7f {
 			continue
