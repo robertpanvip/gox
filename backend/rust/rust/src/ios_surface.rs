@@ -117,7 +117,9 @@ mod tests {
             fake_view_ptr(),
             100,
             100,
-            Box::new(move || { h2.fetch_add(1, Ordering::SeqCst); }),
+            Box::new(move || {
+                h2.fetch_add(1, Ordering::SeqCst);
+            }),
         );
         s.request_redraw();
         assert_eq!(hits.load(Ordering::SeqCst), 1);

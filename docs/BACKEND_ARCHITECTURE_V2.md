@@ -255,7 +255,7 @@ uint64（gxscene.NodeID，NoNode=0 保留值），旧协议把它字符串化进
 | 1 | 统一帧调度（FrameClock/FrameScheduler + 三平台时钟接入） | ✅ 已完成 |
 | 2 | Wire 背压 + FullSync 自动恢复 | ✅ 已完成 |
 | 3 | Rust Renderer 从 winit 解耦，Surface 注入 | ✅ 完成：SurfaceProvider 注入 + 契约测试 + paint/util 模块拆分 + 布局缓存（2.0×）+ emit 指令缓存（累计 2.76×）+ GRX3 协议（NodeID uint64 直传） |
-| 4 | Desktop 正式迁移（Windows 优先；验证 60/120/144Hz；对比 Skia） | 🟡 无头语义验证完成：loopClock 零平台依赖（wake/now 注入）+ 8 项无头验收（合并/唤醒去重/空闲零绘制/Delta 精度/续帧/暂停恢复，60/120/144Hz 模拟节拍全过）；硬件 vsync 实测待真机 |
+| 4 | Desktop 正式迁移（Windows 优先；验证 60/120/144Hz；对比 Skia） | 🟡 首批消费方已切换：desktop-demo / widget-showcase 改走 rustbackend（V2 全链路），glwindow+GLFW+Skia 装配层删除；rustbackend 补齐装配能力（Post=UIExecutor、MeasureEditorAdvances+gx_measure_text_advances C ABI、RequestClose）。gox-idea / playground-desktop 待 Rust 输入面扩展（滚轮/指针拖拽/组合键/剪贴板/光标形状）与 V2 帧时钟归宿设计后切换；loopClock 无头语义验证完成（8 项），硬件 vsync 实测待真机 |
 | 5 | Android 原生 Surface + iOS 首次技术验证（Go Framework 集成 + C ABI 链接） | 🟡 Rust 侧就绪：android_surface.rs（AndroidNdkWindowHandle）/ ios_surface.rs（UiKitWindowHandle）provider + lifecycle 重建 API + 8 项无头测试；交叉编译验证 aarch64-linux-android（--features android-native-activity）与 aarch64-apple-ios 双 target 零错误；C ABI 接线待 NDK/真机环境 |
 | 6 | WebGPU（Rust→WASM，保留 DOM Driver） | 🟡 编译面验证完成：gx_gpu 三种构建（WebGPU/WebGL 兜底/CPU 软光栅）与渲染内核整体均零错误编译到 wasm32-unknown-unknown；web_surface.rs（WebWindowHandle）provider + 4 项无头测试；wasm 导出 ABI（wasm-bindgen/JS glue）与浏览器实测待后续 |
 

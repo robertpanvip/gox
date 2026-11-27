@@ -6,28 +6,41 @@
 use crate::binprotocol::NodeType;
 use crate::util::*;
 use glyphon::Buffer;
-use std::hash::Hash;
 #[cfg(test)]
 use glyphon::{FontSystem, Metrics};
+use std::hash::Hash;
 
 // 与 Skia 后端 backend/skia/overlay.go 完全一致的语义：所有约定走 props 全量透传，
 // gx-role 标记浮层角色，gx-anchor 引用锚点 id，gx-placement/gx-offset 定位。
 
 pub(crate) fn gx_role(n: &crate::scene::SceneNode) -> &str {
-    n.props.get("gx-role").map(|s| s.trim().to_ascii_lowercase())
+    n.props
+        .get("gx-role")
+        .map(|s| s.trim().to_ascii_lowercase())
         .map(|s| match s.as_str() {
-            "popover" => "popover", "modal" => "modal",
-            "portal" => "portal", "scrim" => "scrim", _ => "",
+            "popover" => "popover",
+            "modal" => "modal",
+            "portal" => "portal",
+            "scrim" => "scrim",
+            _ => "",
         })
         .unwrap_or("")
 }
 pub(crate) fn is_overlay(n: &crate::scene::SceneNode) -> bool {
     matches!(gx_role(n), "popover" | "modal" | "portal" | "scrim")
 }
-pub(crate) fn is_popover(n: &crate::scene::SceneNode) -> bool { gx_role(n) == "popover" }
-pub(crate) fn is_modal(n: &crate::scene::SceneNode) -> bool { gx_role(n) == "modal" }
-pub(crate) fn is_portal(n: &crate::scene::SceneNode) -> bool { gx_role(n) == "portal" }
-pub(crate) fn is_scrim(n: &crate::scene::SceneNode) -> bool { gx_role(n) == "scrim" }
+pub(crate) fn is_popover(n: &crate::scene::SceneNode) -> bool {
+    gx_role(n) == "popover"
+}
+pub(crate) fn is_modal(n: &crate::scene::SceneNode) -> bool {
+    gx_role(n) == "modal"
+}
+pub(crate) fn is_portal(n: &crate::scene::SceneNode) -> bool {
+    gx_role(n) == "portal"
+}
+pub(crate) fn is_scrim(n: &crate::scene::SceneNode) -> bool {
+    gx_role(n) == "scrim"
+}
 /// 内容型浮层（非遮罩）：统一在 scrim 之后绘制。
 pub(crate) fn is_content_overlay(n: &crate::scene::SceneNode) -> bool {
     is_popover(n) || is_modal(n) || is_portal(n)
@@ -37,35 +50,62 @@ pub(crate) fn is_content_overlay(n: &crate::scene::SceneNode) -> bool {
 pub(crate) fn place_centered(pw: f32, ph: f32, avail_w: f32, avail_h: f32) -> (f32, f32) {
     let pw = pw.min(avail_w);
     let ph = ph.min(avail_h);
-    (((avail_w - pw) / 2.0).max(0.0), ((avail_h - ph) / 2.0).max(0.0))
+    (
+        ((avail_w - pw) / 2.0).max(0.0),
+        ((avail_h - ph) / 2.0).max(0.0),
+    )
 }
 
 /// 浮层定位结果：side(bottom/top) + align(start/center/end)。
 pub(crate) fn parse_placement(s: &str) -> (&'static str, &'static str) {
     let lower = s.trim().to_ascii_lowercase();
     let parts: Vec<&str> = lower.split('-').collect();
-    let side = match parts.first().copied() { Some("top") => "top", _ => "bottom" };
+    let side = match parts.first().copied() {
+        Some("top") => "top",
+        _ => "bottom",
+    };
     let align = match parts.get(1).copied() {
-        Some("center") => "center", Some("end") => "end", _ => "start",
+        Some("center") => "center",
+        Some("end") => "end",
+        _ => "start",
     };
     (side, align)
 }
 
 /// 计算浮层左上角绝对坐标，空间不足时翻转（与 Skia placeOverlay 对齐）。
 pub(crate) fn place_overlay(
-    ax: f32, ay: f32, aw: f32, ah: f32,
-    pw: f32, ph: f32, placement: &str, offset: f32,
-    avail_w: f32, avail_h: f32,
+    ax: f32,
+    ay: f32,
+    aw: f32,
+    ah: f32,
+    pw: f32,
+    ph: f32,
+    placement: &str,
+    offset: f32,
+    avail_w: f32,
+    avail_h: f32,
 ) -> (f32, f32) {
     let (side, align) = parse_placement(placement);
     let below = ay + ah + offset + ph <= avail_h;
     let above = ay - offset - ph >= 0.0;
-    let side = if side == "bottom" && !below && above { "top" }
-               else if side == "top" && !above && below { "bottom" }
-               else { side };
-    let mut y = if side == "top" { ay - offset - ph } else { ay + ah + offset };
-    if y < 0.0 { y = 0.0; }
-    if y + ph > avail_h && ph <= avail_h { y = avail_h - ph; }
+    let side = if side == "bottom" && !below && above {
+        "top"
+    } else if side == "top" && !above && below {
+        "bottom"
+    } else {
+        side
+    };
+    let mut y = if side == "top" {
+        ay - offset - ph
+    } else {
+        ay + ah + offset
+    };
+    if y < 0.0 {
+        y = 0.0;
+    }
+    if y + ph > avail_h && ph <= avail_h {
+        y = avail_h - ph;
+    }
 
     let end_x = ax + aw - pw;
     let mut x = match align {
@@ -74,24 +114,43 @@ pub(crate) fn place_overlay(
         _ => ax,
     };
     if x < 0.0 {
-        if align == "end" && ax >= 0.0 { x = ax; } else { x = 0.0; }
+        if align == "end" && ax >= 0.0 {
+            x = ax;
+        } else {
+            x = 0.0;
+        }
     } else if x + pw > avail_w {
-        if align == "start" && end_x >= 0.0 { x = end_x; } else { x = avail_w - pw; }
+        if align == "start" && end_x >= 0.0 {
+            x = end_x;
+        } else {
+            x = avail_w - pw;
+        }
     }
     (x, y)
 }
 
 /// 展开一个节点的可见子节点（Fragment 透明摊平），与 build/emit 顺序一致。
-pub(crate) fn flat_children<'a>(n: &'a crate::scene::SceneNode, out: &mut Vec<&'a crate::scene::SceneNode>) {
+pub(crate) fn flat_children<'a>(
+    n: &'a crate::scene::SceneNode,
+    out: &mut Vec<&'a crate::scene::SceneNode>,
+) {
     for c in &n.children {
-        if c.typ == NodeType::Fragment { flat_children(c, out); } else { out.push(c); }
+        if c.typ == NodeType::Fragment {
+            flat_children(c, out);
+        } else {
+            out.push(c);
+        }
     }
 }
 
 /// 节点身份字符串（video/canvas 等字符串 key 的低频通道）：GRX3 帧 id 为空，
 /// 回退 nid 十进制；GRX1/旧帧优先 id 原串。
 pub(crate) fn node_id_str(n: &crate::scene::SceneNode) -> String {
-    if !n.id.is_empty() { n.id.clone() } else { n.nid.to_string() }
+    if !n.id.is_empty() {
+        n.id.clone()
+    } else {
+        n.nid.to_string()
+    }
 }
 
 /// 把统一语义的 CSS linear-gradient 归一化成 GPU 渐变模型（方向向量 +
@@ -101,7 +160,8 @@ pub(crate) fn node_id_str(n: &crate::scene::SceneNode) -> String {
 /// 自行求 len，这里只负责方向与色标）。
 pub(crate) fn gradient_model(
     g: &crate::text_effects::LinearGradient,
-    box_w: f32, box_h: f32,
+    box_w: f32,
+    box_h: f32,
 ) -> Option<gx_gpu::Grad> {
     if box_w <= 0.0 || box_h <= 0.0 || g.stops.is_empty() {
         return None;
@@ -109,11 +169,20 @@ pub(crate) fn gradient_model(
     let (dx, dy) = gx_gpu::css_angle_to_dir(g.angle);
     // ch 边界型色段无百分比：按最大 end_ch 归一化，保持相对位置。
     let max_ch = g.stops.last().map(|x| x.end_ch.max(1)).unwrap_or(1) as f32;
-    let stops: Vec<[f32; 5]> = g.stops.iter().map(|s| {
-        let pos = s.offset.unwrap_or_else(|| s.end_ch as f32 / max_ch);
-        [pos.clamp(0.0, 1.0),
-         s.color.0 as f32, s.color.1 as f32, s.color.2 as f32, s.color.3 as f32]
-    }).collect();
+    let stops: Vec<[f32; 5]> = g
+        .stops
+        .iter()
+        .map(|s| {
+            let pos = s.offset.unwrap_or_else(|| s.end_ch as f32 / max_ch);
+            [
+                pos.clamp(0.0, 1.0),
+                s.color.0 as f32,
+                s.color.1 as f32,
+                s.color.2 as f32,
+                s.color.3 as f32,
+            ]
+        })
+        .collect();
     Some(gx_gpu::Grad { dx, dy, stops })
 }
 
@@ -121,8 +190,13 @@ pub(crate) fn gradient_model(
 /// 同算法）。返回 (dst_rect, uv_window)。fill 铺满；contain 完整放入；
 /// cover 铺满并溢出盒外（溢出部分由祖先 scissor 裁剪，与旧实现一致）。
 pub(crate) fn fit_rect(
-    iw: f32, ih: f32, fit: ObjectFit,
-    rx: f32, ry: f32, rw: f32, rh: f32,
+    iw: f32,
+    ih: f32,
+    fit: ObjectFit,
+    rx: f32,
+    ry: f32,
+    rw: f32,
+    rh: f32,
 ) -> ([f32; 4], [f32; 4]) {
     if iw <= 0.0 || ih <= 0.0 || rw <= 0.0 || rh <= 0.0 {
         return ([0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0]);
@@ -138,7 +212,8 @@ pub(crate) fn fit_rect(
         } else {
             (rx + (rw - rh * ar) / 2.0, ry, rh * ar, rh)
         }
-    } else { // Cover
+    } else {
+        // Cover
         if ar > bar {
             (rx + (rw - rh * ar) / 2.0, ry, rh * ar, rh)
         } else {
@@ -157,8 +232,12 @@ pub(crate) fn selection_px_range(text: &str, start: usize, end: usize, size: f32
     let mut x1 = 0.0;
     for (i, ch) in text.chars().enumerate() {
         let w = if ch.is_ascii() { 0.56 } else { 1.0 } * size;
-        if i < start { x0 += w; }
-        if i < end { x1 += w; }
+        if i < start {
+            x0 += w;
+        }
+        if i < end {
+            x1 += w;
+        }
     }
     (x0, x1)
 }
@@ -177,7 +256,11 @@ pub(crate) fn clip_intersect(a: ClipRect, b: ClipRect) -> ClipRect {
             let y = ay.max(by);
             let r = (ax + aw).min(bx + bw);
             let bot = (ay + ah).min(by + bh);
-            if r > x && bot > y { Some((x, y, r - x, bot - y)) } else { Some((x, y, 0.0, 0.0)) }
+            if r > x && bot > y {
+                Some((x, y, r - x, bot - y))
+            } else {
+                Some((x, y, 0.0, 0.0))
+            }
         }
     }
 }
@@ -191,7 +274,13 @@ pub(crate) fn clip_rejects(c: ClipRect, x: f32, y: f32, w: f32, h: f32) -> bool 
 }
 
 /// 矩形与裁剪矩形求交，返回交集 (x,y,w,h)；完全在外返回 None。
-pub(crate) fn clip_rect_xywh(c: ClipRect, x: f32, y: f32, w: f32, h: f32) -> Option<(f32, f32, f32, f32)> {
+pub(crate) fn clip_rect_xywh(
+    c: ClipRect,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+) -> Option<(f32, f32, f32, f32)> {
     match c {
         None => Some((x, y, w, h)),
         Some((cx, cy, cw, ch)) => {
@@ -199,7 +288,11 @@ pub(crate) fn clip_rect_xywh(c: ClipRect, x: f32, y: f32, w: f32, h: f32) -> Opt
             let ny = y.max(cy);
             let nr = (x + w).min(cx + cw);
             let nb = (y + h).min(cy + ch);
-            if nr > nx && nb > ny { Some((nx, ny, nr - nx, nb - ny)) } else { None }
+            if nr > nx && nb > ny {
+                Some((nx, ny, nr - nx, nb - ny))
+            } else {
+                None
+            }
         }
     }
 }
@@ -234,7 +327,11 @@ pub(crate) struct TextDraw {
 
 /// object-fit：图片如何映射进布局盒（与 Skia 端 image.go 语义一致）。
 #[derive(Clone, Copy, PartialEq)]
-pub(crate) enum ObjectFit { Fill, Contain, Cover }
+pub(crate) enum ObjectFit {
+    Fill,
+    Contain,
+    Cover,
+}
 
 impl ObjectFit {
     pub(crate) fn parse(s: Option<&str>) -> Self {
@@ -259,20 +356,28 @@ pub(crate) struct SelectionDraw {
 
 /// 从节点标量 props 解析 selection 协议：&::selection JSON 子表 + selection-range。
 /// 两者缺一不可；range 非法返回 None（无选区）。JSON 用 serde_json，解析失败静默回退。
-pub(crate) fn parse_selection(props: &std::collections::HashMap<String, String>) -> Option<SelectionDraw> {
+pub(crate) fn parse_selection(
+    props: &std::collections::HashMap<String, String>,
+) -> Option<SelectionDraw> {
     let range = props.get("selection-range")?.trim();
     let (a, b) = range.split_once(|c| c == ':' || c == ',')?;
     let start: usize = a.trim().parse().ok()?;
     let end: usize = b.trim().parse().ok()?;
-    if end <= start { return None; }
+    if end <= start {
+        return None;
+    }
     let raw = props.get("&::selection")?;
     let v: serde_json::Value = serde_json::from_str(raw).ok()?;
     let bg_s = v.get("bg").and_then(|x| x.as_str()).unwrap_or("");
     let color_s = v.get("color").and_then(|x| x.as_str()).unwrap_or("");
     let bg = crate::style::parse_color_rgba(bg_s)?;
-    let color = crate::style::parse_color_rgba(color_s)
-        .map(|(r, g, b, _)| (r, g, b));
-    Some(SelectionDraw { start, end, bg, color })
+    let color = crate::style::parse_color_rgba(color_s).map(|(r, g, b, _)| (r, g, b));
+    Some(SelectionDraw {
+        start,
+        end,
+        bg,
+        color,
+    })
 }
 
 /// 单条文本的内容签名：字形 buffer 取决于 (内容, 字号, 着色分段)，与坐标无关。
@@ -301,7 +406,10 @@ pub(crate) fn text_sig(t: &TextDraw) -> String {
     // 选区前景色改变字形着色，纳入签名以触发重排；背景色不影响字形可省略。
     if let Some(sel) = &t.selection {
         if let Some((r, g, b)) = sel.color {
-            s.push_str(&format!("@sel{}:{}:{:02x}{:02x}{:02x}", sel.start, sel.end, r, g, b));
+            s.push_str(&format!(
+                "@sel{}:{}:{:02x}{:02x}{:02x}",
+                sel.start, sel.end, r, g, b
+            ));
         }
     }
     s
@@ -332,7 +440,11 @@ pub(crate) fn plan_glyphs(
             shaped.push(i);
         }
     }
-    let evicted = cache.keys().filter(|id| !live.contains(*id)).copied().collect();
+    let evicted = cache
+        .keys()
+        .filter(|id| !live.contains(*id))
+        .copied()
+        .collect();
     (shaped, evicted)
 }
 
@@ -367,22 +479,30 @@ pub(crate) struct ShapeDraw {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct ScrollBar {
     /// track 左上角与尺寸（track 覆盖整个容器高度，宽 TRACK_W）
-    pub(crate) x: f32, pub(crate) y: f32, pub(crate) track_h: f32,
+    pub(crate) x: f32,
+    pub(crate) y: f32,
+    pub(crate) track_h: f32,
     /// thumb 顶与高
-    pub(crate) thumb_y: f32, pub(crate) thumb_h: f32,
+    pub(crate) thumb_y: f32,
+    pub(crate) thumb_h: f32,
     /// 透明度 0..1（淡入淡出由 render 阶段按滚动活动度驱动）
     pub(crate) alpha: f32,
 }
 
 /// macOS 滚动条常量：细、圆头、半透明、overlay。
-pub(crate) const SB_TRACK_W: f32 = 8.0;   // track 宽
+pub(crate) const SB_TRACK_W: f32 = 8.0; // track 宽
 pub(crate) const SB_THUMB_MIN: f32 = 32.0; // thumb 最小高度
 
 /// 由容器几何与内容高度算滚动条。内容未溢出返回 None（不显示）。
 /// 纯函数，便于单测。
 pub(crate) fn scrollbar_geometry(
-    cx: f32, cy: f32, cw: f32, ch: f32,
-    content_h: f32, scroll_top: f32, alpha: f32,
+    cx: f32,
+    cy: f32,
+    cw: f32,
+    ch: f32,
+    content_h: f32,
+    scroll_top: f32,
+    alpha: f32,
 ) -> Option<ScrollBar> {
     let max_scroll = content_h - ch;
     if max_scroll <= 0.5 || ch <= 0.0 || cw <= 0.0 {
@@ -434,11 +554,22 @@ pub(crate) fn append_cmds(dl: &mut DisplayList, c: &NodeCmds) {
 /// selection 协议（&::selection/selection-range）、font-family，以及影响
 /// 子树裁剪基准与滚动偏移语义的 overflow。任何新增继承语义键必须同步维护。
 const EMIT_INHERIT_PROPS: &[&str] = &[
-    "color", "font-size",
-    "font-weight", "weight", "text-align", "line-height", "white-space",
-    "gradient-text", "background-clip", "-webkit-background-clip",
-    "bg", "background", "background-image",
-    "&::selection", "selection-range", "font-family",
+    "color",
+    "font-size",
+    "font-weight",
+    "weight",
+    "text-align",
+    "line-height",
+    "white-space",
+    "gradient-text",
+    "background-clip",
+    "-webkit-background-clip",
+    "bg",
+    "background",
+    "background-image",
+    "&::selection",
+    "selection-range",
+    "font-family",
     "overflow",
 ];
 
@@ -461,7 +592,14 @@ pub(crate) fn clip_hash(c: ClipRect) -> u64 {
 
 /// 节点对外传播给子树的裁剪矩形（overflow 容器求交，其余继承）。
 /// emit 与 emit 缓存签名遍历共用的单一来源，防止两处逻辑漂移。
-pub(crate) fn child_clip_of(node: &crate::scene::SceneNode, parent_clip: ClipRect, x: f32, y: f32, w: f32, h: f32) -> ClipRect {
+pub(crate) fn child_clip_of(
+    node: &crate::scene::SceneNode,
+    parent_clip: ClipRect,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+) -> ClipRect {
     let st = crate::style::parse_style(node);
     if node.typ == NodeType::Div && st.overflow != crate::style::Overflow::Visible {
         clip_intersect(parent_clip, Some((x, y, w, h)))
@@ -489,7 +627,14 @@ pub(crate) struct DisplayList {
 
 impl DisplayList {
     pub(crate) fn new() -> Self {
-        DisplayList { shapes: vec![], texts: vec![], measured: vec![], scrollbars: vec![], hitboxes: vec![], inputs: vec![] }
+        DisplayList {
+            shapes: vec![],
+            texts: vec![],
+            measured: vec![],
+            scrollbars: vec![],
+            hitboxes: vec![],
+            inputs: vec![],
+        }
     }
     /// 把镜像场景树编译成绘制指令。
     /// 布局交给 Taffy 0.5（完整 Flexbox 引擎）——
@@ -508,20 +653,32 @@ impl DisplayList {
 
         // video 原语：先从场景树收集所有 video 节点的播放意图，同步解码器进程。
         // 必须在 emit 取帧之前调用，保证本帧拿到的是最新同步状态。
-        fn collect_videos(n: &crate::scene::SceneNode, out: &mut Vec<(String, crate::video::VideoSpec)>) {
-            let vid = if !n.id.is_empty() { n.id.clone() } else if n.nid != 0 { n.nid.to_string() } else { String::new() };
+        fn collect_videos(
+            n: &crate::scene::SceneNode,
+            out: &mut Vec<(String, crate::video::VideoSpec)>,
+        ) {
+            let vid = if !n.id.is_empty() {
+                n.id.clone()
+            } else if n.nid != 0 {
+                n.nid.to_string()
+            } else {
+                String::new()
+            };
             if n.kind.eq_ignore_ascii_case("video") && !vid.is_empty() {
                 let g = |k: &str| n.props.get(k).map(|s| s.as_str()).unwrap_or("");
                 let truthy = |k: &str| matches!(g(k), "true" | "1");
-                out.push((vid, crate::video::VideoSpec {
-                    src: g("src").to_string(),
-                    playback_id: g("playback-id").to_string(),
-                    seek: g("seek-to").to_string(),
-                    playing: truthy("playing"),
-                    autoplay: truthy("autoplay"),
-                    loop_: truthy("loop"),
-                    muted: truthy("muted"),
-                }));
+                out.push((
+                    vid,
+                    crate::video::VideoSpec {
+                        src: g("src").to_string(),
+                        playback_id: g("playback-id").to_string(),
+                        seek: g("seek-to").to_string(),
+                        playing: truthy("playing"),
+                        autoplay: truthy("autoplay"),
+                        loop_: truthy("loop"),
+                        muted: truthy("muted"),
+                    },
+                ));
             }
             for c in &n.children {
                 collect_videos(c, out);
@@ -605,17 +762,40 @@ impl DisplayList {
         impl TextInherit {
             /// 节点自身 props 覆盖继承值（font-weight/text-align/line-height/
             /// white-space 均为 CSS 继承属性）。
-            fn derive(props: &std::collections::HashMap<String, String>, size: f32, parent: Self) -> Self {
-                let line_h = props.get("line-height").and_then(|s| {
-                    let (f, px) = crate::style::line_height_of(s);
-                    if f > 0.0 { Some(f * size) } else if px > 0.0 { Some(px) } else { None }
-                }).or(if parent.line_h > 0.0 { Some(parent.line_h) } else { None })
+            fn derive(
+                props: &std::collections::HashMap<String, String>,
+                size: f32,
+                parent: Self,
+            ) -> Self {
+                let line_h = props
+                    .get("line-height")
+                    .and_then(|s| {
+                        let (f, px) = crate::style::line_height_of(s);
+                        if f > 0.0 {
+                            Some(f * size)
+                        } else if px > 0.0 {
+                            Some(px)
+                        } else {
+                            None
+                        }
+                    })
+                    .or(if parent.line_h > 0.0 {
+                        Some(parent.line_h)
+                    } else {
+                        None
+                    })
                     .unwrap_or(0.0);
                 Self {
                     weight: crate::style::font_weight_from_props(props).or(parent.weight),
-                    align: props.get("text-align").map(|s| crate::style::text_align_of(s)).unwrap_or(parent.align),
+                    align: props
+                        .get("text-align")
+                        .map(|s| crate::style::text_align_of(s))
+                        .unwrap_or(parent.align),
                     line_h,
-                    collapse_ws: props.get("white-space").map(|s| crate::style::white_space_collapses(s)).unwrap_or(parent.collapse_ws),
+                    collapse_ws: props
+                        .get("white-space")
+                        .map(|s| crate::style::white_space_collapses(s))
+                        .unwrap_or(parent.collapse_ws),
                 }
             }
         }
@@ -627,7 +807,8 @@ impl DisplayList {
             parent_scrollable: bool,
             inherited_color: (u8, u8, u8),
             inherited_size: f32,
-            avail_w: f32, avail_h: f32,
+            avail_w: f32,
+            avail_h: f32,
             tinh: TextInherit,
         ) -> taffy::NodeId {
             let p = |k: &str| node.props.get(k).map(|s| s.as_str());
@@ -639,39 +820,65 @@ impl DisplayList {
                 let mut ts = Style::default();
                 // overflow 容器的子树不参与压缩，否则内容被压进视口、永不溢出，
                 // 滚动与滚动条都失效（标准滚动容器语义：子项 flex-shrink:0）。
-                if parent_scrollable { ts.flex_shrink = 0.0; }
+                if parent_scrollable {
+                    ts.flex_shrink = 0.0;
+                }
                 // white-space:normal/nowrap 与绘制端同口径折叠空白。
                 let text = if my_tinh.collapse_ws {
                     crate::style::collapse_whitespace(&node.text)
                 } else {
                     node.text.clone()
                 };
-                return taffy.new_leaf_with_context(
-                    ts,
-                    TextMeasure { text, size, line_height: my_tinh.line_h },
-                ).expect("taffy text leaf");
+                return taffy
+                    .new_leaf_with_context(
+                        ts,
+                        TextMeasure {
+                            text,
+                            size,
+                            line_height: my_tinh.line_h,
+                        },
+                    )
+                    .expect("taffy text leaf");
             }
 
             // padding：1~4 值 CSS 简写（与 Skia/Web 对齐）；负值无意义裁到 0。
             let zero = length(0.0);
-            let pad_rect: taffy::geometry::Rect<taffy::style::LengthPercentage> =
-                p("padding").and_then(crate::style::parse_edges)
+            let pad_rect: taffy::geometry::Rect<taffy::style::LengthPercentage> = p("padding")
+                .and_then(crate::style::parse_edges)
                 .map(|e| Rect {
-                    top: length(e[0].max(0.0)), right: length(e[1].max(0.0)),
-                    bottom: length(e[2].max(0.0)), left: length(e[3].max(0.0)),
+                    top: length(e[0].max(0.0)),
+                    right: length(e[1].max(0.0)),
+                    bottom: length(e[2].max(0.0)),
+                    left: length(e[3].max(0.0)),
                 })
-                .unwrap_or(Rect { top: zero, right: zero, bottom: zero, left: zero });
+                .unwrap_or(Rect {
+                    top: zero,
+                    right: zero,
+                    bottom: zero,
+                    left: zero,
+                });
             // margin：1~4 值简写 + 四边单独覆盖（CSS 级联顺序），负值裁到 0。
             // taffy 的 margin 是 Rect<LengthPercentageAuto>，与 padding 类型不同。
             let auto_zero = taffy::style_helpers::length(0.0);
             let mut margin_rect: taffy::geometry::Rect<taffy::style::LengthPercentageAuto> =
-                p("margin").and_then(crate::style::parse_edges)
-                .map(|e| Rect {
-                    top: length(e[0].max(0.0)), right: length(e[1].max(0.0)),
-                    bottom: length(e[2].max(0.0)), left: length(e[3].max(0.0)),
-                })
-                .unwrap_or(Rect { top: auto_zero, right: auto_zero, bottom: auto_zero, left: auto_zero });
-            for (i, key) in ["margin-top", "margin-right", "margin-bottom", "margin-left"].iter().enumerate() {
+                p("margin")
+                    .and_then(crate::style::parse_edges)
+                    .map(|e| Rect {
+                        top: length(e[0].max(0.0)),
+                        right: length(e[1].max(0.0)),
+                        bottom: length(e[2].max(0.0)),
+                        left: length(e[3].max(0.0)),
+                    })
+                    .unwrap_or(Rect {
+                        top: auto_zero,
+                        right: auto_zero,
+                        bottom: auto_zero,
+                        left: auto_zero,
+                    });
+            for (i, key) in ["margin-top", "margin-right", "margin-bottom", "margin-left"]
+                .iter()
+                .enumerate()
+            {
                 if let Some(v) = p(key).and_then(parse_px) {
                     let d = length(v.max(0.0));
                     match i {
@@ -685,18 +892,28 @@ impl DisplayList {
             // gap：简写兜底双轴；row-gap/column-gap 分别覆盖纵向/横向（CSS 语义，
             // 修正旧实现拿 column-gap 顶替 gap 用的问题）。
             let gap_base = p("gap").and_then(parse_px);
-            let col_gap = p("column-gap").and_then(parse_px).or(gap_base).unwrap_or(0.0);
+            let col_gap = p("column-gap")
+                .and_then(parse_px)
+                .or(gap_base)
+                .unwrap_or(0.0);
             let row_gap = p("row-gap").and_then(parse_px).or(gap_base).unwrap_or(0.0);
             // absolute：浮层/遮罩（gx-role）或显式 position:absolute 都脱离父 flex 流。
             // 浮层位置由第二遍按锚点矩形单独计算；通用 absolute 用 inset 由 Taffy 定位。
             let st = crate::style::parse_style(node);
             let is_abs = is_overlay(node) || st.position == crate::style::Position::Absolute;
             let mut style = Style {
-                position: if is_abs { Position::Absolute } else { Position::Relative },
+                position: if is_abs {
+                    Position::Absolute
+                } else {
+                    Position::Relative
+                },
                 flex_direction: dir_of(p("flex-direction").unwrap_or("column")),
                 padding: pad_rect,
                 margin: margin_rect,
-                gap: Size { width: length(col_gap), height: length(row_gap) },
+                gap: Size {
+                    width: length(col_gap),
+                    height: length(row_gap),
+                },
                 align_items: align_of(p("align-items")),
                 align_content: align_content_of(p("align-content")),
                 flex_wrap: wrap_of(p("flex-wrap")),
@@ -706,55 +923,116 @@ impl DisplayList {
                 ..Default::default()
             };
             // 显式 flex-grow / flex-shrink 属性覆盖默认（补齐与 Skia/Web 的消费差）。
-            if let Some(v) = p("flex-grow").and_then(parse_px) { style.flex_grow = v.max(0.0); }
-            if let Some(v) = p("flex-shrink").and_then(parse_px) { style.flex_shrink = v.max(0.0); }
+            if let Some(v) = p("flex-grow").and_then(parse_px) {
+                style.flex_grow = v.max(0.0);
+            }
+            if let Some(v) = p("flex-shrink").and_then(parse_px) {
+                style.flex_shrink = v.max(0.0);
+            }
             // min/max 尺寸约束。
-            if let Some(v) = p("min-width").and_then(parse_px) { style.min_size.width = length(v); }
-            if let Some(v) = p("min-height").and_then(parse_px) { style.min_size.height = length(v); }
-            if let Some(v) = p("max-width").and_then(parse_px) { style.max_size.width = length(v); }
-            if let Some(v) = p("max-height").and_then(parse_px) { style.max_size.height = length(v); }
+            if let Some(v) = p("min-width").and_then(parse_px) {
+                style.min_size.width = length(v);
+            }
+            if let Some(v) = p("min-height").and_then(parse_px) {
+                style.min_size.height = length(v);
+            }
+            if let Some(v) = p("max-width").and_then(parse_px) {
+                style.max_size.width = length(v);
+            }
+            if let Some(v) = p("max-height").and_then(parse_px) {
+                style.max_size.height = length(v);
+            }
             // inset：top/right/bottom/left（NaN=auto 跳过）。与 Skia 语义一致。
             if is_abs {
                 let i = st.inset;
-                if !i[0].is_nan() { style.inset.top = length(i[0]); }
-                if !i[1].is_nan() { style.inset.right = length(i[1]); }
-                if !i[2].is_nan() { style.inset.bottom = length(i[2]); }
-                if !i[3].is_nan() { style.inset.left = length(i[3]); }
+                if !i[0].is_nan() {
+                    style.inset.top = length(i[0]);
+                }
+                if !i[1].is_nan() {
+                    style.inset.right = length(i[1]);
+                }
+                if !i[2].is_nan() {
+                    style.inset.bottom = length(i[2]);
+                }
+                if !i[3].is_nan() {
+                    style.inset.left = length(i[3]);
+                }
             }
             // 显式宽高；根节点即使未声明也填满窗口。
             let exp_w = p("width").and_then(parse_px);
             let exp_h = p("height").and_then(parse_px);
             let w = exp_w.or(if is_root { Some(avail_w) } else { None });
             let h = exp_h.or(if is_root { Some(avail_h) } else { None });
-            if let Some(v) = w { style.size.width = length(v); }
-            if let Some(v) = h { style.size.height = length(v); }
+            if let Some(v) = w {
+                style.size.width = length(v);
+            }
+            if let Some(v) = h {
+                style.size.height = length(v);
+            }
 
             // 摊平 Fragment：透明包装不引入布局节点，其 children 直接挂到当前父节点。
             let mut kids: Vec<&crate::scene::SceneNode> = Vec::new();
-            fn flatten<'a>(n: &'a crate::scene::SceneNode, out: &mut Vec<&'a crate::scene::SceneNode>) {
+            fn flatten<'a>(
+                n: &'a crate::scene::SceneNode,
+                out: &mut Vec<&'a crate::scene::SceneNode>,
+            ) {
                 for c in &n.children {
-                    if c.typ == NodeType::Fragment { flatten(c, out); } else { out.push(c); }
+                    if c.typ == NodeType::Fragment {
+                        flatten(c, out);
+                    } else {
+                        out.push(c);
+                    }
                 }
             }
             flatten(node, &mut kids);
             let child_scrollable = st.overflow != crate::style::Overflow::Visible;
-            let child_nodes: Vec<taffy::NodeId> = kids.iter()
-                .map(|c| build(taffy, c, false, child_scrollable, color, size, avail_w, avail_h, my_tinh))
+            let child_nodes: Vec<taffy::NodeId> = kids
+                .iter()
+                .map(|c| {
+                    build(
+                        taffy,
+                        c,
+                        false,
+                        child_scrollable,
+                        color,
+                        size,
+                        avail_w,
+                        avail_h,
+                        my_tinh,
+                    )
+                })
                 .collect();
 
-            taffy.new_with_children(style, &child_nodes).expect("taffy container")
+            taffy
+                .new_with_children(style, &child_nodes)
+                .expect("taffy container")
         }
 
         let hit = cache.sig == sig && cache.tree.is_some();
         if !hit {
             cache.rebuilds += 1;
             let mut fresh = TaffyTree::new();
-            let root_node = build(&mut fresh, root, true, false, (226, 232, 240), 16.0, avail_w, avail_h, TextInherit::default());
-            fresh.compute_layout_with_measure(
-                root_node,
-                Size { width: AvailableSpace::Definite(avail_w), height: AvailableSpace::Definite(avail_h) },
-                |known, avail, _id, mctx, _style| measure_text(known, avail, mctx),
-            ).expect("taffy compute_layout");
+            let root_node = build(
+                &mut fresh,
+                root,
+                true,
+                false,
+                (226, 232, 240),
+                16.0,
+                avail_w,
+                avail_h,
+                TextInherit::default(),
+            );
+            fresh
+                .compute_layout_with_measure(
+                    root_node,
+                    Size {
+                        width: AvailableSpace::Definite(avail_w),
+                        height: AvailableSpace::Definite(avail_h),
+                    },
+                    |known, avail, _id, mctx, _style| measure_text(known, avail, mctx),
+                )
+                .expect("taffy compute_layout");
             cache.tree = Some((fresh, root_node));
             cache.sig = sig;
         }
@@ -767,7 +1045,8 @@ impl DisplayList {
         // 签名遍历与 emit 同构（flat_children + 相同坐标/裁剪/继承传播），
         // 归纳保证：签名相等 ⇔ emit 全部输入相等 ⇔ 输出指令段等价。
         let emit_sig_map = if hit {
-            let mut sigs: std::collections::HashMap<taffy::NodeId, (u64, bool)> = std::collections::HashMap::new();
+            let mut sigs: std::collections::HashMap<taffy::NodeId, (u64, bool)> =
+                std::collections::HashMap::new();
             // 递归闭包展开为局部 fn：需要 BuildCtx（嵌套类型）。
             fn render_sig(
                 node: &crate::scene::SceneNode,
@@ -775,7 +1054,8 @@ impl DisplayList {
                 ctx: &BuildCtx,
                 inh: u64,
                 parent_clip: ClipRect,
-                ox: f32, oy: f32,
+                ox: f32,
+                oy: f32,
                 sigs: &mut std::collections::HashMap<taffy::NodeId, (u64, bool)>,
             ) -> (u64, bool) {
                 use std::hash::Hasher;
@@ -799,11 +1079,12 @@ impl DisplayList {
                 let y = oy + lay.location.y;
                 let w = lay.size.width;
                 let h = lay.size.height;
-                let my_clip = if node.typ == NodeType::Div && st_cl != crate::style::Overflow::Visible {
-                    clip_intersect(parent_clip, Some((x, y, w, h)))
-                } else {
-                    parent_clip
-                };
+                let my_clip =
+                    if node.typ == NodeType::Div && st_cl != crate::style::Overflow::Visible {
+                        clip_intersect(parent_clip, Some((x, y, w, h)))
+                    } else {
+                        parent_clip
+                    };
                 // 继承滚动哈希：本节点的继承语义键值滚入，传给孩子（不含裁剪——
                 // 裁剪由每节点显式编码 clip_hash(parent_clip)，见下）。
                 let inh_child = {
@@ -826,7 +1107,8 @@ impl DisplayList {
                 let mut kid_h = std::collections::hash_map::DefaultHasher::new();
                 for (i, c) in kids.iter().enumerate() {
                     let ct = ctx.taffy.child_at_index(tnode, i).expect("taffy child");
-                    let (cs, cv) = render_sig(c, ct, ctx, inh_child, my_clip, child_ox, child_oy, sigs);
+                    let (cs, cv) =
+                        render_sig(c, ct, ctx, inh_child, my_clip, child_ox, child_oy, sigs);
                     cs.hash(&mut kid_h);
                     has_video |= cv;
                 }
@@ -874,11 +1156,17 @@ impl DisplayList {
         struct OverlayInfo<'a> {
             node: &'a crate::scene::SceneNode,
             tnode: taffy::NodeId,
-            x: f32, y: f32, w: f32, h: f32, // 主布局里的初始矩形（浮层的 size 有效，location 待覆盖）
+            x: f32,
+            y: f32,
+            w: f32,
+            h: f32, // 主布局里的初始矩形（浮层的 size 有效，location 待覆盖）
         }
         fn scan<'a>(
-            node: &'a crate::scene::SceneNode, tnode: taffy::NodeId, ctx: &BuildCtx,
-            ox: f32, oy: f32,
+            node: &'a crate::scene::SceneNode,
+            tnode: taffy::NodeId,
+            ctx: &BuildCtx,
+            ox: f32,
+            oy: f32,
             anchors: &mut std::collections::HashMap<String, (f32, f32, f32, f32)>,
             overlays: &mut Vec<OverlayInfo<'a>>,
         ) {
@@ -891,7 +1179,14 @@ impl DisplayList {
                 anchors.insert(id.clone(), (x, y, w, h));
             }
             if is_overlay(node) {
-                overlays.push(OverlayInfo { node, tnode, x, y, w, h });
+                overlays.push(OverlayInfo {
+                    node,
+                    tnode,
+                    x,
+                    y,
+                    w,
+                    h,
+                });
             }
             let mut kids: Vec<&crate::scene::SceneNode> = Vec::new();
             flat_children(node, &mut kids);
@@ -902,10 +1197,19 @@ impl DisplayList {
         }
         let mut anchors = std::collections::HashMap::new();
         let mut overlays: Vec<OverlayInfo> = Vec::new();
-        scan(root, *root_node, &ctx, 0.0, 0.0, &mut anchors, &mut overlays);
+        scan(
+            root,
+            *root_node,
+            &ctx,
+            0.0,
+            0.0,
+            &mut anchors,
+            &mut overlays,
+        );
 
         // 计算每个浮层的目标绝对左上角，按 node.id 索引（emit 时套用）。
-        let mut overrides: std::collections::HashMap<String, (f32, f32)> = std::collections::HashMap::new();
+        let mut overrides: std::collections::HashMap<String, (f32, f32)> =
+            std::collections::HashMap::new();
         for ov in &overlays {
             if is_scrim(ov.node) {
                 overrides.insert(ov.node.id.clone(), (0.0, 0.0)); // 遮罩铺满，尺寸在 emit 时按画布覆盖
@@ -913,7 +1217,10 @@ impl DisplayList {
             }
             if is_modal(ov.node) {
                 // 视口居中（无锚点），与 Skia 端一致。
-                overrides.insert(ov.node.id.clone(), place_centered(ov.w, ov.h, avail_w, avail_h));
+                overrides.insert(
+                    ov.node.id.clone(),
+                    place_centered(ov.w, ov.h, avail_w, avail_h),
+                );
                 continue;
             }
             if is_portal(ov.node) {
@@ -922,15 +1229,27 @@ impl DisplayList {
                 overrides.insert(ov.node.id.clone(), (-ov.x, -ov.y));
                 continue;
             }
-            if !is_popover(ov.node) { continue; }
+            if !is_popover(ov.node) {
+                continue;
+            }
             let mut target = (ov.x, ov.y);
             if let Some(anchor_id) = ov.node.props.get("gx-anchor") {
                 if let Some(&(ax, ay, aw, ah)) = anchors.get(anchor_id) {
-                    let offset = ov.node.props.get("gx-offset")
-                        .and_then(|s| parse_px(s.as_str())).unwrap_or(6.0);
-                    let placement = ov.node.props.get("gx-placement")
-                        .map(|s| s.as_str()).unwrap_or("bottom-start");
-                    target = place_overlay(ax, ay, aw, ah, ov.w, ov.h, placement, offset, avail_w, avail_h);
+                    let offset = ov
+                        .node
+                        .props
+                        .get("gx-offset")
+                        .and_then(|s| parse_px(s.as_str()))
+                        .unwrap_or(6.0);
+                    let placement = ov
+                        .node
+                        .props
+                        .get("gx-placement")
+                        .map(|s| s.as_str())
+                        .unwrap_or("bottom-start");
+                    target = place_overlay(
+                        ax, ay, aw, ah, ov.w, ov.h, placement, offset, avail_w, avail_h,
+                    );
                 }
             }
             overrides.insert(ov.node.id.clone(), target);
@@ -946,9 +1265,11 @@ impl DisplayList {
             dl: &mut DisplayList,
             inherited_color: (u8, u8, u8),
             inherited_size: f32,
-            ox: f32, oy: f32,
+            ox: f32,
+            oy: f32,
             overrides: &std::collections::HashMap<String, (f32, f32)>,
-            avail_w: f32, avail_h: f32,
+            avail_w: f32,
+            avail_h: f32,
             skip_overlays: bool,
             parent_clip: ClipRect,
             inherited_gradient: Option<crate::text_effects::LinearGradient>,
@@ -999,12 +1320,15 @@ impl DisplayList {
             let my_tinh = TextInherit::derive(&node.props, size, tinh);
             let lay = ctx.taffy.layout(tnode).expect("taffy layout");
             // 浮层根用第二遍算出的目标坐标；其余节点沿用 Taffy 相对坐标累加。
-            let (x, y) = overrides.get(&node.id).copied()
+            let (x, y) = overrides
+                .get(&node.id)
+                .copied()
                 .unwrap_or((ox + lay.location.x, oy + lay.location.y));
             let mut w = lay.size.width;
             let mut h = lay.size.height;
             if is_scrim(node) {
-                w = avail_w; h = avail_h; // 遮罩覆盖整个画布
+                w = avail_w;
+                h = avail_h; // 遮罩覆盖整个画布
             }
 
             // 回流实测尺寸：按稳定 node.id 上报最终布局宽高。虚拟列表等组件
@@ -1023,7 +1347,11 @@ impl DisplayList {
                 // y 是 Taffy 算出的文本行盒顶部；glyphon 会用 Buffer 的 Metrics
                 // (font_size, line_height) 自行处理行盒内基线，故这里不加
                 // 任何 size 比例的魔法偏移——否则紧凑容器（如 Input 高 20px）里文字会偏下。
-                let line_h = if my_tinh.line_h > 0.0 { my_tinh.line_h } else { size * 1.35 };
+                let line_h = if my_tinh.line_h > 0.0 {
+                    my_tinh.line_h
+                } else {
+                    size * 1.35
+                };
                 // white-space:normal/nowrap 与测量端同口径折叠空白。
                 let text = if my_tinh.collapse_ws {
                     crate::style::collapse_whitespace(&node.text)
@@ -1032,14 +1360,17 @@ impl DisplayList {
                 };
                 // text-align：盒宽大于内容宽时按 center/right 平移（近似测宽与
                 // measure_text 同口径：ASCII 0.56em / 其它 1em）。
-                let tw = text.chars()
+                let tw = text
+                    .chars()
                     .map(|ch| if ch.is_ascii() { 0.56 } else { 1.0 })
-                    .sum::<f32>() * size;
+                    .sum::<f32>()
+                    * size;
                 let dx = crate::style::align_offset(my_tinh.align, w, tw);
                 if !clip_rejects(my_clip, x, y, size * 4.0, size * 1.35) {
                     // 统一渐变文字：按 ch 边界把文本切成着色分段，glyphon 逐 span 上色。
                     // 无渐变时 spans 为空 → 走 default_color 快路径，零额外分配。
-                    let mut spans = my_gradient.as_ref()
+                    let mut spans = my_gradient
+                        .as_ref()
                         .map(|g| crate::text_effects::gradient_spans(&text, g, color))
                         .unwrap_or_default();
                     // 三端统一 selection：用本节点或父 span 继承的 selection 协议，
@@ -1048,14 +1379,24 @@ impl DisplayList {
                     if let Some(sel) = &selection {
                         if let Some(fg) = sel.color {
                             spans = crate::text_effects::selection_spans(
-                                &text, &spans, color, sel.start, sel.end, fg);
+                                &text, &spans, color, sel.start, sel.end, fg,
+                            );
                         }
                     }
                     dl.texts.push(TextDraw {
-                        id: node.nid, text, x: x + dx, y, size, color,
-                        clip: my_clip, spans, selection, family: my_family.clone(),
+                        id: node.nid,
+                        text,
+                        x: x + dx,
+                        y,
+                        size,
+                        color,
+                        clip: my_clip,
+                        spans,
+                        selection,
+                        family: my_family.clone(),
                         alpha: st.opacity,
-                        weight: my_tinh.weight, line_height: my_tinh.line_h,
+                        weight: my_tinh.weight,
+                        line_height: my_tinh.line_h,
                     });
                 }
                 return y + line_h;
@@ -1066,12 +1407,17 @@ impl DisplayList {
                 let bg = bg_raw.map(parse_color);
                 // 通用渐变背景：带 gradient-text 标记的节点渐变只作用于文字，
                 // 不画背景（与 Go paint.go 的例外一致）；其余节点的 bg 渐变画到容器。
-                let is_gradient_text = node.props.get("gradient-text")
+                let is_gradient_text = node
+                    .props
+                    .get("gradient-text")
                     .map(|v| v.trim() == "1" || v.trim().eq_ignore_ascii_case("true"))
                     .unwrap_or(false)
-                    || node.props.get("background-clip").or_else(|| node.props.get("-webkit-background-clip"))
-                    .map(|v| v.to_ascii_lowercase().contains("text"))
-                    .unwrap_or(false);
+                    || node
+                        .props
+                        .get("background-clip")
+                        .or_else(|| node.props.get("-webkit-background-clip"))
+                        .map(|v| v.to_ascii_lowercase().contains("text"))
+                        .unwrap_or(false);
                 let bg_gradient = if is_gradient_text {
                     None
                 } else {
@@ -1086,15 +1432,20 @@ impl DisplayList {
                     // img 原语：<img src> 走原生解码（data URI / 本地路径），与 Go 端
                     // runtime/imgutil 的 src 语义一致。解码按 src 缓存（image.rs）。
                     let img = if node.kind.eq_ignore_ascii_case("img") {
-                        p("src").and_then(|src| crate::image::load(src))
-                            .map(|pix| (std::sync::Arc::new(pix), ObjectFit::parse(p("object-fit"))))
+                        p("src").and_then(|src| crate::image::load(src)).map(|pix| {
+                            (std::sync::Arc::new(pix), ObjectFit::parse(p("object-fit")))
+                        })
                     } else {
                         None
                     };
                     // canvas 原语：解析 Props["canvas-ops"]（runtime/canvas 协议）。
                     let canvas = if node.kind.eq_ignore_ascii_case("canvas") {
                         let ops = crate::canvas::decode(p("canvas-ops").unwrap_or(""));
-                        if ops.is_empty() { None } else { Some(std::sync::Arc::new(ops)) }
+                        if ops.is_empty() {
+                            None
+                        } else {
+                            Some(std::sync::Arc::new(ops))
+                        }
                     } else {
                         None
                     };
@@ -1106,29 +1457,49 @@ impl DisplayList {
                         None
                     };
                     dl.shapes.push(ShapeDraw {
-                        x, y, w, h,
+                        x,
+                        y,
+                        w,
+                        h,
                         bg: bg.unwrap_or((0, 0, 0)),
                         // 有渐变时纯色底不绘制，由 LinearGradient shader 填充（对齐 Skia/canvas 端）。
                         bg_present: bg.is_some() && bg_gradient.is_none(),
                         bg_gradient,
-                        radius, border,
+                        radius,
+                        border,
                         shadow: st.shadow.clone(),
                         clip: my_clip,
-                        img, canvas,
+                        img,
+                        canvas,
                         alpha: st.opacity,
                         video: video_frame,
-                        video_id: if is_video { node_id_str(node) } else { String::new() },
+                        video_id: if is_video {
+                            node_id_str(node)
+                        } else {
+                            String::new()
+                        },
                     });
                 }
                 // pointer-events:none：节点自身不作为鼠标目标（仍绘制，后代照常
                 // 命中——CSS 命中语义）；cursor 随命中框透出供宿主切换系统光标。
-                let pe_none = node.props.get("pointer-events")
+                let pe_none = node
+                    .props
+                    .get("pointer-events")
                     .map(|s| s.trim().eq_ignore_ascii_case("none"))
                     .unwrap_or(false);
                 if let Some(ev) = node.events.iter().find(|e| e.starts_with("on")) {
                     if !pe_none {
-                        dl.hitboxes.push((x, y, w, h, node.nid, ev.clone(), is_overlay(node), my_clip,
-                            node.props.get("cursor").cloned().unwrap_or_default()));
+                        dl.hitboxes.push((
+                            x,
+                            y,
+                            w,
+                            h,
+                            node.nid,
+                            ev.clone(),
+                            is_overlay(node),
+                            my_clip,
+                            node.props.get("cursor").cloned().unwrap_or_default(),
+                        ));
                     }
                 }
                 if node.props.contains_key("gx-input-id") && !pe_none {
@@ -1139,8 +1510,8 @@ impl DisplayList {
             let mut kids: Vec<&crate::scene::SceneNode> = Vec::new();
             flat_children(node, &mut kids);
             let mut subtree_bottom = y + h; // 至少到自身底边
-            // z-index：按值稳定排序绘制/命中顺序（负值垫底、正值置顶，同值保持
-            // 文档序）。Taffy 子节点顺序不变，按原始下标取 child_tnode。
+                                            // z-index：按值稳定排序绘制/命中顺序（负值垫底、正值置顶，同值保持
+                                            // 文档序）。Taffy 子节点顺序不变，按原始下标取 child_tnode。
             let ordered: Vec<(usize, &crate::scene::SceneNode)> = {
                 let mut v: Vec<(usize, &crate::scene::SceneNode)> =
                     kids.iter().enumerate().map(|(i, c)| (i, *c)).collect();
@@ -1148,8 +1519,31 @@ impl DisplayList {
                 v
             };
             for &(orig_i, c) in ordered.iter() {
-                let child_tnode = ctx.taffy.child_at_index(tnode, orig_i).expect("taffy child");
-                let cb = emit(c, child_tnode, ctx, dl, color, size, child_ox, child_oy, overrides, avail_w, avail_h, skip_overlays, my_clip, my_gradient.clone(), my_selection.clone(), my_family.clone(), my_tinh, emit_sigs, &mut *ecache);
+                let child_tnode = ctx
+                    .taffy
+                    .child_at_index(tnode, orig_i)
+                    .expect("taffy child");
+                let cb = emit(
+                    c,
+                    child_tnode,
+                    ctx,
+                    dl,
+                    color,
+                    size,
+                    child_ox,
+                    child_oy,
+                    overrides,
+                    avail_w,
+                    avail_h,
+                    skip_overlays,
+                    my_clip,
+                    my_gradient.clone(),
+                    my_selection.clone(),
+                    my_family.clone(),
+                    my_tinh,
+                    emit_sigs,
+                    &mut *ecache,
+                );
                 if cb > subtree_bottom {
                     subtree_bottom = cb;
                 }
@@ -1166,22 +1560,28 @@ impl DisplayList {
 
             // 返回给父的"未施加本节点 scroll 前"的内容底边：
             // 本节点子树坐标是 child_oy = y - scroll_top，加回 scroll_top 得到父坐标系下的位置。
-            let bottom = if node.typ == NodeType::Div && st.overflow != crate::style::Overflow::Visible {
-                subtree_bottom + st.scroll_top
-            } else {
-                subtree_bottom
-            };
+            let bottom =
+                if node.typ == NodeType::Div && st.overflow != crate::style::Overflow::Visible {
+                    subtree_bottom + st.scroll_top
+                } else {
+                    subtree_bottom
+                };
             // emit 缓存存槽（仅主树遍；按区间快照本子树产出的指令段）。
             if skip_overlays {
                 if let Some(&(sig, false)) = emit_sigs.get(&tnode) {
-                    ecache.store(tnode, sig, NodeCmds {
-                        shapes: dl.shapes[m0..].to_vec(),
-                        texts: dl.texts[m1..].to_vec(),
-                        hitboxes: dl.hitboxes[m2..].to_vec(),
-                        inputs: dl.inputs[m3..].to_vec(),
-                        scrollbars: dl.scrollbars[m4..].to_vec(),
-                        measured: dl.measured[m5..].to_vec(),
-                    }, bottom);
+                    ecache.store(
+                        tnode,
+                        sig,
+                        NodeCmds {
+                            shapes: dl.shapes[m0..].to_vec(),
+                            texts: dl.texts[m1..].to_vec(),
+                            hitboxes: dl.hitboxes[m2..].to_vec(),
+                            inputs: dl.inputs[m3..].to_vec(),
+                            scrollbars: dl.scrollbars[m4..].to_vec(),
+                            measured: dl.measured[m5..].to_vec(),
+                        },
+                        bottom,
+                    );
                 }
             }
             bottom
@@ -1190,21 +1590,75 @@ impl DisplayList {
         // 帧开始：清空指令缓存 live 集（帧末 retain 淘汰滚出视口的子树）。
         cache.emit.begin_frame();
         // 第一遍：主树，跳过浮层子树。
-        emit(root, *root_node, &ctx, &mut dl, (226, 232, 240), 16.0, 0.0, 0.0,
-            &overrides, avail_w, avail_h, true, None, None, None, None, TextInherit::default(),
-            &emit_sig_map, &mut cache.emit);
+        emit(
+            root,
+            *root_node,
+            &ctx,
+            &mut dl,
+            (226, 232, 240),
+            16.0,
+            0.0,
+            0.0,
+            &overrides,
+            avail_w,
+            avail_h,
+            true,
+            None,
+            None,
+            None,
+            None,
+            TextInherit::default(),
+            &emit_sig_map,
+            &mut cache.emit,
+        );
         // 第二遍：遮罩（拦截外部点击）。
         for ov in overlays.iter().filter(|o| is_scrim(o.node)) {
-            emit(ov.node, ov.tnode, &ctx, &mut dl, (226, 232, 240), 16.0, 0.0, 0.0,
-                &overrides, avail_w, avail_h, false, None, None, None, None, TextInherit::default(),
-                &emit_sig_map, &mut cache.emit);
+            emit(
+                ov.node,
+                ov.tnode,
+                &ctx,
+                &mut dl,
+                (226, 232, 240),
+                16.0,
+                0.0,
+                0.0,
+                &overrides,
+                avail_w,
+                avail_h,
+                false,
+                None,
+                None,
+                None,
+                None,
+                TextInherit::default(),
+                &emit_sig_map,
+                &mut cache.emit,
+            );
         }
         // 第三遍：内容浮层 popover → modal → portal（最上层），按角色分层保证层级稳定。
         for role in ["popover", "modal", "portal"] {
             for ov in overlays.iter().filter(|o| gx_role(o.node) == role) {
-                emit(ov.node, ov.tnode, &ctx, &mut dl, (226, 232, 240), 16.0, 0.0, 0.0,
-                    &overrides, avail_w, avail_h, false, None, None, None, None, TextInherit::default(),
-                    &emit_sig_map, &mut cache.emit);
+                emit(
+                    ov.node,
+                    ov.tnode,
+                    &ctx,
+                    &mut dl,
+                    (226, 232, 240),
+                    16.0,
+                    0.0,
+                    0.0,
+                    &overrides,
+                    avail_w,
+                    avail_h,
+                    false,
+                    None,
+                    None,
+                    None,
+                    None,
+                    TextInherit::default(),
+                    &emit_sig_map,
+                    &mut cache.emit,
+                );
             }
         }
         // 帧结束：淘汰本帧未出现的槽（滚出视口 / 删除的子树）。
@@ -1214,13 +1668,23 @@ impl DisplayList {
 
     /// 命中测试：浮层/遮罩优先于普通内容；同级内面积最小的包含点命中。
     /// 第 9 元素是 cursor 形状（宿主据此切换系统光标）。
-    pub(crate) fn hit(&self, x: f32, y: f32) -> Option<&(f32, f32, f32, f32, u64, String, bool, ClipRect, String)> {
+    pub(crate) fn hit(
+        &self,
+        x: f32,
+        y: f32,
+    ) -> Option<&(f32, f32, f32, f32, u64, String, bool, ClipRect, String)> {
         type Hit<'a> = &'a (f32, f32, f32, f32, u64, String, bool, ClipRect, String);
         fn min_area<'a, I: Iterator<Item = Hit<'a>>>(items: I) -> Option<Hit<'a>> {
-            items.min_by(|a, b| (a.2 * a.3).partial_cmp(&(b.2 * b.3)).unwrap_or(std::cmp::Ordering::Equal))
+            items.min_by(|a, b| {
+                (a.2 * a.3)
+                    .partial_cmp(&(b.2 * b.3))
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
         }
         let contains = |h: &Hit<'_>| {
-            if !(x >= h.0 && x <= h.0 + h.2 && y >= h.1 && y <= h.1 + h.3) { return false; }
+            if !(x >= h.0 && x <= h.0 + h.2 && y >= h.1 && y <= h.1 + h.3) {
+                return false;
+            }
             // 祖先 overflow 裁剪：点必须落在裁剪矩形内。
             match h.7 {
                 None => true,
@@ -1253,24 +1717,43 @@ mod scrollbar_tests {
         // scrollTop=0 → thumb 在顶；scrollTop=400 → thumb 在底。
         let top = scrollbar_geometry(0.0, 0.0, 100.0, 200.0, 600.0, 0.0, 1.0).unwrap();
         assert!((top.thumb_h - 66.67).abs() < 1.0, "thumb_h={}", top.thumb_h);
-        assert!((top.thumb_y - 0.0).abs() < 0.01, "thumb_y at top={}", top.thumb_y);
+        assert!(
+            (top.thumb_y - 0.0).abs() < 0.01,
+            "thumb_y at top={}",
+            top.thumb_y
+        );
         assert!((top.y - 0.0).abs() < 0.01);
-        assert!((top.x - (100.0 - SB_TRACK_W - 2.0)).abs() < 0.01, "track 贴右内侧");
+        assert!(
+            (top.x - (100.0 - SB_TRACK_W - 2.0)).abs() < 0.01,
+            "track 贴右内侧"
+        );
 
         let bottom = scrollbar_geometry(0.0, 0.0, 100.0, 200.0, 600.0, 400.0, 1.0).unwrap();
         let expected_y = 200.0 - top.thumb_h; // travel = ch - thumb_h
-        assert!((bottom.thumb_y - expected_y).abs() < 0.01, "thumb_y at bottom={}", bottom.thumb_y);
+        assert!(
+            (bottom.thumb_y - expected_y).abs() < 0.01,
+            "thumb_y at bottom={}",
+            bottom.thumb_y
+        );
 
         // 中途 scrollTop=200 → thumb 走一半行程。
         let mid = scrollbar_geometry(0.0, 0.0, 100.0, 200.0, 600.0, 200.0, 1.0).unwrap();
-        assert!((mid.thumb_y - expected_y / 2.0).abs() < 0.5, "thumb_y at mid={}", mid.thumb_y);
+        assert!(
+            (mid.thumb_y - expected_y / 2.0).abs() < 0.5,
+            "thumb_y at mid={}",
+            mid.thumb_y
+        );
     }
 
     #[test]
     pub(crate) fn thumb_min_height_clamped() {
         // 内容极大 → thumb 高被最小高度 32 兜底，且不超容器高。
         let sb = scrollbar_geometry(0.0, 0.0, 100.0, 200.0, 100000.0, 0.0, 1.0).unwrap();
-        assert!((sb.thumb_h - SB_THUMB_MIN).abs() < 0.01, "thumb_h={}", sb.thumb_h);
+        assert!(
+            (sb.thumb_h - SB_THUMB_MIN).abs() < 0.01,
+            "thumb_h={}",
+            sb.thumb_h
+        );
     }
 
     #[test]
@@ -1296,42 +1779,81 @@ mod scrollbar_tests {
         let mut kids = Vec::new();
         for i in 0..5 {
             kids.push(crate::scene::SceneNode {
-                typ: NodeType::Div, kind: "div".into(), id: format!("item{}", i),
+                typ: NodeType::Div,
+                kind: "div".into(),
+                id: format!("item{}", i),
                 nid: 1002,
                 text: String::new(),
-                props: [("height".to_string(), "100".to_string())].into_iter().collect(),
-                events: vec![], children: vec![],
+                props: [("height".to_string(), "100".to_string())]
+                    .into_iter()
+                    .collect(),
+                events: vec![],
+                children: vec![],
             });
         }
         let mut props: std::collections::HashMap<String, String> = [
             ("width".to_string(), "100".to_string()),
             ("height".to_string(), "100".to_string()),
             ("overflow".to_string(), "scroll".to_string()),
-        ].into_iter().collect();
+        ]
+        .into_iter()
+        .collect();
         props.insert("scroll-top".to_string(), format!("{}", scroll_top));
         crate::scene::SceneNode {
-            typ: NodeType::Div, kind: "div".into(), id: "vp".into(), text: String::new(),
+            typ: NodeType::Div,
+            kind: "div".into(),
+            id: "vp".into(),
+            text: String::new(),
             nid: 1003,
-            props, events: vec![], children: kids,
+            props,
+            events: vec![],
+            children: kids,
         }
     }
 
     #[test]
     pub(crate) fn from_scene_collects_measured() {
-        let dl = DisplayList::from_scene(&overflow_scene(0.0), 800.0, 600.0, &mut crate::layout::LayoutCache::new());
+        let dl = DisplayList::from_scene(
+            &overflow_scene(0.0),
+            800.0,
+            600.0,
+            &mut crate::layout::LayoutCache::new(),
+        );
         // 回流应覆盖容器 + 5 个 item（非空 id 的节点）。
-        assert_eq!(dl.measured.len(), 6, "应为 vp + 5 items 收集实测尺寸: {:?}", dl.measured);
-        let item0 = dl.measured.iter().find(|(id, _, _)| *id == 1002).expect("item0 应在回流里");
-        assert!((item0.2 - 100.0).abs() < 0.5, "item0 实测高度应约 100，实际 {}", item0.2);
+        assert_eq!(
+            dl.measured.len(),
+            6,
+            "应为 vp + 5 items 收集实测尺寸: {:?}",
+            dl.measured
+        );
+        let item0 = dl
+            .measured
+            .iter()
+            .find(|(id, _, _)| *id == 1002)
+            .expect("item0 应在回流里");
+        assert!(
+            (item0.2 - 100.0).abs() < 0.5,
+            "item0 实测高度应约 100，实际 {}",
+            item0.2
+        );
     }
 
     #[test]
     pub(crate) fn from_scene_emits_scrollbar_for_overflow() {
-        let dl = DisplayList::from_scene(&overflow_scene(0.0), 800.0, 600.0, &mut crate::layout::LayoutCache::new());
+        let dl = DisplayList::from_scene(
+            &overflow_scene(0.0),
+            800.0,
+            600.0,
+            &mut crate::layout::LayoutCache::new(),
+        );
         assert_eq!(dl.scrollbars.len(), 1, "溢出容器应生成一个滚动条");
         let sb = &dl.scrollbars[0];
         // 容器 100 高，内容 500 高 → thumb_h = 100*100/500 = 20 → 被最小高度 32 兜底。
-        assert!((sb.thumb_h - SB_THUMB_MIN).abs() < 0.01, "thumb_h={}", sb.thumb_h);
+        assert!(
+            (sb.thumb_h - SB_THUMB_MIN).abs() < 0.01,
+            "thumb_h={}",
+            sb.thumb_h
+        );
     }
 
     #[test]
@@ -1339,19 +1861,30 @@ mod scrollbar_tests {
         // 容器高 100，只放 1 个高 100 的子项 → 不溢出，无滚动条。
         use crate::binprotocol::NodeType;
         let vp = crate::scene::SceneNode {
-            typ: NodeType::Div, kind: "div".into(), id: "vp".into(), text: String::new(),
+            typ: NodeType::Div,
+            kind: "div".into(),
+            id: "vp".into(),
+            text: String::new(),
             nid: 1004,
             props: [
                 ("width".to_string(), "100".to_string()),
                 ("height".to_string(), "100".to_string()),
                 ("overflow".to_string(), "auto".to_string()),
-            ].into_iter().collect(),
+            ]
+            .into_iter()
+            .collect(),
             events: vec![],
             children: vec![crate::scene::SceneNode {
-                typ: NodeType::Div, kind: "div".into(), id: "one".into(), text: String::new(),
+                typ: NodeType::Div,
+                kind: "div".into(),
+                id: "one".into(),
+                text: String::new(),
                 nid: 1005,
-                props: [("height".to_string(), "100".to_string())].into_iter().collect(),
-                events: vec![], children: vec![],
+                props: [("height".to_string(), "100".to_string())]
+                    .into_iter()
+                    .collect(),
+                events: vec![],
+                children: vec![],
             }],
         };
         let dl = DisplayList::from_scene(&vp, 800.0, 600.0, &mut crate::layout::LayoutCache::new());
@@ -1360,12 +1893,26 @@ mod scrollbar_tests {
 
     #[test]
     pub(crate) fn scrollbar_moves_with_scroll() {
-        let top = DisplayList::from_scene(&overflow_scene(0.0), 800.0, 600.0, &mut crate::layout::LayoutCache::new());
-        let mid = DisplayList::from_scene(&overflow_scene(200.0), 800.0, 600.0, &mut crate::layout::LayoutCache::new());
+        let top = DisplayList::from_scene(
+            &overflow_scene(0.0),
+            800.0,
+            600.0,
+            &mut crate::layout::LayoutCache::new(),
+        );
+        let mid = DisplayList::from_scene(
+            &overflow_scene(200.0),
+            800.0,
+            600.0,
+            &mut crate::layout::LayoutCache::new(),
+        );
         assert_eq!(top.scrollbars.len(), 1);
         assert_eq!(mid.scrollbars.len(), 1);
-        assert!(mid.scrollbars[0].thumb_y > top.scrollbars[0].thumb_y,
-            "滚动后 thumb 应下移: {} -> {}", top.scrollbars[0].thumb_y, mid.scrollbars[0].thumb_y);
+        assert!(
+            mid.scrollbars[0].thumb_y > top.scrollbars[0].thumb_y,
+            "滚动后 thumb 应下移: {} -> {}",
+            top.scrollbars[0].thumb_y,
+            mid.scrollbars[0].thumb_y
+        );
     }
 }
 
@@ -1375,22 +1922,38 @@ mod text_sig_tests {
 
     pub(crate) fn td(id: u64, text: &str, size: f32) -> TextDraw {
         TextDraw {
-            id, text: text.into(), x: 0.0, y: 0.0, size,
-            color: (0, 0, 0), clip: None, spans: vec![], selection: None, family: None, weight: None, line_height: 0.0, alpha: 1.0,
+            id,
+            text: text.into(),
+            x: 0.0,
+            y: 0.0,
+            size,
+            color: (0, 0, 0),
+            clip: None,
+            spans: vec![],
+            selection: None,
+            family: None,
+            weight: None,
+            line_height: 0.0,
+            alpha: 1.0,
         }
     }
 
     /// 用一组 (id,text,size) 构造"上一帧缓存"：只需签名，buffer 用空占位。
-    pub(crate) fn cache_of(items: &[(u64, &str, f32)]) -> std::collections::HashMap<u64, GlyphEntry> {
+    pub(crate) fn cache_of(
+        items: &[(u64, &str, f32)],
+    ) -> std::collections::HashMap<u64, GlyphEntry> {
         let mut m = std::collections::HashMap::new();
         for (id, text, size) in items {
             let t = td(*id, text, *size);
             // buffer 对 plan_glyphs 的判定无影响，这里用 new 占位即可。
             let mut fs = FontSystem::new();
-            m.insert(*id, GlyphEntry {
-                sig: text_sig(&t),
-                buffer: Buffer::new(&mut fs, Metrics::new(*size, *size * 1.35)),
-            });
+            m.insert(
+                *id,
+                GlyphEntry {
+                    sig: text_sig(&t),
+                    buffer: Buffer::new(&mut fs, Metrics::new(*size, *size * 1.35)),
+                },
+            );
         }
         m
     }
@@ -1399,10 +1962,16 @@ mod text_sig_tests {
     pub(crate) fn sig_depends_only_on_text_and_size() {
         // 签名只看文本+字号，与 id/坐标/颜色无关——这是按 ID 复用的正确性基础。
         let a = td(1, "A", 16.0);
-        let moved = TextDraw { id: 2, x: 99.0, y: -6.0, color: (255, 0, 0), ..a.clone() };
+        let moved = TextDraw {
+            id: 2,
+            x: 99.0,
+            y: -6.0,
+            color: (255, 0, 0),
+            ..a.clone()
+        };
         assert_eq!(text_sig(&a), text_sig(&moved));
-        assert_ne!(text_sig(&a), text_sig(&td(1, "B", 16.0)));   // 内容变
-        assert_ne!(text_sig(&a), text_sig(&td(1, "A", 20.0)));   // 字号变
+        assert_ne!(text_sig(&a), text_sig(&td(1, "B", 16.0))); // 内容变
+        assert_ne!(text_sig(&a), text_sig(&td(1, "A", 20.0))); // 字号变
     }
 
     #[test]
@@ -1460,13 +2029,20 @@ mod text_sig_tests {
     pub(crate) fn gradient_spans_change_signature_for_reshaping() {
         // 同一文本/字号，仅渐变分段颜色不同 → 签名必须不同，否则 span 不会更新。
         let mut a = td(9, "func", 13.0);
-        a.spans = vec![("fun".into(), (197, 134, 192)), ("c".into(), (212, 212, 212))];
+        a.spans = vec![
+            ("fun".into(), (197, 134, 192)),
+            ("c".into(), (212, 212, 212)),
+        ];
         let mut b = td(9, "func", 13.0);
         b.spans = vec![("fun".into(), (255, 0, 0)), ("c".into(), (0, 0, 255))];
         assert_ne!(text_sig(&a), text_sig(&b), "渐变颜色变化应触发重新 shape");
 
         // 坐标移动不影响签名（滚动零 shape）。
-        let moved = TextDraw { x: 99.0, y: -6.0, ..a.clone() };
+        let moved = TextDraw {
+            x: 99.0,
+            y: -6.0,
+            ..a.clone()
+        };
         assert_eq!(text_sig(&a), text_sig(&moved));
     }
 
@@ -1474,7 +2050,8 @@ mod text_sig_tests {
     pub(crate) fn gradient_model_builds_for_linear_gradient() {
         let g = crate::text_effects::parse_linear_gradient(
             "linear-gradient(90deg, #ff0000 0%, #0000ff 100%)",
-        ).unwrap();
+        )
+        .unwrap();
         // 90°=向右；盒子 200x100。归一化模型应给出方向（1,0）与 2 个色标。
         let m = gradient_model(&g, 200.0, 100.0).unwrap();
         assert!((m.dx - 1.0).abs() < 1e-6 && m.dy.abs() < 1e-6);
@@ -1507,22 +2084,38 @@ mod text_sig_tests {
         // 验证父 span 解析出的渐变能传到文本子节点并生成着色分段（三端统一的核心链路）。
         use crate::binprotocol::NodeType;
         let text = crate::scene::SceneNode {
-            typ: NodeType::Text, kind: String::new(), id: "code-text".into(),
+            typ: NodeType::Text,
+            kind: String::new(),
+            id: "code-text".into(),
             nid: 1006,
-            text: "ab".into(), props: Default::default(), events: vec![], children: vec![],
+            text: "ab".into(),
+            props: Default::default(),
+            events: vec![],
+            children: vec![],
         };
         let mut props = std::collections::HashMap::new();
         props.insert("gradient-text".into(), "1".into());
-        props.insert("bg".into(),
-            "linear-gradient(90deg, #ff0000 0ch 1ch, #0000ff 1ch 2ch)".into());
+        props.insert(
+            "bg".into(),
+            "linear-gradient(90deg, #ff0000 0ch 1ch, #0000ff 1ch 2ch)".into(),
+        );
         props.insert("white-space".into(), "pre".into());
         let span = crate::scene::SceneNode {
-            typ: NodeType::Div, kind: "span".into(), id: "code-line".into(),
+            typ: NodeType::Div,
+            kind: "span".into(),
+            id: "code-line".into(),
             nid: 1007,
-            text: String::new(), props, events: vec![], children: vec![text],
+            text: String::new(),
+            props,
+            events: vec![],
+            children: vec![text],
         };
-        let dl = DisplayList::from_scene(&span, 800.0, 600.0, &mut crate::layout::LayoutCache::new());
-        let td = dl.texts.iter().find(|t| t.id == 1006)
+        let dl =
+            DisplayList::from_scene(&span, 800.0, 600.0, &mut crate::layout::LayoutCache::new());
+        let td = dl
+            .texts
+            .iter()
+            .find(|t| t.id == 1006)
             .expect("文本节点应进入 DisplayList");
         assert_eq!(td.spans.len(), 2, "应按 ch 边界切成两段: {:?}", td.spans);
         assert_eq!(td.spans[0], ("a".to_string(), (255, 0, 0)));
@@ -1536,28 +2129,72 @@ mod overlay_tests {
 
     #[test]
     pub(crate) fn place_bottom_start() {
-        let (x, y) = place_overlay(100.0, 200.0, 80.0, 30.0, 120.0, 60.0, "bottom-start", 8.0, 800.0, 600.0);
+        let (x, y) = place_overlay(
+            100.0,
+            200.0,
+            80.0,
+            30.0,
+            120.0,
+            60.0,
+            "bottom-start",
+            8.0,
+            800.0,
+            600.0,
+        );
         assert_eq!(x, 100.0);
         assert_eq!(y, 238.0); // 200+30+8
     }
 
     #[test]
     pub(crate) fn place_bottom_center() {
-        let (x, _y) = place_overlay(100.0, 200.0, 100.0, 30.0, 120.0, 60.0, "bottom-center", 8.0, 800.0, 600.0);
+        let (x, _y) = place_overlay(
+            100.0,
+            200.0,
+            100.0,
+            30.0,
+            120.0,
+            60.0,
+            "bottom-center",
+            8.0,
+            800.0,
+            600.0,
+        );
         assert_eq!(x, 90.0); // 100 + (100-120)/2
     }
 
     #[test]
     pub(crate) fn place_flip_to_top() {
         // 锚点靠近底部，下方放不下 → 翻到 top。
-        let (x, y) = place_overlay(100.0, 520.0, 80.0, 30.0, 120.0, 60.0, "bottom-start", 8.0, 800.0, 600.0);
+        let (x, y) = place_overlay(
+            100.0,
+            520.0,
+            80.0,
+            30.0,
+            120.0,
+            60.0,
+            "bottom-start",
+            8.0,
+            800.0,
+            600.0,
+        );
         assert_eq!(x, 100.0);
         assert_eq!(y, 452.0); // 520 - 8 - 60
     }
 
     #[test]
     pub(crate) fn place_end_align() {
-        let (x, _) = place_overlay(100.0, 200.0, 100.0, 30.0, 60.0, 60.0, "bottom-end", 8.0, 800.0, 600.0);
+        let (x, _) = place_overlay(
+            100.0,
+            200.0,
+            100.0,
+            30.0,
+            60.0,
+            60.0,
+            "bottom-end",
+            8.0,
+            800.0,
+            600.0,
+        );
         assert_eq!(x, 140.0); // 100+100-60
     }
 
@@ -1596,10 +2233,12 @@ mod clip_tests {
         let c = Some((0.0, 0.0, 100.0, 50.0));
         assert!(clip_rejects(c, 0.0, -40.0, 100.0, 30.0)); // 滚出上方
         assert!(!clip_rejects(c, 0.0, 40.0, 100.0, 30.0)); // 部分在内
-        assert_eq!(clip_rect_xywh(c, 0.0, 40.0, 100.0, 30.0), Some((0.0, 40.0, 100.0, 10.0)));
+        assert_eq!(
+            clip_rect_xywh(c, 0.0, 40.0, 100.0, 30.0),
+            Some((0.0, 40.0, 100.0, 10.0))
+        );
         assert_eq!(clip_rect_xywh(c, 0.0, -40.0, 100.0, 30.0), None);
     }
-
 }
 
 #[cfg(test)]
@@ -1609,7 +2248,10 @@ mod selection_tests {
     pub(crate) fn sel_props() -> std::collections::HashMap<String, String> {
         let mut p = std::collections::HashMap::new();
         p.insert("selection-range".into(), "2:5".into());
-        p.insert("&::selection".into(), "{\"bg\":\"#264f7880\",\"color\":\"#ffffff\"}".into());
+        p.insert(
+            "&::selection".into(),
+            "{\"bg\":\"#264f7880\",\"color\":\"#ffffff\"}".into(),
+        );
         p
     }
 
@@ -1633,8 +2275,16 @@ mod selection_tests {
     #[test]
     pub(crate) fn selection_px_range_matches_measure() {
         let ascii = selection_px_range("abcdef", 2, 5, 10.0);
-        assert!((ascii.0 - 11.2).abs() < 0.01, "2*0.56*10=11.2, got {:?}", ascii);
-        assert!((ascii.1 - 28.0).abs() < 0.01, "5*0.56*10=28, got {:?}", ascii);
+        assert!(
+            (ascii.0 - 11.2).abs() < 0.01,
+            "2*0.56*10=11.2, got {:?}",
+            ascii
+        );
+        assert!(
+            (ascii.1 - 28.0).abs() < 0.01,
+            "5*0.56*10=28, got {:?}",
+            ascii
+        );
         let cjk = selection_px_range("你ab好", 1, 3, 10.0);
         assert!((cjk.0 - 10.0).abs() < 0.01, "CJK 首字 1em, got {:?}", cjk);
     }
@@ -1642,16 +2292,33 @@ mod selection_tests {
     #[test]
     pub(crate) fn selection_in_text_sig_forces_reshaping() {
         let base = TextDraw {
-            id: 5, text: "abcd".into(), x: 0.0, y: 0.0, size: 13.0,
-            color: (0, 0, 0), clip: None, spans: vec![], selection: None, family: None, weight: None, line_height: 0.0, alpha: 1.0,
+            id: 5,
+            text: "abcd".into(),
+            x: 0.0,
+            y: 0.0,
+            size: 13.0,
+            color: (0, 0, 0),
+            clip: None,
+            spans: vec![],
+            selection: None,
+            family: None,
+            weight: None,
+            line_height: 0.0,
+            alpha: 1.0,
         };
         let mut a = base.clone();
         let mut b = base;
         a.selection = Some(SelectionDraw {
-            start: 1, end: 3, bg: (38, 79, 120, 128), color: Some((255, 255, 255)),
+            start: 1,
+            end: 3,
+            bg: (38, 79, 120, 128),
+            color: Some((255, 255, 255)),
         });
         b.selection = Some(SelectionDraw {
-            start: 2, end: 4, bg: (38, 79, 120, 128), color: Some((255, 255, 255)),
+            start: 2,
+            end: 4,
+            bg: (38, 79, 120, 128),
+            color: Some((255, 255, 255)),
         });
         assert_ne!(text_sig(&a), text_sig(&b), "选区区间变化应触发重排");
     }
@@ -1666,7 +2333,8 @@ mod selection_tests {
     pub(crate) fn font_family_maps_monospace_stack() {
         // Editor 等宽栈应映射到已加载的 DejaVu Sans Mono。
         let f = parse_font_family(&font_props(
-            "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"));
+            "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
+        ));
         assert_eq!(f.as_deref(), Some("DejaVu Sans Mono"));
     }
 
@@ -1682,18 +2350,36 @@ mod selection_tests {
         let f = parse_font_family(&font_props("Menlo, monospace"));
         assert_eq!(f.as_deref(), Some("DejaVu Sans Mono"), "Menlo 属等宽候选");
         let f2 = parse_font_family(&font_props("Fira Code, monospace"));
-        assert_eq!(f2.as_deref(), Some("Fira Code"), "未在等宽名单的具体族名原样使用");
+        assert_eq!(
+            f2.as_deref(),
+            Some("Fira Code"),
+            "未在等宽名单的具体族名原样使用"
+        );
     }
 
     #[test]
     pub(crate) fn font_family_in_text_sig_forces_reshaping() {
         let base = TextDraw {
-            id: 5, text: "abcd".into(), x: 0.0, y: 0.0, size: 13.0,
-            color: (0, 0, 0), clip: None, spans: vec![], selection: None, family: None, weight: None, line_height: 0.0, alpha: 1.0,
+            id: 5,
+            text: "abcd".into(),
+            x: 0.0,
+            y: 0.0,
+            size: 13.0,
+            color: (0, 0, 0),
+            clip: None,
+            spans: vec![],
+            selection: None,
+            family: None,
+            weight: None,
+            line_height: 0.0,
+            alpha: 1.0,
         };
         let mut mono = base.clone();
         mono.family = Some("DejaVu Sans Mono".into());
-        assert_ne!(text_sig(&base), text_sig(&mono), "字体族变化应触发重新 shape");
+        assert_ne!(
+            text_sig(&base),
+            text_sig(&mono),
+            "字体族变化应触发重新 shape"
+        );
     }
 }
-

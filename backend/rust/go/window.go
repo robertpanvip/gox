@@ -52,6 +52,13 @@ type Window struct {
 	destroyed  bool
 	regKey     uintptr // 全局注册表 key，Close 时注销（评审 P1 泄漏）
 
+	// UIExecutor（宿主提案 §6.1）：Post 把绘制回调/微任务投递到 Run 事件泵
+	// goroutine 执行——Run 的 select 循环就是桌面端「UI 线程」。Run 未启动时
+	// 任务按 FIFO 排队等待（与 skia 装配层 loop.Queue 语义一致）；Close 后拒绝。
+	// postCh 容量 1 只做唤醒信号（postQ 本身无界，不丢任务）。
+	postQ  []func()
+	postCh chan struct{}
+
 	// drawFn 仅供测试注入：模拟 cWindowDraw 的返回码与捕获发送字节。
 	// 生产环境为 nil，走真实 cgo 调用 cWindowDraw。
 	drawFn func(data []byte) int
@@ -144,6 +151,7 @@ func NewWindow() *Window {
 		events:  make(chan inputEvent, 64),
 		pump:    make(chan struct{}, 1),
 		runDone: make(chan struct{}),
+		postCh:  make(chan struct{}, 1),
 		grx3:    grx3,
 	}
 }
@@ -354,6 +362,9 @@ func (w *Window) Run() error {
 		case <-w.pump:
 			// 有可靠事件溢出或可合并事件更新，搬运到 events 再消费。
 			w.drainPending()
+		case <-w.postCh:
+			// UIExecutor 任务（帧请求/后台 Dispatch/微任务）在本事件泵执行。
+			w.drainPosts()
 		case ev := <-w.events:
 			w.mu.Lock()
 			fn := w.dispatcher
@@ -395,6 +406,53 @@ func (w *Window) SetDispatcher(fn func(ev InputEvent)) {
 	w.mu.Unlock()
 }
 
+// Post 实现 gxapp.UIExecutor：把任务投递到 Run 事件泵 goroutine 执行。
+//
+// 语义与 skia 装配层的 loop.Queue 一致：任务只入队、绝不在调用栈执行，
+// 统一由 Run 的 select 循环 drain——保证绘制回调、后台 Dispatch 与 Rust
+// 事件处理天然串行（UI 线程亲和性）。Run 未启动时任务排队等待；Close 后
+// 拒绝。postCh 仅做非阻塞唤醒信号（与 pump 互不干扰），postQ 本身无界不丢。
+func (w *Window) Post(fn func()) error {
+	if fn == nil {
+		return fmt.Errorf("rustbackend: Post 回调不能为 nil")
+	}
+	w.mu.Lock()
+	if w.postCh == nil {
+		w.mu.Unlock()
+		return fmt.Errorf("rustbackend: 窗口未初始化（须经 NewWindow 构造）")
+	}
+	if w.closed {
+		w.mu.Unlock()
+		return fmt.Errorf("rustbackend: 窗口已关闭，拒绝新任务")
+	}
+	w.postQ = append(w.postQ, fn)
+	w.mu.Unlock()
+	select {
+	case w.postCh <- struct{}{}:
+	default: // 已有唤醒信号在途，无需重复
+	}
+	return nil
+}
+
+// drainPosts 执行当前排队的全部 Post 任务（FIFO）。只在 Run 事件泵 goroutine
+// 调用（drain 期间新到的任务追加到 postQ，由下一轮循环取走，不在持锁态执行
+// 回调——回调可能写 signal 触发再入队）。
+func (w *Window) drainPosts() {
+	for {
+		w.mu.Lock()
+		if len(w.postQ) == 0 {
+			w.mu.Unlock()
+			return
+		}
+		fns := w.postQ
+		w.postQ = nil
+		w.mu.Unlock()
+		for _, fn := range fns {
+			fn()
+		}
+	}
+}
+
 // Focus 实现 gxapp.Focuser：把 ref 句柄的命令式聚焦意图注入事件通道，
 // 走与「点击输入框」完全相同的 focus 事件闭环：
 //
@@ -421,6 +479,20 @@ type InputEvent struct {
 	Text   string
 	X      float32
 	Y      float32
+}
+
+// RequestClose 请求 Rust 事件循环退出（线程安全、非阻塞）。供后台 goroutine
+// （定时自动关窗、外部信号）调用：事件循环退出后 Run 返回，Close 再做资源释放。
+// 与 Close 的区别：不等待、不销毁——只请求。
+func (w *Window) RequestClose() {
+	w.mu.Lock()
+	handle := w.handle
+	closed := w.closed
+	w.mu.Unlock()
+	if handle == nil || closed {
+		return
+	}
+	cWindowClose(handle)
 }
 
 // Close 实现 gxapp.Window。

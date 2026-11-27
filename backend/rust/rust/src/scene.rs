@@ -91,7 +91,6 @@ impl SceneNode {
     fn child_index(&self, child_id: &str) -> Option<usize> {
         self.children.iter().position(|c| c.matches(child_id))
     }
-
 }
 
 // ---- GRX2/GRX3 动作帧解析 ----
@@ -166,7 +165,13 @@ impl<'a> DeltaView<'a> {
         if blob_off > buf.len() {
             return None;
         }
-        Some(DeltaView { buf, count, pool_off, blob_off, action_sz })
+        Some(DeltaView {
+            buf,
+            count,
+            pool_off,
+            blob_off,
+            action_sz,
+        })
     }
 
     fn pool_str(&self, off: u32) -> &'a str {
@@ -211,7 +216,13 @@ impl<'a> DeltaView<'a> {
                 let (child_id, blob_off_v) = if structural {
                     (0u64, u32at(self.buf, o + 8))
                 } else {
-                    (self.pool_str(u32at(self.buf, o + 8)).trim().parse::<u64>().unwrap_or(0), 0)
+                    (
+                        self.pool_str(u32at(self.buf, o + 8))
+                            .trim()
+                            .parse::<u64>()
+                            .unwrap_or(0),
+                        0,
+                    )
                 };
                 let (val_v, blob_len_v) = if structural {
                     (String::new(), u32at(self.buf, o + 20))
@@ -225,7 +236,9 @@ impl<'a> DeltaView<'a> {
                     before_id: before_s.trim().parse::<u64>().unwrap_or(0),
                     key: if matches!(kind, ACT_SET_ATTR | ACT_SET_HANDLE) {
                         self.pool_str(u32at(self.buf, o + 16)).to_string()
-                    } else { String::new() },
+                    } else {
+                        String::new()
+                    },
                     val: val_v,
                     blob_off: blob_off_v,
                     blob_len: blob_len_v,
@@ -266,16 +279,25 @@ impl<'a> DeltaView<'a> {
         // 阶段①：非结构动作。
         for i in 0..self.count {
             let Some(a) = self.action(i) else { continue };
-            if matches!(a.kind, ACT_INSERT_BEFORE | ACT_REMOVE_CHILD | ACT_MOVE_CHILD | ACT_REPLACE_CHILDREN) {
+            if matches!(
+                a.kind,
+                ACT_INSERT_BEFORE | ACT_REMOVE_CHILD | ACT_MOVE_CHILD | ACT_REPLACE_CHILDREN
+            ) {
                 continue;
             }
             let target = a.node_id.to_string();
             if let Some(n) = root.find_mut(&target) {
                 match a.kind {
-                    ACT_SET_ATTR => { n.props.insert(a.key, a.val); }
-                    ACT_SET_TEXT => { n.text = a.val; }
+                    ACT_SET_ATTR => {
+                        n.props.insert(a.key, a.val);
+                    }
+                    ACT_SET_TEXT => {
+                        n.text = a.val;
+                    }
                     ACT_SET_HANDLE => {
-                        if !n.events.iter().any(|e| e == &a.key) { n.events.push(a.key); }
+                        if !n.events.iter().any(|e| e == &a.key) {
+                            n.events.push(a.key);
+                        }
                     }
                     _ => {}
                 }
@@ -285,10 +307,24 @@ impl<'a> DeltaView<'a> {
 
         // 阶段②：结构动作。先解码为意图，再执行。
         enum StructOp {
-            Insert { parent: u64, child: SceneNode, before: u64 },
-            Remove { parent: u64, child_id: u64 },
-            Move { parent: u64, child_id: u64, before: u64 },
-            Replace { parent: u64, sub: SceneNode },
+            Insert {
+                parent: u64,
+                child: SceneNode,
+                before: u64,
+            },
+            Remove {
+                parent: u64,
+                child_id: u64,
+            },
+            Move {
+                parent: u64,
+                child_id: u64,
+                before: u64,
+            },
+            Replace {
+                parent: u64,
+                sub: SceneNode,
+            },
         }
         let mut ops: Vec<StructOp> = Vec::new();
         for i in 0..self.count {
@@ -296,18 +332,32 @@ impl<'a> DeltaView<'a> {
             match a.kind {
                 ACT_INSERT_BEFORE => {
                     if let Some(child) = self.subtree(a.blob_off, a.blob_len) {
-                        ops.push(StructOp::Insert { parent: a.node_id, child, before: a.before_id });
+                        ops.push(StructOp::Insert {
+                            parent: a.node_id,
+                            child,
+                            before: a.before_id,
+                        });
                     }
                 }
                 ACT_REMOVE_CHILD => {
-                    ops.push(StructOp::Remove { parent: a.node_id, child_id: a.child_id });
+                    ops.push(StructOp::Remove {
+                        parent: a.node_id,
+                        child_id: a.child_id,
+                    });
                 }
                 ACT_MOVE_CHILD => {
-                    ops.push(StructOp::Move { parent: a.node_id, child_id: a.child_id, before: a.before_id });
+                    ops.push(StructOp::Move {
+                        parent: a.node_id,
+                        child_id: a.child_id,
+                        before: a.before_id,
+                    });
                 }
                 ACT_REPLACE_CHILDREN => {
                     if let Some(sub) = self.subtree(a.blob_off, a.blob_len) {
-                        ops.push(StructOp::Replace { parent: a.node_id, sub });
+                        ops.push(StructOp::Replace {
+                            parent: a.node_id,
+                            sub,
+                        });
                     }
                 }
                 _ => {}
@@ -315,7 +365,11 @@ impl<'a> DeltaView<'a> {
         }
         for op in ops {
             let ok = match op {
-                StructOp::Insert { parent, child, before } => root
+                StructOp::Insert {
+                    parent,
+                    child,
+                    before,
+                } => root
                     .find_mut(&parent.to_string())
                     .map(|p| p.insert_child_before(child, before))
                     .unwrap_or(false),
@@ -324,10 +378,18 @@ impl<'a> DeltaView<'a> {
                         if let Some(pos) = p.child_index_nid(child_id) {
                             p.children.remove(pos);
                             true
-                        } else { false }
-                    } else { false }
+                        } else {
+                            false
+                        }
+                    } else {
+                        false
+                    }
                 }
-                StructOp::Move { parent, child_id, before } => {
+                StructOp::Move {
+                    parent,
+                    child_id,
+                    before,
+                } => {
                     if let Some(p) = root.find_mut(&parent.to_string()) {
                         if let Some(pos) = p.child_index_nid(child_id) {
                             let node = p.children.remove(pos);
@@ -343,15 +405,24 @@ impl<'a> DeltaView<'a> {
                                 p.children.push(node);
                                 true
                             }
-                        } else { false }
-                    } else { false }
+                        } else {
+                            false
+                        }
+                    } else {
+                        false
+                    }
                 }
                 StructOp::Replace { parent, sub } => root
                     .find_mut(&parent.to_string())
-                    .map(|p| { p.children = sub.children; true })
+                    .map(|p| {
+                        p.children = sub.children;
+                        true
+                    })
                     .unwrap_or(false),
             };
-            if ok { applied += 1; }
+            if ok {
+                applied += 1;
+            }
         }
         applied
     }
@@ -360,7 +431,9 @@ impl<'a> DeltaView<'a> {
 impl SceneNode {
     /// 找直接子节点中 nid == id 的位置（0 = 末尾锚点/无目标，返回 None）。
     fn child_index_nid(&self, nid: u64) -> Option<usize> {
-        if nid == 0 { return None; }
+        if nid == 0 {
+            return None;
+        }
         self.children.iter().position(|c| c.nid == nid)
     }
 
@@ -383,7 +456,9 @@ impl SceneNode {
 mod tests {
     use super::*;
 
-    fn put32(b: &mut [u8], o: usize, v: u32) { b[o..o+4].copy_from_slice(&v.to_le_bytes()); }
+    fn put32(b: &mut [u8], o: usize, v: u32) {
+        b[o..o + 4].copy_from_slice(&v.to_le_bytes());
+    }
     fn pool_str(buf: &mut Vec<u8>, s: &str) -> u32 {
         let off = buf.len() as u32;
         buf.extend_from_slice(&(s.len() as u16).to_le_bytes());
@@ -401,10 +476,10 @@ mod tests {
         let mut nodes = vec![0u8; n * 32];
         // root
         nodes[0] = 1; // Div
-        put32(&mut nodes, 4, 0);   // kind_off=0
+        put32(&mut nodes, 4, 0); // kind_off=0
         put32(&mut nodes, 8, sub_id);
         put32(&mut nodes, 22, ids.len() as u32 * 0); // placeholder
-        // child_count at offset 22 (u16)
+                                                     // child_count at offset 22 (u16)
         nodes[22..24].copy_from_slice(&(ids.len() as u16).to_le_bytes());
         put32(&mut nodes, 24, 0xFFFFFFFF);
         for (i, id) in ids.iter().enumerate() {
@@ -425,8 +500,8 @@ mod tests {
         put32(&mut buf, 12, n as u32);
         put32(&mut buf, 16, 0); // prop_count
         put32(&mut buf, 20, pool.len() as u32);
-        buf[24..24+nodes.len()].copy_from_slice(&nodes);
-        buf[24+nodes.len()..].copy_from_slice(&pool);
+        buf[24..24 + nodes.len()].copy_from_slice(&nodes);
+        buf[24 + nodes.len()..].copy_from_slice(&pool);
         buf
     }
 
@@ -464,28 +539,61 @@ mod tests {
         put32(&mut buf, 8, actions.len() as u32);
         put32(&mut buf, 12, pool.len() as u32);
         let mut o = 16;
-        buf[o..o+act_bytes.len()].copy_from_slice(&act_bytes); o += act_bytes.len();
-        buf[o..o+pool.len()].copy_from_slice(&pool); o += pool.len();
+        buf[o..o + act_bytes.len()].copy_from_slice(&act_bytes);
+        o += act_bytes.len();
+        buf[o..o + pool.len()].copy_from_slice(&pool);
+        o += pool.len();
         buf[o..].copy_from_slice(blob);
         buf
     }
 
     fn base_tree() -> SceneNode {
         SceneNode {
-            typ: NodeType::Div, kind: "div".into(), id: "r".into(), nid: 10, text: String::new(),
-            props: Default::default(), events: vec![],
+            typ: NodeType::Div,
+            kind: "div".into(),
+            id: "r".into(),
+            nid: 10,
+            text: String::new(),
+            props: Default::default(),
+            events: vec![],
             children: vec![
-                SceneNode { typ: NodeType::Text, kind: "".into(), id: "a".into(), nid: 11, text: "A".into(),
-                    props: Default::default(), events: vec![], children: vec![] },
-                SceneNode { typ: NodeType::Text, kind: "".into(), id: "b".into(), nid: 12, text: "B".into(),
-                    props: Default::default(), events: vec![], children: vec![] },
-                SceneNode { typ: NodeType::Text, kind: "".into(), id: "c".into(), nid: 13, text: "C".into(),
-                    props: Default::default(), events: vec![], children: vec![] },
+                SceneNode {
+                    typ: NodeType::Text,
+                    kind: "".into(),
+                    id: "a".into(),
+                    nid: 11,
+                    text: "A".into(),
+                    props: Default::default(),
+                    events: vec![],
+                    children: vec![],
+                },
+                SceneNode {
+                    typ: NodeType::Text,
+                    kind: "".into(),
+                    id: "b".into(),
+                    nid: 12,
+                    text: "B".into(),
+                    props: Default::default(),
+                    events: vec![],
+                    children: vec![],
+                },
+                SceneNode {
+                    typ: NodeType::Text,
+                    kind: "".into(),
+                    id: "c".into(),
+                    nid: 13,
+                    text: "C".into(),
+                    props: Default::default(),
+                    events: vec![],
+                    children: vec![],
+                },
             ],
         }
     }
 
-    fn ids(root: &SceneNode) -> Vec<&str> { root.children.iter().map(|c| c.id.as_str()).collect() }
+    fn ids(root: &SceneNode) -> Vec<&str> {
+        root.children.iter().map(|c| c.id.as_str()).collect()
+    }
 
     /// 构造 GRX3 delta 帧（48B 动作，u64 直传）。
     /// actions: [(kind, node_id, child_id, before_id, blob_off, blob_len, val_str)]
@@ -511,8 +619,10 @@ mod tests {
         put32(&mut buf, 8, actions.len() as u32);
         put32(&mut buf, 12, pool.len() as u32);
         let mut o = 16;
-        buf[o..o + act_bytes.len()].copy_from_slice(&act_bytes); o += act_bytes.len();
-        buf[o..o + pool.len()].copy_from_slice(&pool); o += pool.len();
+        buf[o..o + act_bytes.len()].copy_from_slice(&act_bytes);
+        o += act_bytes.len();
+        buf[o..o + pool.len()].copy_from_slice(&pool);
+        o += pool.len();
         buf[o..].copy_from_slice(blob);
         buf
     }
@@ -580,7 +690,10 @@ mod tests {
         let mut root = base_tree();
         let blob = make_grx1(&["d"]);
         // Insert: c=blob offset(0), before="12", val=blob len
-        let g2 = make_grx2(&[(ACT_INSERT_BEFORE, "10", "0", "12", &blob.len().to_string())], &blob);
+        let g2 = make_grx2(
+            &[(ACT_INSERT_BEFORE, "10", "0", "12", &blob.len().to_string())],
+            &blob,
+        );
         let v = DeltaView::parse(&g2).unwrap();
         assert_eq!(v.apply(&mut root), 1);
         // 插入的是整棵子树（id="sub"），位于 b 之前
@@ -591,7 +704,10 @@ mod tests {
     fn replace_children() {
         let mut root = base_tree();
         let blob = make_grx1(&["x", "y"]);
-        let g2 = make_grx2(&[(ACT_REPLACE_CHILDREN, "10", "0", "", &blob.len().to_string())], &blob);
+        let g2 = make_grx2(
+            &[(ACT_REPLACE_CHILDREN, "10", "0", "", &blob.len().to_string())],
+            &blob,
+        );
         let v = DeltaView::parse(&g2).unwrap();
         assert_eq!(v.apply(&mut root), 1);
         // Replace 用子树 children 覆盖 → x, y
@@ -621,13 +737,20 @@ mod tests {
     fn grx3_delta_u64_ids() {
         let mut root = base_tree();
         // Remove child nid=11（a），Move nid=13（c）到 nid=12（b）之前
-        let g3 = make_grx3_delta(&[
-            (ACT_REMOVE_CHILD, 10, 11, 0, 0, 0, ""),
-            (ACT_MOVE_CHILD, 10, 13, 12, 0, 0, ""),
-        ], &[]);
+        let g3 = make_grx3_delta(
+            &[
+                (ACT_REMOVE_CHILD, 10, 11, 0, 0, 0, ""),
+                (ACT_MOVE_CHILD, 10, 13, 12, 0, 0, ""),
+            ],
+            &[],
+        );
         let v = DeltaView::parse(&g3).expect("GRX3 delta 应可解析");
         assert_eq!(v.apply(&mut root), 2);
-        assert_eq!(ids(&root), ["c", "b"], "remove a → [b,c]，move c before b → [c,b]");
+        assert_eq!(
+            ids(&root),
+            ["c", "b"],
+            "remove a → [b,c]，move c before b → [c,b]"
+        );
     }
 
     #[test]
@@ -635,7 +758,10 @@ mod tests {
         let mut root = base_tree();
         let blob = make_grx1(&["d"]);
         // 在 nid=12（b）之前插入子树
-        let g3 = make_grx3_delta(&[(ACT_INSERT_BEFORE, 10, 0, 12, 0, blob.len() as u32, "")], &blob);
+        let g3 = make_grx3_delta(
+            &[(ACT_INSERT_BEFORE, 10, 0, 12, 0, blob.len() as u32, "")],
+            &blob,
+        );
         let v = DeltaView::parse(&g3).unwrap();
         assert_eq!(v.apply(&mut root), 1);
         assert_eq!(ids(&root), ["a", "sub", "b", "c"]);
@@ -644,10 +770,13 @@ mod tests {
     #[test]
     fn grx3_delta_set_attr_and_text() {
         let mut root = base_tree();
-        let g3 = make_grx3_delta(&[
-            (ACT_SET_ATTR, 11, 0, 0, 0, 0, "#ff0000"),
-            (ACT_SET_TEXT, 13, 0, 0, 0, 0, "Z"),
-        ], &[]);
+        let g3 = make_grx3_delta(
+            &[
+                (ACT_SET_ATTR, 11, 0, 0, 0, 0, "#ff0000"),
+                (ACT_SET_TEXT, 13, 0, 0, 0, 0, "Z"),
+            ],
+            &[],
+        );
         let v = DeltaView::parse(&g3).unwrap();
         assert_eq!(v.apply(&mut root), 2);
         // attr 动作需要 key——GRX3 的 key_off 槽；本 helper 未写 key 池，

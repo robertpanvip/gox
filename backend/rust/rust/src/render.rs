@@ -2,18 +2,18 @@
 //! 布局采用与 host flex 语义一致的主轴排布（fragment 透明透传）。
 
 use crate::paint::*;
-use crate::util::*;
 use crate::protocol::InputEvent;
-use raw_window_handle::{RawDisplayHandle, RawWindowHandle};
+use crate::util::*;
 use glyphon::{
     Attrs, Buffer, Cache, Color, Family, FontSystem, Metrics, Resolution, Shaping, SwashCache,
     TextArea, TextAtlas, TextBounds, TextRenderer, Viewport, Weight,
 };
+use raw_window_handle::{RawDisplayHandle, RawWindowHandle};
 use wgpu::{
-    CommandEncoderDescriptor, CompositeAlphaMode, DeviceDescriptor, Instance,
-    InstanceDescriptor, LoadOp, MultisampleState, Operations, PresentMode,
-    RenderPassColorAttachment, RenderPassDescriptor, RequestAdapterOptions,
-    SurfaceConfiguration, TextureFormat, TextureUsages, TextureViewDescriptor,
+    CommandEncoderDescriptor, CompositeAlphaMode, DeviceDescriptor, Instance, InstanceDescriptor,
+    LoadOp, MultisampleState, Operations, PresentMode, RenderPassColorAttachment,
+    RenderPassDescriptor, RequestAdapterOptions, SurfaceConfiguration, TextureFormat,
+    TextureUsages, TextureViewDescriptor,
 };
 
 /// 平台无关 Surface 提供者（BACKEND_ARCHITECTURE_V2 §七）：
@@ -124,7 +124,11 @@ impl Renderer {
             .request_adapter(&RequestAdapterOptions::default())
             .await
             .expect("request_adapter");
-        eprintln!("[rust-backend] adapter: {} ({:?})", adapter.get_info().name, adapter.get_info().backend);
+        eprintln!(
+            "[rust-backend] adapter: {} ({:?})",
+            adapter.get_info().name,
+            adapter.get_info().backend
+        );
         let (device, queue) = adapter
             .request_device(&DeviceDescriptor::default())
             .await
@@ -132,11 +136,10 @@ impl Renderer {
         // 平台原生化注入：raw handle 建 surface（§七）。句柄在 Renderer 存活期
         // 保持有效由 provider 的安全契约保证（Renderer 持有 provider 本体）。
         let surface = unsafe {
-            instance
-                .create_surface_unsafe(wgpu::SurfaceTargetUnsafe::RawHandle {
-                    raw_display_handle: provider.raw_display_handle(),
-                    raw_window_handle: provider.raw_window_handle(),
-                })
+            instance.create_surface_unsafe(wgpu::SurfaceTargetUnsafe::RawHandle {
+                raw_display_handle: provider.raw_display_handle(),
+                raw_window_handle: provider.raw_window_handle(),
+            })
         }
         .expect("create_surface");
         // Bgra8Unorm（非 sRGB target）：写入即显示，gamma 空间混合——与
@@ -153,7 +156,6 @@ impl Renderer {
             desired_maximum_frame_latency: 2,
         };
         surface.configure(&device, &config);
-
 
         let mut font_system = FontSystem::new();
         for path in [
@@ -172,18 +174,27 @@ impl Renderer {
         let cache = Cache::new(&device);
         let viewport = Viewport::new(&device, &cache);
         let mut atlas = TextAtlas::new(&device, &queue, &cache, fmt);
-        let text_renderer = TextRenderer::new(&mut atlas, &device, MultisampleState::default(), None);
+        let text_renderer =
+            TextRenderer::new(&mut atlas, &device, MultisampleState::default(), None);
 
         let gpu = gx_gpu::QuadGpu::new(device.clone(), queue.clone(), fmt);
         Renderer {
-            device, queue, surface, config,
+            device,
+            queue,
+            surface,
+            config,
             gpu,
             tex_cache: std::collections::HashMap::new(),
             tex_ids: std::collections::HashMap::new(),
             next_tex_id: 1,
             rebuild_gen: 0,
-            width: w, height: h,
-            font_system, swash_cache, viewport, atlas, text_renderer,
+            width: w,
+            height: h,
+            font_system,
+            swash_cache,
+            viewport,
+            atlas,
+            text_renderer,
             scene: None,
             layout_cache: crate::layout::LayoutCache::new(),
             bg: (11, 16, 32),
@@ -300,7 +311,9 @@ impl Renderer {
         frame: &mut gx_gpu::GpuFrame,
         logical: u64,
         content: u64,
-        w: u32, h: u32, premul: bool,
+        w: u32,
+        h: u32,
+        premul: bool,
         data: std::sync::Arc<Vec<u8>>,
         persistent: bool,
     ) -> u32 {
@@ -313,13 +326,32 @@ impl Renderer {
                 id
             }
         };
-        let cached = self.tex_cache.get(&content).map(|e| e.id == id).unwrap_or(false);
+        let cached = self
+            .tex_cache
+            .get(&content)
+            .map(|e| e.id == id)
+            .unwrap_or(false);
         if !cached {
-            self.tex_cache.insert(content, TexEntry {
-                id, w, h, premul, data: data.clone(), persistent,
-            });
+            self.tex_cache.insert(
+                content,
+                TexEntry {
+                    id,
+                    w,
+                    h,
+                    premul,
+                    data: data.clone(),
+                    persistent,
+                },
+            );
         }
-        frame.uploads.push(gx_gpu::TexUpload { id, key: content, w, h, data, premul });
+        frame.uploads.push(gx_gpu::TexUpload {
+            id,
+            key: content,
+            w,
+            h,
+            data,
+            premul,
+        });
         id
     }
 
@@ -328,7 +360,8 @@ impl Renderer {
     /// 背景、滚动条 thumb（overlay）；glyphon 文本由 render 在同一 pass 最后叠加。
     fn build_gpu_frame(&mut self, dl: &DisplayList) -> gx_gpu::GpuFrame {
         let mut f = gx_gpu::GpuFrame::new(
-            self.width, self.height,
+            self.width,
+            self.height,
             [self.bg.0 as f32, self.bg.1 as f32, self.bg.2 as f32, 255.0],
         );
         let mut used_keys: Vec<u64> = Vec::new();
@@ -348,7 +381,11 @@ impl Renderer {
             // box-shadow：6 层半透明圆角矩形近似（与 Skia 端 paintShadow 同
             // 算法）；几何不裁（旧实现仅做剔除），溢出由 scissor/交集裁剪兜底。
             if let Some(sh) = &s.shadow {
-                let base_a = if sh.color.3 > 0 { sh.color.3 as f32 } else { 90.0 };
+                let base_a = if sh.color.3 > 0 {
+                    sh.color.3 as f32
+                } else {
+                    90.0
+                };
                 const LAYERS: i32 = 6;
                 for i in (1..=LAYERS).rev() {
                     let t = i as f32 / LAYERS as f32;
@@ -361,17 +398,26 @@ impl Renderer {
                         continue;
                     }
                     let a = (base_a * (1.0 - t) / LAYERS as f32 * 1.8).clamp(0.0, 255.0);
-                    f.quad([sx, sy, sw, shh], clip,
+                    f.quad(
+                        [sx, sy, sw, shh],
+                        clip,
                         [sh.color.0 as f32, sh.color.1 as f32, sh.color.2 as f32, a],
-                        s.radius + expand, 0.0);
+                        s.radius + expand,
+                        0.0,
+                    );
                 }
             }
             if s.bg_present {
                 // opacity 作用于元素整体：声明式 blink 动画采样后写进 st.opacity，
                 // 此处按 alpha 淡入淡出（对齐 Skia paintElement / Web CSS opacity）。
                 let a = (s.alpha.clamp(0.0, 1.0) * 255.0) as f32;
-                f.quad([rx, ry, rw, rh], clip,
-                    [s.bg.0 as f32, s.bg.1 as f32, s.bg.2 as f32, a], s.radius, 0.0);
+                f.quad(
+                    [rx, ry, rw, rh],
+                    clip,
+                    [s.bg.0 as f32, s.bg.1 as f32, s.bg.2 as f32, a],
+                    s.radius,
+                    0.0,
+                );
             }
             // 通用 linear-gradient 背景：与 Go 桌面端 paintGradientBackgroundShader
             // 路径一致；GPU 端按 quad 尺寸求渐变线长度。
@@ -383,12 +429,27 @@ impl Renderer {
             // img 原语：解码按 src 缓存（image.rs），纹理按源指针跨帧常驻，
             // 只上传一次（旧管线每帧全屏上传，此处为净收益）。
             if let Some((pix, fit)) = &s.img {
-                let (dst, uv) = fit_rect(pix.width() as f32, pix.height() as f32, *fit, rx, ry, rw, rh);
+                let (dst, uv) = fit_rect(
+                    pix.width() as f32,
+                    pix.height() as f32,
+                    *fit,
+                    rx,
+                    ry,
+                    rw,
+                    rh,
+                );
                 if dst[2] > 0.0 && dst[3] > 0.0 {
                     let logical = std::sync::Arc::as_ptr(pix) as u64;
-                    let id = self.ensure_tex(&mut f, logical, logical,
-                        pix.width(), pix.height(), true,
-                        std::sync::Arc::new(pix.data().to_vec()), true);
+                    let id = self.ensure_tex(
+                        &mut f,
+                        logical,
+                        logical,
+                        pix.width(),
+                        pix.height(),
+                        true,
+                        std::sync::Arc::new(pix.data().to_vec()),
+                        true,
+                    );
                     f.tex(dst, clip, id, uv, s.radius, 1.0);
                 }
             }
@@ -403,10 +464,18 @@ impl Renderer {
                     h.finish()
                 };
                 let content = logical ^ crate::video::frame_seq().rotate_left(1);
-                let id = self.ensure_tex(&mut f, logical, content,
-                    vf.w.max(1), vf.h.max(1), true,
-                    std::sync::Arc::new(vf.data.clone()), false);
-                let (dst, uv) = fit_rect(vf.w as f32, vf.h as f32, ObjectFit::Contain, rx, ry, rw, rh);
+                let id = self.ensure_tex(
+                    &mut f,
+                    logical,
+                    content,
+                    vf.w.max(1),
+                    vf.h.max(1),
+                    true,
+                    std::sync::Arc::new(vf.data.clone()),
+                    false,
+                );
+                let (dst, uv) =
+                    fit_rect(vf.w as f32, vf.h as f32, ObjectFit::Contain, rx, ry, rw, rh);
                 if dst[2] > 0.0 && dst[3] > 0.0 {
                     used_keys.push(content);
                     f.tex(dst, clip, id, uv, s.radius, 1.0);
@@ -421,17 +490,36 @@ impl Renderer {
                     crate::canvas::paint(&mut tmp, ops, 0.0, 0.0);
                     let logical = canvas_ops_key(ops);
                     let content = logical ^ self.rebuild_gen.rotate_left(32);
-                    let id = self.ensure_tex(&mut f, logical, content, cw, chh, true,
-                        std::sync::Arc::new(tmp.data().to_vec()), false);
+                    let id = self.ensure_tex(
+                        &mut f,
+                        logical,
+                        content,
+                        cw,
+                        chh,
+                        true,
+                        std::sync::Arc::new(tmp.data().to_vec()),
+                        false,
+                    );
                     used_keys.push(content);
-                    f.tex([rx, ry, rw, rh], clip, id,
-                        [0.0, 0.0, cw as f32, chh as f32], s.radius, 1.0);
+                    f.tex(
+                        [rx, ry, rw, rh],
+                        clip,
+                        id,
+                        [0.0, 0.0, cw as f32, chh as f32],
+                        s.radius,
+                        1.0,
+                    );
                 }
             }
             // 描边：带心环（GPU band / CPU stroke 同几何）；旧实现强制不透明。
             if let Some((c, bw)) = s.border {
-                f.quad([rx, ry, rw, rh], clip,
-                    [c.0 as f32, c.1 as f32, c.2 as f32, 255.0], s.radius, bw);
+                f.quad(
+                    [rx, ry, rw, rh],
+                    clip,
+                    [c.0 as f32, c.1 as f32, c.2 as f32, 255.0],
+                    s.radius,
+                    bw,
+                );
             }
         }
         // 三端统一 selection：在文字层之前画选区背景矩形（glyphon 文字随后绘制）。
@@ -439,25 +527,47 @@ impl Renderer {
         for t in &dl.texts {
             let Some(sel) = &t.selection else { continue };
             let (sx0, sx1) = selection_px_range(&t.text, sel.start, sel.end, t.size);
-            if sx1 <= sx0 { continue; }
-            let Some((rx, ry, rw, rh)) = clip_rect_xywh(t.clip, t.x + sx0, t.y, sx1 - sx0, t.size * 1.35)
-            else { continue };
-            if rw <= 0.0 || rh <= 0.0 { continue; }
-            f.quad([rx, ry, rw, rh], gx_gpu::clip_of(t.clip),
-                [sel.bg.0 as f32, sel.bg.1 as f32, sel.bg.2 as f32, sel.bg.3 as f32],
-                0.0, 0.0);
+            if sx1 <= sx0 {
+                continue;
+            }
+            let Some((rx, ry, rw, rh)) =
+                clip_rect_xywh(t.clip, t.x + sx0, t.y, sx1 - sx0, t.size * 1.35)
+            else {
+                continue;
+            };
+            if rw <= 0.0 || rh <= 0.0 {
+                continue;
+            }
+            f.quad(
+                [rx, ry, rw, rh],
+                gx_gpu::clip_of(t.clip),
+                [
+                    sel.bg.0 as f32,
+                    sel.bg.1 as f32,
+                    sel.bg.2 as f32,
+                    sel.bg.3 as f32,
+                ],
+                0.0,
+                0.0,
+            );
         }
         // 苹果风格滚动条画在内容之上（overlay），参与整体淡入淡出。
         if self.scrollbar_alpha > 0.01 {
             let a = (self.scrollbar_alpha * 0.55 * 255.0) as f32;
             for b in &dl.scrollbars {
-                f.quad([b.x, b.thumb_y, SB_TRACK_W, b.thumb_h], [0.0, 0.0, 0.0, 0.0],
-                    [120.0, 120.0, 128.0, a], SB_TRACK_W * 0.5, 0.0);
+                f.quad(
+                    [b.x, b.thumb_y, SB_TRACK_W, b.thumb_h],
+                    [0.0, 0.0, 0.0, 0.0],
+                    [120.0, 120.0, 128.0, a],
+                    SB_TRACK_W * 0.5,
+                    0.0,
+                );
             }
         }
         // 淘汰本帧未引用的非持久纹理（视频旧帧 / canvas 旧代）。
         let used: std::collections::HashSet<u64> = used_keys.into_iter().collect();
-        self.tex_cache.retain(|k, e| e.persistent || used.contains(k));
+        self.tex_cache
+            .retain(|k, e| e.persistent || used.contains(k));
         f
     }
 
@@ -471,7 +581,12 @@ impl Renderer {
         }
         // 声明式周期动画（如 Editor 光标 blink）无外部事件唤醒，必须持续重绘。
         // 直接扫描常驻场景树，不依赖 apply 的调用时序。
-        if self.scene.as_ref().map(|s| crate::style::tree_has_animation(s)).unwrap_or(false) {
+        if self
+            .scene
+            .as_ref()
+            .map(|s| crate::style::tree_has_animation(s))
+            .unwrap_or(false)
+        {
             return true;
         }
         // 视频正在播放：解码线程持续产出新帧，必须保持重绘调度。
@@ -485,7 +600,8 @@ impl Renderer {
             if (a > 0.0 && a < 1.0)
                 || std::time::Instant::now()
                     .duration_since(self.scrollbar_last_activity)
-                    .as_millis() < 1700
+                    .as_millis()
+                    < 1700
             {
                 return true;
             }
@@ -494,7 +610,9 @@ impl Renderer {
     }
 
     pub fn render(&mut self) {
-        let Some(scene) = self.scene.as_ref() else { return; };
+        let Some(scene) = self.scene.as_ref() else {
+            return;
+        };
         // transition：按当前时间推进动画。动画进行中必须逐帧重算（插值值在变）。
         let now_ms = self.anim_origin.elapsed().as_millis();
         self.animator.set_now(now_ms);
@@ -510,7 +628,13 @@ impl Renderer {
         let need_rebuild = self.frame_dirty || animating || self.cached_areas_dirty;
         self.rebuild_gen = self.rebuild_gen.wrapping_add(1);
 
-        self.viewport.update(&self.queue, Resolution { width: self.config.width, height: self.config.height });
+        self.viewport.update(
+            &self.queue,
+            Resolution {
+                width: self.config.width,
+                height: self.config.height,
+            },
+        );
 
         // 帧数据来源：重建帧用新 DisplayList，静止帧沿用上一帧
         // （纯数据构建，成本低；GPU 端 (id,key) 去重保证零纹理上传）。
@@ -526,7 +650,12 @@ impl Renderer {
                 self.active_id.as_deref(),
                 self.focused_id.as_deref(),
             );
-            let dl = DisplayList::from_scene(&styled, self.width as f32, self.height as f32, &mut self.layout_cache);
+            let dl = DisplayList::from_scene(
+                &styled,
+                self.width as f32,
+                self.height as f32,
+                &mut self.layout_cache,
+            );
 
             // 滚动条淡入淡出：以首个滚动条的 thumb_y 作为滚动位置信号。
             // 位置变化（或首次出现）视为活动 → alpha 拉满并刷新时间戳。
@@ -569,7 +698,11 @@ impl Renderer {
             let shaped = shaped_idx.len();
             for i in shaped_idx {
                 let t = &src.texts[i];
-                let lh = if t.line_height > 0.0 { t.line_height } else { t.size * 1.35 };
+                let lh = if t.line_height > 0.0 {
+                    t.line_height
+                } else {
+                    t.size * 1.35
+                };
                 let mut b = Buffer::new(&mut self.font_system, Metrics::new(t.size, lh));
                 b.set_size(&mut self.font_system, Some(700.0), Some(80.0));
                 let attrs = match &t.family {
@@ -589,20 +722,39 @@ impl Renderer {
                 } else {
                     // 统一渐变文字：按 ch 分段逐 span 着色。段内颜色编进 Attrs，
                     // glyphon 渲染时优先读 glyph.color_opt（见 text_render.rs:245）。
-                    let styled: Vec<(&str, Attrs)> = t.spans.iter().map(|(seg, c)| {
-                        (seg.as_str(), attrs.clone().color(Color::rgb(c.0, c.1, c.2)))
-                    }).collect();
-                    b.set_rich_text(&mut self.font_system, styled, &attrs, Shaping::Advanced, None);
+                    let styled: Vec<(&str, Attrs)> = t
+                        .spans
+                        .iter()
+                        .map(|(seg, c)| {
+                            (seg.as_str(), attrs.clone().color(Color::rgb(c.0, c.1, c.2)))
+                        })
+                        .collect();
+                    b.set_rich_text(
+                        &mut self.font_system,
+                        styled,
+                        &attrs,
+                        Shaping::Advanced,
+                        None,
+                    );
                 }
-                self.glyph_cache.insert(t.id, GlyphEntry { sig: text_sig(t), buffer: b });
+                self.glyph_cache.insert(
+                    t.id,
+                    GlyphEntry {
+                        sig: text_sig(t),
+                        buffer: b,
+                    },
+                );
             }
             for id in evicted {
                 self.glyph_cache.remove(&id);
             }
             #[cfg(debug_assertions)]
             if shaped > 0 || shaped < src.texts.len() {
-                eprintln!("[rust-backend] glyph reuse: {} reused, {} shaped",
-                    src.texts.len().saturating_sub(shaped), shaped);
+                eprintln!(
+                    "[rust-backend] glyph reuse: {} reused, {} shaped",
+                    src.texts.len().saturating_sub(shaped),
+                    shaped
+                );
             }
             self.frame_dirty = false;
             self.cached_areas_dirty = false;
@@ -615,46 +767,67 @@ impl Renderer {
         let frame = self.build_gpu_frame(&src);
 
         // 从当前 DisplayList + 按 ID 缓存的 buffers 组装 areas（有无变化都要做，因为 prepare 每帧消费 areas）。
-        let areas: Vec<TextArea> = self.display.texts.iter().filter_map(|t| {
-            let b = match self.glyph_cache.get(&t.id) {
-                Some(e) => &e.buffer,
-                None => return None, // 理论上不会发生；防御性跳过缺字形的项
-            };
-            let bounds = match t.clip {
-                Some((cx, cy, cw, ch)) => TextBounds {
-                    left: (cx - t.x - 20.0) as i32, top: (cy - t.y - 20.0) as i32,
-                    right: (cx + cw - t.x) as i32, bottom: (cy + ch - t.y) as i32,
-                },
-                None => TextBounds { left: -20, top: -20, right: 720, bottom: self.height as i32 },
-            };
-            Some(TextArea {
-                buffer: b,
-                left: t.x,
-                top: t.y,
-                scale: 1.0,
-                bounds,
-                // opacity（含声明式 blink 采样）作用于文字 alpha，对齐 Skia/Web。
-                // glyphon 颜色为 pre-multiplied，按 alpha 缩放三通道。
-                default_color: {
-                    let a = t.alpha.clamp(0.0, 1.0);
-                    Color::rgba(
-                        (t.color.0 as f32 * a) as u8,
-                        (t.color.1 as f32 * a) as u8,
-                        (t.color.2 as f32 * a) as u8,
-                        (a * 255.0) as u8,
-                    )
-                },
-                custom_glyphs: &[],
+        let areas: Vec<TextArea> = self
+            .display
+            .texts
+            .iter()
+            .filter_map(|t| {
+                let b = match self.glyph_cache.get(&t.id) {
+                    Some(e) => &e.buffer,
+                    None => return None, // 理论上不会发生；防御性跳过缺字形的项
+                };
+                let bounds = match t.clip {
+                    Some((cx, cy, cw, ch)) => TextBounds {
+                        left: (cx - t.x - 20.0) as i32,
+                        top: (cy - t.y - 20.0) as i32,
+                        right: (cx + cw - t.x) as i32,
+                        bottom: (cy + ch - t.y) as i32,
+                    },
+                    None => TextBounds {
+                        left: -20,
+                        top: -20,
+                        right: 720,
+                        bottom: self.height as i32,
+                    },
+                };
+                Some(TextArea {
+                    buffer: b,
+                    left: t.x,
+                    top: t.y,
+                    scale: 1.0,
+                    bounds,
+                    // opacity（含声明式 blink 采样）作用于文字 alpha，对齐 Skia/Web。
+                    // glyphon 颜色为 pre-multiplied，按 alpha 缩放三通道。
+                    default_color: {
+                        let a = t.alpha.clamp(0.0, 1.0);
+                        Color::rgba(
+                            (t.color.0 as f32 * a) as u8,
+                            (t.color.1 as f32 * a) as u8,
+                            (t.color.2 as f32 * a) as u8,
+                            (a * 255.0) as u8,
+                        )
+                    },
+                    custom_glyphs: &[],
+                })
             })
-        }).collect();
-        self.text_renderer.prepare(
-            &self.device, &self.queue, &mut self.font_system, &mut self.atlas,
-            &self.viewport, areas, &mut self.swash_cache,
-        ).unwrap();
+            .collect();
+        self.text_renderer
+            .prepare(
+                &self.device,
+                &self.queue,
+                &mut self.font_system,
+                &mut self.atlas,
+                &self.viewport,
+                areas,
+                &mut self.swash_cache,
+            )
+            .unwrap();
 
         let f = self.surface.get_current_texture().unwrap();
         let view = f.texture.create_view(&TextureViewDescriptor::default());
-        let mut enc = self.device.create_command_encoder(&CommandEncoderDescriptor { label: None });
+        let mut enc = self
+            .device
+            .create_command_encoder(&CommandEncoderDescriptor { label: None });
         {
             let mut pass = enc.begin_render_pass(&RenderPassDescriptor {
                 label: None,
@@ -662,14 +835,14 @@ impl Renderer {
                     view: &view,
                     resolve_target: None,
                     ops: Operations {
-                    load: LoadOp::Clear(wgpu::Color {
-                        r: (frame.clear[0] / 255.0) as f64,
-                        g: (frame.clear[1] / 255.0) as f64,
-                        b: (frame.clear[2] / 255.0) as f64,
-                        a: (frame.clear[3] / 255.0) as f64,
-                    }),
-                    store: wgpu::StoreOp::Store,
-                },
+                        load: LoadOp::Clear(wgpu::Color {
+                            r: (frame.clear[0] / 255.0) as f64,
+                            g: (frame.clear[1] / 255.0) as f64,
+                            b: (frame.clear[2] / 255.0) as f64,
+                            a: (frame.clear[3] / 255.0) as f64,
+                        }),
+                        store: wgpu::StoreOp::Store,
+                    },
                 })],
                 depth_stencil_attachment: None,
                 timestamp_writes: None,
@@ -678,7 +851,9 @@ impl Renderer {
             // GPU quad 管线画图形（gx_gpu crate，三端统一 WGSL），
             // 随后在同一 pass 叠加 glyphon 文本。
             self.gpu.draw(&mut pass, &frame);
-            self.text_renderer.render(&self.atlas, &self.viewport, &mut pass).unwrap();
+            self.text_renderer
+                .render(&self.atlas, &self.viewport, &mut pass)
+                .unwrap();
         }
         self.queue.submit(Some(enc.finish()));
         f.present();
@@ -687,14 +862,16 @@ impl Renderer {
 
     /// 点击命中 → 生成 click 事件 JSON
     pub fn hit_click(&self, x: f32, y: f32) -> Option<InputEvent> {
-        self.display.hit(x, y).map(|(_, _, _, _, id, ev, _, ..)| InputEvent {
-            kind: "click".into(),
-            node_id: id.to_string(),
-            event: ev.clone(),
-            text: String::new(),
-            x,
-            y,
-        })
+        self.display
+            .hit(x, y)
+            .map(|(_, _, _, _, id, ev, _, ..)| InputEvent {
+                kind: "click".into(),
+                node_id: id.to_string(),
+                event: ev.clone(),
+                text: String::new(),
+                x,
+                y,
+            })
     }
 
     /// 点击是否落在输入框 → 生成 focus 事件
@@ -703,7 +880,11 @@ impl Renderer {
             .inputs
             .iter()
             .filter(|(bx, by, bw, bh, _)| x >= *bx && x <= bx + bw && y >= *by && y <= by + bh)
-            .min_by(|a, b| (a.2 * a.3).partial_cmp(&(b.2 * b.3)).unwrap_or(std::cmp::Ordering::Equal))
+            .min_by(|a, b| {
+                (a.2 * a.3)
+                    .partial_cmp(&(b.2 * b.3))
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
             .map(|(_, _, _, _, id)| InputEvent {
                 kind: "focus".into(),
                 node_id: id.to_string(),
@@ -788,19 +969,33 @@ mod parity_tests {
 
     fn div(id: &str, props: &[(&str, &str)], children: Vec<SceneNode>) -> SceneNode {
         SceneNode {
-            typ: NodeType::Div, kind: "div".into(), id: id.into(), text: String::new(),
+            typ: NodeType::Div,
+            kind: "div".into(),
+            id: id.into(),
+            text: String::new(),
             nid: 1008,
-            props: props.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
-            events: vec![], children,
+            props: props
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+            events: vec![],
+            children,
         }
     }
 
     fn text(id: &str, text: &str, props: &[(&str, &str)]) -> SceneNode {
         SceneNode {
-            typ: NodeType::Text, kind: "#text".into(), id: id.into(), text: text.into(),
+            typ: NodeType::Text,
+            kind: "#text".into(),
+            id: id.into(),
+            text: text.into(),
             nid: 1009,
-            props: props.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
-            events: vec![], children: vec![],
+            props: props
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+            events: vec![],
+            children: vec![],
         }
     }
 
@@ -808,12 +1003,33 @@ mod parity_tests {
 
     #[test]
     fn hitboxes_expose_cursor_and_skip_pointer_events() {
-        let mut btn = div("btn", &[("width", "50"), ("height", "20"), ("cursor", "pointer")], vec![]);
+        let mut btn = div(
+            "btn",
+            &[("width", "50"), ("height", "20"), ("cursor", "pointer")],
+            vec![],
+        );
         btn.events = vec!["on-click".into()];
-        let mut pe = div("pe", &[("width", "50"), ("height", "20"), ("pointer-events", "none")], vec![]);
+        let mut pe = div(
+            "pe",
+            &[
+                ("width", "50"),
+                ("height", "20"),
+                ("pointer-events", "none"),
+            ],
+            vec![],
+        );
         pe.events = vec!["on-click".into()];
-        let root = div("root", &[("width", "200"), ("height", "60"), ("flex-direction", "row")], vec![btn, pe]);
-        let dl = DisplayList::from_scene(&root, 400.0, 200.0, &mut crate::layout::LayoutCache::new());
+        let root = div(
+            "root",
+            &[
+                ("width", "200"),
+                ("height", "60"),
+                ("flex-direction", "row"),
+            ],
+            vec![btn, pe],
+        );
+        let dl =
+            DisplayList::from_scene(&root, 400.0, 200.0, &mut crate::layout::LayoutCache::new());
         assert_eq!(dl.hitboxes.len(), 1, "pointer-events:none 不登记命中框");
         let hb = &dl.hitboxes[0];
         assert_eq!(hb.4, 1008, "btn 节点 nid（测试 helper 顺序分配）");
@@ -822,37 +1038,71 @@ mod parity_tests {
 
     #[test]
     fn text_align_and_whitespace_and_weight_in_text_draws() {
-        let root = div("root", &[("width", "100"), ("text-align", "center"),
-                                ("white-space", "normal"), ("font-weight", "700")],
-            vec![text("t", "a   b", &[])]);
-        let dl = DisplayList::from_scene(&root, 200.0, 100.0, &mut crate::layout::LayoutCache::new());
+        let root = div(
+            "root",
+            &[
+                ("width", "100"),
+                ("text-align", "center"),
+                ("white-space", "normal"),
+                ("font-weight", "700"),
+            ],
+            vec![text("t", "a   b", &[])],
+        );
+        let dl =
+            DisplayList::from_scene(&root, 200.0, 100.0, &mut crate::layout::LayoutCache::new());
         assert_eq!(dl.texts.len(), 1);
         let t = &dl.texts[0];
         assert_eq!(t.text, "a b", "white-space:normal 折叠空白");
         assert_eq!(t.weight, Some(700), "font-weight 进入 TextDraw");
         // 近似宽 = (0.56*2 + 1*1空格?) "a b" = a(0.56)+空格(0.56)+b(0.56) = 1.68em*16=26.88
-        let tw = t.text.chars().map(|c| if c.is_ascii() { 0.56 } else { 1.0 }).sum::<f32>() * t.size;
+        let tw = t
+            .text
+            .chars()
+            .map(|c| if c.is_ascii() { 0.56 } else { 1.0 })
+            .sum::<f32>()
+            * t.size;
         let want_dx = (100.0 - tw) / 2.0;
-        assert!((t.x - want_dx).abs() < 0.5, "center 落笔 x = {}, want ≈{}", t.x, want_dx);
+        assert!(
+            (t.x - want_dx).abs() < 0.5,
+            "center 落笔 x = {}, want ≈{}",
+            t.x,
+            want_dx
+        );
     }
 
     #[test]
     fn line_height_overrides_text_draw() {
-        let root = div("root", &[("width", "100"), ("line-height", "2")],
-            vec![text("t", "hi", &[])]);
-        let dl = DisplayList::from_scene(&root, 200.0, 100.0, &mut crate::layout::LayoutCache::new());
+        let root = div(
+            "root",
+            &[("width", "100"), ("line-height", "2")],
+            vec![text("t", "hi", &[])],
+        );
+        let dl =
+            DisplayList::from_scene(&root, 200.0, 100.0, &mut crate::layout::LayoutCache::new());
         let t = &dl.texts[0];
-        assert!((t.line_height - 32.0).abs() < 0.1, "line-height:2 × 16px = 32, got {}", t.line_height);
+        assert!(
+            (t.line_height - 32.0).abs() < 0.1,
+            "line-height:2 × 16px = 32, got {}",
+            t.line_height
+        );
     }
 
     #[test]
     fn line_height_inherits_from_parent() {
         // text 子节点自身无 line-height，应继承父容器的 1.5。
-        let root = div("root", &[("width", "100"), ("line-height", "1.5")],
-            vec![div("wrap", &[], vec![text("t", "hi", &[])])]);
-        let dl = DisplayList::from_scene(&root, 200.0, 100.0, &mut crate::layout::LayoutCache::new());
+        let root = div(
+            "root",
+            &[("width", "100"), ("line-height", "1.5")],
+            vec![div("wrap", &[], vec![text("t", "hi", &[])])],
+        );
+        let dl =
+            DisplayList::from_scene(&root, 200.0, 100.0, &mut crate::layout::LayoutCache::new());
         let t = &dl.texts[0];
-        assert!((t.line_height - 24.0).abs() < 0.1, "继承 1.5×16=24, got {}", t.line_height);
+        assert!(
+            (t.line_height - 24.0).abs() < 0.1,
+            "继承 1.5×16=24, got {}",
+            t.line_height
+        );
     }
 
     #[test]
@@ -860,27 +1110,53 @@ mod parity_tests {
         let mk = |id: &str, bg: &str, z: Option<&str>| {
             let mut props = vec![("width", "30"), ("height", "10"), ("bg", bg)];
             let mut p: Vec<(&str, &str)> = props.drain(..).collect();
-            if let Some(zv) = z { p.push(("z-index", zv)); }
+            if let Some(zv) = z {
+                p.push(("z-index", zv));
+            }
             div(id, &p, vec![])
         };
-        let root = div("root", &[("width", "60"), ("height", "60")], vec![
-            mk("a", "#010101", Some("5")),
-            mk("b", "#020202", None),
-            mk("c", "#030303", Some("-1")),
-        ]);
-        let dl = DisplayList::from_scene(&root, 100.0, 100.0, &mut crate::layout::LayoutCache::new());
+        let root = div(
+            "root",
+            &[("width", "60"), ("height", "60")],
+            vec![
+                mk("a", "#010101", Some("5")),
+                mk("b", "#020202", None),
+                mk("c", "#030303", Some("-1")),
+            ],
+        );
+        let dl =
+            DisplayList::from_scene(&root, 100.0, 100.0, &mut crate::layout::LayoutCache::new());
         // 绘制顺序：c(-1) → b(0) → a(5)，同值保持文档序。
-        let bgs: Vec<(u8, u8, u8)> = dl.shapes.iter().filter(|s| s.bg_present).map(|s| s.bg).collect();
-        assert_eq!(bgs, vec![(0x03, 0x03, 0x03), (0x02, 0x02, 0x02), (0x01, 0x01, 0x01)],
-            "z-index 应重排绘制顺序: {:?}", bgs);
+        let bgs: Vec<(u8, u8, u8)> = dl
+            .shapes
+            .iter()
+            .filter(|s| s.bg_present)
+            .map(|s| s.bg)
+            .collect();
+        assert_eq!(
+            bgs,
+            vec![(0x03, 0x03, 0x03), (0x02, 0x02, 0x02), (0x01, 0x01, 0x01)],
+            "z-index 应重排绘制顺序: {:?}",
+            bgs
+        );
     }
 
     #[test]
     fn text_sig_includes_weight() {
         let mut t = TextDraw {
-            id: 7, text: "hi".into(), x: 0.0, y: 0.0, size: 16.0,
-            color: (0, 0, 0), clip: None, spans: vec![], selection: None, family: None,
-            weight: None, line_height: 0.0, alpha: 1.0,
+            id: 7,
+            text: "hi".into(),
+            x: 0.0,
+            y: 0.0,
+            size: 16.0,
+            color: (0, 0, 0),
+            clip: None,
+            spans: vec![],
+            selection: None,
+            family: None,
+            weight: None,
+            line_height: 0.0,
+            alpha: 1.0,
         };
         assert!(!text_sig(&t).contains("@w"));
         t.weight = Some(700);
@@ -922,14 +1198,26 @@ mod threeway_tests {
         }
         if kind == "text" {
             SceneNode {
-                typ: NodeType::Text, kind: "#text".into(), id, nid, text: v["text"].as_str().unwrap_or("").into(),
-                props, events: vec![], children,
+                typ: NodeType::Text,
+                kind: "#text".into(),
+                id,
+                nid,
+                text: v["text"].as_str().unwrap_or("").into(),
+                props,
+                events: vec![],
+                children,
             }
         } else {
             // Skia 端对全部 div 登记命中框；镜像对齐：每个 div 视作可命中。
             SceneNode {
-                typ: NodeType::Div, kind: "div".into(), id, nid, text: String::new(),
-                props, events: vec!["on-click".into()], children,
+                typ: NodeType::Div,
+                kind: "div".into(),
+                id,
+                nid,
+                text: String::new(),
+                props,
+                events: vec!["on-click".into()],
+                children,
             }
         }
     }
@@ -939,32 +1227,63 @@ mod threeway_tests {
     }
 
     #[derive(Clone)]
-    struct TwRect { bg: String, x: f32, y: f32, w: f32, h: f32 }
+    struct TwRect {
+        bg: String,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+    }
     #[derive(Clone)]
-    struct TwText { text: String, x: f32, y: f32 }
+    struct TwText {
+        text: String,
+        x: f32,
+        y: f32,
+    }
 
-    fn tw_observe(dl: &DisplayList, bg_by_id: &std::collections::HashMap<String, String>) -> (Vec<TwRect>, Vec<TwText>) {
+    fn tw_observe(
+        dl: &DisplayList,
+        bg_by_id: &std::collections::HashMap<String, String>,
+    ) -> (Vec<TwRect>, Vec<TwText>) {
         let mut rects = vec![];
         for s in &dl.shapes {
             if s.bg_present && s.bg_gradient.is_none() {
-                rects.push(TwRect { bg: tw_hex(s.bg), x: s.x, y: s.y, w: s.w, h: s.h });
+                rects.push(TwRect {
+                    bg: tw_hex(s.bg),
+                    x: s.x,
+                    y: s.y,
+                    w: s.w,
+                    h: s.h,
+                });
             }
         }
         let mut texts = vec![];
         for t in &dl.texts {
-            texts.push(TwText { text: t.text.clone(), x: t.x, y: t.y });
+            texts.push(TwText {
+                text: t.text.clone(),
+                x: t.x,
+                y: t.y,
+            });
         }
         // 命中观测对齐 Skia HitTest：逆序（自顶向下）第一个包含点的命中框。
         let _ = bg_by_id;
         (rects, texts)
     }
 
-    fn tw_hit_at(dl: &DisplayList, bg_by_id: &std::collections::HashMap<String, String>, px: f32, py: f32) -> (String, String) {
+    fn tw_hit_at(
+        dl: &DisplayList,
+        bg_by_id: &std::collections::HashMap<String, String>,
+        px: f32,
+        py: f32,
+    ) -> (String, String) {
         for hb in dl.hitboxes.iter().rev() {
             let (x, y, w, h, id, _, _, clip, cursor) = hb;
             let contains = px >= *x && px < x + *w && py >= *y && py < y + *h;
             if contains && !clip_rejects(*clip, px, py, 0.0, 0.0) {
-                return (bg_by_id.get(&id.to_string()).cloned().unwrap_or_default(), cursor.clone());
+                return (
+                    bg_by_id.get(&id.to_string()).cloned().unwrap_or_default(),
+                    cursor.clone(),
+                );
             }
         }
         (String::new(), String::new())
@@ -979,11 +1298,15 @@ mod threeway_tests {
         let manifest = env!("CARGO_MANIFEST_DIR");
         let path = std::env::var("GX_THREEWAY_CASES")
             .unwrap_or_else(|_| format!("{}/../../../testdata/threeway/cases.json", manifest));
-        let raw = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("读取用例 {}: {}", path, e));
+        let raw =
+            std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("读取用例 {}: {}", path, e));
         let suite: serde_json::Value = serde_json::from_str(&raw).unwrap();
         let (vw, vh) = {
             let vp = suite["viewport"].as_array().unwrap();
-            (vp[0].as_f64().unwrap() as f32, vp[1].as_f64().unwrap() as f32)
+            (
+                vp[0].as_f64().unwrap() as f32,
+                vp[1].as_f64().unwrap() as f32,
+            )
         };
 
         let mut fails: Vec<String> = vec![];
@@ -995,8 +1318,12 @@ mod threeway_tests {
             let root = tw_build(&case["scene"], &mut counter);
             // 构造后收集 id → bg 便于命中目标识别。
             fn collect(n: &SceneNode, m: &mut std::collections::HashMap<String, String>) {
-                if let Some(bg) = n.props.get("bg") { m.insert(n.id.clone(), bg.clone()); }
-                for c in &n.children { collect(c, m); }
+                if let Some(bg) = n.props.get("bg") {
+                    m.insert(n.id.clone(), bg.clone());
+                }
+                for c in &n.children {
+                    collect(c, m);
+                }
             }
             collect(&root, &mut bg_by_id);
             let dl = DisplayList::from_scene(&root, vw, vh, &mut crate::layout::LayoutCache::new());
@@ -1015,7 +1342,10 @@ mod threeway_tests {
                     "rect" => {
                         let bg = e["bg"].as_str().unwrap_or("");
                         match first_rect(bg) {
-                            None => case_fails.push(format!("[rust] {}: rect {} 未绘制（属性未消费或颜色未透传）", name, bg)),
+                            None => case_fails.push(format!(
+                                "[rust] {}: rect {} 未绘制（属性未消费或颜色未透传）",
+                                name, bg
+                            )),
                             Some(r) => {
                                 for (got, want, label) in [
                                     (r.x, e["x"].as_f64().unwrap_or(0.0), "x"),
@@ -1025,7 +1355,10 @@ mod threeway_tests {
                                 ] {
                                     let tol = e["tol"].as_f64().unwrap_or(1.0);
                                     if !near(got, want, tol) {
-                                        case_fails.push(format!("[rust] {}: rect {} {}={:.1} want {}", name, bg, label, got, want));
+                                        case_fails.push(format!(
+                                            "[rust] {}: rect {} {}={:.1} want {}",
+                                            name, bg, label, got, want
+                                        ));
                                     }
                                 }
                             }
@@ -1034,45 +1367,71 @@ mod threeway_tests {
                     "text" | "text-dx" | "text-dy" => {
                         let txt = e["text"].as_str().unwrap_or("");
                         match first_text(txt) {
-                            None => case_fails.push(format!("[rust] {}: text {:?} 未绘制（文本属性未消费或内容被错误改写）", name, txt)),
-                            Some(t) => match kind {
-                                "text-dx" => {
-                                    let want = e["x"].as_f64().unwrap_or(0.0);
-                                    let tol = e["tol"].as_f64().unwrap_or(1.0);
-                                    if !near(t.x, want, tol) {
-                                        case_fails.push(format!("[rust] {}: text {:?} x={:.1} want {}(±{})", name, txt, t.x, want, tol));
+                            None => case_fails.push(format!(
+                                "[rust] {}: text {:?} 未绘制（文本属性未消费或内容被错误改写）",
+                                name, txt
+                            )),
+                            Some(t) => {
+                                match kind {
+                                    "text-dx" => {
+                                        let want = e["x"].as_f64().unwrap_or(0.0);
+                                        let tol = e["tol"].as_f64().unwrap_or(1.0);
+                                        if !near(t.x, want, tol) {
+                                            case_fails.push(format!(
+                                                "[rust] {}: text {:?} x={:.1} want {}(±{})",
+                                                name, txt, t.x, want, tol
+                                            ));
+                                        }
                                     }
-                                }
-                                "text-dy" => {
-                                    let anc = e["anchor"].as_str().unwrap_or("");
-                                    match first_text(anc) {
-                                        None => case_fails.push(format!("[rust] {}: anchor text {:?} 未绘制", name, anc)),
-                                        Some(a) => {
-                                            let want = e["dy"].as_f64().unwrap_or(0.0);
-                                            let tol = e["tol"].as_f64().unwrap_or(1.0);
-                                            if !near(t.y - a.y, want, tol) {
-                                                case_fails.push(format!("[rust] {}: text {:?} dy={:.1} want {}(±{})", name, txt, t.y - a.y, want, tol));
+                                    "text-dy" => {
+                                        let anc = e["anchor"].as_str().unwrap_or("");
+                                        match first_text(anc) {
+                                            None => case_fails.push(format!(
+                                                "[rust] {}: anchor text {:?} 未绘制",
+                                                name, anc
+                                            )),
+                                            Some(a) => {
+                                                let want = e["dy"].as_f64().unwrap_or(0.0);
+                                                let tol = e["tol"].as_f64().unwrap_or(1.0);
+                                                if !near(t.y - a.y, want, tol) {
+                                                    case_fails.push(format!("[rust] {}: text {:?} dy={:.1} want {}(±{})", name, txt, t.y - a.y, want, tol));
+                                                }
                                             }
                                         }
                                     }
+                                    _ => {}
                                 }
-                                _ => {}
-                            },
+                            }
                         }
                     }
                     "order" => {
-                        let bgs: Vec<&str> = e["bgs"].as_array().unwrap().iter().filter_map(|v| v.as_str()).collect();
+                        let bgs: Vec<&str> = e["bgs"]
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .filter_map(|v| v.as_str())
+                            .collect();
                         let mut pos: Vec<usize> = vec![];
                         for bg in &bgs {
                             match rects.iter().position(|r| r.bg == *bg) {
                                 Some(i) => pos.push(i),
-                                None => { case_fails.push(format!("[rust] {}: order {:?} 有 bg 未绘制", name, bgs)); pos.clear(); break; }
+                                None => {
+                                    case_fails.push(format!(
+                                        "[rust] {}: order {:?} 有 bg 未绘制",
+                                        name, bgs
+                                    ));
+                                    pos.clear();
+                                    break;
+                                }
                             }
                         }
                         if !pos.is_empty() {
                             for w in pos.windows(2) {
                                 if w[0] >= w[1] {
-                                    case_fails.push(format!("[rust] {}: order {:?} z-index 绘制顺序不符", name, bgs));
+                                    case_fails.push(format!(
+                                        "[rust] {}: order {:?} z-index 绘制顺序不符",
+                                        name, bgs
+                                    ));
                                     break;
                                 }
                             }
@@ -1085,14 +1444,20 @@ mod threeway_tests {
                         let want_target = e["target"].as_str().unwrap_or("");
                         if want_target.is_empty() {
                             if !bg.is_empty() {
-                                case_fails.push(format!("[rust] {}: hit({},{}) 命中了 {}，期望空白区", name, px, py, bg));
+                                case_fails.push(format!(
+                                    "[rust] {}: hit({},{}) 命中了 {}，期望空白区",
+                                    name, px, py, bg
+                                ));
                             }
                         } else if bg != want_target {
                             case_fails.push(format!("[rust] {}: hit({},{}) = {}, want {}（pointer-events 命中豁免或 z 序不符）", name, px, py, bg, want_target));
                         }
                         if let Some(wc) = e["cursor"].as_str() {
                             if !wc.is_empty() && cursor != wc {
-                                case_fails.push(format!("[rust] {}: hit({},{}) cursor = {}, want {}", name, px, py, cursor, wc));
+                                case_fails.push(format!(
+                                    "[rust] {}: hit({},{}) cursor = {}, want {}",
+                                    name, px, py, cursor, wc
+                                ));
                             }
                         }
                     }
@@ -1113,9 +1478,16 @@ mod threeway_tests {
         // 报告落盘（供脚本汇总矩阵）。
         if let Ok(out) = std::env::var("GX_THREEWAY_OUT") {
             let report = serde_json::json!({"backend": "rust", "cases": case_reports});
-            let _ = std::fs::write(&out, serde_json::to_string_pretty(&report).unwrap_or_default());
+            let _ = std::fs::write(
+                &out,
+                serde_json::to_string_pretty(&report).unwrap_or_default(),
+            );
         }
-        assert!(fails.is_empty(), "三端矩阵 Rust 端失败 {} 项:\n{}", fails.len(), fails.join("\n"));
+        assert!(
+            fails.is_empty(),
+            "三端矩阵 Rust 端失败 {} 项:\n{}",
+            fails.len(),
+            fails.join("\n")
+        );
     }
 }
-

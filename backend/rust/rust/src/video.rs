@@ -160,7 +160,12 @@ pub fn sync(specs: &[(String, VideoSpec)]) {
             to_spawn.push((id.clone(), spec.clone()));
         }
         // 清理消失节点。
-        let gone: Vec<String> = m.decoders.keys().filter(|k| !seen.contains(*k)).cloned().collect();
+        let gone: Vec<String> = m
+            .decoders
+            .keys()
+            .filter(|k| !seen.contains(*k))
+            .cloned()
+            .collect();
         for id in gone {
             if let Some(d) = m.decoders.remove(&id) {
                 to_stop.push(d);
@@ -194,7 +199,16 @@ pub fn sync(specs: &[(String, VideoSpec)]) {
                 text: "error".into(),
             });
         } else {
-            spawn_decode(bin.clone(), id.clone(), spec.clone(), frame, paused, stop, events, child);
+            spawn_decode(
+                bin.clone(),
+                id.clone(),
+                spec.clone(),
+                frame,
+                paused,
+                stop,
+                events,
+                child,
+            );
         }
         manager().lock().unwrap().decoders.insert(id, decoder);
     }
@@ -203,7 +217,9 @@ pub fn sync(specs: &[(String, VideoSpec)]) {
 /// 当前帧（渲染线程读）。
 pub fn frame(id: &str) -> Option<VideoFrame> {
     let m = manager().lock().unwrap();
-    m.decoders.get(id).and_then(|d| d.frame.read().unwrap().clone())
+    m.decoders
+        .get(id)
+        .and_then(|d| d.frame.read().unwrap().clone())
 }
 
 /// drain 事件（render 后由 lib.rs 经 eventCb 回传 Go）。
@@ -228,9 +244,9 @@ pub fn frame_seq() -> u64 {
 /// 保守返回 true——宁可多绘几帧，也不能让播放中的视频停在旧画面。
 pub fn has_active() -> bool {
     let m = manager().lock().unwrap();
-    m.decoders.values().any(|d| {
-        !*d.stop.read().unwrap() && d.spec.playing && !*d.paused.read().unwrap()
-    })
+    m.decoders
+        .values()
+        .any(|d| !*d.stop.read().unwrap() && d.spec.playing && !*d.paused.read().unwrap())
 }
 
 fn bump_seq() {
@@ -251,7 +267,10 @@ fn spawn_decode(
 ) {
     std::thread::spawn(move || {
         let mut args: Vec<String> = vec![
-            "-hide_banner".into(), "-loglevel".into(), "error".into(), "-nostdin".into(),
+            "-hide_banner".into(),
+            "-loglevel".into(),
+            "error".into(),
+            "-nostdin".into(),
         ];
         if spec.loop_ {
             args.push("-stream_loop".into());
@@ -272,7 +291,9 @@ fn spawn_decode(
         let (w, h, duration) = probe(&bin, &spec.src);
         if let Some(meta) = serde_json::to_string(&serde_json::json!({
             "duration": duration, "w": w, "h": h,
-        })).ok() {
+        }))
+        .ok()
+        {
             events.lock().unwrap().push(VideoEvent {
                 node_id: node_id.clone(),
                 kind: "videometa".into(),
@@ -311,7 +332,11 @@ fn spawn_decode(
         events.lock().unwrap().push(VideoEvent {
             node_id: node_id.clone(),
             kind: "videostate".into(),
-            text: if *paused.read().unwrap() { "paused".into() } else { "playing".into() },
+            text: if *paused.read().unwrap() {
+                "paused".into()
+            } else {
+                "playing".into()
+            },
         });
 
         let mut stdout = match child.stdout.take() {
@@ -370,8 +395,17 @@ fn spawn_decode(
 fn probe(bin: &str, src: &str) -> (u32, u32, f64) {
     let probe_bin = bin.replacen("ffmpeg", "ffprobe", 1);
     let out = Command::new(&probe_bin)
-        .args(["-v", "error", "-select_streams", "v:0",
-               "-show_entries", "stream=width,height", "-of", "json", src])
+        .args([
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=width,height",
+            "-of",
+            "json",
+            src,
+        ])
         .output();
     let (w, h) = match out {
         Ok(o) if o.status.success() => {
@@ -384,11 +418,23 @@ fn probe(bin: &str, src: &str) -> (u32, u32, f64) {
         _ => (0, 0),
     };
     let duration = Command::new(&probe_bin)
-        .args(["-v", "error", "-show_entries", "format=duration",
-               "-of", "default=nw=1:nk=1", src])
+        .args([
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "default=nw=1:nk=1",
+            src,
+        ])
         .output()
         .ok()
-        .and_then(|o| String::from_utf8_lossy(&o.stdout).trim().parse::<f64>().ok())
+        .and_then(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .trim()
+                .parse::<f64>()
+                .ok()
+        })
         .unwrap_or(0.0);
     (w, h, duration)
 }
@@ -397,8 +443,11 @@ fn extract_num(json: &str, key: &str) -> u32 {
     let needle = format!("\"{}\":", key);
     if let Some(i) = json.find(&needle) {
         let rest = &json[i + needle.len()..];
-        let digits: String = rest.chars().skip_while(|c| c.is_whitespace())
-            .take_while(|c| c.is_ascii_digit()).collect();
+        let digits: String = rest
+            .chars()
+            .skip_while(|c| c.is_whitespace())
+            .take_while(|c| c.is_ascii_digit())
+            .collect();
         return digits.parse().unwrap_or(0);
     }
     0
@@ -410,7 +459,10 @@ mod tests {
 
     #[test]
     fn extract_num_basic() {
-        assert_eq!(extract_num(r#"{"width": 160, "height": 120}"#, "width"), 160);
+        assert_eq!(
+            extract_num(r#"{"width": 160, "height": 120}"#, "width"),
+            160
+        );
         assert_eq!(extract_num(r#"{"width":160,"height":120}"#, "height"), 120);
         assert_eq!(extract_num("no json", "width"), 0);
     }
@@ -420,8 +472,12 @@ mod tests {
         // 用不存在的 src 触发解码失败；不应 panic。
         let spec = VideoSpec {
             src: "/nonexistent/video.mp4".into(),
-            playback_id: "1".into(), seek: "0".into(),
-            playing: true, autoplay: true, loop_: false, muted: true,
+            playback_id: "1".into(),
+            seek: "0".into(),
+            playing: true,
+            autoplay: true,
+            loop_: false,
+            muted: true,
         };
         sync(&[("n1".into(), spec)]);
         // 清理

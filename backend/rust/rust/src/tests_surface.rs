@@ -42,7 +42,10 @@ fn surface_provider_is_object_safe_and_platform_free() {
         std::sync::Arc::new(MockSurface { w: 1920, h: 1080 });
     assert_eq!(provider.pixel_size(), (1920, 1080));
     // handle 构造不 panic、返回 AppKit 变体（证明句柄是纯数据，无窗口库回调）。
-    assert!(matches!(provider.raw_window_handle(), RawWindowHandle::AppKit(_)));
+    assert!(matches!(
+        provider.raw_window_handle(),
+        RawWindowHandle::AppKit(_)
+    ));
 }
 
 /// 契约：render.rs（渲染内核）不得 import 任何窗口库。
@@ -51,9 +54,6 @@ fn surface_provider_is_object_safe_and_platform_free() {
 fn render_kernel_has_no_window_library_dependency() {
     const KERNEL: &str = include_str!("render.rs");
     for banned in ["use winit", "extern crate winit", "use tao", "use glutin"] {
-        assert!(
-            !KERNEL.contains(banned),
-            "渲染内核不得依赖窗口库: {banned}"
-        );
+        assert!(!KERNEL.contains(banned), "渲染内核不得依赖窗口库: {banned}");
     }
 }

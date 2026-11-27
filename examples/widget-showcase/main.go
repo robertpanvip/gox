@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"time"
 
+	rb "github.com/robertpanvip/gox-backend-rust"
 	gxapp "github.com/robertpanvip/gox/runtime/app"
 	gxscene "github.com/robertpanvip/gox/runtime/scene"
 	"github.com/robertpanvip/gox/showcase"
@@ -150,6 +151,9 @@ func main() {
 		widgets.SetTheme(widgets.DarkTheme)
 	}
 
+	// V2 后端装配（阶段 4 切换）：Rust 渲染 + winit 窗口，替代原 GLFW+Skia glwindow。
+	win := rb.NewWindow()
+
 	// GX_SHOT_MS 指定多少毫秒后自动关窗（配合外部 scrot 截图）。0 表示不自动关。
 	autoClose := 0
 	if v := os.Getenv("GX_SHOT_MS"); v != "" {
@@ -160,19 +164,19 @@ func main() {
 	if autoClose > 0 {
 		go func() {
 			time.Sleep(time.Duration(autoClose) * time.Millisecond)
-			requestClose()
+			win.RequestClose() // rustbackend：线程安全、非阻塞的关窗请求
 		}()
 	}
 
-	// GX_DPR 用于截图/调试：按 dpr 放大物理窗口，配合 glwindow 的 DPR 覆盖，
-	// 让逻辑布局维持 W×H 的同时以 2x/3x 物理像素渲染，便于对比 Retina 清晰度。
+	// GX_DPR 用于截图/调试：按 dpr 放大窗口尺寸（V2 后端按窗口尺寸驱动布局，
+	// 与旧 glwindow 的「逻辑尺寸不变、物理放大」语义不同——截图对比时注意）。
 	winW, winH := W, H
 	if v := os.Getenv("GX_DPR"); v != "" {
 		if d, err := strconv.Atoi(v); err == nil && d > 1 {
 			winW, winH = W*d, H*d
 		}
 	}
-	app, err := gxapp.OpenWith(gxapp.WindowConfig{Title: "Widget Showcase", Width: winW, Height: winH}, openGL())
+	app, err := gxapp.OpenWith(gxapp.WindowConfig{Title: "Widget Showcase", Width: winW, Height: winH}, win)
 	if err != nil {
 		panic(err)
 	}

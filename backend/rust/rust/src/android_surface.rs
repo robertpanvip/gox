@@ -104,7 +104,10 @@ mod tests {
     fn android_surface_handles_and_size() {
         let s = AndroidSurface::from_native_window(fake_window_ptr(), 1080, 2400, Box::new(|| {}));
         assert_eq!(s.pixel_size(), (1080, 2400));
-        assert!(matches!(s.raw_display_handle(), RawDisplayHandle::Android(_)));
+        assert!(matches!(
+            s.raw_display_handle(),
+            RawDisplayHandle::Android(_)
+        ));
         match s.raw_window_handle() {
             RawWindowHandle::AndroidNdk(h) => {
                 assert_eq!(h.a_native_window.as_ptr(), fake_window_ptr());
@@ -135,11 +138,17 @@ mod tests {
             fake_window_ptr(),
             100,
             100,
-            Box::new(move || { h2.fetch_add(1, Ordering::SeqCst); }),
+            Box::new(move || {
+                h2.fetch_add(1, Ordering::SeqCst);
+            }),
         );
         s.request_redraw();
         s.request_redraw();
-        assert_eq!(hits.load(Ordering::SeqCst), 2, "request_redraw 必须转发到宿主唤醒点");
+        assert_eq!(
+            hits.load(Ordering::SeqCst),
+            2,
+            "request_redraw 必须转发到宿主唤醒点"
+        );
     }
 
     #[test]

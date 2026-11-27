@@ -21,25 +21,49 @@ use crate::util::TextMeasure;
 /// 与浮层第二遍（gx-role/gx-anchor/gx-placement/gx-offset 定位）的全部读取。
 const LAYOUT_PROPS: &[&str] = &[
     // 盒模型与尺寸
-    "width", "height", "min-width", "min-height", "max-width", "max-height",
-    "padding", "margin", "margin-top", "margin-right", "margin-bottom", "margin-left",
+    "width",
+    "height",
+    "min-width",
+    "min-height",
+    "max-width",
+    "max-height",
+    "padding",
+    "margin",
+    "margin-top",
+    "margin-right",
+    "margin-bottom",
+    "margin-left",
     // flex 布局
-    "gap", "row-gap", "column-gap", "flex-direction", "flex-wrap",
-    "justify-content", "align-items", "align-content", "flex-grow", "flex-shrink",
+    "gap",
+    "row-gap",
+    "column-gap",
+    "flex-direction",
+    "flex-wrap",
+    "justify-content",
+    "align-items",
+    "align-content",
+    "flex-grow",
+    "flex-shrink",
     // 定位与溢出（position:absolute 脱离 flex 流；overflow 决定子树 shrink）
-    "position", "top", "right", "bottom", "left", "overflow",
+    "position",
+    "top",
+    "right",
+    "bottom",
+    "left",
+    "overflow",
     // 文本测量输入（TextMeasure：text + size + line_height + 折叠语义）
-    "font-size", "line-height", "white-space",
+    "font-size",
+    "line-height",
+    "white-space",
     // 浮层定位（scan 第二遍）：角色判定影响 position:absolute 与锚点定位
-    "gx-role", "gx-anchor", "gx-placement", "gx-offset",
+    "gx-role",
+    "gx-anchor",
+    "gx-placement",
+    "gx-offset",
 ];
 
 /// 计算场景树的布局签名（窗口尺寸参与）。
-pub(crate) fn layout_signature(
-    root: &crate::scene::SceneNode,
-    avail_w: f32,
-    avail_h: f32,
-) -> u64 {
+pub(crate) fn layout_signature(root: &crate::scene::SceneNode, avail_w: f32, avail_h: f32) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
     avail_w.to_bits().hash(&mut h);
     avail_h.to_bits().hash(&mut h);
@@ -92,7 +116,10 @@ pub(crate) struct LayoutCache {
 impl LayoutCache {
     pub(crate) fn new() -> Self {
         LayoutCache {
-            tree: None, sig: 0, rebuilds: 0, reuses: 0,
+            tree: None,
+            sig: 0,
+            rebuilds: 0,
+            reuses: 0,
             emit: EmitCache::new(),
         }
     }
@@ -137,7 +164,8 @@ impl EmitCache {
         EmitCache {
             map: std::collections::HashMap::new(),
             live: std::collections::HashSet::new(),
-            hits: 0, misses: 0,
+            hits: 0,
+            misses: 0,
         }
     }
 
@@ -165,7 +193,13 @@ impl EmitCache {
     }
 
     /// 存槽（同 tnode 新签名覆盖旧段；同时标记 live）。
-    pub(crate) fn store(&mut self, key: taffy::NodeId, sig: u64, cmds: crate::paint::NodeCmds, bottom: f32) {
+    pub(crate) fn store(
+        &mut self,
+        key: taffy::NodeId,
+        sig: u64,
+        cmds: crate::paint::NodeCmds,
+        bottom: f32,
+    ) {
         self.live.insert(key);
         self.map.insert(key, EmitSlot { sig, cmds, bottom });
     }
@@ -177,27 +211,48 @@ mod tests {
     use crate::binprotocol::NodeType;
     use crate::paint::DisplayList;
 
-    fn div(id: &str, props: &[(&str, &str)], children: Vec<crate::scene::SceneNode>) -> crate::scene::SceneNode {
+    fn div(
+        id: &str,
+        props: &[(&str, &str)],
+        children: Vec<crate::scene::SceneNode>,
+    ) -> crate::scene::SceneNode {
         crate::scene::SceneNode {
-            typ: NodeType::Div, kind: "div".into(), id: id.into(), text: String::new(),
+            typ: NodeType::Div,
+            kind: "div".into(),
+            id: id.into(),
+            text: String::new(),
             nid: 1000,
-            props: props.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
-            events: vec![], children,
+            props: props
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+            events: vec![],
+            children,
         }
     }
 
     fn text(id: &str, content: &str, props: &[(&str, &str)]) -> crate::scene::SceneNode {
         crate::scene::SceneNode {
-            typ: NodeType::Text, kind: "#text".into(), id: id.into(), text: content.into(),
+            typ: NodeType::Text,
+            kind: "#text".into(),
+            id: id.into(),
+            text: content.into(),
             nid: 1001,
-            props: props.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
-            events: vec![], children: vec![],
+            props: props
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+            events: vec![],
+            children: vec![],
         }
     }
 
     fn page(color: &str, value: &str) -> crate::scene::SceneNode {
-        div("page", &[("width", "100"), ("height", "50"), ("color", color)],
-            vec![text("t", value, &[])])
+        div(
+            "page",
+            &[("width", "100"), ("height", "50"), ("color", color)],
+            vec![text("t", value, &[])],
+        )
     }
 
     /// 不变量验收：改颜色（纯绘制属性）不重建布局树，只重跑 emit。
@@ -228,9 +283,13 @@ mod tests {
     #[test]
     fn scroll_change_reuses_layout() {
         let scene = |top: f32| {
-            let mut n = div("vp",
+            let mut n = div(
+                "vp",
                 &[("width", "100"), ("height", "100"), ("overflow", "scroll")],
-                (0..5).map(|i| div(&format!("i{}", i), &[("height", "100")], vec![])).collect());
+                (0..5)
+                    .map(|i| div(&format!("i{}", i), &[("height", "100")], vec![]))
+                    .collect(),
+            );
             n.props.insert("scroll-top".into(), format!("{}", top));
             n
         };
@@ -311,9 +370,19 @@ mod tests {
     #[test]
     fn emit_cache_invalidates_on_scroll() {
         let scene = |top: f32| {
-            let mut n = div("vp",
+            let mut n = div(
+                "vp",
                 &[("width", "100"), ("height", "400"), ("overflow", "scroll")],
-                (0..5).map(|i| div(&format!("i{}", i), &[("height", "100"), ("bg", "#222")], vec![])).collect());
+                (0..5)
+                    .map(|i| {
+                        div(
+                            &format!("i{}", i),
+                            &[("height", "100"), ("bg", "#222")],
+                            vec![],
+                        )
+                    })
+                    .collect(),
+            );
             n.props.insert("scroll-top".into(), format!("{}", top));
             n
         };
@@ -326,15 +395,24 @@ mod tests {
         // 自身）必须整体平移 -150px——验证缓存失效后输出正确。
         let ys_before: Vec<f32> = before.shapes.iter().skip(1).map(|s| s.y).collect();
         let ys_after: Vec<f32> = after.shapes.iter().skip(1).map(|s| s.y).collect();
-        assert!(!ys_after.is_empty() && !ys_before.is_empty(), "可见子项不得为空");
+        assert!(
+            !ys_after.is_empty() && !ys_before.is_empty(),
+            "可见子项不得为空"
+        );
         for y in &ys_after {
             assert!(
                 ys_before.iter().any(|b| (b - 150.0 - y).abs() < 0.01),
-                "after y={} 必须对应 before y={}（整体上移 150px）", y, y + 150.0
+                "after y={} 必须对应 before y={}（整体上移 150px）",
+                y,
+                y + 150.0
             );
         }
         // 滚动条 thumb 位置随内容滚动下移。
-        assert_eq!(before.scrollbars.len(), after.scrollbars.len(), "滚动条几何应持续生成");
+        assert_eq!(
+            before.scrollbars.len(),
+            after.scrollbars.len(),
+            "滚动条几何应持续生成"
+        );
         if let (Some(b1), Some(b2)) = (before.scrollbars.first(), after.scrollbars.first()) {
             assert!(b2.thumb_y > b1.thumb_y, "滚动后 thumb 应下移");
         }
@@ -358,31 +436,61 @@ mod tests {
     #[ignore]
     fn bench_emit_cache_breakdown() {
         use std::time::Instant;
-        let card = |i: usize| div(
-            &format!("c{}", i),
-            &[("bg", "#141b33"), ("width", "200"), ("height", "96"), ("padding", "14"), ("border-radius", "12")],
+        let card = |i: usize| {
+            div(
+                &format!("c{}", i),
+                &[
+                    ("bg", "#141b33"),
+                    ("width", "200"),
+                    ("height", "96"),
+                    ("padding", "14"),
+                    ("border-radius", "12"),
+                ],
+                vec![
+                    div(
+                        &format!("c{}l", i),
+                        &[("color", "#94a3b8"), ("font-size", "12")],
+                        vec![text(&format!("c{}lt", i), "Card label", &[])],
+                    ),
+                    div(
+                        &format!("c{}v", i),
+                        &[("color", "#e2e8f0"), ("font-size", "26")],
+                        vec![text(&format!("c{}vt", i), "12345", &[])],
+                    ),
+                ],
+            )
+        };
+        let root = div(
+            "root",
+            &[
+                ("flex-direction", "column"),
+                ("width", "760"),
+                ("padding", "20"),
+                ("align-items", "center"),
+            ],
             vec![
-                div(&format!("c{}l", i), &[("color", "#94a3b8"), ("font-size", "12")],
-                    vec![text(&format!("c{}lt", i), "Card label", &[])]),
-                div(&format!("c{}v", i), &[("color", "#e2e8f0"), ("font-size", "26")],
-                    vec![text(&format!("c{}vt", i), "12345", &[])]),
+                div(
+                    "title",
+                    &[("color", "#e2e8f0"), ("font-size", "26")],
+                    vec![text("tt", "Benchmark Dashboard", &[])],
+                ),
+                div(
+                    "row",
+                    &[("flex-direction", "row"), ("gap", "12")],
+                    (0..30).map(card).collect(),
+                ),
             ],
         );
-        let root = div("root",
-            &[("flex-direction", "column"), ("width", "760"), ("padding", "20"), ("align-items", "center")],
-            vec![
-                div("title", &[("color", "#e2e8f0"), ("font-size", "26")],
-                    vec![text("tt", "Benchmark Dashboard", &[])]),
-                div("row", &[("flex-direction", "row"), ("gap", "12")],
-                    (0..30).map(card).collect()),
-            ]);
         let n = 500;
         let t = Instant::now();
         for _ in 0..n {
             let c = root.clone();
             std::hint::black_box(&c);
         }
-        eprintln!("clone tree          : {:>10.1} us/op", t.elapsed().as_secs_f64() * 1e6 / n as f64);
+        eprintln!(
+            "clone tree          : {:>10.1} us/op",
+            t.elapsed().as_secs_f64() * 1e6 / n as f64
+        );
 
         let t = Instant::now();
         let mut rebuilds = 0u64;
@@ -392,7 +500,11 @@ mod tests {
             std::hint::black_box(&dl);
             rebuilds = c.rebuilds;
         }
-        eprintln!("from_scene (rebuild): {:>10.1} us/op (rebuilds={})", t.elapsed().as_secs_f64() * 1e6 / n as f64, rebuilds);
+        eprintln!(
+            "from_scene (rebuild): {:>10.1} us/op (rebuilds={})",
+            t.elapsed().as_secs_f64() * 1e6 / n as f64,
+            rebuilds
+        );
 
         let mut cache = LayoutCache::new();
         let _ = DisplayList::from_scene(&root, 760.0, 560.0, &mut cache);
@@ -401,7 +513,12 @@ mod tests {
             let dl = DisplayList::from_scene(&root, 760.0, 560.0, &mut cache);
             std::hint::black_box(&dl);
         }
-        eprintln!("from_scene (cached) : {:>10.1} us/op (hits={} misses={} layout reuses={})",
-            t.elapsed().as_secs_f64() * 1e6 / n as f64, cache.emit.hits, cache.emit.misses, cache.reuses);
+        eprintln!(
+            "from_scene (cached) : {:>10.1} us/op (hits={} misses={} layout reuses={})",
+            t.elapsed().as_secs_f64() * 1e6 / n as f64,
+            cache.emit.hits,
+            cache.emit.misses,
+            cache.reuses
+        );
     }
 }

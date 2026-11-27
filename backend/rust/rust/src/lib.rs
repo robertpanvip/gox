@@ -23,14 +23,14 @@
 mod binprotocol;
 mod canvas;
 mod image;
-mod protocol;
 mod layout;
 mod paint;
+mod protocol;
 mod render;
-mod util;
 mod scene;
 mod style;
 mod text_effects;
+mod util;
 mod video;
 // 平台 SurfaceProvider（阶段 5/6）：由外部宿主（NDK/JNI、iOS 工程、浏览器
 // JS glue）构造与消费，本 crate 内部（除测试）不构造——抑制 dead_code。
@@ -44,12 +44,12 @@ mod web_surface;
 #[cfg(test)]
 mod tests_surface;
 
+use raw_window_handle::{HasRawDisplayHandle as _, HasRawWindowHandle as _};
 use render::Renderer;
 use std::collections::VecDeque;
 use std::ffi::CString;
 use std::os::raw::{c_char, c_int, c_uchar, c_void};
 use std::sync::{Arc, Mutex};
-use raw_window_handle::{HasRawDisplayHandle as _, HasRawWindowHandle as _};
 use winit::{
     dpi::LogicalSize,
     event::{ElementState, Ime, MouseButton, WindowEvent},
@@ -229,7 +229,12 @@ struct WindowStyle {
 
 impl Default for WindowStyle {
     fn default() -> Self {
-        WindowStyle { decorated: -1, transparent: false, always_on_top: false, opacity: 0.0 }
+        WindowStyle {
+            decorated: -1,
+            transparent: false,
+            always_on_top: false,
+            opacity: 0.0,
+        }
     }
 }
 
@@ -376,7 +381,11 @@ pub extern "C" fn gx_window_run(handle: *mut c_void) -> c_int {
     let title = backend.title.clone();
     // 启动时间探针：仅当 GX_STARTUP_PROBE 设置时开启，默认零开销。
     let probe = std::env::var_os("GX_STARTUP_PROBE").is_some();
-    let t_run_start = if probe { Some(std::time::Instant::now()) } else { None };
+    let t_run_start = if probe {
+        Some(std::time::Instant::now())
+    } else {
+        None
+    };
     let result = std::panic::catch_unwind(|| {
         let el = new_event_loop();
         // 注入 proxy：draw/close 可跨线程唤醒这个事件循环。
@@ -410,7 +419,11 @@ pub extern "C" fn gx_window_run(handle: *mut c_void) -> c_int {
         .expect("run_app");
     });
     // backend 在此 drop（-1）。原始那份由 gx_window_destroy 释放。
-    if result.is_ok() { 0 } else { 2 }
+    if result.is_ok() {
+        0
+    } else {
+        2
+    }
 }
 
 /// 构造事件循环。Linux 下事件循环跑在 Go goroutine 经 cgo 进入的线程（非主线程），
@@ -480,8 +493,9 @@ impl winit::application::ApplicationHandler<GxEvent> for WinitApp<'_> {
         // opacity: winit 0.30 无跨平台窗口级 opacity API（各平台扩展不一），
         // 透明效果请用 with_transparent + 场景节点的半透明 bg；此处不设置。
         let _ = self.style.opacity;
-        let provider: Arc<dyn crate::render::SurfaceProvider> =
-            Arc::new(WinitSurface { window: window.clone() });
+        let provider: Arc<dyn crate::render::SurfaceProvider> = Arc::new(WinitSurface {
+            window: window.clone(),
+        });
         *self.state = Some(pollster::block_on(Renderer::new(provider)));
         // 首帧主动请求一次重绘：绘制首帧/应用 run 前已提交的帧。之后靠事件驱动。
         self.state.as_ref().unwrap().request_redraw();
@@ -513,7 +527,9 @@ impl winit::application::ApplicationHandler<GxEvent> for WinitApp<'_> {
         _id: winit::window::WindowId,
         event: WindowEvent,
     ) {
-        let Some(renderer) = self.state.as_mut() else { return; };
+        let Some(renderer) = self.state.as_mut() else {
+            return;
+        };
         match event {
             WindowEvent::Resized(size) => {
                 renderer.resize(size.width.max(1), size.height.max(1));
@@ -532,7 +548,11 @@ impl winit::application::ApplicationHandler<GxEvent> for WinitApp<'_> {
                         self.queue.lock().unwrap().applied += 1;
                     }
                 }
-                let t_pre_render = if self.probe { Some(std::time::Instant::now()) } else { None };
+                let t_pre_render = if self.probe {
+                    Some(std::time::Instant::now())
+                } else {
+                    None
+                };
                 renderer.render();
                 // 回流实测尺寸：把本帧布局结果经事件回调送回 Host，供虚拟列表按
                 // node_id 订阅并修正 offsets/锚定。text 承载紧凑 JSON 数组。
@@ -540,12 +560,16 @@ impl winit::application::ApplicationHandler<GxEvent> for WinitApp<'_> {
                 if !measured.is_empty() {
                     // JSON 边界保持 [["<nid十进制>", w, h], ...]——Go publishMeasuredWire
                     // 按 r[0].(string) 解析后 gxscene.ParseNodeID 还原，宿主零改动。
-                    let rows: Vec<Vec<serde_json::Value>> = measured.iter()
-                        .map(|(nid, w, h)| vec![
-                            serde_json::Value::String(nid.to_string()),
-                            serde_json::json!(w),
-                            serde_json::json!(h),
-                        ]).collect();
+                    let rows: Vec<Vec<serde_json::Value>> = measured
+                        .iter()
+                        .map(|(nid, w, h)| {
+                            vec![
+                                serde_json::Value::String(nid.to_string()),
+                                serde_json::json!(w),
+                                serde_json::json!(h),
+                            ]
+                        })
+                        .collect();
                     let ev = protocol::InputEvent {
                         kind: "measured".into(),
                         node_id: String::new(),
@@ -578,10 +602,7 @@ impl winit::application::ApplicationHandler<GxEvent> for WinitApp<'_> {
                     let resumed = self.t_resumed_done.unwrap_or(t_first);
                     let new_ms = ms(run_start, resumed); // event loop + wgpu 设备 + 字体系统初始化
                     let frame_ms = t_pre_render.map(|t| ms(t, t_first)).unwrap_or(0.0); // 首帧布局+光栅化
-                    let text = format!(
-                        "init_ms={:.3};first_frame_ms={:.3}",
-                        new_ms, frame_ms
-                    );
+                    let text = format!("init_ms={:.3};first_frame_ms={:.3}", new_ms, frame_ms);
                     let ev = protocol::InputEvent {
                         kind: "startup_first_frame".into(),
                         node_id: String::new(),
@@ -655,16 +676,35 @@ impl winit::application::ApplicationHandler<GxEvent> for WinitApp<'_> {
                 Ime::Enabled => fire(&self.cb, &self.cb_ctx, ev_json("ime_enabled")),
                 Ime::Disabled => {}
                 Ime::Preedit(s, _) => {
-                    let ev = protocol::InputEvent { kind: "ime_preedit".into(), node_id: String::new(), event: String::new(), text: s, x: 0.0, y: 0.0 };
+                    let ev = protocol::InputEvent {
+                        kind: "ime_preedit".into(),
+                        node_id: String::new(),
+                        event: String::new(),
+                        text: s,
+                        x: 0.0,
+                        y: 0.0,
+                    };
                     fire(&self.cb, &self.cb_ctx, &ev.to_json());
                 }
                 Ime::Commit(s) => {
-                    let ev = protocol::InputEvent { kind: "ime_commit".into(), node_id: String::new(), event: String::new(), text: s, x: 0.0, y: 0.0 };
+                    let ev = protocol::InputEvent {
+                        kind: "ime_commit".into(),
+                        node_id: String::new(),
+                        event: String::new(),
+                        text: s,
+                        x: 0.0,
+                        y: 0.0,
+                    };
                     fire(&self.cb, &self.cb_ctx, &ev.to_json());
                 }
             },
             WindowEvent::KeyboardInput {
-                event: winit::event::KeyEvent { state: ElementState::Pressed, logical_key, .. },
+                event:
+                    winit::event::KeyEvent {
+                        state: ElementState::Pressed,
+                        logical_key,
+                        ..
+                    },
                 ..
             } => {
                 if logical_key == Key::Named(NamedKey::Backspace) {
@@ -676,8 +716,12 @@ impl winit::application::ApplicationHandler<GxEvent> for WinitApp<'_> {
                     // 过滤控制字符，其余按 commit 回写文本框。
                     if !text.chars().any(|c| c.is_control()) {
                         let ev = protocol::InputEvent {
-                            kind: "ime_commit".into(), node_id: String::new(),
-                            event: String::new(), text: text.to_string(), x: 0.0, y: 0.0,
+                            kind: "ime_commit".into(),
+                            node_id: String::new(),
+                            event: String::new(),
+                            text: text.to_string(),
+                            x: 0.0,
+                            y: 0.0,
                         };
                         fire(&self.cb, &self.cb_ctx, &ev.to_json());
                     }
@@ -726,7 +770,9 @@ pub extern "C" fn gx_window_close(handle: *mut c_void) {
 #[no_mangle]
 pub extern "C" fn gx_window_destroy(handle: *mut c_void) {
     if !handle.is_null() {
-        unsafe { drop(Arc::from_raw(handle as *const Backend)); }
+        unsafe {
+            drop(Arc::from_raw(handle as *const Backend));
+        }
     }
 }
 
@@ -735,11 +781,39 @@ pub extern "C" fn gx_window_version() -> *const c_char {
     b"gxbackend-rust 0.3.0 (GRX3 binary protocol)\0".as_ptr() as *const c_char
 }
 
+/// 编辑器字符 advance 实测（Go 侧 MeasureEditorAdvances 的底层）。
+/// family 是 CSS font-family 栈文本（如 "Consolas, monospace"），size 是字号 px。
+/// 结果写入 narrow/wide 两个出参：ASCII 样本与 CJK 样本的平均字符 advance。
+/// 返回 0=成功；出参为空返回 1。与 skia 后端 MeasureEditorAdvances 语义对齐，
+/// 供桌面装配层启动时注入 ui.SetCharWidth/SetWideWidth（点击换算与光标渲染依赖）。
+#[no_mangle]
+pub extern "C" fn gx_measure_text_advances(
+    family: *const c_char,
+    size: c_int,
+    narrow: *mut f32,
+    wide: *mut f32,
+) -> c_int {
+    if narrow.is_null() || wide.is_null() {
+        return 1;
+    }
+    let stack = unsafe { cstr(family) };
+    let (n, w) = crate::util::measure_advances(&stack, size.max(1) as f32);
+    unsafe {
+        *narrow = n;
+        *wide = w;
+    }
+    0
+}
+
 /// 纯 CPU 管线基准：buf 是 GRX1 帧，重复 iters 次「解析→建树→Taffy 布局→指令生成」。
 /// 返回累计纳秒；解析失败返回 0。不含任何 GPU/窗口工作，供 cross-backend benchmark 调用。
 #[no_mangle]
 pub extern "C" fn gx_bench_frame(
-    buf: *const c_uchar, len: c_int, width: f32, height: f32, iters: c_int,
+    buf: *const c_uchar,
+    len: c_int,
+    width: f32,
+    height: f32,
+    iters: c_int,
 ) -> u64 {
     if buf.is_null() || len <= 0 || iters <= 0 {
         return 0;
@@ -753,7 +827,11 @@ pub extern "C" fn gx_bench_frame(
 /// （BACKEND_ARCHITECTURE_V2 阶段 3 布局缓存验收）。
 #[no_mangle]
 pub extern "C" fn gx_bench_frame_cached(
-    buf: *const c_uchar, len: c_int, width: f32, height: f32, iters: c_int,
+    buf: *const c_uchar,
+    len: c_int,
+    width: f32,
+    height: f32,
+    iters: c_int,
 ) -> u64 {
     if buf.is_null() || len <= 0 || iters <= 0 {
         return 0;
@@ -778,7 +856,11 @@ static MIRROR: std::sync::OnceLock<Mutex<MirrorSession>> = std::sync::OnceLock::
 
 fn mirror() -> &'static Mutex<MirrorSession> {
     MIRROR.get_or_init(|| {
-        Mutex::new(MirrorSession { scene: None, applied: 0, failed: 0 })
+        Mutex::new(MirrorSession {
+            scene: None,
+            applied: 0,
+            failed: 0,
+        })
     })
 }
 

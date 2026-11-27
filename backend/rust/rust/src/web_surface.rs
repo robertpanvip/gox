@@ -108,7 +108,9 @@ mod tests {
             7,
             100,
             100,
-            Box::new(move || { h2.fetch_add(1, Ordering::SeqCst); }),
+            Box::new(move || {
+                h2.fetch_add(1, Ordering::SeqCst);
+            }),
         );
         s.request_redraw();
         s.request_redraw();

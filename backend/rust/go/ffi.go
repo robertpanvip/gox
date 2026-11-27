@@ -17,6 +17,7 @@ extern int         gx_window_run(void* handle);
 extern void        gx_window_close(void* handle);
 extern void        gx_window_destroy(void* handle);
 extern const char* gx_window_version();
+extern int         gx_measure_text_advances(const char* family, int size, float* narrow, float* wide);
 extern uint64_t    gx_bench_frame(const uint8_t* buf, int len, float width, float height, int iters);
 extern uint64_t    gx_bench_frame_cached(const uint8_t* buf, int len, float width, float height, int iters);
 
@@ -152,6 +153,20 @@ func cWindowDestroy(handle unsafe.Pointer) {
 
 func cVersion() string {
 	return C.GoString(C.gx_window_version())
+}
+
+// cMeasureTextAdvances 调 Rust 编辑器字符 advance 实测（gx_measure_text_advances）。
+// 返回 narrow（ASCII 样本平均 advance）与 wide（CJK 样本平均 advance）；
+// Rust 侧失败（出参空）时返回 0, 0，由上层语义兜底。
+func cMeasureTextAdvances(family string, size int) (float64, float64) {
+	cFamily := C.CString(family)
+	defer C.free(unsafe.Pointer(cFamily))
+	var narrow, wide C.float
+	rc := C.gx_measure_text_advances(cFamily, C.int(size), &narrow, &wide)
+	if rc != 0 {
+		return 0, 0
+	}
+	return float64(narrow), float64(wide)
 }
 
 // cBenchFrame 调 Rust 纯 CPU 管线基准，返回 iters 次累计纳秒。
