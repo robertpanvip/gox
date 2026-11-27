@@ -216,9 +216,31 @@ hitboxes/inputs/scrollbars/measured 六通道）/ 继承 color 变化失效且�
 布局缓存 346μs → emit 指令缓存 **243μs**（累计 **2.76×**，本步 1.42×）；
 cgo 基准 `gx_bench_frame_cached` 306μs（含场景树 clone 47μs）。
 
-**后续（待做）**：GPU 资源管理器独立化（tex_cache 已具雏形）；GRX3 协议
-NodeID uint64 化；DisplayList 段零拷贝复用（dl 改段列表结构，消除 append
-时的 String clone——需与 GRX3 一并评估）。
+**GRX3 协议已落地（NodeID uint64 直传）**：Go runtime 的 Node.ID 本就是
+uint64（gxscene.NodeID，NoNode=0 保留值），旧协议把它字符串化进池纯属传输
+负担。GRX3（magic 0x3358_5247）：
+
+- **全量帧**：节点结构 32→40 字节，尾部新增 `node_id: u64` 直传；不再携带
+  id 字符串（id 池槽指向空串）；
+- **增量帧**：动作 24→48 字节，node/child/before id 全部 u64 直传
+  （Change.NodeID 字符串经 strconv.ParseUint 还原，空串=NoNode=0；非数字 id
+  → 编码失败回退全量快照，与 GRX2 失败语义一致）；结构动作的内嵌子树 blob
+  同步用 GRX3 帧；
+- **能力探测**：`gx_window_version()` 升至 0.3.0，Go 宿主探测 minor≥3 选择
+  GRX3 编码，旧后端自动走 GRX1/GRX2——双版本并行，无破坏性切换；
+- **Rust 内部热路径 u64 化**：SceneNode 增加 `nid: u64`（id: String 保留兜底），
+  TextDraw.id / hitboxes / inputs / measured 全部改用 u64——每帧省去数百次
+  String clone/hash；glyph_cache key String→u64；查找（find_mut / child_index）
+  改为 nid 优先 + id 字符串兜底（matches 单一来源）；
+- **边界兼容**：C ABI 回传（click/focus 事件的 node_id、measured JSON）仍是
+  十进制字符串——Go 宿主（parseNodeID / publishMeasuredWire）零改动；
+- 验收：Rust 100 项测试（含 GRX3 帧解析 / delta u64 动作 / NoNode 锚点 /
+  video 禁缓存等）；Go 端到端 5 项（GRX3 全帧镜像 roundtrip 100 节点 /
+  帧不含 id 字符串 / GRX3 delta 补丁 SetText+Remove+Insert / 非数字 id 回退
+  / 空锚点追加末尾）。
+
+**后续（待做）**：GPU 资源管理器独立化（tex_cache 已具雏形）；DisplayList
+段零拷贝复用（dl 改段列表结构，消除 append 时的 String clone）。
 
 内部模块：scene（retained mirror）→ layout（Taffy + 缓存）→ style → text
 （cosmic-text/glyphon）→ paint（Display List + 缓存）→ gpu（wgpu + 资源管理）。
@@ -231,14 +253,13 @@ NodeID uint64 化；DisplayList 段零拷贝复用（dl 改段列表结构，消
 | 阶段 | 内容 | 状态 |
 | ---- | ---- | ---- |
 | 1 | 统一帧调度（FrameClock/FrameScheduler + 三平台时钟接入） | ✅ 已完成 |
-| 2 | Wire 背压 + FullSync 自动恢复 | ✅ 已完成（NodeID uint64 留待协议 v3） |
-| 3 | Rust Renderer 从 winit 解耦，Surface 注入 | ✅ 完成：SurfaceProvider 注入 + 契约测试 + paint/util 模块拆分 + 布局缓存（2.0×）+ emit 指令缓存（累计 2.76×）；GRX3 协议为后续独立变更 |
+| 2 | Wire 背压 + FullSync 自动恢复 | ✅ 已完成 |
+| 3 | Rust Renderer 从 winit 解耦，Surface 注入 | ✅ 完成：SurfaceProvider 注入 + 契约测试 + paint/util 模块拆分 + 布局缓存（2.0×）+ emit 指令缓存（累计 2.76×）+ GRX3 协议（NodeID uint64 直传） |
 | 4 | Desktop 正式迁移（Windows 优先；验证 60/120/144Hz；对比 Skia） | 待做 |
 | 5 | Android 原生 Surface + iOS 首次技术验证（Go Framework 集成 + C ABI 链接） | 待做 |
 | 6 | WebGPU（Rust→WASM，保留 DOM Driver） | 待做 |
 
-NodeID 二进制协议 uint64 化（评审 §六.3）需要协议版本升级（GRX3）：牵动 GRX1/GRX2
-格式与 Rust binprotocol 解析，作为后续独立变更，避免与模块拆分耦合。
+NodeID 二进制协议 uint64 化（评审 §六.3）已作为独立变更落地（GRX3，见上）。
 
 ## 七、性能指标（阶段 4 起建立监控）
 

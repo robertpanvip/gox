@@ -32,6 +32,7 @@ type Window struct {
 
 	hasBase     bool   // Rust 侧是否已成功建立基线镜像树
 	lastVersion uint64 // 最近一次成功 Present 的 Frame.Version（丢帧检测）
+	grx3        bool   // 后端支持 GRX3（协议 minor>=3）：NodeID u64 直传编码
 	events      chan inputEvent
 	dispatcher  func(ev InputEvent)
 	mu          sync.Mutex
@@ -135,10 +136,15 @@ var (
 
 // NewWindow 创建 Rust 后端窗口。
 func NewWindow() *Window {
+	// GRX3 能力探测（协议 minor>=3）：NodeID u64 直传编码。旧后端（探测失败
+	// 或版本不满足）自动走 GRX1/GRX2 字符串编码，双版本兼容。
+	_, minor, ok := parseProtocolVersion(cVersion())
+	grx3 := ok && minor >= 3
 	return &Window{
 		events:  make(chan inputEvent, 64),
 		pump:    make(chan struct{}, 1),
 		runDone: make(chan struct{}),
+		grx3:    grx3,
 	}
 }
 
@@ -202,7 +208,9 @@ func (w *Window) Open(cfg gxapp.WindowConfig) error {
 	// Wire 版本协商（评审 P2）：明确解析出不同 Major 时拒绝启动，防止 core 更新
 	// 了 GRX2 而用户仍用旧版后端这种难排查的错配。Minor 差异放行（能力向后兼容）。
 	// 字符串解析失败时放行——协议版本文本格式脆弱，不应因无法判断而阻塞启动。
-	if major, _, ok := parseProtocolVersion(cVersion()); ok && major != expectedProtocolMajor {
+	if major, minor, ok := parseProtocolVersion(cVersion()); ok && major != expectedProtocolMajor {
+		// minor>=3 → 后端支持 GRX3（NodeID u64 直传）。旧后端自动走 GRX1/GRX2。
+		_ = minor
 		return fmt.Errorf("rustbackend: wire 协议不兼容: got %q (major=%d), want major=%d",
 			cVersion(), major, expectedProtocolMajor)
 	}
@@ -277,12 +285,24 @@ func (w *Window) Present(frame *gxapp.Frame) error {
 	var data []byte
 	var err error
 	if !fullSync && len(frame.Changes) > 0 {
-		if delta, ok := serializeDelta(frame.Changes, root, uint32(w.cfg.Width), uint32(w.cfg.Height)); ok {
+		// GRX3 优先（id u64 直传）；无法编码（非数字 id 等）回退全量快照。
+		var delta []byte
+		var ok bool
+		if w.grx3 {
+			delta, ok = serializeDeltaV3(frame.Changes, root, uint32(w.cfg.Width), uint32(w.cfg.Height))
+		} else {
+			delta, ok = serializeDelta(frame.Changes, root, uint32(w.cfg.Width), uint32(w.cfg.Height))
+		}
+		if ok {
 			data = delta
 		}
 	}
 	if data == nil {
-		data, err = serializeFrameBin(root, uint32(w.cfg.Width), uint32(w.cfg.Height))
+		if w.grx3 {
+			data, err = serializeFrameBinV3(root, uint32(w.cfg.Width), uint32(w.cfg.Height))
+		} else {
+			data, err = serializeFrameBin(root, uint32(w.cfg.Width), uint32(w.cfg.Height))
+		}
 		if err != nil {
 			return fmt.Errorf("rustbackend: serialize frame: %w", err)
 		}

@@ -6,7 +6,7 @@
 use crate::binprotocol::NodeType;
 use crate::util::*;
 use glyphon::Buffer;
-use std::hash::{Hash, Hasher};
+use std::hash::Hash;
 #[cfg(test)]
 use glyphon::{FontSystem, Metrics};
 
@@ -86,6 +86,12 @@ pub(crate) fn flat_children<'a>(n: &'a crate::scene::SceneNode, out: &mut Vec<&'
     for c in &n.children {
         if c.typ == NodeType::Fragment { flat_children(c, out); } else { out.push(c); }
     }
+}
+
+/// 节点身份字符串（video/canvas 等字符串 key 的低频通道）：GRX3 帧 id 为空，
+/// 回退 nid 十进制；GRX1/旧帧优先 id 原串。
+pub(crate) fn node_id_str(n: &crate::scene::SceneNode) -> String {
+    if !n.id.is_empty() { n.id.clone() } else { n.nid.to_string() }
 }
 
 /// 把统一语义的 CSS linear-gradient 归一化成 GPU 渐变模型（方向向量 +
@@ -200,9 +206,10 @@ pub(crate) fn clip_rect_xywh(c: ClipRect, x: f32, y: f32, w: f32, h: f32) -> Opt
 
 #[derive(Clone)]
 pub(crate) struct TextDraw {
-    /// 稳定节点 ID：作为字形缓存 key，滚动时同一 item 的 ID 不变，
-    /// 使未变文本的字形 buffer 可跨帧复用（只 shape 新增/变化项）。
-    pub(crate) id: String,
+    /// 稳定整数节点身份（GRX3 nid 直传）：作为字形缓存 key，滚动时同一
+    /// item 的 nid 不变，使未变文本的字形 buffer 可跨帧复用（只 shape
+    /// 新增/变化项）。u64 key 免去每帧 String clone/hash。
+    pub(crate) id: u64,
     pub(crate) text: String,
     pub(crate) x: f32,
     pub(crate) y: f32,
@@ -313,19 +320,19 @@ pub(crate) struct GlyphEntry {
 /// - 缓存里有但当前帧不再出现 → 淘汰（滚出视口的项）
 pub(crate) fn plan_glyphs(
     texts: &[TextDraw],
-    cache: &std::collections::HashMap<String, GlyphEntry>,
-) -> (Vec<usize>, Vec<String>) {
+    cache: &std::collections::HashMap<u64, GlyphEntry>,
+) -> (Vec<usize>, Vec<u64>) {
     let mut shaped = Vec::new();
     let mut live = std::collections::HashSet::with_capacity(texts.len());
     for (i, t) in texts.iter().enumerate() {
-        live.insert(t.id.clone());
+        live.insert(t.id);
         let sig = text_sig(t);
         let hit = cache.get(&t.id).map(|e| e.sig == sig).unwrap_or(false);
         if !hit {
             shaped.push(i);
         }
     }
-    let evicted = cache.keys().filter(|id| !live.contains(*id)).cloned().collect();
+    let evicted = cache.keys().filter(|id| !live.contains(*id)).copied().collect();
     (shaped, evicted)
 }
 
@@ -402,10 +409,10 @@ pub(crate) fn scrollbar_geometry(
 pub(crate) struct NodeCmds {
     pub(crate) shapes: Vec<ShapeDraw>,
     pub(crate) texts: Vec<TextDraw>,
-    pub(crate) hitboxes: Vec<(f32, f32, f32, f32, String, String, bool, ClipRect, String)>,
-    pub(crate) inputs: Vec<(f32, f32, f32, f32, String)>,
+    pub(crate) hitboxes: Vec<(f32, f32, f32, f32, u64, String, bool, ClipRect, String)>,
+    pub(crate) inputs: Vec<(f32, f32, f32, f32, u64)>,
     pub(crate) scrollbars: Vec<ScrollBar>,
-    pub(crate) measured: Vec<(String, f32, f32)>,
+    pub(crate) measured: Vec<(u64, f32, f32)>,
 }
 
 /// 把缓存的指令段按原通道顺序追加进 DisplayList（段复用路径的全部工作）。
@@ -467,16 +474,17 @@ pub(crate) fn child_clip_of(node: &crate::scene::SceneNode, parent_clip: ClipRec
 pub(crate) struct DisplayList {
     pub(crate) shapes: Vec<ShapeDraw>,
     pub(crate) texts: Vec<TextDraw>,
-    /// 布局回流：每个节点的 (id, w, h)，emit 时按 Taffy 结果收集，
-    /// 渲染后经 eventCb 送回 Host，供虚拟列表等组件按 node_id 订阅实测高度。
-    pub(crate) measured: Vec<(String, f32, f32)>,
+    /// 布局回流：每个节点的 (nid, w, h)，emit 时按 Taffy 结果收集，
+    /// 渲染后经 eventCb 送回 Host（JSON 边界转字符串），供虚拟列表等
+    /// 组件按 node_id 订阅实测高度。
+    pub(crate) measured: Vec<(u64, f32, f32)>,
     /// 需要显示滚动条的容器几何（由 emit 计算内容高度后生成）
     pub(crate) scrollbars: Vec<ScrollBar>,
-    /// (x, y, w, h, node_id, event, is_overlay, clip)
+    /// (x, y, w, h, nid, event, is_overlay, clip)
     // 第 9 元素是节点 cursor 属性（CSS cursor 样式，宿主消费）。
-    pub(crate) hitboxes: Vec<(f32, f32, f32, f32, String, String, bool, ClipRect, String)>,
-    /// (x, y, w, h, node_id)
-    pub(crate) inputs: Vec<(f32, f32, f32, f32, String)>,
+    pub(crate) hitboxes: Vec<(f32, f32, f32, f32, u64, String, bool, ClipRect, String)>,
+    /// (x, y, w, h, nid)
+    pub(crate) inputs: Vec<(f32, f32, f32, f32, u64)>,
 }
 
 impl DisplayList {
@@ -501,10 +509,11 @@ impl DisplayList {
         // video 原语：先从场景树收集所有 video 节点的播放意图，同步解码器进程。
         // 必须在 emit 取帧之前调用，保证本帧拿到的是最新同步状态。
         fn collect_videos(n: &crate::scene::SceneNode, out: &mut Vec<(String, crate::video::VideoSpec)>) {
-            if n.kind.eq_ignore_ascii_case("video") && !n.id.is_empty() {
+            let vid = if !n.id.is_empty() { n.id.clone() } else if n.nid != 0 { n.nid.to_string() } else { String::new() };
+            if n.kind.eq_ignore_ascii_case("video") && !vid.is_empty() {
                 let g = |k: &str| n.props.get(k).map(|s| s.as_str()).unwrap_or("");
                 let truthy = |k: &str| matches!(g(k), "true" | "1");
-                out.push((n.id.clone(), crate::video::VideoSpec {
+                out.push((vid, crate::video::VideoSpec {
                     src: g("src").to_string(),
                     playback_id: g("playback-id").to_string(),
                     seek: g("seek-to").to_string(),
@@ -1000,8 +1009,8 @@ impl DisplayList {
 
             // 回流实测尺寸：按稳定 node.id 上报最终布局宽高。虚拟列表等组件
             // 按 item 根节点 ID 订阅，据此修正 offsets 与锚定（对齐 virtua）。
-            if !node.id.is_empty() {
-                dl.measured.push((node.id.clone(), w, h));
+            if !node.id.is_empty() || node.nid != 0 {
+                dl.measured.push((node.nid, w, h));
             }
 
             // overflow 容器：本节点矩形成为子树的新裁剪边界；子树坐标减 scroll 偏移。
@@ -1043,7 +1052,7 @@ impl DisplayList {
                         }
                     }
                     dl.texts.push(TextDraw {
-                        id: node.id.clone(), text, x: x + dx, y, size, color,
+                        id: node.nid, text, x: x + dx, y, size, color,
                         clip: my_clip, spans, selection, family: my_family.clone(),
                         alpha: st.opacity,
                         weight: my_tinh.weight, line_height: my_tinh.line_h,
@@ -1092,7 +1101,7 @@ impl DisplayList {
                     // video 原语：ffmpeg 子进程解码动画（video.rs），当前帧在此取。
                     let is_video = node.kind.eq_ignore_ascii_case("video");
                     let video_frame = if is_video {
-                        crate::video::frame(&node.id).map(std::sync::Arc::new)
+                        crate::video::frame(&node_id_str(node)).map(std::sync::Arc::new)
                     } else {
                         None
                     };
@@ -1108,7 +1117,7 @@ impl DisplayList {
                         img, canvas,
                         alpha: st.opacity,
                         video: video_frame,
-                        video_id: if is_video { node.id.clone() } else { String::new() },
+                        video_id: if is_video { node_id_str(node) } else { String::new() },
                     });
                 }
                 // pointer-events:none：节点自身不作为鼠标目标（仍绘制，后代照常
@@ -1118,12 +1127,12 @@ impl DisplayList {
                     .unwrap_or(false);
                 if let Some(ev) = node.events.iter().find(|e| e.starts_with("on")) {
                     if !pe_none {
-                        dl.hitboxes.push((x, y, w, h, node.id.clone(), ev.clone(), is_overlay(node), my_clip,
+                        dl.hitboxes.push((x, y, w, h, node.nid, ev.clone(), is_overlay(node), my_clip,
                             node.props.get("cursor").cloned().unwrap_or_default()));
                     }
                 }
                 if node.props.contains_key("gx-input-id") && !pe_none {
-                    dl.inputs.push((x, y, w, h, node.id.clone()));
+                    dl.inputs.push((x, y, w, h, node.nid));
                 }
             }
 
@@ -1205,8 +1214,8 @@ impl DisplayList {
 
     /// 命中测试：浮层/遮罩优先于普通内容；同级内面积最小的包含点命中。
     /// 第 9 元素是 cursor 形状（宿主据此切换系统光标）。
-    pub(crate) fn hit(&self, x: f32, y: f32) -> Option<&(f32, f32, f32, f32, String, String, bool, ClipRect, String)> {
-        type Hit<'a> = &'a (f32, f32, f32, f32, String, String, bool, ClipRect, String);
+    pub(crate) fn hit(&self, x: f32, y: f32) -> Option<&(f32, f32, f32, f32, u64, String, bool, ClipRect, String)> {
+        type Hit<'a> = &'a (f32, f32, f32, f32, u64, String, bool, ClipRect, String);
         fn min_area<'a, I: Iterator<Item = Hit<'a>>>(items: I) -> Option<Hit<'a>> {
             items.min_by(|a, b| (a.2 * a.3).partial_cmp(&(b.2 * b.3)).unwrap_or(std::cmp::Ordering::Equal))
         }
@@ -1288,6 +1297,7 @@ mod scrollbar_tests {
         for i in 0..5 {
             kids.push(crate::scene::SceneNode {
                 typ: NodeType::Div, kind: "div".into(), id: format!("item{}", i),
+                nid: 1002,
                 text: String::new(),
                 props: [("height".to_string(), "100".to_string())].into_iter().collect(),
                 events: vec![], children: vec![],
@@ -1301,6 +1311,7 @@ mod scrollbar_tests {
         props.insert("scroll-top".to_string(), format!("{}", scroll_top));
         crate::scene::SceneNode {
             typ: NodeType::Div, kind: "div".into(), id: "vp".into(), text: String::new(),
+            nid: 1003,
             props, events: vec![], children: kids,
         }
     }
@@ -1310,7 +1321,7 @@ mod scrollbar_tests {
         let dl = DisplayList::from_scene(&overflow_scene(0.0), 800.0, 600.0, &mut crate::layout::LayoutCache::new());
         // 回流应覆盖容器 + 5 个 item（非空 id 的节点）。
         assert_eq!(dl.measured.len(), 6, "应为 vp + 5 items 收集实测尺寸: {:?}", dl.measured);
-        let item0 = dl.measured.iter().find(|(id, _, _)| id == "item0").expect("item0 应在回流里");
+        let item0 = dl.measured.iter().find(|(id, _, _)| *id == 1002).expect("item0 应在回流里");
         assert!((item0.2 - 100.0).abs() < 0.5, "item0 实测高度应约 100，实际 {}", item0.2);
     }
 
@@ -1329,6 +1340,7 @@ mod scrollbar_tests {
         use crate::binprotocol::NodeType;
         let vp = crate::scene::SceneNode {
             typ: NodeType::Div, kind: "div".into(), id: "vp".into(), text: String::new(),
+            nid: 1004,
             props: [
                 ("width".to_string(), "100".to_string()),
                 ("height".to_string(), "100".to_string()),
@@ -1337,6 +1349,7 @@ mod scrollbar_tests {
             events: vec![],
             children: vec![crate::scene::SceneNode {
                 typ: NodeType::Div, kind: "div".into(), id: "one".into(), text: String::new(),
+                nid: 1005,
                 props: [("height".to_string(), "100".to_string())].into_iter().collect(),
                 events: vec![], children: vec![],
             }],
@@ -1360,21 +1373,21 @@ mod scrollbar_tests {
 mod text_sig_tests {
     use super::*;
 
-    pub(crate) fn td(id: &str, text: &str, size: f32) -> TextDraw {
+    pub(crate) fn td(id: u64, text: &str, size: f32) -> TextDraw {
         TextDraw {
-            id: id.into(), text: text.into(), x: 0.0, y: 0.0, size,
+            id, text: text.into(), x: 0.0, y: 0.0, size,
             color: (0, 0, 0), clip: None, spans: vec![], selection: None, family: None, weight: None, line_height: 0.0, alpha: 1.0,
         }
     }
 
     /// 用一组 (id,text,size) 构造"上一帧缓存"：只需签名，buffer 用空占位。
-    pub(crate) fn cache_of(items: &[(&str, &str, f32)]) -> std::collections::HashMap<String, GlyphEntry> {
+    pub(crate) fn cache_of(items: &[(u64, &str, f32)]) -> std::collections::HashMap<u64, GlyphEntry> {
         let mut m = std::collections::HashMap::new();
         for (id, text, size) in items {
-            let t = td(id, text, *size);
+            let t = td(*id, text, *size);
             // buffer 对 plan_glyphs 的判定无影响，这里用 new 占位即可。
             let mut fs = FontSystem::new();
-            m.insert((*id).into(), GlyphEntry {
+            m.insert(*id, GlyphEntry {
                 sig: text_sig(&t),
                 buffer: Buffer::new(&mut fs, Metrics::new(*size, *size * 1.35)),
             });
@@ -1385,18 +1398,18 @@ mod text_sig_tests {
     #[test]
     pub(crate) fn sig_depends_only_on_text_and_size() {
         // 签名只看文本+字号，与 id/坐标/颜色无关——这是按 ID 复用的正确性基础。
-        let a = td("a", "A", 16.0);
-        let moved = TextDraw { id: "b".into(), x: 99.0, y: -6.0, color: (255, 0, 0), ..a.clone() };
+        let a = td(1, "A", 16.0);
+        let moved = TextDraw { id: 2, x: 99.0, y: -6.0, color: (255, 0, 0), ..a.clone() };
         assert_eq!(text_sig(&a), text_sig(&moved));
-        assert_ne!(text_sig(&a), text_sig(&td("a", "B", 16.0)));   // 内容变
-        assert_ne!(text_sig(&a), text_sig(&td("a", "A", 20.0)));   // 字号变
+        assert_ne!(text_sig(&a), text_sig(&td(1, "B", 16.0)));   // 内容变
+        assert_ne!(text_sig(&a), text_sig(&td(1, "A", 20.0)));   // 字号变
     }
 
     #[test]
     pub(crate) fn unchanged_texts_need_no_shape() {
         // 小幅滚动：ID 和文本都没变 → 全部复用，零 shape。
-        let cache = cache_of(&[("a", "A", 16.0), ("b", "B", 16.0)]);
-        let cur = [td("a", "A", 16.0), td("b", "B", 16.0)];
+        let cache = cache_of(&[(1, "A", 16.0), (2, "B", 16.0)]);
+        let cur = [td(1, "A", 16.0), td(2, "B", 16.0)];
         let (shaped, evicted) = plan_glyphs(&cur, &cache);
         assert!(shaped.is_empty(), "未变文本应零 shape");
         assert!(evicted.is_empty());
@@ -1406,18 +1419,18 @@ mod text_sig_tests {
     pub(crate) fn scroll_boundary_shapes_only_new_item() {
         // 虚拟列表跨 item 边界：滚出 "a"、滚入 "c"，"b" 未变 →
         // 只有 "c" 需要 shape，"a" 被淘汰，"b" 复用。
-        let cache = cache_of(&[("a", "A", 16.0), ("b", "B", 16.0)]);
-        let cur = [td("b", "B", 16.0), td("c", "C", 16.0)];
+        let cache = cache_of(&[(1, "A", 16.0), (2, "B", 16.0)]);
+        let cur = [td(2, "B", 16.0), td(3, "C", 16.0)];
         let (shaped, evicted) = plan_glyphs(&cur, &cache);
         assert_eq!(shaped, vec![1], "只有滚入的 c 需要 shape");
-        assert_eq!(evicted, vec!["a".to_string()], "滚出的 a 应被淘汰");
+        assert_eq!(evicted, vec![1u64], "滚出的 a 应被淘汰");
     }
 
     #[test]
     pub(crate) fn content_change_shapes_only_changed_item() {
         // 某一项文本变化：只有该项重新 shape，其余复用。
-        let cache = cache_of(&[("a", "A", 16.0), ("b", "B", 16.0)]);
-        let cur = [td("a", "A", 16.0), td("b", "B2", 16.0)];
+        let cache = cache_of(&[(1, "A", 16.0), (2, "B", 16.0)]);
+        let cur = [td(1, "A", 16.0), td(2, "B2", 16.0)];
         let (shaped, evicted) = plan_glyphs(&cur, &cache);
         assert_eq!(shaped, vec![1], "内容变的 b 需重新 shape");
         assert!(evicted.is_empty());
@@ -1427,8 +1440,8 @@ mod text_sig_tests {
     pub(crate) fn reorder_keeps_identity() {
         // 顺序变化但 ID+内容不变（如 For 重排）：全部复用，零 shape——
         // 这正是整段签名方案会误判为全量重建的场景。
-        let cache = cache_of(&[("a", "A", 16.0), ("b", "B", 16.0)]);
-        let cur = [td("b", "B", 16.0), td("a", "A", 16.0)];
+        let cache = cache_of(&[(1, "A", 16.0), (2, "B", 16.0)]);
+        let cur = [td(2, "B", 16.0), td(1, "A", 16.0)];
         let (shaped, evicted) = plan_glyphs(&cur, &cache);
         assert!(shaped.is_empty(), "重排不应触发 shape");
         assert!(evicted.is_empty());
@@ -1437,7 +1450,7 @@ mod text_sig_tests {
     #[test]
     pub(crate) fn cold_cache_shapes_all() {
         let cache = cache_of(&[]);
-        let cur = [td("a", "A", 16.0), td("b", "B", 16.0)];
+        let cur = [td(1, "A", 16.0), td(2, "B", 16.0)];
         let (shaped, evicted) = plan_glyphs(&cur, &cache);
         assert_eq!(shaped, vec![0, 1]);
         assert!(evicted.is_empty());
@@ -1446,9 +1459,9 @@ mod text_sig_tests {
     #[test]
     pub(crate) fn gradient_spans_change_signature_for_reshaping() {
         // 同一文本/字号，仅渐变分段颜色不同 → 签名必须不同，否则 span 不会更新。
-        let mut a = td("code", "func", 13.0);
+        let mut a = td(9, "func", 13.0);
         a.spans = vec![("fun".into(), (197, 134, 192)), ("c".into(), (212, 212, 212))];
-        let mut b = td("code", "func", 13.0);
+        let mut b = td(9, "func", 13.0);
         b.spans = vec![("fun".into(), (255, 0, 0)), ("c".into(), (0, 0, 255))];
         assert_ne!(text_sig(&a), text_sig(&b), "渐变颜色变化应触发重新 shape");
 
@@ -1495,6 +1508,7 @@ mod text_sig_tests {
         use crate::binprotocol::NodeType;
         let text = crate::scene::SceneNode {
             typ: NodeType::Text, kind: String::new(), id: "code-text".into(),
+            nid: 1006,
             text: "ab".into(), props: Default::default(), events: vec![], children: vec![],
         };
         let mut props = std::collections::HashMap::new();
@@ -1504,10 +1518,11 @@ mod text_sig_tests {
         props.insert("white-space".into(), "pre".into());
         let span = crate::scene::SceneNode {
             typ: NodeType::Div, kind: "span".into(), id: "code-line".into(),
+            nid: 1007,
             text: String::new(), props, events: vec![], children: vec![text],
         };
         let dl = DisplayList::from_scene(&span, 800.0, 600.0, &mut crate::layout::LayoutCache::new());
-        let td = dl.texts.iter().find(|t| t.id == "code-text")
+        let td = dl.texts.iter().find(|t| t.id == 1006)
             .expect("文本节点应进入 DisplayList");
         assert_eq!(td.spans.len(), 2, "应按 ch 边界切成两段: {:?}", td.spans);
         assert_eq!(td.spans[0], ("a".to_string(), (255, 0, 0)));
@@ -1627,7 +1642,7 @@ mod selection_tests {
     #[test]
     pub(crate) fn selection_in_text_sig_forces_reshaping() {
         let base = TextDraw {
-            id: "x".into(), text: "abcd".into(), x: 0.0, y: 0.0, size: 13.0,
+            id: 5, text: "abcd".into(), x: 0.0, y: 0.0, size: 13.0,
             color: (0, 0, 0), clip: None, spans: vec![], selection: None, family: None, weight: None, line_height: 0.0, alpha: 1.0,
         };
         let mut a = base.clone();
@@ -1673,7 +1688,7 @@ mod selection_tests {
     #[test]
     pub(crate) fn font_family_in_text_sig_forces_reshaping() {
         let base = TextDraw {
-            id: "x".into(), text: "abcd".into(), x: 0.0, y: 0.0, size: 13.0,
+            id: 5, text: "abcd".into(), x: 0.0, y: 0.0, size: 13.0,
             color: (0, 0, 0), clip: None, spans: vec![], selection: None, family: None, weight: None, line_height: 0.0, alpha: 1.0,
         };
         let mut mono = base.clone();

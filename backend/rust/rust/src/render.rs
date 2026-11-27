@@ -81,7 +81,7 @@ pub struct Renderer {
     /// 最近一次 DisplayList（供命中测试）
     display: DisplayList,
     /// 最近一次布局导出的实测尺寸，待渲染后经 eventCb 回传 Host（回流）。
-    pending_measured: Vec<(String, f32, f32)>,
+    pending_measured: Vec<(u64, f32, f32)>,
     /// transition 插值引擎（跨帧持有动画状态）
     animator: crate::style::Animator,
     /// 动画时钟原点
@@ -98,7 +98,7 @@ pub struct Renderer {
     /// 按稳定 node_id 缓存的字形：只 shape 新增/内容变化的文本，其余跨帧复用。
     /// 虚拟列表滚动跨 item 边界时只有进出视口的 1 个 ID 变化，其余全部命中，
     /// 比"整段签名一致才全复用"更精确——任何内容变化帧都能复用未变的项。
-    glyph_cache: std::collections::HashMap<String, GlyphEntry>,
+    glyph_cache: std::collections::HashMap<u64, GlyphEntry>,
     /// 缓存的文本区域屏幕坐标（供命中/调试）
     cached_areas_dirty: bool,
     /// 最近光标位置（MouseInput 事件不带坐标）
@@ -246,14 +246,14 @@ impl Renderer {
     }
 
     /// 取走本帧布局导出的实测尺寸（回流到 Host）。取后清空，避免重复回传。
-    pub fn take_measured(&mut self) -> Vec<(String, f32, f32)> {
+    pub fn take_measured(&mut self) -> Vec<(u64, f32, f32)> {
         std::mem::take(&mut self.pending_measured)
     }
 
     /// 命中测试：返回坐标处的 node_id（供 hover/active 伪状态使用）。
     /// 与 hit_click 共用同一命中规则（浮层优先、最小面积、裁剪检查）。
     pub fn hit_node_id(&self, x: f32, y: f32) -> Option<String> {
-        self.display.hit(x, y).map(|h| h.4.clone())
+        self.display.hit(x, y).map(|h| h.4.to_string())
     }
 
     /// 设置 hover 节点；返回 true 表示发生了变化（调用方据此决定 request_redraw）。
@@ -594,7 +594,7 @@ impl Renderer {
                     }).collect();
                     b.set_rich_text(&mut self.font_system, styled, &attrs, Shaping::Advanced, None);
                 }
-                self.glyph_cache.insert(t.id.clone(), GlyphEntry { sig: text_sig(t), buffer: b });
+                self.glyph_cache.insert(t.id, GlyphEntry { sig: text_sig(t), buffer: b });
             }
             for id in evicted {
                 self.glyph_cache.remove(&id);
@@ -689,7 +689,7 @@ impl Renderer {
     pub fn hit_click(&self, x: f32, y: f32) -> Option<InputEvent> {
         self.display.hit(x, y).map(|(_, _, _, _, id, ev, _, ..)| InputEvent {
             kind: "click".into(),
-            node_id: id.clone(),
+            node_id: id.to_string(),
             event: ev.clone(),
             text: String::new(),
             x,
@@ -706,7 +706,7 @@ impl Renderer {
             .min_by(|a, b| (a.2 * a.3).partial_cmp(&(b.2 * b.3)).unwrap_or(std::cmp::Ordering::Equal))
             .map(|(_, _, _, _, id)| InputEvent {
                 kind: "focus".into(),
-                node_id: id.clone(),
+                node_id: id.to_string(),
                 event: String::new(),
                 text: String::new(),
                 x,
@@ -789,6 +789,7 @@ mod parity_tests {
     fn div(id: &str, props: &[(&str, &str)], children: Vec<SceneNode>) -> SceneNode {
         SceneNode {
             typ: NodeType::Div, kind: "div".into(), id: id.into(), text: String::new(),
+            nid: 1008,
             props: props.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
             events: vec![], children,
         }
@@ -797,6 +798,7 @@ mod parity_tests {
     fn text(id: &str, text: &str, props: &[(&str, &str)]) -> SceneNode {
         SceneNode {
             typ: NodeType::Text, kind: "#text".into(), id: id.into(), text: text.into(),
+            nid: 1009,
             props: props.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
             events: vec![], children: vec![],
         }
@@ -814,7 +816,7 @@ mod parity_tests {
         let dl = DisplayList::from_scene(&root, 400.0, 200.0, &mut crate::layout::LayoutCache::new());
         assert_eq!(dl.hitboxes.len(), 1, "pointer-events:none 不登记命中框");
         let hb = &dl.hitboxes[0];
-        assert_eq!(hb.4, "btn");
+        assert_eq!(hb.4, 1008, "btn 节点 nid（测试 helper 顺序分配）");
         assert_eq!(hb.8, "pointer", "cursor 随命中框透出");
     }
 
@@ -876,7 +878,7 @@ mod parity_tests {
     #[test]
     fn text_sig_includes_weight() {
         let mut t = TextDraw {
-            id: "t".into(), text: "hi".into(), x: 0.0, y: 0.0, size: 16.0,
+            id: 7, text: "hi".into(), x: 0.0, y: 0.0, size: 16.0,
             color: (0, 0, 0), clip: None, spans: vec![], selection: None, family: None,
             weight: None, line_height: 0.0, alpha: 1.0,
         };
@@ -911,6 +913,7 @@ mod threeway_tests {
         }
         *id_counter += 1;
         let id = id_counter.to_string();
+        let nid = *id_counter as u64;
         let mut children = vec![];
         if let Some(arr) = v["children"].as_array() {
             for c in arr {
@@ -919,13 +922,13 @@ mod threeway_tests {
         }
         if kind == "text" {
             SceneNode {
-                typ: NodeType::Text, kind: "#text".into(), id, text: v["text"].as_str().unwrap_or("").into(),
+                typ: NodeType::Text, kind: "#text".into(), id, nid, text: v["text"].as_str().unwrap_or("").into(),
                 props, events: vec![], children,
             }
         } else {
             // Skia 端对全部 div 登记命中框；镜像对齐：每个 div 视作可命中。
             SceneNode {
-                typ: NodeType::Div, kind: "div".into(), id, text: String::new(),
+                typ: NodeType::Div, kind: "div".into(), id, nid, text: String::new(),
                 props, events: vec!["on-click".into()], children,
             }
         }
@@ -961,7 +964,7 @@ mod threeway_tests {
             let (x, y, w, h, id, _, _, clip, cursor) = hb;
             let contains = px >= *x && px < x + *w && py >= *y && py < y + *h;
             if contains && !clip_rejects(*clip, px, py, 0.0, 0.0) {
-                return (bg_by_id.get(id).cloned().unwrap_or_default(), cursor.clone());
+                return (bg_by_id.get(&id.to_string()).cloned().unwrap_or_default(), cursor.clone());
             }
         }
         (String::new(), String::new())

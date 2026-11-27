@@ -180,6 +180,7 @@ mod tests {
     fn div(id: &str, props: &[(&str, &str)], children: Vec<crate::scene::SceneNode>) -> crate::scene::SceneNode {
         crate::scene::SceneNode {
             typ: NodeType::Div, kind: "div".into(), id: id.into(), text: String::new(),
+            nid: 1000,
             props: props.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
             events: vec![], children,
         }
@@ -188,6 +189,7 @@ mod tests {
     fn text(id: &str, content: &str, props: &[(&str, &str)]) -> crate::scene::SceneNode {
         crate::scene::SceneNode {
             typ: NodeType::Text, kind: "#text".into(), id: id.into(), text: content.into(),
+            nid: 1001,
             props: props.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
             events: vec![], children: vec![],
         }

@@ -530,11 +530,19 @@ impl winit::application::ApplicationHandler<GxEvent> for WinitApp<'_> {
                 // node_id 订阅并修正 offsets/锚定。text 承载紧凑 JSON 数组。
                 let measured = renderer.take_measured();
                 if !measured.is_empty() {
+                    // JSON 边界保持 [["<nid十进制>", w, h], ...]——Go publishMeasuredWire
+                    // 按 r[0].(string) 解析后 gxscene.ParseNodeID 还原，宿主零改动。
+                    let rows: Vec<Vec<serde_json::Value>> = measured.iter()
+                        .map(|(nid, w, h)| vec![
+                            serde_json::Value::String(nid.to_string()),
+                            serde_json::json!(w),
+                            serde_json::json!(h),
+                        ]).collect();
                     let ev = protocol::InputEvent {
                         kind: "measured".into(),
                         node_id: String::new(),
                         event: String::new(),
-                        text: serde_json::to_string(&measured).unwrap_or_default(),
+                        text: serde_json::to_string(&rows).unwrap_or_default(),
                         x: 0.0,
                         y: 0.0,
                     };
@@ -716,7 +724,7 @@ pub extern "C" fn gx_window_destroy(handle: *mut c_void) {
 
 #[no_mangle]
 pub extern "C" fn gx_window_version() -> *const c_char {
-    b"gxbackend-rust 0.2.0 (binary protocol)\0".as_ptr() as *const c_char
+    b"gxbackend-rust 0.3.0 (GRX3 binary protocol)\0".as_ptr() as *const c_char
 }
 
 /// 纯 CPU 管线基准：buf 是 GRX1 帧，重复 iters 次「解析→建树→Taffy 布局→指令生成」。
@@ -827,7 +835,12 @@ pub extern "C" fn gx_mirror_dump(out: *mut c_char, cap: c_int) -> c_int {
     let m = mirror().lock().unwrap();
     let mut s = String::new();
     fn walk(n: &crate::scene::SceneNode, s: &mut String) {
-        s.push_str(&n.id);
+        // 身份摘要：id 字符串优先（GRX1/测试），GRX3 回退 nid 十进制。
+        if !n.id.is_empty() {
+            s.push_str(&n.id);
+        } else if n.nid != 0 {
+            s.push_str(&n.nid.to_string());
+        }
         s.push(':');
         s.push_str(&n.text);
         s.push('\n');

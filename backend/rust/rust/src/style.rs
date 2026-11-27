@@ -437,15 +437,16 @@ pub fn apply_pseudo_state(
         focused: Option<&str>,
     ) -> SceneNode {
         let mut out = n.clone();
-        let id = n.id.as_str();
+        // 交互态匹配：nid 优先（GRX3 整数身份）、id 字符串兜底（GRX1/测试）。
+        let hit = |target: &Option<&str>| target.map(|t| n.matches(t)).unwrap_or(false);
         // 交互态：hover 先、focus 次、active 后，逐级覆盖同名属性。
-        if Some(id) == hovered {
+        if hit(&hovered) {
             overlay_pseudo(&mut out.props, "&:hover");
         }
-        if Some(id) == focused {
+        if hit(&focused) {
             overlay_pseudo(&mut out.props, "&:focus");
         }
-        if Some(id) == active {
+        if hit(&active) {
             overlay_pseudo(&mut out.props, "&:active");
         }
         // 禁用态优先级最高：盖过 hover/focus/active 的覆盖结果。
@@ -574,6 +575,7 @@ mod tests {
         for (k, v) in props { p.insert(k.to_string(), v.to_string()); }
         SceneNode {
             typ: NodeType::Div, kind: "div".into(), id: "n1".into(), text: String::new(),
+            nid: 1010,
             props: p, events: vec![], children: vec![],
         }
     }
@@ -859,6 +861,7 @@ mod parity_tests {
         props.insert("z-index".to_string(), "-5".to_string());
         let n = crate::scene::SceneNode {
             typ: NodeType::Div, kind: "div".into(), id: "n".into(), text: String::new(),
+            nid: 1011,
             props, events: vec![], children: vec![],
         };
         assert_eq!(parse_style(&n).z_index, -5);
