@@ -13,8 +13,8 @@ import (
 	rb "github.com/robertpanvip/gox-backend-rust"
 	"github.com/robertpanvip/gox-playground/ui"
 	"github.com/robertpanvip/gox-playground/ui/interp"
-	gxapp "github.com/robertpanvip/gox/runtime/app"
-	"github.com/robertpanvip/gox/widgets"
+	gxapp "github.com/robertpanvip/gox-core/runtime/app"
+	"github.com/robertpanvip/gox-core/widgets"
 )
 
 func main() {

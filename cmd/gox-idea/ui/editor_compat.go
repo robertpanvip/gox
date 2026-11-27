@@ -6,7 +6,7 @@ package ui
 import (
 	"strings"
 
-	"github.com/robertpanvip/gox/widgets"
+	"github.com/robertpanvip/gox-core/widgets"
 )
 
 func PrefixWidth(s string, col int) float64              { return editorState.PrefixWidth(s, col) }

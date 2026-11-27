@@ -8,7 +8,7 @@ import (
 	"sync/atomic"
 
 	sk "github.com/robertpanvip/gox-skia/compat"
-	gxscene "github.com/robertpanvip/gox/runtime/scene"
+	gxscene "github.com/robertpanvip/gox-core/runtime/scene"
 )
 
 // 本文件让 Skia 后端理解编辑器用 CSS linear-gradient 编码的语法高亮。

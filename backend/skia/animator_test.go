@@ -1,7 +1,7 @@
 package skia
 
 import (
-	gxscene "github.com/robertpanvip/gox/runtime/scene"
+	gxscene "github.com/robertpanvip/gox-core/runtime/scene"
 	"testing"
 	"time"
 )

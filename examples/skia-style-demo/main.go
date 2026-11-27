@@ -10,10 +10,10 @@ import (
 	"time"
 
 	rb "github.com/robertpanvip/gox-backend-rust"
-	gxapp "github.com/robertpanvip/gox/runtime/app"
-	gxscene "github.com/robertpanvip/gox/runtime/scene"
-	"github.com/robertpanvip/gox/runtime/signal"
-	widgets "github.com/robertpanvip/gox/widgets"
+	gxapp "github.com/robertpanvip/gox-core/runtime/app"
+	gxscene "github.com/robertpanvip/gox-core/runtime/scene"
+	"github.com/robertpanvip/gox-core/runtime/signal"
+	widgets "github.com/robertpanvip/gox-core/widgets"
 )
 
 func label(value, color, size string) *gxscene.Instance {

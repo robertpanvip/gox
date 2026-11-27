@@ -6,8 +6,8 @@ import (
 	"time"
 
 	sk "github.com/robertpanvip/gox-skia/compat"
-	gxapp "github.com/robertpanvip/gox/runtime/app"
-	gxscene "github.com/robertpanvip/gox/runtime/scene"
+	gxapp "github.com/robertpanvip/gox-core/runtime/app"
+	gxscene "github.com/robertpanvip/gox-core/runtime/scene"
 )
 
 // Window 实现 gxapp.Window：一个基于纯 Go Skia 渲染后端

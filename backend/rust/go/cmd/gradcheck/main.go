@@ -11,8 +11,8 @@ import (
 	"time"
 
 	rb "github.com/robertpanvip/gox-backend-rust"
-	gxapp "github.com/robertpanvip/gox/runtime/app"
-	gxscene "github.com/robertpanvip/gox/runtime/scene"
+	gxapp "github.com/robertpanvip/gox-core/runtime/app"
+	gxscene "github.com/robertpanvip/gox-core/runtime/scene"
 )
 
 // gradientText 造一个 gradient-text 标记 + 渐变 bg 的 span，文本为子节点。

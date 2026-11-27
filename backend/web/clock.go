@@ -7,7 +7,7 @@ import (
 	"syscall/js"
 	"time"
 
-	"github.com/robertpanvip/gox/runtime/scheduler"
+	"github.com/robertpanvip/gox-core/runtime/scheduler"
 )
 
 // rafClock 把浏览器的 requestAnimationFrame 适配为 scheduler.FrameClock

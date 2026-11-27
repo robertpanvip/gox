@@ -4,9 +4,9 @@ import (
 	"strings"
 	"testing"
 
-	gxapp "github.com/robertpanvip/gox/runtime/app"
+	gxapp "github.com/robertpanvip/gox-core/runtime/app"
 
-	gxscene "github.com/robertpanvip/gox/runtime/scene"
+	gxscene "github.com/robertpanvip/gox-core/runtime/scene"
 )
 
 func fixedMeasure2(text string, fontSize int, bold bool, family string) float32 {

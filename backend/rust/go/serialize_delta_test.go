@@ -4,7 +4,7 @@ import (
 	"encoding/binary"
 	"testing"
 
-	gxscene "github.com/robertpanvip/gox/runtime/scene"
+	gxscene "github.com/robertpanvip/gox-core/runtime/scene"
 )
 
 func leaf(id gxscene.NodeID, text string) *gxscene.Node {

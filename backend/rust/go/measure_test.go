@@ -3,7 +3,7 @@ package rustbackend
 import (
 	"testing"
 
-	gxscene "github.com/robertpanvip/gox/runtime/scene"
+	gxscene "github.com/robertpanvip/gox-core/runtime/scene"
 )
 
 // TestPublishMeasuredWire：Rust 回流的 [[id,w,h],...] 应被正确解析并发布到

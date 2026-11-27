@@ -1,7 +1,7 @@
 package interp
 
 import (
-	"github.com/robertpanvip/gox/pkg/compiler"
+	"github.com/robertpanvip/gox-core/pkg/compiler"
 )
 
 // Stmt 是语句 AST。

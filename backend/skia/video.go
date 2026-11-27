@@ -12,8 +12,8 @@ import (
 	"sync"
 
 	sk "github.com/robertpanvip/gox-skia/compat"
-	gxscene "github.com/robertpanvip/gox/runtime/scene"
-	gxvideo "github.com/robertpanvip/gox/runtime/video"
+	gxscene "github.com/robertpanvip/gox-core/runtime/scene"
+	gxvideo "github.com/robertpanvip/gox-core/runtime/video"
 )
 
 // videoManager 进程级管理器：key(nodeID|playbackID|seek|src) → 解码器。

@@ -6,7 +6,7 @@ require (
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/muesli/termenv v0.16.0
-	github.com/robertpanvip/gox v0.0.0
+	github.com/robertpanvip/gox-core v0.0.0
 )
 
 require (
@@ -29,4 +29,4 @@ require (
 	golang.org/x/text v0.41.0 // indirect
 )
 
-replace github.com/robertpanvip/gox => ../..
+replace github.com/robertpanvip/gox-core => ../../../gox-core

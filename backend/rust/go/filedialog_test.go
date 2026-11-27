@@ -4,7 +4,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/robertpanvip/gox/widgets"
+	"github.com/robertpanvip/gox-core/widgets"
 )
 
 func TestRustNativeFileDialogImplementsContract(t *testing.T) {

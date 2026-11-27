@@ -5,7 +5,7 @@ import (
 
 	yoga "github.com/ahati/yoga-go-binding"
 	sk "github.com/robertpanvip/gox-skia/compat"
-	gxscene "github.com/robertpanvip/gox/runtime/scene"
+	gxscene "github.com/robertpanvip/gox-core/runtime/scene"
 )
 
 // 本文件用 Facebook Yoga 3.x（github.com/ahati/yoga-go-binding，C++20

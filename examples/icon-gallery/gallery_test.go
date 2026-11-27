@@ -4,9 +4,9 @@ import (
 	"strings"
 	"testing"
 
-	gxscene "github.com/robertpanvip/gox/runtime/scene"
-	gxicon "github.com/robertpanvip/gox/runtime/icon"
-	"github.com/robertpanvip/gox/widgets"
+	gxscene "github.com/robertpanvip/gox-core/runtime/scene"
+	gxicon "github.com/robertpanvip/gox-core/runtime/icon"
+	"github.com/robertpanvip/gox-core/widgets"
 )
 
 // TestNamedComponentsExist 保证 showcase 里引用的具名图标组件都真实导出且产出

@@ -6,7 +6,7 @@ import (
 	"fmt"
 
 	skia "github.com/robertpanvip/gox-backend-rust"
-	"github.com/robertpanvip/gox/widgets"
+	"github.com/robertpanvip/gox-core/widgets"
 )
 
 func main() {

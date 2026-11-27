@@ -15,8 +15,8 @@ import (
 
 	"github.com/robertpanvip/gox-playground/ui"
 	"github.com/robertpanvip/gox-playground/ui/interp"
-	gxapp "github.com/robertpanvip/gox/runtime/app"
-	"github.com/robertpanvip/gox/widgets"
+	gxapp "github.com/robertpanvip/gox-core/runtime/app"
+	"github.com/robertpanvip/gox-core/widgets"
 
 	"golang.org/x/mobile/app"
 	"golang.org/x/mobile/event/lifecycle"

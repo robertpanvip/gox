@@ -2,7 +2,7 @@
 package demos
 
 import (
-    gxscene "github.com/robertpanvip/gox/runtime/scene"
+    gxscene "github.com/robertpanvip/gox-core/runtime/scene"
     d01 "github.com/robertpanvip/gox-playground/ui/demos/d01"
     d02 "github.com/robertpanvip/gox-playground/ui/demos/d02"
     d03 "github.com/robertpanvip/gox-playground/ui/demos/d03"

@@ -12,7 +12,7 @@ import (
 	"github.com/robertpanvip/gox-tui/internal/complete"
 	"github.com/robertpanvip/gox-tui/internal/editor"
 	"github.com/robertpanvip/gox-tui/internal/theme"
-	"github.com/robertpanvip/gox/pkg/gxcomplete"
+	"github.com/robertpanvip/gox-core/pkg/gxcomplete"
 )
 
 // overlay 是当前的浮层模式。

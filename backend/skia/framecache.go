@@ -7,7 +7,7 @@ import (
 	"strings"
 
 	sk "github.com/robertpanvip/gox-skia/compat"
-	gxscene "github.com/robertpanvip/gox/runtime/scene"
+	gxscene "github.com/robertpanvip/gox-core/runtime/scene"
 )
 
 // 本文件实现帧间缓存 + 脏矩形检测，让"没变化就不重算、只重画变化区域"落在后端。

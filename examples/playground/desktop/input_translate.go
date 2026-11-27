@@ -20,8 +20,8 @@ import (
 
 	rb "github.com/robertpanvip/gox-backend-rust"
 	"github.com/robertpanvip/gox-playground/ui"
-	gxapp "github.com/robertpanvip/gox/runtime/app"
-	gxscene "github.com/robertpanvip/gox/runtime/scene"
+	gxapp "github.com/robertpanvip/gox-core/runtime/app"
+	gxscene "github.com/robertpanvip/gox-core/runtime/scene"
 
 	"math"
 )

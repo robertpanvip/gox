@@ -13,10 +13,10 @@
 package main
 
 import (
-    gxscene "github.com/robertpanvip/gox/runtime/scene"
-    gxapp "github.com/robertpanvip/gox/runtime/app"
-    gxicon "github.com/robertpanvip/gox/runtime/icon"
-    widgets "github.com/robertpanvip/gox/widgets"
+    gxscene "github.com/robertpanvip/gox-core/runtime/scene"
+    gxapp "github.com/robertpanvip/gox-core/runtime/app"
+    gxicon "github.com/robertpanvip/gox-core/runtime/icon"
+    widgets "github.com/robertpanvip/gox-core/widgets"
     "fmt"
 )
 

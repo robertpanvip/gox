@@ -1,7 +1,7 @@
 package gxweb
 
 import (
-	gxapp "github.com/robertpanvip/gox/runtime/app"
+	gxapp "github.com/robertpanvip/gox-core/runtime/app"
 )
 
 // Backend 实现 gxapp.Backend 接口：接入层按接口形状注入，核心零依赖本包。

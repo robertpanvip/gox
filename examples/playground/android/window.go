@@ -23,9 +23,9 @@ import (
 
 	sk "github.com/robertpanvip/gox-skia/compat"
 	skia "github.com/robertpanvip/gox-backend-skia"
-	gxapp "github.com/robertpanvip/gox/runtime/app"
-	gxscene "github.com/robertpanvip/gox/runtime/scene"
-	"github.com/robertpanvip/gox/runtime/loop"
+	gxapp "github.com/robertpanvip/gox-core/runtime/app"
+	gxscene "github.com/robertpanvip/gox-core/runtime/scene"
+	"github.com/robertpanvip/gox-core/runtime/loop"
 	"github.com/robertpanvip/gox-playground/ui"
 
 	"golang.org/x/mobile/event/size"

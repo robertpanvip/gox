@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strconv"
 
-	gxscene "github.com/robertpanvip/gox/runtime/scene"
+	gxscene "github.com/robertpanvip/gox-core/runtime/scene"
 )
 
 // 二进制协议常量（与 PROTOCOL.md / Rust binprotocol.rs 对齐）

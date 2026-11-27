@@ -6,8 +6,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/robertpanvip/gox/cssbox"
-	gxscene "github.com/robertpanvip/gox/runtime/scene"
+	"github.com/robertpanvip/gox-core/cssbox"
+	gxscene "github.com/robertpanvip/gox-core/runtime/scene"
 )
 
 // isStyleKey 判断 key 是否为受限 CSS sheet 属性（与 gxscene.StylePropNames 一致，

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"sync"
 
-	gxscene "github.com/robertpanvip/gox/runtime/scene"
+	gxscene "github.com/robertpanvip/gox-core/runtime/scene"
 )
 
 // memDriver 是内存 DOM 驱动，用于 native 单测、快照断言与无浏览器的 headless 场景。

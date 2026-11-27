@@ -6,7 +6,7 @@ import (
 
 	skia "github.com/robertpanvip/gox-backend-rust"
 	"github.com/robertpanvip/gox-idea/ui"
-	"github.com/robertpanvip/gox/widgets"
+	"github.com/robertpanvip/gox-core/widgets"
 )
 
 // TestEditorClickRoundTrip 回归测试：光标列 ↔ 点击像素必须双向闭环。

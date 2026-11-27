@@ -7,7 +7,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	Rope "github.com/robertpanvip/gox/runtime/rope"
+	Rope "github.com/robertpanvip/gox-core/runtime/rope"
 )
 
 // Buffer 是一份可编辑文档。Rope 是唯一文本权威；磁盘文件与内存解耦。

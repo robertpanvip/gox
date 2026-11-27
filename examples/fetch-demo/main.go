@@ -8,7 +8,7 @@ import (
 	"net/http/httptest"
 	"time"
 
-	"github.com/robertpanvip/gox/runtime/loop"
+	"github.com/robertpanvip/gox-core/runtime/loop"
 )
 
 // 桌面 / Rust 宿主共用这份驱动：两者都在 Go 侧提供 *loop.Queue 作为 Executor。

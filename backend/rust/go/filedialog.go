@@ -13,7 +13,7 @@ import (
 	"runtime"
 	"strings"
 
-	"github.com/robertpanvip/gox/widgets"
+	"github.com/robertpanvip/gox-core/widgets"
 )
 
 // NativeFileDialog 是 Rust 后端的 FileDialog 实现。

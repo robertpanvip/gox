@@ -19,7 +19,7 @@ import (
 
 	rb "github.com/robertpanvip/gox-backend-rust"
 	"github.com/robertpanvip/gox-idea/ui"
-	gxscene "github.com/robertpanvip/gox/runtime/scene"
+	gxscene "github.com/robertpanvip/gox-core/runtime/scene"
 )
 
 // gxAppIface 是 bridge 依赖的应用窄接口（*gxapp.App 满足）。

@@ -9,8 +9,8 @@ import (
 	"sync"
 	"syscall/js"
 
-	"github.com/robertpanvip/gox/runtime/canvas"
-	gxscene "github.com/robertpanvip/gox/runtime/scene"
+	"github.com/robertpanvip/gox-core/runtime/canvas"
+	gxscene "github.com/robertpanvip/gox-core/runtime/scene"
 )
 
 // jsDriver 是 syscall/js 驱动：直接操作浏览器 DOM。它是 memDriver 的镜像实现，

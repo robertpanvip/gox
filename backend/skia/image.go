@@ -13,8 +13,8 @@ import (
 	"sync"
 
 	sk "github.com/robertpanvip/gox-skia/compat"
-	"github.com/robertpanvip/gox/runtime/imgutil"
-	gxscene "github.com/robertpanvip/gox/runtime/scene"
+	"github.com/robertpanvip/gox-core/runtime/imgutil"
+	gxscene "github.com/robertpanvip/gox-core/runtime/scene"
 )
 
 // imageCache 进程级缓存：src → *sk.Image。Skia Image 是 immutable 可共享的。

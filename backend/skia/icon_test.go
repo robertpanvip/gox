@@ -8,11 +8,11 @@ import (
 	"fmt"
 	"testing"
 
-	gxapp "github.com/robertpanvip/gox/runtime/app"
-	"github.com/robertpanvip/gox/runtime/canvas"
-	gxicon "github.com/robertpanvip/gox/runtime/icon"
-	gxscene "github.com/robertpanvip/gox/runtime/scene"
-	"github.com/robertpanvip/gox/widgets"
+	gxapp "github.com/robertpanvip/gox-core/runtime/app"
+	"github.com/robertpanvip/gox-core/runtime/canvas"
+	gxicon "github.com/robertpanvip/gox-core/runtime/icon"
+	gxscene "github.com/robertpanvip/gox-core/runtime/scene"
+	"github.com/robertpanvip/gox-core/widgets"
 )
 
 func TestIconVectorDraw(t *testing.T) {

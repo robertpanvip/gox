@@ -8,11 +8,11 @@ import (
 	"time"
 
 	rb "github.com/robertpanvip/gox-backend-rust"
-	gxapp "github.com/robertpanvip/gox/runtime/app"
-	"github.com/robertpanvip/gox/runtime/canvas"
-	gxscene "github.com/robertpanvip/gox/runtime/scene"
-	"github.com/robertpanvip/gox/runtime/signal"
-	widgets "github.com/robertpanvip/gox/widgets"
+	gxapp "github.com/robertpanvip/gox-core/runtime/app"
+	"github.com/robertpanvip/gox-core/runtime/canvas"
+	gxscene "github.com/robertpanvip/gox-core/runtime/scene"
+	"github.com/robertpanvip/gox-core/runtime/signal"
+	widgets "github.com/robertpanvip/gox-core/widgets"
 )
 
 // textNode 用 Template 造一个带样式的文本组件（host 没有独立 Text 构造函数）。

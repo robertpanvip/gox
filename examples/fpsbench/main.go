@@ -29,9 +29,9 @@ import (
 	"time"
 
 	rb "github.com/robertpanvip/gox-backend-rust"
-	gxapp "github.com/robertpanvip/gox/runtime/app"
-	gxscene "github.com/robertpanvip/gox/runtime/scene"
-	"github.com/robertpanvip/gox/runtime/signal"
+	gxapp "github.com/robertpanvip/gox-core/runtime/app"
+	gxscene "github.com/robertpanvip/gox-core/runtime/scene"
+	"github.com/robertpanvip/gox-core/runtime/signal"
 )
 
 // ---- 会话级帧统计（关窗后打印汇总；读写都在 UI 线程，仅汇总打印跨线程读） ----

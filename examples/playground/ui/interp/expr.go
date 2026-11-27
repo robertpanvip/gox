@@ -5,8 +5,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/robertpanvip/gox/pkg/compiler"
-	"github.com/robertpanvip/gox/runtime/signal"
+	"github.com/robertpanvip/gox-core/pkg/compiler"
+	"github.com/robertpanvip/gox-core/runtime/signal"
 )
 
 // stream 是过滤掉空白/注释后的 token 流，带位置回溯。

@@ -1,10 +1,10 @@
 package d15
 
-import "github.com/robertpanvip/gox/runtime/list"
-import Signal "github.com/robertpanvip/gox/runtime/signal"
+import "github.com/robertpanvip/gox-core/runtime/list"
+import Signal "github.com/robertpanvip/gox-core/runtime/signal"
 
 import (
-    gxscene "github.com/robertpanvip/gox/runtime/scene"
+    gxscene "github.com/robertpanvip/gox-core/runtime/scene"
 )
 
 // 集合链式：[]T 提升为 List[T]，filter/map/reduce 可换型

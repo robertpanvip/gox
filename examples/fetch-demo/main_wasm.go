@@ -7,7 +7,7 @@ import (
 	"syscall/js"
 	"time"
 
-	"github.com/robertpanvip/gox/runtime/loop"
+	"github.com/robertpanvip/gox-core/runtime/loop"
 )
 
 // Web 宿主驱动：gxweb.Window 只提供 Post（RAF），用 WakeExecutor 补出 PostMicro，

@@ -3,7 +3,7 @@ package ui
 import (
 	"testing"
 
-	gxscene "github.com/robertpanvip/gox/runtime/scene"
+	gxscene "github.com/robertpanvip/gox-core/runtime/scene"
 )
 
 // collectProp 递归收集场景树中某个 prop 的所有值（用于验证响应式样式）。

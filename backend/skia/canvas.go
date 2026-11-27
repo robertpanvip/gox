@@ -9,8 +9,8 @@ import (
 	"strings"
 
 	sk "github.com/robertpanvip/gox-skia/compat"
-	"github.com/robertpanvip/gox/runtime/canvas"
-	gxscene "github.com/robertpanvip/gox/runtime/scene"
+	"github.com/robertpanvip/gox-core/runtime/canvas"
+	gxscene "github.com/robertpanvip/gox-core/runtime/scene"
 )
 
 // paintCanvas 绘制 canvas 节点的所有指令。

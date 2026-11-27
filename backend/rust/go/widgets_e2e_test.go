@@ -8,9 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/robertpanvip/gox/runtime/canvas"
-	gxscene "github.com/robertpanvip/gox/runtime/scene"
-	widgets "github.com/robertpanvip/gox/widgets"
+	"github.com/robertpanvip/gox-core/runtime/canvas"
+	gxscene "github.com/robertpanvip/gox-core/runtime/scene"
+	widgets "github.com/robertpanvip/gox-core/widgets"
 )
 
 // 统计场景树里 Kind 出现的次数。

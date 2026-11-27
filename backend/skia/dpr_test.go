@@ -4,7 +4,7 @@ import (
 	"testing"
 
 	sk "github.com/robertpanvip/gox-skia/compat"
-	gxscene "github.com/robertpanvip/gox/runtime/scene"
+	gxscene "github.com/robertpanvip/gox-core/runtime/scene"
 )
 
 // newTestCanvas 创建一块离屏 raster canvas，供 PaintTo / PaintToScaled 测试使用。

@@ -3,7 +3,7 @@ package skia
 import (
 	"testing"
 
-	gxscene "github.com/robertpanvip/gox/runtime/scene"
+	gxscene "github.com/robertpanvip/gox-core/runtime/scene"
 )
 
 // TestWindowFocus 验证 Skia 后端的 Focuser：记录焦点目标，供 GUI 集成层查询。

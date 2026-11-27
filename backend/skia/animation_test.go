@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	gxscene "github.com/robertpanvip/gox/runtime/scene"
+	gxscene "github.com/robertpanvip/gox-core/runtime/scene"
 )
 
 // TestApplyAnimationsBlink 验证声明式 blink 动画按帧时钟把 opacity 采样写进
