@@ -1,0 +1,236 @@
+# GX 编译器 CI：Linux + Windows 双平台测试 + Windows exe 自动构建。
+#
+# test job（矩阵 ubuntu + windows）：
+#   - 全量 Go 测试（Windows 下先装 mingw，cgo 包才能编译）
+#   - 全 module 测试（根 ./... 覆盖不到的嵌套 module：playground/gox-tui/
+#     gox-term/gox-idea/backend/*；含 TUI 真 PTY E2E 与 Playground UI E2E）
+#   - Playground 按功能 E2E（Playwright + Chromium，用例清单见
+#     scripts/e2e/playground_features.py 的 CASES；Windows 侧先允许失败，
+#     稳定后去掉 continue-on-error 转为硬门禁）
+#   - gox-idea GUI E2E（真实鼠标/键盘，78 项断言：点击/拖动/滚轮/分隔条/
+#     标签/项目树/resize/图标像素/主流程；统一入口 tests/run_gui_e2e_all.sh，
+#     跨平台驱动 tests/gui_driver.py + shims/；Linux 硬门禁，Windows 观察）
+#   - 三端一致性矩阵（Linux 硬门禁）：testdata/threeway/cases.json 共享用例
+#     经 Web/Skia/Rust 三端无头消费并断言，覆盖样式属性实现与传值正确性
+#   - Desktop Playground GUI E2E（28 项：点击定位/三击选行复制两个历史 bug
+#     回归 + 键盘/滚轮/主题/Run/示例/resize；脚本 examples/playground/tests/
+#     gui_e2e.sh，复用 gox-idea 的 shims；Linux 硬门禁，Windows 观察）
+# build-windows job：测试通过后编译自包含 exe（yoga Windows 静态库从源码
+#   编译，见 scripts/build-windows-msys2.sh 与 docs/windows-build.md），
+#   上传 artifact；打 tag（v*）时额外创建 GitHub Release。
+name: CI
+# 注意：本文件暂存于 workflows-test/（推送凭证缺 workflow scope）。
+# 启用方式：把目录改名为 .github/workflows/ 即可，其余内容不用动。
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Go 测试 + 按功能 E2E（${{ matrix.os }}）
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      # Linux 侧安装 Rust：Rust 渲染后端单测 + cgo 适配层所需的静态库
+      # （libgxbackend_rust）都靠它；三端一致性矩阵也依赖 cargo。
+      - name: 安装 Rust stable（Linux）
+        if: runner.os == 'Linux'
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: 缓存 Rust 构建产物
+        if: runner.os == 'Linux'
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: backend/rust/rust
+
+      # Windows：cgo（desktop/yoga 绑定）需要 mingw 工具链，Go 测试前先装好。
+      - name: 安装 MSYS2 / mingw-w64 工具链
+        if: runner.os == 'Windows'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: false
+          install: git mingw-w64-x86_64-gcc mingw-w64-x86_64-binutils
+
+      - name: Rust 后端单测 + 静态库（Linux）
+        if: runner.os == 'Linux'
+        run: |
+          cargo test --manifest-path backend/rust/rust/Cargo.toml
+          cargo build --release --manifest-path backend/rust/rust/Cargo.toml
+
+      - name: 全量 Go 测试
+        if: runner.os == 'Linux'
+        run: go test ./... -count=1
+
+      - name: 全量 Go 测试
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: go test ./... -count=1
+
+      # 根 `go test ./...` 只覆盖主 module；go.work 里的嵌套 module
+      # （playground / gox-tui / gox-term / gox-idea / backend/*）不在 ./... 内。
+      # 统一入口自动发现并逐个跑：含 TUI 真 PTY E2E、Playground UI E2E、
+      # gox-idea 全部单测与 E2E。Rust 后端静态库未编译时自动跳过。
+      - name: 全 module 单测（Linux 硬门禁）
+        if: runner.os == 'Linux'
+        run: bash scripts/e2e/run_all_module_tests.sh
+
+      # 三端一致性矩阵：testdata/threeway/cases.json 的共享用例分别由
+      # Web(memDriver 透传) / Skia(Yoga 布局+DrawLog) / Rust(Taffy+绘制指令)
+      # 消费并按同一期望断言；任一端样式属性未实现 / 传值错误 / 语义漂移
+      # 都会在此失败并点名具体用例。依赖上一步编译出的 Rust 静态库。
+      - name: 三端一致性矩阵（Linux 硬门禁）
+        if: runner.os == 'Linux'
+        run: bash scripts/threeway-parity.sh
+
+      - name: 全 module 单测（Windows 观察）
+        if: runner.os == 'Windows'
+        continue-on-error: true
+        shell: msys2 {0}
+        run: bash scripts/e2e/run_all_module_tests.sh
+
+      - name: 安装 Playwright（Python，Linux）
+        if: runner.os == 'Linux'
+        run: |
+          pip install playwright
+          playwright install --with-deps chromium
+
+      - name: 安装 Playwright（Python，Windows）
+        if: runner.os == 'Windows'
+        run: |
+          pip install playwright
+          playwright install chromium
+
+      # 按功能 E2E（构建 wasm + 起服务 + 跑用例），脚本已做跨平台适配
+      # （python3/python 自动探测）。Windows 侧先允许失败观察，稳定后转硬门禁。
+      - name: 按功能 E2E
+        continue-on-error: ${{ runner.os == 'Windows' }}
+        run: bash scripts/e2e/run_playground_e2e.sh
+
+      # ---- gox-idea GUI E2E（真实鼠标/键盘/图标/主流程，78 项断言）----
+      # 三套脚本通过 shims/ + gui_driver.py 跨平台：Linux 用原生 X11 工具，
+      # Windows 用 pyautogui。统一入口 run_gui_e2e_all.sh 依次跑三套并汇总。
+      # Linux 为硬门禁；Windows 侧首次接入先 continue-on-error 观察（GUI 自动化
+      # 在 CI runner 上的会话/分辨率与本地不同，稳定后去掉 continue-on-error）。
+      - name: 安装 GUI E2E 依赖（Linux）
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb xdotool xclip imagemagick
+          pip install pillow
+
+      - name: 安装 GUI E2E 依赖（Windows）
+        if: runner.os == 'Windows'
+        run: pip install pyautogui pygetwindow pillow
+
+      - name: 构建 gox-idea（Linux）
+        if: runner.os == 'Linux'
+        run: cd cmd/gox-idea && go build -o /tmp/gox-idea-lg .
+
+      - name: 构建 gox-idea.exe（Windows）
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: bash cmd/gox-idea/build-windows.sh
+
+      - name: gox-idea GUI E2E（Linux 硬门禁）
+        if: runner.os == 'Linux'
+        run: bash cmd/gox-idea/tests/run_gui_e2e_all.sh
+        env:
+          GOX_IDEA_BIN: /tmp/gox-idea-lg
+
+      - name: gox-idea GUI E2E（Windows 观察）
+        if: runner.os == 'Windows'
+        continue-on-error: true
+        shell: msys2 {0}
+        run: bash cmd/gox-idea/tests/run_gui_e2e_all.sh
+        env:
+          GOX_IDEA_BIN: cmd/gox-idea/gox-idea.exe
+
+      # ---- Desktop Playground GUI E2E（真实鼠标/键盘，28 项断言）----
+      # 覆盖点击定位/三击选行复制两个历史严重 bug，及键盘/滚轮/主题/Run/
+      # 示例切换/resize。命中框动态定位按钮，字宽运行时实测，不写死坐标。
+      - name: 构建 Desktop Playground（Linux）
+        if: runner.os == 'Linux'
+        run: cd examples/playground && go build -o /tmp/pg-desktop-e2e ./desktop
+
+      - name: 构建 Desktop Playground（Windows）
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: bash scripts/build-windows-msys2.sh
+
+      - name: Desktop Playground GUI E2E（Linux 硬门禁）
+        if: runner.os == 'Linux'
+        run: bash examples/playground/tests/gui_e2e.sh
+        env:
+          GOX_PLAYGROUND_BIN: /tmp/pg-desktop-e2e
+
+      - name: Desktop Playground GUI E2E（Windows 观察）
+        if: runner.os == 'Windows'
+        continue-on-error: true
+        shell: msys2 {0}
+        run: bash examples/playground/tests/gui_e2e.sh
+        env:
+          GOX_PLAYGROUND_BIN: GX-Playground.exe
+
+      - name: 失败时上传截图
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-failure-logs-${{ matrix.os }}
+          path: |
+            /tmp/pg_final.png
+            examples/playground/web/build.log
+            /tmp/gox-idea-e2e-app.log
+            /tmp/gox-idea-i-app.log
+            /tmp/gox-idea-v-app.log
+            /tmp/pg-e2e-app.log
+            /tmp/gox-idea-visual-dark.png
+            /tmp/gox-idea-visual-light.png
+          if-no-files-found: ignore
+
+  build-windows:
+    name: Windows exe 构建
+    runs-on: windows-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: 安装 MSYS2 / mingw-w64 工具链
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: false
+          install: git mingw-w64-x86_64-gcc mingw-w64-x86_64-binutils
+
+      - name: 构建 GX-Playground.exe
+        shell: msys2 {0}
+        run: bash scripts/build-windows-msys2.sh
+
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: GX-Playground-windows-x64
+          path: GX-Playground.exe
+
+      - name: 发布 Release（仅 tag 触发）
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: GX-Playground.exe
