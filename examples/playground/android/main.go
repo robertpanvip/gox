@@ -65,13 +65,14 @@ func main() {
 			case lifecycle.Event:
 				switch e.Crosses(lifecycle.StageVisible) {
 				case lifecycle.CrossOn:
-					// EGL 上下文随可见性建立：GL 显示端在这里初始化。
+					// EGL 上下文随可见性建立（x/mobile 内部使用；V2 的 wgpu
+					// surface 由 paintNow 懒初始化，见 paintNowV2）。
 					glctx, _ = e.DrawContext.(gl.Context)
 					log.Printf("LIFECYCLE CrossOn glctx=%v", glctx != nil)
 					if glctx != nil {
 						if gxWin != nil {
 							if err := gxWin.ensureGL(glctx); err != nil {
-								log.Fatalf("GLES blit 初始化: %v", err)
+								log.Printf("GLES blit 初始化（V2 失败时的回退显示端）: %v", err)
 							}
 							a.Send(paint.Event{})
 						}
@@ -130,7 +131,11 @@ func main() {
 					frameClock.emit()
 				}
 				gxWin.paintNow()
-				a.Publish()
+				if !v2Ready() {
+					// 回退路径才走 x/mobile 的 EGL swap；V2 的 present 由
+					// wgpu 直接写 ANativeWindow buffer queue。
+					a.Publish()
+				}
 				// 光标 blink 等旁路动画没有 frame.Changes，paintNow 会保持
 				// dirty——自发下一帧 paint 事件，动画消失后自动停帧。
 				// 声明式 RAF 动画的续帧由 frameClock.RequestFrame 在 drawNowErr

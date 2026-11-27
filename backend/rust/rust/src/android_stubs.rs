@@ -83,3 +83,9 @@ pub unsafe extern "C" fn gx_clipboard_free(_ptr: *mut c_char) {}
 pub extern "C" fn gx_clipboard_set(_text: *const c_char) -> c_int {
     -1
 }
+
+/// MousePassthrough 为桌面能力：Android 返回 2（平台不支持）。
+#[no_mangle]
+pub extern "C" fn gx_window_set_mouse_passthrough(_handle: *mut c_void, _mode: i32) -> i32 {
+    2
+}

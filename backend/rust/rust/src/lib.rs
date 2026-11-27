@@ -37,6 +37,11 @@ mod video;
 // JS glue）构造与消费，本 crate 内部（除测试）不构造——抑制 dead_code。
 #[allow(dead_code)]
 mod android_surface;
+/// Android C ABI（阶段 5 Go 集成层）：gx_android_* 直通渲染内核。
+mod android_abi;
+/// Android target 的桌面 ABI stub（保证 backend/rust/go 的 ffi.go 可链接）。
+#[cfg(target_os = "android")]
+mod android_stubs;
 #[allow(dead_code)]
 mod ios_surface;
 #[allow(dead_code)]
@@ -51,6 +56,7 @@ use std::collections::VecDeque;
 use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_int, c_uchar, c_void};
 use std::sync::{Arc, Mutex};
+#[cfg(not(target_os = "android"))]
 use winit::{
     dpi::LogicalSize,
     event::{ElementState, Ime, MouseButton, WindowEvent},
@@ -60,6 +66,7 @@ use winit::{
     window::Window,
 };
 
+#[cfg(not(target_os = "android"))]
 /// winit 平台适配层（BACKEND_ARCHITECTURE_V2 §七）：把 winit Window 适配成
 /// 渲染内核的平台无关 SurfaceProvider。渲染内核（render.rs）不再 import
 /// winit——未来 Android NDK / iOS CAMetalLayer 宿主各写一个同款适配器，
@@ -71,6 +78,7 @@ struct WinitSurface {
 // SurfaceTargetUnsafe::RawHandle 的输入），rwh 0.6 标记 deprecated 的
 // HasRawDisplayHandle/HasRawWindowHandle 正是完成此转换的官方路径。
 #[allow(deprecated)]
+#[cfg(not(target_os = "android"))]
 impl crate::render::SurfaceProvider for WinitSurface {
     fn pixel_size(&self) -> (u32, u32) {
         let s = self.window.inner_size();
@@ -116,6 +124,7 @@ struct FrameQueue {
     /// 待消费帧队列（FIFO）。draw push_back，redraw drain 全部按序 apply。
     pending: VecDeque<Vec<u8>>,
     /// 事件循环代理（run 启动后注入）。draw/close 经它唤醒事件循环。
+    #[cfg(not(target_os = "android"))]
     proxy: Option<EventLoopProxy<GxEvent>>,
     /// 已收到退出请求。
     shutdown: bool,
@@ -143,6 +152,7 @@ impl FrameQueue {
     fn new() -> Self {
         FrameQueue {
             pending: VecDeque::new(),
+            #[cfg(not(target_os = "android"))]
             proxy: None,
             shutdown: false,
             wake_in_flight: false,
@@ -217,10 +227,15 @@ impl FrameQueue {
         if !need {
             return;
         }
+        #[cfg(not(target_os = "android"))]
         if let Some(p) = &self.proxy {
             if p.send_event(ev).is_ok() && ev == GxEvent::Wake {
                 self.wake_in_flight = true;
             }
+        }
+        #[cfg(target_os = "android")]
+        {
+            let _ = ev; // Android 无 winit proxy：唤醒由宿主 paintClock 驱动
         }
     }
 }
@@ -268,16 +283,23 @@ struct Backend {
     /// 缓存，resumed 应用整窗级；区域级由每帧 RedrawRequested 用内容矩形应用。
     passthrough: Arc<std::sync::atomic::AtomicU8>,
     /// winit 窗口共享槽：resumed 创建后填充；pump Exit 清空（与 renderer 槽同契约）。
+    #[cfg(not(target_os = "android"))]
     window: Arc<Mutex<Option<Arc<Window>>>>,
+    /// Android：无 winit 窗口（ANativeWindow 经 android_abi 注入），恒空槽。
+    #[cfg(target_os = "android")]
+    window: Arc<Mutex<Option<()>>>,
     /// 事件循环实例（gx_window_new 创建；pump 返回 Exit 后丢弃）。
+    #[cfg(not(target_os = "android"))]
     el: Mutex<Option<EventLoop<GxEvent>>>,
     /// 跨 pump 持久的 winit 应用状态（窗口句柄 / 修饰键 / 首帧探针等）。
+    #[cfg(not(target_os = "android"))]
     app: Mutex<Option<WinitApp>>,
 }
 
 unsafe impl Send for Backend {}
 unsafe impl Sync for Backend {}
 
+#[cfg(not(target_os = "android"))]
 #[no_mangle]
 pub extern "C" fn gx_window_new(width: c_int, height: c_int, title: *const c_char) -> *mut c_void {
     gx_window_new_ex(width, height, title, -1, 0, 0, 0.0)
@@ -292,6 +314,7 @@ unsafe fn cstr(s: *const c_char) -> String {
 
 /// 扩展版窗口创建：携带无边框/透明/置顶/不透明度配置。
 /// 各布尔参数为 0/1；decorated 为 -1(默认)/0/1；opacity<=0 或 >1 表示不设置。
+#[cfg(not(target_os = "android"))]
 #[no_mangle]
 pub extern "C" fn gx_window_new_ex(
     width: c_int,
@@ -408,6 +431,7 @@ pub extern "C" fn gx_window_set_event_cb(handle: *mut c_void, cb: EventCallback,
     *backend.cb_ctx.lock().unwrap() = ctx;
 }
 
+#[cfg(not(target_os = "android"))]
 /// 构造 winit 应用状态（跨 pump 持久；首次 pump 时创建）。
 /// 启动时间探针：仅当 GX_STARTUP_PROBE 设置时开启，默认零开销。
 fn winit_app_for(backend: &Backend) -> WinitApp {
@@ -441,6 +465,7 @@ fn winit_app_for(backend: &Backend) -> WinitApp {
 /// 实现用 winit 的 pump_events 嵌入 API（timeout=Some(ZERO)，绝不阻塞宿主循环）；
 /// 应用状态跨 pump 持久化在 Backend.app（窗口句柄/修饰键等）。pump 返回 Exit 时
 /// 清空渲染器槽（surface/设备与事件循环同生命周期）并丢弃事件循环与应用状态。
+#[cfg(not(target_os = "android"))]
 #[no_mangle]
 pub extern "C" fn gx_window_pump(handle: *mut c_void) -> c_int {
     if handle.is_null() {
@@ -481,6 +506,7 @@ pub extern "C" fn gx_window_pump(handle: *mut c_void) -> c_int {
     }
 }
 
+#[cfg(not(target_os = "android"))]
 /// 构造事件循环。Linux 下事件循环跑在 Go goroutine 经 cgo 进入的线程（非主线程），
 /// 必须显式开启 any_thread；X11/Wayland 两条后端都要开，避免运行环境选 Wayland 时踩坑。
 fn new_event_loop() -> EventLoop<GxEvent> {
@@ -503,6 +529,7 @@ fn new_event_loop() -> EventLoop<GxEvent> {
     }
 }
 
+#[cfg(not(target_os = "android"))]
 struct WinitApp {
     /// 共享渲染器槽：pump 期间经 Mutex 访问；Backend 的 debug/时钟 ABI
     /// 在泵运行期间经同一 Arc 读取（评审 P0 生命周期：pump Exit 后随槽释放）。
@@ -532,6 +559,7 @@ struct WinitApp {
     win_slot: Arc<Mutex<Option<Arc<Window>>>>,
 }
 
+#[cfg(not(target_os = "android"))]
 impl winit::application::ApplicationHandler<GxEvent> for WinitApp {
     fn resumed(&mut self, el: &winit::event_loop::ActiveEventLoop) {
         if self.state.lock().unwrap().is_some() {
@@ -940,6 +968,7 @@ impl winit::application::ApplicationHandler<GxEvent> for WinitApp {
     }
 }
 
+#[cfg(not(target_os = "android"))]
 /// 构造原始输入事件 JSON（mods 为空时省略字段，保持事件体最小）。
 fn input_json(
     kind: &str,
@@ -962,6 +991,7 @@ fn input_json(
     ev.to_json()
 }
 
+#[cfg(not(target_os = "android"))]
 /// winit LogicalKey → 翻译层键名：Named 键给变体名（Left/Home/Backspace/Escape...），
 /// 字符键给字符本身（"a"），识别不了给空串。
 fn key_name(k: &Key) -> String {
@@ -972,6 +1002,7 @@ fn key_name(k: &Key) -> String {
     }
 }
 
+#[cfg(not(target_os = "android"))]
 /// 修饰键固定顺序串（翻译层按 contains 判断）："ctrl+shift+alt+super"。
 /// 自由函数而非方法：window_event 里 renderer 可变借用 self.state 期间，
 /// 方法调用会触发整 self 借用冲突；ModifiersState 是 Copy，先复制再传值。
@@ -992,6 +1023,7 @@ fn mods_str(m: winit::keyboard::ModifiersState) -> String {
     parts.join("+")
 }
 
+#[cfg(not(target_os = "android"))]
 /// CSS cursor 值 → winit 系统光标（与旧 skia glwindow 的 setHoverCursor 同一张映射）。
 /// "default"/"auto"/空 → Arrow；未识别值（wait/progress/move）暂按箭头。
 fn cursor_icon_for(shape: &str) -> winit::window::CursorIcon {
@@ -1026,6 +1058,7 @@ fn fire(cb: &Arc<Mutex<EventCallback>>, ctx: &Arc<Mutex<*mut c_void>>, json: &st
 /// 请求关闭：设置 shutdown 并通过 proxy 唤醒事件循环退出。
 /// 注意：这里【不释放】Backend 内存——pump 可能仍在使用它（评审 P0 生命周期竞争）。
 /// 宿主观测到 gx_window_pump 返回 0 后调用 gx_window_destroy 释放。
+#[cfg(not(target_os = "android"))]
 #[no_mangle]
 pub extern "C" fn gx_window_close(handle: *mut c_void) {
     if handle.is_null() {
@@ -1043,6 +1076,7 @@ pub extern "C" fn gx_window_close(handle: *mut c_void) {
 /// Go 侧必须在 gx_window_pump 返回 0（事件循环已退出）之后调用。
 /// 释放前兜底清空渲染器槽 / winit 应用状态 / 事件循环，保证 GPU 资源先于
 /// Backend 析构（pump Exit 路径已清，这里覆盖「未泵即 destroy」的短生命周期）。
+#[cfg(not(target_os = "android"))]
 #[no_mangle]
 pub extern "C" fn gx_window_destroy(handle: *mut c_void) {
     if !handle.is_null() {
@@ -1077,6 +1111,7 @@ fn vsync_mode(code: u8) -> wgpu::PresentMode {
 /// 运行时切换 vsync/present 模式。渲染器已创建则立即 reconfigure 生效；
 /// 未创建（首窗前）仅记录请求，由 resumed 应用。
 /// 返回 0=成功；1=surface 不支持该模式（保持原值，请求仍记录）；2=参数/句柄无效。
+#[cfg(not(target_os = "android"))]
 #[no_mangle]
 pub extern "C" fn gx_window_set_vsync(handle: *mut c_void, mode: c_int) -> c_int {
     if handle.is_null() || !(0..=2).contains(&mode) {
@@ -1101,6 +1136,7 @@ pub extern "C" fn gx_window_set_vsync(handle: *mut c_void, mode: c_int) -> c_int
 
 /// 读取当前请求的 vsync 模式码（0/1/2；句柄无效返回 -1）。诊断用。
 #[no_mangle]
+#[cfg(not(target_os = "android"))]
 pub extern "C" fn gx_window_get_vsync(handle: *mut c_void) -> c_int {
     if handle.is_null() {
         return -1;
@@ -1116,6 +1152,7 @@ pub extern "C" fn gx_window_get_vsync(handle: *mut c_void) -> c_int {
 /// 窗口未创建（首 pump 前）：只缓存请求，resumed 创建窗口后自动应用——这与
 /// gx_window_set_vsync 的创建期语义一致，Go 侧可在 openEntry 装配段直接调用。
 #[no_mangle]
+#[cfg(not(target_os = "android"))]
 pub extern "C" fn gx_window_set_mouse_passthrough(handle: *mut c_void, mode: c_int) -> c_int {
     if handle.is_null() {
         return 1;
@@ -1171,6 +1208,7 @@ pub extern "C" fn gx_window_set_mouse_passthrough(handle: *mut c_void, mode: c_i
 /// E2E 调试导出：{"win_w":..,"win_h":..,"boxes":[{label,testid,kind,x,y,w,h},...]}。
 /// 返回堆上 C 字符串，调用方用 gx_window_debug_free 释放；空场景返回 "boxes":[]。
 #[no_mangle]
+#[cfg(not(target_os = "android"))]
 pub extern "C" fn gx_window_debug_info(handle: *mut c_void) -> *mut c_char {
     if handle.is_null() {
         return CString::default().into_raw();
@@ -1191,6 +1229,7 @@ pub extern "C" fn gx_window_debug_info(handle: *mut c_void) -> *mut c_char {
 
 /// 释放 gx_window_debug_info 返回的堆串。
 #[no_mangle]
+#[cfg(not(target_os = "android"))]
 pub unsafe extern "C" fn gx_window_debug_free(ptr: *mut c_char) {
     if !ptr.is_null() {
         drop(CString::from_raw(ptr));
@@ -1205,6 +1244,7 @@ pub unsafe extern "C" fn gx_window_debug_free(ptr: *mut c_char) {
 /// 进程级剪贴板实例。初始化失败（无显示服务 / Wayland 无 data-control）存 None，
 /// 读写按"失败"处理而非 panic——剪贴板不可用不应拖垮渲染进程。
 #[cfg(feature = "clipboard")]
+#[cfg(not(target_os = "android"))]
 fn clipboard() -> Option<&'static Mutex<arboard::Clipboard>> {
     static CLIP: std::sync::OnceLock<Option<Mutex<arboard::Clipboard>>> =
         std::sync::OnceLock::new();
@@ -1214,6 +1254,7 @@ fn clipboard() -> Option<&'static Mutex<arboard::Clipboard>> {
 
 /// 读取剪贴板文本。返回堆上 C 字符串（NUL 结尾，UTF-8；失败/空返回 ""），
 /// 调用方必须用 gx_clipboard_free 释放（非借用，避免栈帧生命周期纠缠）。
+#[cfg(not(target_os = "android"))]
 #[no_mangle]
 pub extern "C" fn gx_clipboard_get() -> *mut c_char {
     let text: String = {
@@ -1235,6 +1276,7 @@ pub extern "C" fn gx_clipboard_get() -> *mut c_char {
 
 /// 释放 gx_clipboard_get 返回的堆串。
 #[no_mangle]
+#[cfg(not(target_os = "android"))]
 pub unsafe extern "C" fn gx_clipboard_free(ptr: *mut c_char) {
     if !ptr.is_null() {
         drop(CString::from_raw(ptr));
@@ -1242,6 +1284,7 @@ pub unsafe extern "C" fn gx_clipboard_free(ptr: *mut c_char) {
 }
 
 /// 写剪贴板文本（UTF-8，NUL 结尾）。返回 0 成功 / -1 失败（feature 关闭恒 -1）。
+#[cfg(not(target_os = "android"))]
 #[no_mangle]
 pub extern "C" fn gx_clipboard_set(text: *const c_char) -> i32 {
     if text.is_null() {

@@ -2,7 +2,10 @@ package rustbackend
 
 /*
 #cgo CFLAGS: -I${SRCDIR}/../rust/target/release
-#cgo LDFLAGS: -L${SRCDIR}/../rust/target/release -lgxbackend_rust -lpthread -ldl -lm
+#cgo !android LDFLAGS: -L${SRCDIR}/../rust/target/release -lgxbackend_rust -lpthread -ldl -lm
+#cgo android LDFLAGS: -lgxbackend_rust -ldl -lm -llog -landroid
+#cgo android,arm64 LDFLAGS: -L${SRCDIR}/../../rust/rust/target/aarch64-linux-android/release
+#cgo android,amd64 LDFLAGS: -L${SRCDIR}/../../rust/rust/target/x86_64-linux-android/release
 #include <stdlib.h>
 #include <stdint.h>
 

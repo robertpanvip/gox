@@ -16,7 +16,6 @@ wgpu = "25"
 # 平台无关 raw handle（SurfaceProvider trait 返回值；wgpu 25 同版本传递依赖）
 raw-window-handle = "0.6"
 glyphon = "0.9"
-winit = "0.30"
 cosmic-text = "0.14"
 pollster = "0.4"
 serde = { version = "1", features = ["derive"] }
@@ -25,7 +24,6 @@ serde_json = "1"
 gx_gpu = { path = "../../gpu" }
 # 桌面剪贴板（阶段 4 翻译层 Ctrl+C/V/X 消费）。wasm 构建必须 --no-default-features
 # （arboard 不支持 wasm32，会拉爆编译）。
-arboard = { version = "3", optional = true, default-features = false }
 
 [features]
 default = ["clipboard"]
@@ -45,3 +43,10 @@ codegen-units = 1     # 单代码单元，配合 LTO 最大化优化
 strip = "symbols"     # 去除符号表与调试信息
 panic = "unwind"      # 保留 unwind：C ABI 用 catch_unwind 兜底 panic
 overflow-checks = false
+
+# Android target 不编 winit/arboard：宿主是 Go x/mobile NativeActivity
+# （ANativeActivity_onCreate 由 x/mobile glue 提供，与 winit 的 android-activity
+# glue 重复），帧调度在 Go 侧 paintClock，渲染内核经 android_abi.rs 直通。
+[target.'cfg(not(target_os = "android"))'.dependencies]
+winit = "0.30"
+arboard = { version = "3", optional = true, default-features = false }

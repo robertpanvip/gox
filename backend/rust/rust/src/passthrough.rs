@@ -12,7 +12,9 @@
 //! 等价的逐帧不透明区域日志，先提供整窗级开关支撑 overlay 场景；区域级在拿到
 //! 渲染端内容框日志后按同一口径补齐。
 
+#[cfg(not(target_os = "android"))]
 use std::ffi::c_long;
+#[cfg(not(target_os = "android"))]
 use winit::window::Window;
 
 /// 区域级穿透的输入形状矩形：窗口内容区物理像素坐标（左上原点）。
@@ -30,6 +32,7 @@ pub struct InputRect {
 ///
 /// X11 经 XShape ShapeInput 实现；Windows/macOS 无区域级公开 API，返回 Err
 /// （Go 侧应回退整窗级模式）。
+#[cfg(not(target_os = "android"))]
 pub fn apply_input_shape(window: &Window, rects: &[InputRect]) -> Result<(), String> {
     #[cfg(target_os = "linux")]
     {
@@ -44,6 +47,7 @@ pub fn apply_input_shape(window: &Window, rects: &[InputRect]) -> Result<(), Str
 
 /// 整窗级穿透开关。成功返回 Ok；平台不支持（Wayland）或系统库缺失返回 Err，
 /// Go 侧透传为错误（不静默）。
+#[cfg(not(target_os = "android"))]
 pub fn set_mouse_passthrough(window: &Window, enabled: bool) -> Result<(), String> {
     #[cfg(target_os = "linux")]
     {

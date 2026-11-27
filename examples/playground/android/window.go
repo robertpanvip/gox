@@ -17,12 +17,14 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"strconv"
 	"strings"
 	"sync"
 
 	sk "github.com/robertpanvip/gox-skia/compat"
 	skia "github.com/robertpanvip/gox-backend-skia"
+	rustbackend "github.com/robertpanvip/gox-backend-rust"
 	gxapp "github.com/robertpanvip/gox/runtime/app"
 	gxscene "github.com/robertpanvip/gox/runtime/scene"
 	"github.com/robertpanvip/gox/runtime/loop"
@@ -157,6 +159,10 @@ func (w *androidWindow) resize(e size.Event) {
 	if w.opened {
 		w.rebuildCanvasLocked()
 	}
+	// V2：surface 尺寸变化同步渲染器（渲染目标=逻辑尺寸，系统拉伸）。
+	if v2Ready() {
+		v2Resize(int(float32(w.physW)/w.dpr), int(float32(w.physH)/w.dpr))
+	}
 }
 
 func (w *androidWindow) rebuildCanvasLocked() {
@@ -202,6 +208,7 @@ func (w *androidWindow) suspendGL() {
 	defer w.mu.Unlock()
 	w.visible = false
 	w.painted = false
+	v2Destroy() // V2：surface 失效即销毁渲染器，重建走 set_window/new
 	w.blit = nil // EGL 上下文随之失效，显示端资源整体废弃
 	w.frameCache = skia.FrameCache{}
 }
@@ -236,11 +243,34 @@ func (w *androidWindow) Present(frame *gxapp.Frame) error {
 	return nil
 }
 
-// paintNow 在 GL 线程（paint 事件回调内）执行绘制：CPU raster → 纹理上传 → blit。
+// paintNow 在 UI 线程（paint 事件回调内）执行绘制。
+// V2 路径（rust 渲染内核已就绪）：skia layout 只取命中框（E2E 测试桥），
+// GRX3 指令流 → gx_android_apply → gx_android_render（wgpu 直通 present）；
+// V2 未就绪（wgpu 初始化失败）回退旧 skia raster + GLES blit。
 func (w *androidWindow) paintNow() {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if !w.opened || !w.visible || w.blit == nil || w.canvas.IsNil() || !w.dirty {
+	if !w.opened || !w.visible || w.root == nil || !w.dirty {
+		return
+	}
+
+	// V2：渲染器懒初始化（首个 paint 时 surface 已挂载）。
+	if !v2Ready() {
+		if nw := getNativeWindow(); nw != nil {
+			lw, lh := w.logicalSize()
+			if err := v2New(nw, lw, lh); err != nil {
+				log.Printf("V2 渲染器初始化失败，回退 GLES blit: %v", err)
+			}
+		}
+	}
+
+	if v2Ready() {
+		w.paintNowV2()
+		return
+	}
+
+	// 旧路径：skia CPU raster → GLES blit（回退）。
+	if w.blit == nil || w.canvas.IsNil() {
 		return
 	}
 	canvas := w.canvas
@@ -252,7 +282,33 @@ func (w *androidWindow) paintNow() {
 		w.blit.blit()
 	}
 	w.painted = true
-	// 声明式动画（光标 blink）不产生 frame.Changes：保持 dirty 让主循环续帧。
+	w.dirty = skia.HasActiveAnimation(w.root)
+}
+
+// paintNowV2 是 rust 渲染内核路径：layout（skia，供 E2E 命中框）→ GRX3 序列化
+// → Rust apply/render。帧与 surface 均用逻辑尺寸（ANativeWindow 由系统拉伸到
+// 物理视口；dpr 精细缩放待后续 Renderer scale 支持）。
+func (w *androidWindow) paintNowV2() {
+	canvas := w.canvas
+	if !canvas.IsNil() {
+		_, hits := skia.PaintToCachedScaled(&w.frameCache, canvas,
+			float32(w.physW), float32(w.physH), w.dpr, w.root, w.fonts)
+		w.hits = hits
+	}
+	lw, lh := w.logicalSize()
+	data, err := rustbackend.SerializeFrameBinV3(w.root, uint32(lw), uint32(lh))
+	if err != nil {
+		log.Printf("V2 序列化失败: %v", err)
+		return
+	}
+	if err := v2Apply(data); err != nil {
+		log.Printf("V2 apply 失败: %v", err)
+	}
+	if err := v2Render(); err != nil {
+		log.Printf("V2 render 失败: %v", err)
+	}
+	w.painted = true
+	// V2 present 后 buffer 已交给系统：dirty 语义与旧路径一致（动画续帧）。
 	w.dirty = skia.HasActiveAnimation(w.root)
 }
 
