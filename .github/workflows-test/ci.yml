@@ -12,6 +12,9 @@
 #     跨平台驱动 tests/gui_driver.py + shims/；Linux 硬门禁，Windows 观察）
 #   - 三端一致性矩阵（Linux 硬门禁）：testdata/threeway/cases.json 共享用例
 #     经 Web/Skia/Rust 三端无头消费并断言，覆盖样式属性实现与传值正确性
+#   - Desktop Playground GUI E2E（28 项：点击定位/三击选行复制两个历史 bug
+#     回归 + 键盘/滚轮/主题/Run/示例/resize；脚本 examples/playground/tests/
+#     gui_e2e.sh，复用 gox-idea 的 shims；Linux 硬门禁，Windows 观察）
 # build-windows job：测试通过后编译自包含 exe（yoga Windows 静态库从源码
 #   编译，见 scripts/build-windows-msys2.sh 与 docs/windows-build.md），
 #   上传 artifact；打 tag（v*）时额外创建 GitHub Release。
@@ -156,6 +159,32 @@ jobs:
         env:
           GOX_IDEA_BIN: cmd/gox-idea/gox-idea.exe
 
+      # ---- Desktop Playground GUI E2E（真实鼠标/键盘，28 项断言）----
+      # 覆盖点击定位/三击选行复制两个历史严重 bug，及键盘/滚轮/主题/Run/
+      # 示例切换/resize。命中框动态定位按钮，字宽运行时实测，不写死坐标。
+      - name: 构建 Desktop Playground（Linux）
+        if: runner.os == 'Linux'
+        run: cd examples/playground && go build -o /tmp/pg-desktop-e2e ./desktop
+
+      - name: 构建 Desktop Playground（Windows）
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: bash scripts/build-windows-msys2.sh
+
+      - name: Desktop Playground GUI E2E（Linux 硬门禁）
+        if: runner.os == 'Linux'
+        run: bash examples/playground/tests/gui_e2e.sh
+        env:
+          GOX_PLAYGROUND_BIN: /tmp/pg-desktop-e2e
+
+      - name: Desktop Playground GUI E2E（Windows 观察）
+        if: runner.os == 'Windows'
+        continue-on-error: true
+        shell: msys2 {0}
+        run: bash examples/playground/tests/gui_e2e.sh
+        env:
+          GOX_PLAYGROUND_BIN: GX-Playground.exe
+
       - name: 失败时上传截图
         if: failure()
         uses: actions/upload-artifact@v4
@@ -167,6 +196,7 @@ jobs:
             /tmp/gox-idea-e2e-app.log
             /tmp/gox-idea-i-app.log
             /tmp/gox-idea-v-app.log
+            /tmp/pg-e2e-app.log
             /tmp/gox-idea-visual-dark.png
             /tmp/gox-idea-visual-light.png
           if-no-files-found: ignore

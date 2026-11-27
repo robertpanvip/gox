@@ -288,3 +288,8 @@ func toolbar() *gxscene.Instance {
  func EditorStatus() string               { return editorState.Status() }
  func PickColumn(idx int, x float64) int  { return editorState.PickColumn(idx, x) }
  func EditorLineText(idx int, slot int) string { return editorState.LineText(idx, slot) }
+
+// ---- GUI E2E 只读观测钩子（仅测试快照使用，正常用户零开销）----
+ func EditorScrollTop() float64  { return editorState.ScrollTop() }
+ func EditorHasSelection() bool  { return editorState.HasSelection() }
+ func ConsoleTextSnapshot() string { return consoleState.Text() }

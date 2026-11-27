@@ -6,6 +6,10 @@
 package main
 
 import (
+	"encoding/json"
+	"os"
+	"time"
+
 	"github.com/robertpanvip/gox-playground/ui"
 	"github.com/robertpanvip/gox-playground/ui/interp"
 	skia "github.com/robertpanvip/gox-backend-skia"
@@ -30,6 +34,40 @@ func main() {
 	// 帧请求、后台 Dispatch、微任务全部进入共享 Loop 队列，由 Run() 在
 	// GLFW 线程 drain 执行；不启动第二个事件循环。
 	app.SetUIExecutor(win)
+
+	// GUI 端到端测试钩子：设置 GOX_PLAYGROUND_STATE_FILE 后，每 100ms 把 UI 状态
+	// 快照写到指定文件，供脚本在真实鼠标/键盘操作后硬断言（点击定位、拖动选区、
+	// 滚轮、主题、Run 等状态进程外不可见）。快照在 UI 线程生成，避免与编辑并发；
+	// 未设置环境变量时完全不启用，正常用户零开销。
+	if stateFile := os.Getenv("GOX_PLAYGROUND_STATE_FILE"); stateFile != "" {
+		go func() {
+			ticker := time.NewTicker(100 * time.Millisecond)
+			defer ticker.Stop()
+			for range ticker.C {
+				path := stateFile
+				if err := win.Post(func() {
+					data := ui.DebugStateJSON()
+					var snap map[string]any
+					if json.Unmarshal(data, &snap) == nil {
+						ww, wh := win.DebugWindowSize()
+						snap["window_w"] = ww
+						snap["window_h"] = wh
+						snap["boxes"] = win.DebugAllBoxes()
+						if merged, err := json.Marshal(snap); err == nil {
+							data = merged
+						}
+					}
+					// 原子替换，避免脚本读到半截 JSON。
+					tmp := path + ".tmp"
+					if os.WriteFile(tmp, data, 0644) == nil {
+						_ = os.Rename(tmp, path)
+					}
+				}); err != nil {
+					return
+				}
+			}
+		}()
+	}
 
 	// 字符宽度实测注入：编辑器点击换算/光标渲染依赖字符宽度，默认值 7.83 与
 	// 桌面 Skia 实际等宽族（Windows 上 Consolas 13px ≈ 7.15）不符，不注入会导致

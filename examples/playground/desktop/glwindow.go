@@ -761,6 +761,58 @@ func (g *glWindow) Close() error {
 // Config 实现 gxapp.Window。
 func (g *glWindow) Config() gxapp.WindowConfig { return g.cfg }
 
+// nodeLabel 从节点自身 label prop / 子树文本里提取可读标识，供 E2E 按文案定位按钮。
+func nodeLabel(n *gxscene.Node) string {
+	if n == nil {
+		return ""
+	}
+	if v, ok := n.Props["label"].(string); ok && v != "" {
+		return v
+	}
+	if n.Text != "" {
+		return n.Text
+	}
+	for _, c := range n.Children {
+		if s := nodeLabel(c); s != "" {
+			return s
+		}
+	}
+	return ""
+}
+
+// DebugAllBoxes 导出最近一帧所有命中框（x/y/w/h + 可读标识），供 E2E 按文案
+// 动态定位按钮/示例行，避免写死坐标在布局调整后失效。
+func (g *glWindow) DebugAllBoxes() []map[string]any {
+	g.mu.Lock()
+	hits := append([]skia.HitBox(nil), g.hits...)
+	g.mu.Unlock()
+	out := []map[string]any{}
+	for _, h := range hits {
+		if h.Node == nil {
+			continue
+		}
+		label := nodeLabel(h.Node)
+		tid, _ := h.Node.Props["testid"].(string)
+		kind := h.Node.Kind
+		if kind == "" {
+			kind = fmt.Sprintf("%v", h.Node.Type)
+		}
+		out = append(out, map[string]any{
+			"label":  label,
+			"testid": tid,
+			"kind":   kind,
+			"x":      h.X, "y": h.Y, "w": h.W, "h": h.H,
+		})
+	}
+	return out
+}
+
+// DebugWindowSize 供 GUI E2E 快照读取窗口逻辑尺寸（点），用于断言 resize 生效。
+func (g *glWindow) DebugWindowSize() (int, int) {
+	w, h := g.win.GetSize()
+	return w, h
+}
+
 // Frames 返回已绘制帧数（观测用）。
 func (g *glWindow) Frames() int {
 	g.mu.Lock()

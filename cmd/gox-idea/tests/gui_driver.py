@@ -36,6 +36,13 @@ import time
 IS_WIN = platform.system() == "Windows"
 DEVNULL = subprocess.DEVNULL
 
+# 受测 GUI 程序标题关键字：gox-idea IDE 与 Desktop Playground 都要能被驱动定位。
+WINDOW_TITLES = ("GoX IDE", "GX Playground")
+
+
+def find_windows(gw):
+    return [w for w in gw.getAllWindows() if any(t in w.title for t in WINDOW_TITLES)]
+
 
 def run(args, **kw):
     return subprocess.run(args, check=False, **kw)
@@ -114,7 +121,7 @@ def win_xdotool(args):
             # WID W H → 跳过 WID，用后两个参数
             i += 1
             import pygetwindow as gw
-            wins = [w for w in gw.getAllWindows() if "GoX IDE" in w.title]
+            wins = find_windows(gw)
             if wins and i + 1 < n:
                 wins[0].resizeTo(int(args[i]), int(args[i + 1]))
             i = n
@@ -205,23 +212,31 @@ def main():
     if cmd == "find-window":
         if IS_WIN:
             import pygetwindow as gw
-            wins = [w for w in gw.getAllWindows() if "GoX IDE" in w.title]
+            wins = find_windows(gw)
             print("1" if wins else "0")
         else:
-            r = run(["xdotool", "search", "--name", "GoX IDE"], capture_output=True, text=True)
-            print("1" if r.stdout.strip() else "0")
+            found = False
+            for title in WINDOW_TITLES:
+                r = run(["xdotool", "search", "--name", title], capture_output=True, text=True)
+                if r.stdout.strip():
+                    found = True
+                    break
+            print("1" if found else "0")
         return 0
 
     if cmd == "windowsize":
         if IS_WIN:
             import pygetwindow as gw
-            wins = [w for w in gw.getAllWindows() if "GoX IDE" in w.title]
+            wins = find_windows(gw)
             if wins:
                 wins[0].resizeTo(int(args[0]), int(args[1]))
         else:
             wid = ""
-            r = run(["xdotool", "search", "--name", "GoX IDE"], capture_output=True, text=True)
-            wid = r.stdout.strip().splitlines()[0] if r.stdout.strip() else ""
+            for title in WINDOW_TITLES:
+                r = run(["xdotool", "search", "--name", title], capture_output=True, text=True)
+                if r.stdout.strip():
+                    wid = r.stdout.strip().splitlines()[0]
+                    break
             if wid:
                 run(["xdotool", "windowsize", wid, args[0], args[1]], stdout=DEVNULL)
         return 0
