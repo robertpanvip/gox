@@ -290,14 +290,19 @@ func (w *androidWindow) onTouch(e touch.Event) {
 		}
 		dy := e.Y - start.Y
 		if dy < -8 || dy > 8 {
-			// 编辑器内拖动 → 虚拟滚动（1 逻辑点 ≈ 0.2 行）；行容器滚动交给
-			// 编辑器自身的受控 scrollTop。
-			if _, _, ok := w.editorHit(e.X, e.Y); ok {
-				ui.EditorScrollLines(float64(-dy / 5))
-				w.mu.Lock()
-				w.touchStart = e // 增量式：每次以最新触点为基准
-				w.mu.Unlock()
+			w.mu.Lock()
+			hits := append([]skia.HitBox(nil), w.hits...)
+			w.mu.Unlock()
+			// 增量式：每次以最新触点为基准，delta 与命中检测共用逻辑坐标。
+			if _, _, ok := w.editorHitAt(hits, e.X, e.Y); ok {
+				// 编辑器内拖动 → 虚拟滚动（1 逻辑点 ≈ 1/22 行）。
+				ui.EditorScrollLines(float64(-dy / 22))
+			} else if !w.dragScrollAt(e.X, e.Y, dy) {
+				// 编辑器外无可滚动容器：忽略（紧凑布局外层 overflow hidden）。
 			}
+			w.mu.Lock()
+			w.touchStart = e
+			w.mu.Unlock()
 		}
 	case touch.TypeEnd:
 		w.mu.Lock()
@@ -356,12 +361,113 @@ func (w *androidWindow) onTap(px, py float32) {
 	}
 }
 
+// ---- 滚动路由（与桌面端 glwindow.wheelScrollAt 同语义）----
+// 拖动点下的 overflow:auto/scroll 容器沿祖先链滚动 scroll-top：
+// 编辑器走 EditorScrollLines（编辑逻辑层），其余容器（示例列表等）在此处理。
+
+// dragScrollAt 把拖动增量路由到 (px,py) 下的可滚动容器。delta>0 表示内容
+// 向下滚。返回是否找到并滚动了容器。
+func (w *androidWindow) dragScrollAt(px, py, delta float32) bool {
+	w.mu.Lock()
+	hits, root := w.hits, w.root
+	w.mu.Unlock()
+	if root == nil {
+		return false
+	}
+	var target *gxscene.Node
+	var box skia.HitBox
+	for i := range hits {
+		h := hits[i]
+		if h.Node == nil || !h.Contains(px, py) {
+			continue
+		}
+		for n := h.Node; n != nil; n = n.Parent() {
+			ov, _ := n.Props["overflow"].(string)
+			ov = strings.ToLower(strings.TrimSpace(ov))
+			if ov != "auto" && ov != "scroll" {
+				continue
+			}
+			// 编辑器拖动走 EditorScrollLines（编辑逻辑层），不在此处理。
+			if cls, _ := n.Props["class"].(string); strings.Contains(cls, "gx-editor") {
+				continue
+			}
+			target, box = n, h
+			break
+		}
+		if target != nil {
+			break
+		}
+	}
+	if target == nil {
+		return false
+	}
+	w.mu.Lock()
+	cur := propFloat(target.Props["scroll-top"])
+	maxScroll := w.contentSize(target, box, hits) - box.H
+	next := cur + delta
+	if next < 0 {
+		next = 0
+	}
+	if next > maxScroll {
+		next = maxScroll
+	}
+	if next != cur {
+		target.Props["scroll-top"] = float64(next)
+	}
+	w.mu.Unlock()
+	return true
+}
+
+// contentSize 估算容器的内容总高度：取该容器子树内所有命中框的最大底边
+// （命中框坐标已含当前 scroll 偏移，加回 curScroll 得内容高度）。
+// 与桌面端 glwindow.contentSize 同源。
+func (w *androidWindow) contentSize(container *gxscene.Node, box skia.HitBox, hits []skia.HitBox) float32 {
+	sub := map[*gxscene.Node]bool{}
+	var walk func(*gxscene.Node)
+	walk = func(n *gxscene.Node) {
+		sub[n] = true
+		for _, c := range n.Children {
+			walk(c)
+		}
+	}
+	walk(container)
+	cur := propFloat(container.Props["scroll-top"])
+	maxBottom := box.Y + box.H
+	for _, h := range hits {
+		if h.Node != nil && sub[h.Node] && h.Y+h.H > maxBottom {
+			maxBottom = h.Y + h.H
+		}
+	}
+	return maxBottom - box.Y + cur
+}
+
+// propFloat 从节点属性读数值（scroll-top 可能是 float64/int/string）。
+func propFloat(v any) float32 {
+	switch x := v.(type) {
+	case float64:
+		return float32(x)
+	case float32:
+		return x
+	case int:
+		return float32(x)
+	case string:
+		f, _ := strconv.ParseFloat(strings.TrimSpace(x), 32)
+		return float32(f)
+	}
+	return 0
+}
+
 // editorHit 与桌面端同源：行号取行节点 data-line（真实文档行号），列换算走
 // ui.PickColumn 与 caret 渲染共用同一套字符度量。
 func (w *androidWindow) editorHit(px, py float32) (int, int, bool) {
 	w.mu.Lock()
 	hits := append([]skia.HitBox(nil), w.hits...)
 	w.mu.Unlock()
+	return w.editorHitAt(hits, px, py)
+}
+
+// editorHitAt 是 editorHit 的纯函数版本（调用方已持有 hits 快照）。
+func (w *androidWindow) editorHitAt(hits []skia.HitBox, px, py float32) (int, int, bool) {
 	for i := range hits {
 		h := hits[i]
 		if h.Node == nil || h.Node.Props == nil || h.H <= 0 {
@@ -393,6 +499,67 @@ func (w *androidWindow) logicalSize() (int, int) {
 		return 1080, 720
 	}
 	return int(float32(w.physW) / w.dpr), int(float32(w.physH) / w.dpr)
+}
+
+// Dpr 返回当前 DPR（E2E 测试桥：逻辑坐标 ↔ 物理点击坐标换算用）。
+func (w *androidWindow) Dpr() float32 {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.dpr <= 0 {
+		return 1
+	}
+	return w.dpr
+}
+
+// TestElements 导出关键可点元素的逻辑坐标（E2E 测试桥消费）：
+// class 命中 gx-sample-row / gx-vk-key / gx-tool-btn 的节点，按其
+// data-index / data-key / data-action 属性生成 key → "x y w h" 映射。
+func (w *androidWindow) TestElements() string {
+	w.mu.Lock()
+	hits := append([]skia.HitBox(nil), w.hits...)
+	w.mu.Unlock()
+	var b strings.Builder
+	b.WriteString("{")
+	first := true
+	add := func(k string, h skia.HitBox) {
+		if !first {
+			b.WriteString(",")
+		}
+		first = false
+		b.WriteString(strconv.Quote(k))
+		b.WriteString(fmt.Sprintf(":\"%d %d %d %d\"", int(h.X), int(h.Y), int(h.W), int(h.H)))
+	}
+	var firstEditor, lastEditor = -1, -1
+	for i := range hits {
+		h := hits[i]
+		if h.Node == nil || h.Node.Props == nil {
+			continue
+		}
+		cls, _ := h.Node.Props["class"].(string)
+		switch {
+		case strings.Contains(cls, "gx-sample-row"):
+			idx, _ := h.Node.Props["data-index"].(string)
+			add("sample-"+idx, h)
+		case strings.Contains(cls, "gx-vk-key"):
+			key, _ := h.Node.Props["data-key"].(string)
+			add("key-"+key, h)
+		case strings.Contains(cls, "gx-tool-btn"):
+			act, _ := h.Node.Props["data-action"].(string)
+			add("tool-"+act, h)
+		case strings.Contains(cls, "gx-editor-row"):
+			// 编辑器可视行首尾：换算拖动滚动区域用。
+			if firstEditor < 0 {
+				firstEditor = i
+			}
+			lastEditor = i
+		}
+	}
+	if firstEditor >= 0 && lastEditor >= 0 {
+		add("editor-top", hits[firstEditor])
+		add("editor-bottom", hits[lastEditor])
+	}
+	b.WriteString("}")
+	return b.String()
 }
 
 func (w *androidWindow) paintErr() error {
