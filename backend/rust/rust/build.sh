@@ -41,4 +41,17 @@ for lib in "${LIBS[@]}"; do
   fi
 done
 
+# 兜底清扫：cgo 的 -L 安全检查会扫描目录内全部 .a（不只 -l 指定的主库），
+# cargo 重编译后遗留的旧 hash 孤儿归档若带 LTO 段同样炸链接（实测踩坑：
+# "disallowed LTO section" 指向早已不在链接路径上的 deps/libgxbackend_rust-<旧hash>）。
+# 剥离后仍带段的归档直接删除——它们要么已被新产物取代、要么是 cargo 未清理的孤儿。
+for lib in target/release/deps/libgxbackend_rust-*.a target/release/deps/libgx_gpu-*.a; do
+  [ -f "$lib" ] || continue
+  sections="$(objdump -h "$lib" 2>/dev/null || true)"
+  if printf '%s' "$sections" | grep -qE '\.llvmbc|\.llvmcmd'; then
+    echo "[rust-backend] remove orphan archive with LTO sections: $(basename "$lib")"
+    rm -f "$lib"
+  fi
+done
+
 echo "[rust-backend] done."
