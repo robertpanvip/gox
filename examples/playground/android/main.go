@@ -43,18 +43,31 @@ var (
 )
 
 func main() {
+	log.Printf("MAIN: 进入 app.Main")
+	// 心跳：证明 Go runtime 与 main goroutine 是否存活（V2 诊断）。
+	go func() {
+		for i := 1; ; i++ {
+			time.Sleep(10 * time.Second)
+			log.Printf("HEARTBEAT %d alive", i)
+		}
+	}()
 	app.Main(func(a app.App) {
+		log.Printf("MAIN: app.Main 已进入")
 		// 帧时钟：RequestFrame → Send paint.Event（CAS 去重），paint.Event 到达时
 		// emit 派发帧回调。动画续帧由 Scheduler 经此时钟预约 vsync 帧。
 		frameClock = newPaintClock(func() { a.Send(paint.Event{}) })
 		var glctx gl.Context
 		for e := range a.Events() {
+			if lv, ok := a.Filter(e).(lifecycle.Event); ok {
+				log.Printf("LIFECYCLE raw: %v cross=%v", lv, lv.Crosses(lifecycle.StageVisible))
+			}
 			switch e := a.Filter(e).(type) {
 			case lifecycle.Event:
 				switch e.Crosses(lifecycle.StageVisible) {
 				case lifecycle.CrossOn:
 					// EGL 上下文随可见性建立：GL 显示端在这里初始化。
 					glctx, _ = e.DrawContext.(gl.Context)
+					log.Printf("LIFECYCLE CrossOn glctx=%v", glctx != nil)
 					if glctx != nil {
 						if gxWin != nil {
 							if err := gxWin.ensureGL(glctx); err != nil {
@@ -94,6 +107,7 @@ func main() {
 			case paint.Event:
 				if !setUp && glReady {
 					setUp = true
+					log.Printf("PAINT 首帧：开始 setupGX")
 					if err := setupGX(); err != nil {
 						log.Fatalf("GX 装配失败: %v", err)
 					}
