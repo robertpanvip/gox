@@ -123,6 +123,19 @@ pub func SetLayoutTerminalH(h int) {
 }
 pub func ToggleTerminal() { Signal.batch(func() { layoutTerminalOpen = !layoutTerminalOpen }) }
 pub func SetTerminalOpen(v bool) { Signal.batch(func() { layoutTerminalOpen = v }) }
+
+// ---- 编辑器分屏视图（WebStorm "Split Right"：同一文档双 pane，
+// 内容/滚动天然同步；输入路由仍归主编辑区，右栏为镜像视图） ----
+sig splitOn = false
+pub func ToggleSplit() { splitOn = !splitOn }
+pub func SplitOn() bool { return splitOn }
+
+// ---- 内存指示真数据（装配层每帧循环注入 runtime.MemStats，主线程） ----
+sig memHeapMB = 0
+sig memTotalMB = 0
+pub func SetMemStats(heapMB int, totalMB int) {
+    Signal.batch(func() { memHeapMB = heapMB; memTotalMB = totalMB })
+}
 // SetSplitDragging 由装配层在分隔条按下/松开时切换高亮反馈。
 pub func SetSplitDragging(on bool) { Signal.batch(func() { layoutSplitActive = on }) }
 
@@ -1089,7 +1102,7 @@ func editorTabBar() *gxscene.Instance {
         </For>
         <div style={{ flexGrow: 1 }}/>
         <div
-            onClick={func(e gxscene.EventContext) { if e.Synthetic != nil { e.Synthetic.StopPropagation() }; SetMenu("View") }}
+            onClick={func(e gxscene.EventContext) { if e.Synthetic != nil { e.Synthetic.StopPropagation() }; ToggleSplit() }}
             testid={"tabs-split"}
             style={{ width: 24, height: 24, alignItems: "center", justifyContent: "center", marginRight: 6, borderRadius: widgets.RadiusSmall, cursor: "pointer", hover: { background: widgets.UseToken("panelalt")() } }}
         >
@@ -1189,10 +1202,26 @@ func notifText() string {
 func memoryIndicator() *gxscene.Instance {
     return <div
         testid={"st-memory"}
-        style={{ flexDirection: "row", alignItems: "center", width: 46, height: 12, borderRadius: 6, background: widgets.UseToken("panelalt")(), padding: "0 0 0 2" }}
+        style={{ flexDirection: "row", alignItems: "center", gap: 4 }}
     >
-        <div style={{ width: 14, height: 8, borderRadius: 4, background: widgets.UseToken("success")() }}/>
+        <div style={{ flexDirection: "row", alignItems: "center", width: 46, height: 12, borderRadius: 6, background: widgets.UseToken("panelalt")(), padding: "0 0 0 2" }}>
+            <div style={{ width: memFillW(), height: 8, borderRadius: 4, background: widgets.UseToken("success")() }}/>
+        </div>
+        {widgets.Text(gxscene.Props{"value": memText(), "size": "10", "tone": "muted"})}
     </div>
+}
+
+func memFillW() string {
+    if memTotalMB <= 0 { return "14" }
+    v := 44 * memHeapMB / memTotalMB
+    if v < 4 { v = 4 }
+    if v > 44 { v = 44 }
+    return strconv.Itoa(v)
+}
+
+func memText() string {
+    if memTotalMB <= 0 { return "" }
+    return strconv.Itoa(memHeapMB) + "M"
 }
 
 // ---- 主界面：WebStorm 风格三区布局 ----
@@ -1207,7 +1236,19 @@ func editorAndTerminal() *gxscene.Instance {
     return <div style={{ flexDirection: "column", gap: 0, flexGrow: 1, minWidth: 0 }}>
         {editorTabBar()}
         <div style={{ flexDirection: "column", gap: 0, height: editorAreaPx(), flexShrink: 0, overflow: "hidden", background: canvasBg() }}>
-            {Editor()}
+            if splitOn {
+                <div style={{ flexDirection: "row", gap: 0, flexGrow: 1, minHeight: 0 }}>
+                    <div style={{ flexDirection: "column", flexGrow: 1, minWidth: 0 }}>
+                        {Editor()}
+                    </div>
+                    <div style={{ width: 1, flexShrink: 0, background: borderColor() }}/>
+                    <div style={{ flexDirection: "column", flexGrow: 1, minWidth: 0 }}>
+                        {Editor()}
+                    </div>
+                </div>
+            } else {
+                {Editor()}
+            }
         </div>
         <div
             class="gx-splitter-h"

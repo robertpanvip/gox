@@ -65,15 +65,15 @@ type glWindow struct {
 	frameCache skia.FrameCache
 
 	// 编辑器选区交互状态。GLFW 回调都在主线程（Run 的 WaitEvents 循环里）串行执行，无需加锁。
-	scrollEvents   atomic.Int64 // 测试钩子：累计收到的滚轮回调次数，用于区分「事件没到」与「滚动逻辑没生效」
-	lastScrollYOff    float64 // 测试钩子：最近一次滚轮回调的 yoff，诊断事件参数是否为 0
-	lastScrollBefore  float64 // 测试钩子：滚动转发前后的偏移，定位「转发没生效/被回写」
-	lastScrollAfter   float64
-	dragging   bool      // 左键按住拖拽选择中
-	clickTime  time.Time // 上次按下时刻/位置：双击、三击判定
-	clickX     float64
-	clickY     float64
-	clickCount int
+	scrollEvents     atomic.Int64 // 测试钩子：累计收到的滚轮回调次数，用于区分「事件没到」与「滚动逻辑没生效」
+	lastScrollYOff   float64      // 测试钩子：最近一次滚轮回调的 yoff，诊断事件参数是否为 0
+	lastScrollBefore float64      // 测试钩子：滚动转发前后的偏移，定位「转发没生效/被回写」
+	lastScrollAfter  float64
+	dragging         bool      // 左键按住拖拽选择中
+	clickTime        time.Time // 上次按下时刻/位置：双击、三击判定
+	clickX           float64
+	clickY           float64
+	clickCount       int
 
 	// WebStorm 三区分隔条拖拽状态（同样只在主线程回调里读写）。
 	splitDrag   bool   // 正在拖拽分隔条
@@ -730,8 +730,16 @@ func (g *glWindow) Run() error {
 	}
 	// 首帧：Render() 已在 Run 前调用 Draw 置 dirty，主线程立即绘制。
 	g.paintNow()
+	lastMem := time.Now()
 	for !g.win.ShouldClose() {
 		glfw.WaitEventsTimeout(0.02) // 20ms 超时；Loop.Wake 经 PostEmptyEvent 即时打断
+		// 内存指示真数据：每秒读一次 runtime（GLFW 主线程写 sig，无跨线程问题）。
+		if time.Since(lastMem) >= time.Second {
+			lastMem = time.Now()
+			var ms runtime.MemStats
+			runtime.ReadMemStats(&ms)
+			ui.SetMemStats(int(ms.HeapAlloc>>20), int(ms.Sys>>20))
+		}
 		g.drainLoop()
 		g.paintNow()
 	}

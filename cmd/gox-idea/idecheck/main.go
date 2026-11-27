@@ -587,6 +587,94 @@ var features = []Feature{
 		}
 		return expect(!h.HasText("Problems"), "关闭后底部工具窗应收起")
 	}},
+
+	{"H1", "图标在各自容器内居中（偏差<=1.5px）", func(h *Harness) error {
+		bad := h.iconMisalign(8)
+		if len(bad) == 0 {
+			return nil
+		}
+		return fmt.Errorf("%d 处图标未居中: %v", len(bad), bad)
+	}},
+	{"H2", "图标墨迹在自身画布内居中(视觉级,容差2.5px)", func(h *Harness) error {
+		bad := h.inkCenterCheck(2.5)
+		if len(bad) == 0 {
+			return nil
+		}
+		return fmt.Errorf("%d 处图标墨迹偏心: %v", len(bad), bad[:min(6, len(bad))])
+	}},
+	{"H4", "tabs-split 开启分屏（编辑器行数翻倍）", func(h *Harness) error {
+		countRows := func() int {
+			c := 0
+			for i := range h.hits {
+				n := h.hits[i].Node
+				if n != nil && n.Props != nil {
+					if cls, _ := n.Props["class"].(string); strings.Contains(cls, "gx-editor-row") && h.hits[i].H > 0 {
+						c++
+					}
+				}
+			}
+			return c
+		}
+		before := countRows()
+		if before < 3 {
+			return fmt.Errorf("基线编辑器行数异常: %d", before)
+		}
+		if err := h.ClickTestIDBox("tabs-split"); err != nil {
+			return err
+		}
+		after := countRows()
+		if after < before*2-2 {
+			return fmt.Errorf("分屏后行数应约翻倍 before=%d after=%d", before, after)
+		}
+		if err := h.ClickTestIDBox("tabs-split"); err != nil {
+			return err
+		}
+		back := countRows()
+		return expect(back <= before+2, "再点应还原单栏, back="+strconv.Itoa(back))
+	}},
+}
+
+// iconMisalign 扫描场景树：所有 canvas 图标节点（Icon 组件产物）相对其父
+// 容器盒的垂直/水平中心偏差。返回偏差最大的前 N 条描述（>1.5px 记为问题）。
+func (h *Harness) iconMisalign(limit int) []string {
+	var bad []string
+	for i := range h.hits {
+		n := h.hits[i].Node
+		if n == nil || n.Kind != "canvas" || n.Parent() == nil {
+			continue
+		}
+		pb, ok := h.hitBoxOfNode(n.Parent())
+		if !ok {
+			continue
+		}
+		b := h.hits[i]
+		dx := (b.X + b.W/2) - (pb.X + pb.W/2)
+		dy := (b.Y + b.H/2) - (pb.Y + pb.H/2)
+		if abs32(dx) > 1.5 || abs32(dy) > 1.5 {
+			bad = append(bad, fmt.Sprintf("icon@%.0f,%.0f(%0.f x%.0f) in %q dX=%+.1f dY=%+.1f",
+				b.X, b.Y, b.W, b.H, n.Parent().Kind, dx, dy))
+			if len(bad) >= limit {
+				break
+			}
+		}
+	}
+	return bad
+}
+
+func (h *Harness) hitBoxOfNode(t *gxscene.Node) (skia.HitBox, bool) {
+	for i := range h.hits {
+		if h.hits[i].Node == t {
+			return h.hits[i], true
+		}
+	}
+	return skia.HitBox{}, false
+}
+
+func abs32(v float32) float32 {
+	if v < 0 {
+		return -v
+	}
+	return v
 }
 
 // dumpHits 调试用：打印命中表里的文本节点与关键状态。
@@ -608,6 +696,86 @@ func (h *Harness) dumpHits(tag string) {
 }
 
 // ---- main ----
+// inkCenterCheck 图标"墨迹级"对齐检测：canvas 盒子几何居中不等于视觉居中——
+// 若 SVG 线条画在 viewBox 偏心位置，图标看起来仍是歪的。
+// 在 offscreen 像素里，对每个图标 canvas 盒求亮色墨迹中心 vs 盒中心偏差。
+func (h *Harness) inkCenterCheck(tol float32) []string {
+	buf := h.win.Pixels()
+	if buf == nil {
+		return nil
+	}
+	var bad []string
+	for i := range h.hits {
+		n := h.hits[i].Node
+		if n == nil || n.Kind != "canvas" || h.hits[i].W < 8 {
+			continue
+		}
+		b := h.hits[i]
+		x0, y0 := int(b.X), int(b.Y)
+		x1, y1 := int(b.X+b.W), int(b.Y+b.H)
+		if x1 <= 0 || y1 <= 0 || x0 >= 1400 || y0 >= 860 {
+			continue // 画布外（滚动出可视区）的盒不做墨迹测量
+		}
+		if x0 < 0 {
+			x0 = 0
+		}
+		if y0 < 0 {
+			y0 = 0
+		}
+		if x1 > 1400 {
+			x1 = 1400
+		}
+		if y1 > 860 {
+			y1 = 860
+		}
+		mnX, mxX, mnY, mxY := 1<<30, -1, 1<<30, -1
+		cnt := 0
+		for y := y0; y < y1 && y < 860; y++ {
+			for x := x0; x < x1 && x < 1400; x++ {
+				oi := (y*1400 + x) * 4
+				if oi+2 >= len(buf) {
+					continue
+				}
+				r, g, bl := int(buf[oi]), int(buf[oi+1]), int(buf[oi+2])
+				lum := (r + g + bl) / 3
+				if lum < 95 {
+					continue
+				}
+				if x < mnX {
+					mnX = x
+				}
+				if x > mxX {
+					mxX = x
+				}
+				if y < mnY {
+					mnY = y
+				}
+				if y > mxY {
+					mxY = y
+				}
+				cnt++
+			}
+		}
+		if cnt < 4 {
+			continue
+		}
+		dx := (float32(mnX)+float32(mxX))/2 - (b.X + b.W/2)
+		dy := (float32(mnY)+float32(mxY))/2 - (b.Y + b.H/2)
+		if dx < 0 {
+			dx = -dx
+		}
+		if dy < 0 {
+			dy = -dy
+		}
+		if dx > tol || dy > tol {
+			bad = append(bad, fmt.Sprintf("canvas@%.0f,%.0f %.0fx%.0f ink[%d..%d,%d..%d] dX=%+.1f dY=%+.1f",
+				b.X, b.Y, b.W, b.H, mnX, mxX, mnY, mxY,
+				(float32(mnX)+float32(mxX))/2-(b.X+b.W/2),
+				(float32(mnY)+float32(mxY))/2-(b.Y+b.H/2)))
+		}
+	}
+	return bad
+}
 
 func main() {
 	h := New()

@@ -123,6 +123,19 @@ func currentRunStamp() int { return runStamp }
 }
  func ToggleTerminal() { Signal.Batch(func() { LayoutTerminalOpen(!LayoutTerminalOpen() )}) }
  func SetTerminalOpen(v bool) { Signal.Batch(func() { LayoutTerminalOpen(v )}) }
+
+// ---- 编辑器分屏视图（WebStorm "Split Right"：同一文档双 pane，
+// 内容/滚动天然同步；输入路由仍归主编辑区，右栏为镜像视图） ----
+var splitOn = Signal.New(false)
+ func ToggleSplit() { splitOn(!splitOn() )}
+ func SplitOn() bool { return splitOn() }
+
+// ---- 内存指示真数据（装配层每帧循环注入 runtime.MemStats，主线程） ----
+var memHeapMB = Signal.New(0)
+var memTotalMB = Signal.New(0)
+ func SetMemStats(heapMB int, totalMB int) {
+    Signal.Batch(func() { memHeapMB(heapMB); memTotalMB(totalMB )})
+}
 // SetSplitDragging 由装配层在分隔条按下/松开时切换高亮反馈。
  func SetSplitDragging(on bool) { Signal.Batch(func() { LayoutSplitActive(on )}) }
 
@@ -892,7 +905,7 @@ func ideToolbar() *gxscene.Instance {
 
 // editorTabBar 编辑器标签页：当前文件高亮 + 关闭图标，紧贴代码区顶部。
 func editorTabBar() *gxscene.Instance {
-    return gxscene.Render(gxscene.Template{Ops:[]gxscene.Op{gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:0,},gxscene.Op{Code:gxscene.OpFor,Slot:1,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:2,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpEvent,Key:"onClick",Slot:3,},gxscene.Op{Code:gxscene.OpDynAttr,Key:"testid",Slot:4,},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:5,},gxscene.Op{Code:gxscene.OpDynChild,Slot:6,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpClose,},},N:7,}, func() any{ return gxscene.Style{FlexDirection:"row",AlignItems:"flex-end",Height:"32",Background:chromeBg(),BorderWidth:widgets.HairlineWidth,Border:borderColor(),} }, gxscene.ForGetterOfSignal[string](func() []string { return tabs() },nil,func(t func() string) *gxscene.Instance { return tabItem(t) }), func() any{ return gxscene.Style{FlexGrow:"1",} }, func() any{ return func(e gxscene.EventContext) { if e.Synthetic != nil { e.Synthetic.StopPropagation() }; SetMenu("View") } }, func() any{ return "tabs-split" }, func() any{ return gxscene.Style{Width:"24",Height:"24",AlignItems:"center",JustifyContent:"center",MarginRight:"6",BorderRadius:widgets.RadiusSmall,Cursor:"pointer",Hover:&gxscene.Style{Background:widgets.UseToken("panelalt")(),},} }, func() any{ return widgets.Icon(gxscene.Props{"name": "panel", "size": 13, "tone": "muted"}) })
+    return gxscene.Render(gxscene.Template{Ops:[]gxscene.Op{gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:0,},gxscene.Op{Code:gxscene.OpFor,Slot:1,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:2,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpEvent,Key:"onClick",Slot:3,},gxscene.Op{Code:gxscene.OpDynAttr,Key:"testid",Slot:4,},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:5,},gxscene.Op{Code:gxscene.OpDynChild,Slot:6,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpClose,},},N:7,}, func() any{ return gxscene.Style{FlexDirection:"row",AlignItems:"flex-end",Height:"32",Background:chromeBg(),BorderWidth:widgets.HairlineWidth,Border:borderColor(),} }, gxscene.ForGetterOfSignal[string](func() []string { return tabs() },nil,func(t func() string) *gxscene.Instance { return tabItem(t) }), func() any{ return gxscene.Style{FlexGrow:"1",} }, func() any{ return func(e gxscene.EventContext) { if e.Synthetic != nil { e.Synthetic.StopPropagation() }; ToggleSplit() } }, func() any{ return "tabs-split" }, func() any{ return gxscene.Style{Width:"24",Height:"24",AlignItems:"center",JustifyContent:"center",MarginRight:"6",BorderRadius:widgets.RadiusSmall,Cursor:"pointer",Hover:&gxscene.Style{Background:widgets.UseToken("panelalt")(),},} }, func() any{ return widgets.Icon(gxscene.Props{"name": "panel", "size": 13, "tone": "muted"}) })
 }
 
 // tabItem 单个编辑器标签：激活高亮 + 点击切换 + 关闭。
@@ -933,7 +946,20 @@ func notifText() string {
 // memoryIndicator WebStorm 内存指示样式（轨道+填充）。真实堆数据需装配层接
 // runtime 探针，这里为布局占位、不写假数字。
 func memoryIndicator() *gxscene.Instance {
-    return gxscene.Render(gxscene.Template{Ops:[]gxscene.Op{gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"testid",Slot:0,},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:1,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:2,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpClose,},},N:3,}, func() any{ return "st-memory" }, func() any{ return struct{ flexDirection string; alignItems string; width int; height int; borderRadius int; background string; paddingLeft int }{ flexDirection: "row", alignItems: "center", width: 46, height: 12, borderRadius: 6, background: widgets.UseToken("panelalt")(), paddingLeft: 2 } }, func() any{ return gxscene.Style{Width:"14",Height:"8",BorderRadius:"4",Background:widgets.UseToken("success")(),} })
+    return gxscene.Render(gxscene.Template{Ops:[]gxscene.Op{gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"testid",Slot:0,},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:1,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:2,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:3,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpDynChild,Slot:4,},gxscene.Op{Code:gxscene.OpClose,},},N:5,}, func() any{ return "st-memory" }, func() any{ return gxscene.Style{FlexDirection:"row",AlignItems:"center",Gap:"4",} }, func() any{ return gxscene.Style{FlexDirection:"row",AlignItems:"center",Width:"46",Height:"12",BorderRadius:"6",Background:widgets.UseToken("panelalt")(),Padding:"0 0 0 2",} }, func() any{ return gxscene.Style{Width:memFillW(),Height:"8",BorderRadius:"4",Background:widgets.UseToken("success")(),} }, func() any{ return widgets.Text(gxscene.Props{"value": memText(), "size": "10", "tone": "muted"}) })
+}
+
+func memFillW() string {
+    if memTotalMB() <= 0 { return "14" }
+    v := 44 * memHeapMB() / memTotalMB()
+    if v < 4 { v = 4 }
+    if v > 44 { v = 44 }
+    return strconv.Itoa(v)
+}
+
+func memText() string {
+    if memTotalMB() <= 0 { return "" }
+    return strconv.Itoa(memHeapMB()) + "M"
 }
 
 // ---- 主界面：WebStorm 风格三区布局 ----
@@ -945,7 +971,8 @@ func memoryIndicator() *gxscene.Instance {
 // 若把 if 直接放在 row flex 内，编译器生成的 #frag 节点会成为 row 的直接
 // 子项，交叉轴对齐把它推到容器底部，导致垂直分隔条命中框跑到 y=834。
 func editorAndTerminal() *gxscene.Instance {
-    return gxscene.Render(gxscene.Template{Ops:[]gxscene.Op{gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:0,},gxscene.Op{Code:gxscene.OpDynChild,Slot:1,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:2,},gxscene.Op{Code:gxscene.OpDynChild,Slot:3,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpAttr,Arg:"gx-splitter-h",Key:"class",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:4,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpBranch,Slot:5,},gxscene.Op{Code:gxscene.OpClose,},},N:6,}, func() any{ return gxscene.Style{FlexDirection:"column",Gap:"0",FlexGrow:"1",MinWidth:"0",} }, func() any{ return editorTabBar() }, func() any{ return gxscene.Style{FlexDirection:"column",Gap:"0",Height:editorAreaPx(),FlexShrink:"0",Overflow:"hidden",Background:canvasBg(),} }, func() any{ return Editor() }, func() any{ return gxscene.Style{Height:"6",FlexShrink:"0",Cursor:"row-resize",Background:splitActiveBg(),Hover:&gxscene.Style{Background:accentColor(),},} }, gxscene.BranchGetter(func() int{if LayoutTerminalOpen() { return 0 }
+    return gxscene.Render(gxscene.Template{Ops:[]gxscene.Op{gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:0,},gxscene.Op{Code:gxscene.OpDynChild,Slot:1,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:2,},gxscene.Op{Code:gxscene.OpBranch,Slot:3,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpAttr,Arg:"gx-splitter-h",Key:"class",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:4,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpBranch,Slot:5,},gxscene.Op{Code:gxscene.OpClose,},},N:6,}, func() any{ return gxscene.Style{FlexDirection:"column",Gap:"0",FlexGrow:"1",MinWidth:"0",} }, func() any{ return editorTabBar() }, func() any{ return gxscene.Style{FlexDirection:"column",Gap:"0",Height:editorAreaPx(),FlexShrink:"0",Overflow:"hidden",Background:canvasBg(),} }, gxscene.BranchGetter(func() int{if splitOn() { return 0 }
+return 1 }, func() *gxscene.Instance { return gxscene.Render(gxscene.Template{Ops:[]gxscene.Op{gxscene.Op{Code:gxscene.OpElem,Arg:"#frag",},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:0,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:1,},gxscene.Op{Code:gxscene.OpDynChild,Slot:2,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:3,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:4,},gxscene.Op{Code:gxscene.OpDynChild,Slot:5,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpClose,},},N:6,}, func() any{ return gxscene.Style{FlexDirection:"row",Gap:"0",FlexGrow:"1",MinHeight:"0",} }, func() any{ return gxscene.Style{FlexDirection:"column",FlexGrow:"1",MinWidth:"0",} }, func() any{ return Editor() }, func() any{ return gxscene.Style{Width:"1",FlexShrink:"0",Background:borderColor(),} }, func() any{ return gxscene.Style{FlexDirection:"column",FlexGrow:"1",MinWidth:"0",} }, func() any{ return Editor() }) }, func() *gxscene.Instance { return gxscene.Render(gxscene.Template{Ops:[]gxscene.Op{gxscene.Op{Code:gxscene.OpElem,Arg:"#frag",},gxscene.Op{Code:gxscene.OpDynChild,Slot:0,},gxscene.Op{Code:gxscene.OpClose,},},N:1,}, func() any{ return Editor() }) }), func() any{ return gxscene.Style{Height:"6",FlexShrink:"0",Cursor:"row-resize",Background:splitActiveBg(),Hover:&gxscene.Style{Background:accentColor(),},} }, gxscene.BranchGetter(func() int{if LayoutTerminalOpen() { return 0 }
 return 1 }, func() *gxscene.Instance { return gxscene.Render(gxscene.Template{Ops:[]gxscene.Op{gxscene.Op{Code:gxscene.OpElem,Arg:"#frag",},gxscene.Op{Code:gxscene.OpDynChild,Slot:0,},gxscene.Op{Code:gxscene.OpClose,},},N:1,}, func() any{ return TerminalView() }) }, func() *gxscene.Instance { return gxscene.Render(gxscene.Template{Ops:[]gxscene.Op{gxscene.Op{Code:gxscene.OpElem,Arg:"#frag",},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpClose,},},N:0,}) }))
 }
 
