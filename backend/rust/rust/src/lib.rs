@@ -32,6 +32,8 @@ mod scene;
 mod style;
 mod text_effects;
 mod video;
+mod android_surface;
+mod ios_surface;
 
 #[cfg(test)]
 mod tests_surface;

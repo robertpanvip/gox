@@ -24,6 +24,13 @@ serde_json = "1"
 # GPU quad 渲染管线（独立 crate backend/gpu：GPU 优先 / 打包期可选 CPU 接管）
 gx_gpu = { path = "../../gpu" }
 
+[features]
+# Android 交叉编译（阶段 5）：winit 的 android-activity 依赖必须选一个后端
+# feature（NativeActivity 是 x/mobile 路线的宿主）。真机构建：
+#   cargo check/build --target aarch64-linux-android --features android-native-activity
+android-native-activity = ["winit/android-native-activity"]
+android-game-activity = ["winit/android-game-activity"]
+
 # 静态库体积优化：LTO + 去符号 + 单代码单元 + 体积优先优化。
 # 注意：不能用 panic="abort"，因为 gx_window_run 依赖 catch_unwind 把 panic 转成 rc=2。
 [profile.release]

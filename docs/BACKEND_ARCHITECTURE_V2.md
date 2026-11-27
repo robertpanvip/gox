@@ -256,7 +256,7 @@ uint64（gxscene.NodeID，NoNode=0 保留值），旧协议把它字符串化进
 | 2 | Wire 背压 + FullSync 自动恢复 | ✅ 已完成 |
 | 3 | Rust Renderer 从 winit 解耦，Surface 注入 | ✅ 完成：SurfaceProvider 注入 + 契约测试 + paint/util 模块拆分 + 布局缓存（2.0×）+ emit 指令缓存（累计 2.76×）+ GRX3 协议（NodeID uint64 直传） |
 | 4 | Desktop 正式迁移（Windows 优先；验证 60/120/144Hz；对比 Skia） | 🟡 无头语义验证完成：loopClock 零平台依赖（wake/now 注入）+ 8 项无头验收（合并/唤醒去重/空闲零绘制/Delta 精度/续帧/暂停恢复，60/120/144Hz 模拟节拍全过）；硬件 vsync 实测待真机 |
-| 5 | Android 原生 Surface + iOS 首次技术验证（Go Framework 集成 + C ABI 链接） | 待做 |
+| 5 | Android 原生 Surface + iOS 首次技术验证（Go Framework 集成 + C ABI 链接） | 🟡 Rust 侧就绪：android_surface.rs（AndroidNdkWindowHandle）/ ios_surface.rs（UiKitWindowHandle）provider + lifecycle 重建 API + 8 项无头测试；交叉编译验证 aarch64-linux-android（--features android-native-activity）与 aarch64-apple-ios 双 target 零错误；C ABI 接线待 NDK/真机环境 |
 | 6 | WebGPU（Rust→WASM，保留 DOM Driver） | 待做 |
 
 NodeID 二进制协议 uint64 化（评审 §六.3）已作为独立变更落地（GRX3，见上）。
