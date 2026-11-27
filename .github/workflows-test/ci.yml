@@ -135,7 +135,11 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y xvfb xdotool xclip imagemagick
+          # GUI dev 头文件：gox-idea/playground 的 cgo 依赖（go-gl/glfw 要
+          # X11 头、go-gl/gl 要 pkg-config gl、x/mobile 要 GLES3 头），缺了
+          # 连编译期都过不去；fonts-noto-cjk 供 CJK 字体相关用例真实执行。
+          sudo apt-get install -y xvfb xdotool xclip imagemagick \
+            libx11-dev libgles2-mesa-dev libgl-dev pkg-config fonts-noto-cjk
           pip install pillow
 
       - name: 安装 GUI E2E 依赖（Windows）
@@ -160,6 +164,7 @@ jobs:
       - name: gox-idea GUI E2E（Windows 观察）
         if: runner.os == 'Windows'
         continue-on-error: true
+        timeout-minutes: 20
         shell: msys2 {0}
         run: bash cmd/gox-idea/tests/run_gui_e2e_all.sh
         env:
@@ -186,6 +191,7 @@ jobs:
       - name: Desktop Playground GUI E2E（Windows 观察）
         if: runner.os == 'Windows'
         continue-on-error: true
+        timeout-minutes: 20
         shell: msys2 {0}
         run: bash examples/playground/tests/gui_e2e.sh
         env:
