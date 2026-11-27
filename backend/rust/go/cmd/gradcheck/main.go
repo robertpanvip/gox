@@ -1,6 +1,8 @@
 // gradcheck 是三端渐变统一的 Rust 后端可视化验收程序。
 // 渲染：① 分段渐变文字（模拟编辑器代码高亮，红→绿→蓝按 ch 边界）
-//       ② 平滑渐变背景块（通用 linear-gradient，90deg 红→蓝）
+//
+//	② 平滑渐变背景块（通用 linear-gradient，90deg 红→蓝）
+//
 // 在 xvfb 下运行并用截图采样像素，确认 Rust 后端与 Web/Go 桌面端语义一致。
 package main
 
@@ -77,7 +79,7 @@ func main() {
 		_ = app.Close()
 	}()
 
-	if err := app.Run(); err != nil {
+	if err := handle.Run(); err != nil { // Host 唯一主循环（P4 目标态）：app.Run 已退化为 no-op
 		panic(err)
 	}
 }

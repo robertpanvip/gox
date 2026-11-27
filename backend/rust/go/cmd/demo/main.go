@@ -143,12 +143,12 @@ func main() {
 					}),
 					// 新增组件验证：Tooltip / TimePicker / FilePicker / Table 均走同一套 GX 场景树。
 					widgets.Tooltip(gxscene.Props{
-						"trigger": func() any { return widgets.Button(gxscene.Props{"label": "悬停我", "variant": "secondary"}) },
-						"content": func() any { return textNode("这是 Tooltip 提示", "#ffffff", "12") },
+						"trigger":   func() any { return widgets.Button(gxscene.Props{"label": "悬停我", "variant": "secondary"}) },
+						"content":   func() any { return textNode("这是 Tooltip 提示", "#ffffff", "12") },
 						"placement": "top",
 					}),
 					widgets.TimePicker(gxscene.Props{
-						"value": func() any { return "09:30" },
+						"value":    func() any { return "09:30" },
 						"onChange": widgets.BindValue(func(string) {}),
 					}),
 					widgets.FilePicker(gxscene.Props{
@@ -160,7 +160,7 @@ func main() {
 							{Key: "k", Title: "键", Width: "120", Sortable: true},
 							{Key: "v", Title: "值", Width: "120"},
 						},
-						"rows": func() any { return []any{[]string{"A", "1"}, []string{"B", "2"}} },
+						"rows":       func() any { return []any{[]string{"A", "1"}, []string{"B", "2"}} },
 						"row-height": 32, "viewport-height": 72,
 					}),
 					// 底部说明
@@ -198,7 +198,7 @@ func main() {
 		}
 	})
 
-	if err := app.Run(); err != nil {
+	if err := handle.Run(); err != nil { // Host 唯一主循环（P4 目标态）：app.Run 已退化为 no-op
 		panic(err)
 	}
 }

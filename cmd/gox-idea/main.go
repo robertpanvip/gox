@@ -186,7 +186,7 @@ func main() {
 	if err := app.Render(func() any { return ui.Playground() }); err != nil {
 		panic(err)
 	}
-	if err := app.Run(); err != nil {
+	if err := handle.Run(); err != nil { // Host 唯一主循环（P4 目标态）：app.Run 已退化为 no-op
 		panic(err)
 	}
 }

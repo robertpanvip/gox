@@ -17,9 +17,9 @@ import (
 	"os"
 	"time"
 
+	rb "github.com/robertpanvip/gox-backend-rust"
 	gxapp "github.com/robertpanvip/gox/runtime/app"
 	gxscene "github.com/robertpanvip/gox/runtime/scene"
-	rb "github.com/robertpanvip/gox-backend-rust"
 )
 
 var procMainStart = time.Now()
@@ -89,7 +89,7 @@ func main() {
 	})
 
 	done := make(chan struct{})
-	go func() { _ = app.Run(); close(done) }()
+	go func() { _ = handle.Run(); close(done) }() // Host 唯一主循环
 
 	select {
 	case rustInfo := <-got:
