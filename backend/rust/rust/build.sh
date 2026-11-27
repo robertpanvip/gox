@@ -54,4 +54,20 @@ for lib in target/release/deps/libgxbackend_rust-*.a target/release/deps/libgx_g
   fi
 done
 
+# 收尾校验（防静默漏剥）：递归扫描 target/release 下全部 gx 归档，任何残留
+# LTO 段都视为失败——cgo 的 -L 安全检查会递归扫描目录内全部 .a，漏掉一个
+# 就在 Go 链接期炸出难排查的 "disallowed LTO section"。这里 fail loud。
+fail=0
+while IFS= read -r -d '' lib; do
+  sections="$(objdump -h "$lib" 2>/dev/null || true)"
+  if printf '%s' "$sections" | grep -qE '\.llvmbc|\.llvmcmd'; then
+    echo "[rust-backend] ERROR: 仍带 LTO 段的归档: $lib" >&2
+    fail=1
+  fi
+done < <(find target/release -name 'libgx*.a' -type f -print0)
+if [ "$fail" -ne 0 ]; then
+  echo "[rust-backend] LTO 段剥离不彻底，拒绝交付（先修复上面的归档再重试）" >&2
+  exit 1
+fi
+
 echo "[rust-backend] done."

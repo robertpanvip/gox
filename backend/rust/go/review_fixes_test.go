@@ -84,8 +84,8 @@ func TestMergeableEventKeepsLatest(t *testing.T) {
 
 func TestRegisterKeyAssigned(t *testing.T) {
 	w := NewWindow()
-	if w.runDone == nil || w.pump == nil {
-		t.Fatal("NewWindow 应初始化 runDone/pump 通道")
+	if w.pump == nil || w.postCh == nil {
+		t.Fatal("NewWindow 应初始化 pump/postCh 通道")
 	}
 }
 

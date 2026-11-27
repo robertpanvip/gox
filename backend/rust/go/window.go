@@ -43,17 +43,18 @@ type Window struct {
 
 	// 事件分级（评审 P1）：events 是可靠交付通道；overflow 是可靠事件在
 	// events 满时的无界溢出缓冲（不丢），mergeSlot 只保留最新可合并事件。
-	// pump 在 postEvent 写入 overflow/mergeSlot 后非阻塞通知 Run 去 drain。
+	// pump 回调线程写入 overflow/mergeSlot 后，Poll 每轮搬运消费。
 	overflow  []inputEvent
 	mergeSlot *inputEvent
 	pump      chan struct{}
 
-	// 生命周期（评审 P0）：runDone 在 Run 退出时 close；Close 等待它后再 destroy。
-	runDone    chan struct{}
-	runOnce    sync.Once
-	runStarted bool
-	destroyed  bool
-	regKey     uintptr // 全局注册表 key，Close 时注销（评审 P1 泄漏）
+	// 生命周期（P4 目标态）：窗口由 Host 主循环 Poll 驱动，无自驱 Run。
+	// pumped 记录是否泵过（Close 决定是否需要让 Rust 事件循环退出）；
+	// closeRequested 在 pump 返回 Exit（用户点关闭 / 请求关闭）后置位。
+	pumped         bool
+	closeRequested bool
+	destroyed      bool
+	regKey         uintptr // 全局注册表 key，Close 时注销（评审 P1 泄漏）
 
 	// 统一帧时钟（BACKEND_ARCHITECTURE_V2 阶段 1）：Signal 更新合并成一帧，
 	// Run 事件泵每轮 Poll 派发绘制（App.SetFrameClock 时启用）。
@@ -110,8 +111,10 @@ func (w *Window) postEvent(ev inputEvent) {
 	}
 }
 
-// drainPending 把 overflow 与 mergeSlot 搬运到 events 通道供 Run 统一消费。
-// 由 Run 在每次 pump 唤醒时调用。
+// drainPending 把 overflow 与 mergeSlot 搬运到 events 通道供 Poll 消费。
+// **非阻塞**：events 放不下的可靠事件保序留在 overflow（不丢）、可合并事件
+// 放回 mergeSlot——Poll 是唯一消费者且与搬运同线程串行，先消费腾出空间、
+// 高频事件流下逐轮追平，绝不卡住 Host 主循环。
 func (w *Window) drainPending() {
 	w.mu.Lock()
 	ov := w.overflow
@@ -122,25 +125,64 @@ func (w *Window) drainPending() {
 		w.mergeSlot = nil
 	}
 	w.mu.Unlock()
-	for _, ev := range ov {
-		w.events <- ev // 这里可能阻塞，但 Run 是唯一消费者，安全
+
+	keep := -1 // 第一个放不下的可靠事件下标（其后整体保序保留）
+	for i := range ov {
+		select {
+		case w.events <- ov[i]:
+		default:
+			keep = i
+		}
+		if keep >= 0 {
+			break
+		}
 	}
+	mergedKept := false
 	if merged != nil {
 		select {
 		case w.events <- *merged:
 		default:
-			// 极端情况下 events 仍满：合并事件允许覆盖最新一条到 mergeSlot。
-			w.mu.Lock()
-			w.mergeSlot = merged
-			w.mu.Unlock()
+			mergedKept = true
+		}
+	}
+	w.mu.Lock()
+	if keep >= 0 {
+		// 保序放回：未搬完的可靠事件在前，接上搬运期间新到的溢出。
+		w.overflow = append(ov[keep:], w.overflow...)
+	}
+	if mergedKept && w.mergeSlot == nil {
+		w.mergeSlot = merged
+	}
+	w.mu.Unlock()
+}
+
+// consumeEvents 非阻塞消费 events 通道，逐条派发给 dispatcher（Host 主循环线程
+// 执行——与绘制同线程串行，符合单一 UI Loop 的线程契约）。
+func (w *Window) consumeEvents() {
+	for {
+		var ev inputEvent
+		select {
+		case ev = <-w.events:
+		default:
+			return
+		}
+		w.mu.Lock()
+		fn := w.dispatcher
+		w.mu.Unlock()
+		if fn != nil {
+			fn(InputEvent{
+				Kind: ev.Kind, NodeID: ev.NodeID, Event: ev.Event,
+				Text: ev.Text, X: ev.X, Y: ev.Y, Mods: ev.Mods,
+			})
 		}
 	}
 }
 
-// 编译期断言：本后端采用 Frame 契约，并实现可选的焦点能力。
+// 编译期断言：Frame 契约 + 焦点能力 + P4 目标态的 Host 轮询驱动。
 var (
 	_ gxapp.FramePresenter = (*Window)(nil)
 	_ gxapp.Focuser        = (*Window)(nil)
+	_ gxapp.HostedWindow   = (*Window)(nil)
 )
 
 // 全局注册表：C 回调的 ctx 是注册表 key（uintptr），避免把 Go 指针长期交给 C。
@@ -157,11 +199,10 @@ func NewWindow() *Window {
 	_, minor, ok := parseProtocolVersion(cVersion())
 	grx3 := ok && minor >= 3
 	return &Window{
-		events:  make(chan inputEvent, 64),
-		pump:    make(chan struct{}, 1),
-		runDone: make(chan struct{}),
-		postCh:  make(chan struct{}, 1),
-		grx3:    grx3,
+		events: make(chan inputEvent, 64),
+		pump:   make(chan struct{}, 1),
+		postCh: make(chan struct{}, 1),
+		grx3:   grx3,
 	}
 }
 
@@ -351,61 +392,50 @@ func (w *Window) Draw(root *gxscene.Node) error {
 	return w.Present(&gxapp.Frame{Root: root, FullSync: true})
 }
 
-// Run 实现 gxapp.Window：goroutine 跑 Rust 事件循环，本线程消费事件并分派。
-func (w *Window) Run() error {
+// Run 实现 gxapp.Window：P4 目标态下退化为 no-op——窗口由 Host 主循环经
+// Poll 驱动（winit pump_events 嵌入泵），不再有自驱阻塞事件循环。
+// 直接 gxapp.Open + app.Run 的旧单窗口路径对本后端不再可用：请走
+// gxapp.Use(Backend) → Handle.Render / Handle.Run 的 Host 接入。
+func (w *Window) Run() error { return nil }
+
+// Poll 实现 gxapp.HostedWindow：非阻塞泵一轮 winit 事件，随后消费回调线程
+// 投递的事件并派发。错误/panic 由 Host 归因熔断本窗口。
+func (w *Window) Poll() error {
 	w.mu.Lock()
-	if w.handle == nil {
-		w.mu.Unlock()
+	handle := w.handle
+	closed := w.closed
+	w.mu.Unlock()
+	if closed {
+		return nil // 已关闭：Host 主循环随后把它逐出，Poll 保持幂等安全
+	}
+	if handle == nil {
 		return fmt.Errorf("rustbackend: window not opened")
 	}
-	w.runStarted = true
-	w.mu.Unlock()
-	// runDone 在退出时 close，通知 Close 可以安全 destroy Backend（评审 P0）。
-	defer w.runOnce.Do(func() { close(w.runDone) })
-
-	done := make(chan int, 1)
-	handle := w.handle
-	go func() { done <- cWindowRun(handle) }()
-	for {
-		select {
-		case <-w.pump:
-			// 有可靠事件溢出或可合并事件更新，搬运到 events 再消费。
-			w.drainPending()
-		case <-w.postCh:
-			// UIExecutor 任务（帧请求/后台 Dispatch/微任务）在本事件泵执行。
-			w.drainPosts()
-			w.pollFrameClock()
-		case ev := <-w.events:
-			w.mu.Lock()
-			fn := w.dispatcher
-			w.mu.Unlock()
-			if fn != nil {
-				fn(InputEvent{
-					Kind: ev.Kind, NodeID: ev.NodeID, Event: ev.Event,
-					Text: ev.Text, X: ev.X, Y: ev.Y,
-				})
-			}
-		case rc := <-done:
-			// 事件循环已退出：最后再 drain 一次，避免尾部事件丢失。
-			w.drainPending()
-			for len(w.events) > 0 {
-				ev := <-w.events
-				w.mu.Lock()
-				fn := w.dispatcher
-				w.mu.Unlock()
-				if fn != nil {
-					fn(InputEvent{
-						Kind: ev.Kind, NodeID: ev.NodeID, Event: ev.Event,
-						Text: ev.Text, X: ev.X, Y: ev.Y, Mods: ev.Mods,
-					})
-				}
-			}
-			if rc != 0 {
-				return fmt.Errorf("rustbackend: gx_window_run rc=%d", rc)
-			}
-			return nil
-		}
+	rc := cWindowPoll(handle)
+	if rc == 2 {
+		return fmt.Errorf("rustbackend: gx_window_pump 内部错误（panic）")
 	}
+	w.mu.Lock()
+	w.pumped = true
+	if rc == 0 {
+		w.closeRequested = true
+	}
+	w.mu.Unlock()
+	// 泵期间 Rust 回调线程投递的事件：先消费腾空间，再搬运溢出/合并槽，
+	// 最后把追平的新事件一并派发（顺序：可靠事件 FIFO 不乱）。
+	w.consumeEvents()
+	w.drainPending()
+	w.consumeEvents()
+	w.pollFrameClock()
+	return nil
+}
+
+// ShouldClose 实现 gxapp.HostedWindow：pump 返回 Exit（用户点了关闭按钮 /
+// gx_window_close 请求退出）或窗口已关闭时为 true，Host 据此 CloseWindow。
+func (w *Window) ShouldClose() bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.closeRequested || w.closed
 }
 
 // SetDispatcher 注册事件分派器：把 Rust 回传事件映射到场景树节点。
@@ -485,8 +515,8 @@ func (w *Window) Focus(id gxscene.NodeID) {
 type InputEvent struct {
 	Kind   string // "click" / "pointer_down" / "pointer_up" / "pointer_move" / "wheel" / "key" / "ime_preedit" / "ime_commit" / "focus" / "backspace" / "ime_enabled"
 	NodeID string
-	Event  string // click: 事件名；pointer: "left"；key: "down"/"repeat"
-	Text   string // ime 文本 / key: 键名（"Left"/"Home"/"a"…）
+	Event  string  // click: 事件名；pointer: "left"；key: "down"/"repeat"
+	Text   string  // ime 文本 / key: 键名（"Left"/"Home"/"a"…）
 	X      float32 // 点击/指针坐标；wheel: 行增量
 	Y      float32
 	Mods   string // 修饰键（key/pointer）：空串或 "ctrl+shift+alt+super" 的子串
@@ -528,10 +558,10 @@ func (w *Window) DebugWindowSize() (int, int) {
 
 // DebugAllBoxes 导出最近一帧全部命中框（x/y/w/h + label/testid/kind），供
 // E2E 按文案动态定位（与旧 skia glwindow 同语义）。数据来自 Rust 渲染端
-// gx_window_debug_info（镜像树反查节点文本），非 Run 状态返回 nil。
+// gx_window_debug_info（镜像树反查节点文本），未泵过事件循环时返回 nil。
 func (w *Window) DebugAllBoxes() []map[string]any {
 	w.mu.Lock()
-	opened := w.handle != nil && w.runStarted
+	opened := w.handle != nil && w.pumped
 	w.mu.Unlock()
 	if !opened {
 		return nil
@@ -551,9 +581,9 @@ func (w *Window) DebugAllBoxes() []map[string]any {
 	return info.Boxes
 }
 
-// RequestClose 请求 Rust 事件循环退出（线程安全、非阻塞）。供后台 goroutine
-// （定时自动关窗、外部信号）调用：事件循环退出后 Run 返回，Close 再做资源释放。
-// 与 Close 的区别：不等待、不销毁——只请求。
+// RequestClose 请求 Rust 事件循环退出（线程安全、非阻塞）。下一轮 Poll 返回
+// Exit → ShouldClose=true，Host 主循环随即 CloseWindow。供后台 goroutine
+// （定时自动关窗、外部信号）调用：与 Close 的区别：不等待、不销毁——只请求。
 func (w *Window) RequestClose() {
 	w.mu.Lock()
 	handle := w.handle
@@ -567,13 +597,12 @@ func (w *Window) RequestClose() {
 
 // Close 实现 gxapp.Window。
 //
-// 优雅关闭顺序（评审 P0 生命周期）：
+// 优雅关闭顺序（P4 目标态生命周期）：
 //  1. cWindowClose 只发退出请求（Rust 侧设置 shutdown + 唤醒事件循环），不释放内存；
-//  2. 若 Run 正在跑，等待 runDone——确保 Rust 的 gx_window_run 已返回、已 drop 其借用的 Arc；
-//  3. cWindowDestroy 释放调用方持有的最后一份 Arc，Backend 此刻才真正析构；
+//  2. 若本窗口被泵过，再非阻塞泵几轮让 Rust 观测 Exit、清空渲染器槽
+//     （surface/设备与事件循环同生命周期，必须在 destroy 前释放）；
+//  3. cWindowDestroy 释放调用方持有的强引用（Rust 侧兜底清空 app/el/renderer）；
 //  4. 从全局注册表注销并清理回调上下文（评审 P1 泄漏）。
-//
-// 这样 Run 使用 Backend 期间内存始终有效，彻底消除 use-after-free。
 func (w *Window) Close() error {
 	w.mu.Lock()
 	if w.closed {
@@ -583,21 +612,23 @@ func (w *Window) Close() error {
 	w.closed = true
 	handle := w.handle
 	w.handle = nil
-	started := w.runStarted
-	runDone := w.runDone
+	pumped := w.pumped
 	key := w.regKey
-	destroyed := w.destroyed
 	w.mu.Unlock()
 
 	if handle != nil {
 		// 1. 请求 Rust 事件循环退出（不释放内存）。
 		cWindowClose(handle)
-		// 2. 等事件循环退出后再释放，避免 Run/Close 竞争。
-		if started {
-			<-runDone
+		// 2. 泵过的窗口：非阻塞泵到退出（通常 1-2 轮），让渲染器槽先释放。
+		if pumped {
+			for i := 0; i < 8; i++ {
+				if cWindowPoll(handle) != 1 {
+					break
+				}
+			}
 		}
-		// 3. 释放 Backend（若 run 未启动，没有其它引用，直接释放也安全）。
-		if !destroyed {
+		// 3. 释放 Backend（若未泵过，没有 GPU 资源，Rust destroy 兜底清理）。
+		if !w.destroyed {
 			cWindowDestroy(handle)
 			w.mu.Lock()
 			w.destroyed = true

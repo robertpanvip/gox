@@ -5,22 +5,25 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+	"time"
 
 	gxscene "github.com/robertpanvip/gox/runtime/scene"
 	"github.com/robertpanvip/gox/runtime/signal"
 )
 
-// stubWindow 是多窗口装配验收桩：记录生命周期调用，可选 panic / 错误注入。
-// Post 内联执行（UIExecutor 接线验证用——headless 场景无独立事件泵）。
+// stubWindow 是多窗口装配验收桩（HostedWindow：由 Host 主循环轮询驱动）。
+// 记录生命周期与 Poll 调用，可选 panic / 错误注入 / 第 N 次 Poll 后请求关闭。
 type stubWindow struct {
-	mu        sync.Mutex
-	cfg       WindowConfig
-	opened    bool
-	closed    bool
-	drawn     int
-	bindCalls int
-	runErr    error
-	runPanic  any
+	mu         sync.Mutex
+	cfg        WindowConfig
+	opened     bool
+	closed     bool
+	drawn      int
+	bindCalls  int
+	polls      int64
+	closeAfter int64 // 第 N 次 Poll 后 ShouldClose 返回 true；0 = 永不请求
+	pollPanic  any
+	pollErr    error
 }
 
 func (w *stubWindow) Open(cfg WindowConfig) error {
@@ -38,11 +41,33 @@ func (w *stubWindow) Draw(root *gxscene.Node) error {
 	return nil
 }
 
-func (w *stubWindow) Run() error {
-	if w.runPanic != nil {
-		panic(w.runPanic)
+// Run 在 HostedWindow 路径下退化为 no-op（窗口由 Host 主循环轮询驱动）。
+func (w *stubWindow) Run() error { return nil }
+
+// Poll 实现 HostedWindow：计数并注入 panic / 错误。
+func (w *stubWindow) Poll() error {
+	w.mu.Lock()
+	w.polls++
+	p, e := w.pollPanic, w.pollErr
+	w.mu.Unlock()
+	if p != nil {
+		panic(p)
 	}
-	return w.runErr
+	return e
+}
+
+// ShouldClose 实现 HostedWindow：第 closeAfter 次 Poll 后请求关闭。
+func (w *stubWindow) ShouldClose() bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.closeAfter > 0 && w.polls >= w.closeAfter
+}
+
+// pollCount 返回累计 Poll 次数（观测用）。
+func (w *stubWindow) pollCount() int64 {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.polls
 }
 
 func (w *stubWindow) Close() error {
@@ -183,7 +208,10 @@ func TestHandleSignalIsolationBetweenWindows(t *testing.T) {
 
 	count(count() + 1) // 只应更新窗口 A 的树内容（A 的树订阅了 count）
 
-	// Post 内联执行：signal 写入同步走 A 的派发器重绘。
+	// 目标态接线：重绘请求投递进 Host 唯一 UI Loop，这里手动 drain 一个轮次
+	// （主循环不在跑）执行帧任务——signal 写入应触发 A 的一次重绘。
+	app.Host().Loop().DrainTurn()
+
 	w1.mu.Lock()
 	d1b := w1.drawn
 	w1.mu.Unlock()
@@ -202,26 +230,33 @@ func TestHandleSignalIsolationBetweenWindows(t *testing.T) {
 	_ = app.Close()
 }
 
-// 故障隔离：任一窗口 Run panic 被 recover 归因上报，不传播、不拖垮其它窗口。
+// 故障隔离：任一窗口 Poll panic 被 recover 归因上报、只熔断该窗口，
+// 其余窗口继续被主循环轮询（fault 窗口被移除后不再 Poll）。
 func TestHostRunFaultIsolation(t *testing.T) {
-	wBad, wGood := &stubWindow{runPanic: "boom"}, &stubWindow{}
+	wBad, wGood := &stubWindow{pollPanic: "boom"}, &stubWindow{closeAfter: 3}
 	var faults []Fault
-	host := NewHost(WithFaultHandler(func(f Fault) { faults = append(faults, f) }))
+	host := NewHost(WithFaultHandler(func(f Fault) { faults = append(faults, f) }), WithIdleWait(time.Millisecond))
 	if _, err := host.OpenWindow(WindowConfig{Title: "bad", Backend: "stub"}, wBad); err != nil {
 		t.Fatalf("open bad: %v", err)
 	}
 	if _, err := host.OpenWindow(WindowConfig{Title: "good", Backend: "stub"}, wGood); err != nil {
 		t.Fatalf("open good: %v", err)
 	}
-	err := host.Run()
-	if err == nil {
-		t.Fatal("Run 应返回 panic 窗口的错误")
+	// HostedWindow 路径没有 Run 错误返回语义：故障被隔离上报，主循环跑完返回 nil。
+	if err := host.Run(); err != nil {
+		t.Fatalf("Run: %v", err)
 	}
-	if len(faults) != 1 || faults[0].Phase != "run" || faults[0].Panic != "boom" {
+	if len(faults) != 1 || faults[0].Phase != "poll" || faults[0].Panic != "boom" {
 		t.Fatalf("故障应归因上报一次, got %+v", faults)
 	}
 	if !faults[0].Recovered {
 		t.Fatal("Fault.Recovered 应为 true")
+	}
+	if !wBad.closed {
+		t.Fatal("panic 窗口应被熔断关闭")
+	}
+	if got := wGood.pollCount(); got != 3 {
+		t.Fatalf("好窗口应继续被轮询到请求关闭, got %d 次 Poll", got)
 	}
 	if err := host.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
@@ -265,13 +300,14 @@ func TestHostCloseWindowIsolation(t *testing.T) {
 }
 
 // Use 接口注入：接入层只依赖 Backend 接口形状，后端实现即可插拔。
+// 桩窗口在第 2 次 Poll 后请求关闭，Host.Run 主循环跑完即返回。
 type fakeBackend struct{ n int }
 
 func (f *fakeBackend) Name() string { return "fake" }
 
 func (f *fakeBackend) NewWindow(cfg WindowConfig) (Window, error) {
 	f.n++
-	return &stubWindow{}, nil
+	return &stubWindow{closeAfter: 2}, nil
 }
 
 // Use(接口值) 多窗渲染：每窗调用一次 Backend.NewWindow，窗口归 Host 管理。
@@ -396,13 +432,19 @@ func TestHostClosedRejectsNewWindow(t *testing.T) {
 	}
 }
 
-// Run 错误透传：非 panic 的 Run 错误返回给调用方（第一个）。
-func TestHostRunPropagatesError(t *testing.T) {
-	wErr, wOk := &stubWindow{runErr: fmt.Errorf("protocol dead")}, &stubWindow{}
-	host := NewHost()
+// Poll 错误熔断：Poll 返回错误的窗口被归因关闭，其余窗口继续轮询。
+func TestHostPollErrorCutsOffWindow(t *testing.T) {
+	wErr, wOk := &stubWindow{pollErr: fmt.Errorf("event pump dead")}, &stubWindow{closeAfter: 2}
+	host := NewHost(WithFaultHandler(func(Fault) {}), WithIdleWait(time.Millisecond))
 	_, _ = host.OpenWindow(WindowConfig{Title: "err", Backend: "stub"}, wErr)
 	_, _ = host.OpenWindow(WindowConfig{Title: "ok", Backend: "stub"}, wOk)
-	if err := host.Run(); err == nil || err.Error() != "protocol dead" {
-		t.Fatalf("Run 应透传窗口错误, got %v", err)
+	if err := host.Run(); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !wErr.closed {
+		t.Fatal("Poll 出错的窗口应被熔断关闭")
+	}
+	if got := wOk.pollCount(); got != 2 {
+		t.Fatalf("好窗口应继续被轮询, got %d 次 Poll", got)
 	}
 }

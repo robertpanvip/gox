@@ -1,23 +1,23 @@
 //! GX 的 Rust 渲染后端 —— C ABI 入口。
 //!
 //! Go 侧通过 cgo 调用：
-//!   - gx_window_new(w, h, title)        创建窗口句柄
+//!   - gx_window_new(w, h, title)        创建窗口句柄（同时创建事件循环并注入 proxy）
 //!   - gx_window_draw(handle, buf, len)  传入二进制场景帧（零拷贝解析）
-//!   - gx_window_run(handle)             跑 winit 事件循环（阻塞）
-//!   - gx_window_close(handle)           关闭
+//!   - gx_window_pump(handle)            非阻塞泵一轮 winit 事件（P4 目标态：Host 轮询驱动）
+//!   - gx_window_close(handle)           请求关闭
 //!   - gx_window_set_event_cb(cb, ctx)   注册事件回调（click/IME/backspace）
 //!
-//! 线程模型：wgpu surface 与事件循环绑定在 gx_window_run() 所在线程。
-//! 该线程由 Go 侧 goroutine 经 cgo 进入，并非进程主线程，故 Linux 下显式开启
-//! winit 的 any_thread（官方嵌入宿主 API）；Windows 无主线程限制。事件循环线程
-//! 由本后端自管理，Go 侧不再用 LockOSThread 试图绑定（评审 P0）。
+//! 线程模型（P4 目标态）：事件循环在 gx_window_new 创建、由 gx_window_pump 在
+//! Host 主循环 goroutine 上逐轮非阻塞泵（winit pump_events 嵌入宿主 API）；
+//! 创建与泵同线程（Handle.Render → Handle.Run 串行约定保证）。不再有自驱
+//! gx_window_run 阻塞循环；多窗口 = 多窗口各持一个事件循环实例，由同一 Host
+//! 主循环交替泵（单一 UI Loop 不变量在 Go 侧 Host 实现）。
 //!
 //! 帧传输与生命周期（评审 P0）：
 //!   - draw() 把帧 push 进 FIFO 队列并通过 EventLoopProxy 唤醒事件循环；事件循环
 //!     每次 redraw 排空队列、按顺序 apply，杜绝单槽覆盖导致的增量丢失。
-//!   - Backend 用 Arc 引用计数管理：run 持有强引用直到事件循环退出；close 只发
-//!     退出请求，不释放内存；内存由最后离开的引用（gx_window_destroy / run 结束）
-//!     释放，彻底消除 Run/Close 竞争下的 use-after-free。
+//!   - Backend 用 Arc 引用计数管理：close 只发退出请求，不释放内存；pump 观测到
+//!     Exit 后清空渲染器槽；内存由 gx_window_destroy 释放，消除 use-after-free。
 //!   - 重绘改为事件驱动：新帧/尺寸/交互状态/动画/视频才请求重绘，静止时停止。
 
 mod binprotocol;
@@ -55,6 +55,7 @@ use winit::{
     event::{ElementState, Ime, MouseButton, WindowEvent},
     event_loop::{EventLoop, EventLoopProxy},
     keyboard::{Key, NamedKey},
+    platform::pump_events::EventLoopExtPumpEvents,
     window::Window,
 };
 
@@ -256,9 +257,13 @@ struct Backend {
     height: u32,
     title: String,
     style: WindowStyle,
-    /// 渲染器共享句柄：gx_window_run 的 resumed 创建后填充；debug 导出 /
-    /// 帧时钟等 C ABI 在 Run 运行期间经它访问（run 退出后置 None）。
+    /// 渲染器共享句柄：首次 pump 的 resumed 创建后填充；debug 导出 /
+    /// 帧时钟等 C ABI 在泵运行期间经它访问（pump Exit 后置 None）。
     renderer: Arc<Mutex<Option<Renderer>>>,
+    /// 事件循环实例（gx_window_new 创建；pump 返回 Exit 后丢弃）。
+    el: Mutex<Option<EventLoop<GxEvent>>>,
+    /// 跨 pump 持久的 winit 应用状态（窗口句柄 / 修饰键 / 首帧探针等）。
+    app: Mutex<Option<WinitApp>>,
 }
 
 unsafe impl Send for Backend {}
@@ -289,6 +294,10 @@ pub extern "C" fn gx_window_new_ex(
     opacity: f32,
 ) -> *mut c_void {
     let title_str = unsafe { cstr(title) };
+    // 事件循环在创建时建立（P4 目标态：gx_window_new 创建、gx_window_pump 泵），
+    // proxy 注入提前到创建期——draw/close 从第一帧起即可跨线程唤醒。
+    let el = new_event_loop();
+    let proxy = el.create_proxy();
     let backend = Backend {
         renderer: Arc::new(Mutex::new(None)),
         queue: Arc::new(Mutex::new(FrameQueue::new())),
@@ -303,9 +312,19 @@ pub extern "C" fn gx_window_new_ex(
             always_on_top: always_on_top != 0,
             opacity,
         },
+        el: Mutex::new(Some(el)),
+        app: Mutex::new(None),
     };
-    // Arc::into_raw：handle 是一份强引用的原始指针。run 期间借用（不改计数），
-    // destroy 时 Arc::from_raw 释放。close 不释放，避免 run 仍在使用时 UAF。
+    {
+        let mut q = backend.queue.lock().unwrap();
+        q.proxy = Some(proxy);
+        // draw 早于首次 pump（首帧在 pump 前提交）：补一次 wake。
+        if !q.pending.is_empty() {
+            q.wake(GxEvent::Wake);
+        }
+    }
+    // Arc::into_raw：handle 是一份强引用的原始指针。pump 期间借用（不改计数），
+    // destroy 时 Arc::from_raw 释放。close 不释放，避免 pump 仍在使用时 UAF。
     Arc::into_raw(Arc::new(backend)) as *mut c_void
 }
 
@@ -377,71 +396,71 @@ pub extern "C" fn gx_window_set_event_cb(handle: *mut c_void, cb: EventCallback,
     *backend.cb_ctx.lock().unwrap() = ctx;
 }
 
-#[no_mangle]
-pub extern "C" fn gx_window_run(handle: *mut c_void) -> c_int {
-    if handle.is_null() {
-        return 1;
+/// 构造 winit 应用状态（跨 pump 持久；首次 pump 时创建）。
+/// 启动时间探针：仅当 GX_STARTUP_PROBE 设置时开启，默认零开销。
+fn winit_app_for(backend: &Backend) -> WinitApp {
+    WinitApp {
+        state: backend.renderer.clone(),
+        width: backend.width,
+        height: backend.height,
+        title: backend.title.clone(),
+        style: backend.style,
+        queue: backend.queue.clone(),
+        cb: backend.cb.clone(),
+        cb_ctx: backend.cb_ctx.clone(),
+        probe: std::env::var_os("GX_STARTUP_PROBE").is_some(),
+        t_run_start: Some(std::time::Instant::now()),
+        t_resumed_done: None,
+        first_frame_done: false,
+        window: None,
+        modifiers: winit::keyboard::ModifiersState::empty(),
+        hover_cursor: String::new(),
     }
-    // 保活（评审 P0 生命周期）：handle 是调用方持有的 1 份强引用（into_raw 产生）。
-    // run 期间先用 increment_strong_count 加 1 份，再从 raw 造出 Arc 借用这份新增引用；
-    // 这样即便 Go 侧并发调用 destroy 释放原始那份，run 仍有自己的引用，不会 UAF。
-    // run 返回时 backend drop（-1），原始那份仍归调用方。
-    unsafe { Arc::increment_strong_count(handle as *const Backend) };
-    let backend: Arc<Backend> = unsafe { Arc::from_raw(handle as *const Backend) };
+}
 
-    let (w, h) = (backend.width, backend.height);
-    let style = backend.style;
-    let title = backend.title.clone();
-    // 启动时间探针：仅当 GX_STARTUP_PROBE 设置时开启，默认零开销。
-    let probe = std::env::var_os("GX_STARTUP_PROBE").is_some();
-    let t_run_start = if probe {
-        Some(std::time::Instant::now())
-    } else {
-        None
+/// 非阻塞泵一轮 winit 事件（P4 目标态：Host 主循环逐轮驱动，ui-loop-p4 文档 §5.2）。
+///
+/// 返回 1=继续（正常，宿主下一轮再泵）；0=事件循环已退出（用户点了关闭按钮 /
+/// gx_window_close 请求退出）——宿主应停止泵并走关闭流程；2=参数错/内部错误。
+///
+/// 实现用 winit 的 pump_events 嵌入 API（timeout=Some(ZERO)，绝不阻塞宿主循环）；
+/// 应用状态跨 pump 持久化在 Backend.app（窗口句柄/修饰键等）。pump 返回 Exit 时
+/// 清空渲染器槽（surface/设备与事件循环同生命周期）并丢弃事件循环与应用状态。
+#[no_mangle]
+pub extern "C" fn gx_window_pump(handle: *mut c_void) -> c_int {
+    if handle.is_null() {
+        return 2;
+    }
+    let backend = unsafe { &*(handle as *const Backend) };
+    let mut el_slot = backend.el.lock().unwrap();
+    let Some(mut el) = el_slot.take() else {
+        return 1; // 已退出（重复 pump）：宿主按 ShouldClose 处理
     };
-    let result = std::panic::catch_unwind(|| {
-        let el = new_event_loop();
-        // 注入 proxy：draw/close 可跨线程唤醒这个事件循环。
-        {
-            let mut q = backend.queue.lock().unwrap();
-            q.proxy = Some(el.create_proxy());
-            if q.shutdown {
-                // close 早于 run：直接退出，不创建窗口。
-                return;
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let mut app_slot = backend.app.lock().unwrap();
+        let mut app = app_slot.take().unwrap_or_else(|| winit_app_for(backend));
+        let status = el.pump_app_events(Some(std::time::Duration::ZERO), &mut app);
+        match status {
+            winit::platform::pump_events::PumpStatus::Continue => {
+                *app_slot = Some(app);
+                1
             }
-            // draw 早于 run（首帧在 run 前提交）：补一次 wake。
-            if !q.pending.is_empty() {
-                q.wake(GxEvent::Wake);
+            winit::platform::pump_events::PumpStatus::Exit(_) => {
+                // pump 退出即清空渲染器槽：Renderer 的 surface/设备与事件循环同
+                // 生命周期，事件循环外不得再经 debug/时钟 ABI 访问（评审 P0 契约）。
+                *app.state.lock().unwrap() = None;
+                0
             }
         }
-        let state = backend.renderer.clone();
-        let run_result = el.run_app(&mut WinitApp {
-            state: &state,
-            width: w,
-            height: h,
-            title,
-            style,
-            queue: backend.queue.clone(),
-            cb: backend.cb.clone(),
-            cb_ctx: backend.cb_ctx.clone(),
-            probe,
-            t_run_start,
-            t_resumed_done: None,
-            first_frame_done: false,
-            window: None,
-            modifiers: winit::keyboard::ModifiersState::empty(),
-            hover_cursor: String::new(),
-        });
-        // run 退出即清空渲染器槽：Renderer 的 surface/设备与事件循环同生命周期，
-        // 事件循环外不得再经 debug/时钟 ABI 访问（评审 P0 生命周期契约）。
-        state.lock().unwrap().take();
-        let _ = run_result;
-    });
-    // backend 在此 drop（-1）。原始那份由 gx_window_destroy 释放。
-    if result.is_ok() {
-        0
-    } else {
-        2
+    }));
+    match result {
+        Ok(code) => {
+            if code == 1 {
+                *el_slot = Some(el);
+            }
+            code
+        }
+        Err(_) => 2, // pump panic：宿主归因熔断该窗口
     }
 }
 
@@ -467,10 +486,10 @@ fn new_event_loop() -> EventLoop<GxEvent> {
     }
 }
 
-struct WinitApp<'a> {
-    /// 共享渲染器槽：事件循环期间经 Mutex 访问；Backend 的 debug/时钟 ABI
-    /// 在 Run 运行期间经同一 Arc 读取（评审 P0 生命周期：run 退出后随槽释放）。
-    state: &'a Arc<Mutex<Option<Renderer>>>,
+struct WinitApp {
+    /// 共享渲染器槽：pump 期间经 Mutex 访问；Backend 的 debug/时钟 ABI
+    /// 在泵运行期间经同一 Arc 读取（评审 P0 生命周期：pump Exit 后随槽释放）。
+    state: Arc<Mutex<Option<Renderer>>>,
     width: u32,
     height: u32,
     title: String,
@@ -490,7 +509,7 @@ struct WinitApp<'a> {
     hover_cursor: String,
 }
 
-impl winit::application::ApplicationHandler<GxEvent> for WinitApp<'_> {
+impl winit::application::ApplicationHandler<GxEvent> for WinitApp {
     fn resumed(&mut self, el: &winit::event_loop::ActiveEventLoop) {
         if self.state.lock().unwrap().is_some() {
             return;
@@ -937,8 +956,8 @@ fn fire(cb: &Arc<Mutex<EventCallback>>, ctx: &Arc<Mutex<*mut c_void>>, json: &st
 }
 
 /// 请求关闭：设置 shutdown 并通过 proxy 唤醒事件循环退出。
-/// 注意：这里【不释放】Backend 内存——run 可能仍在使用它（评审 P0 生命周期竞争）。
-/// 内存由 Go 侧在事件循环退出后调用 gx_window_destroy 释放。
+/// 注意：这里【不释放】Backend 内存——pump 可能仍在使用它（评审 P0 生命周期竞争）。
+/// 宿主观测到 gx_window_pump 返回 0 后调用 gx_window_destroy 释放。
 #[no_mangle]
 pub extern "C" fn gx_window_close(handle: *mut c_void) {
     if handle.is_null() {
@@ -953,12 +972,24 @@ pub extern "C" fn gx_window_close(handle: *mut c_void) {
 }
 
 /// 真正释放 Backend（Arc::from_raw 归还调用方持有的那份强引用）。
-/// Go 侧必须在 gx_window_run 返回之后调用，确保 run 已 drop 它借用的那份。
+/// Go 侧必须在 gx_window_pump 返回 0（事件循环已退出）之后调用。
+/// 释放前兜底清空渲染器槽 / winit 应用状态 / 事件循环，保证 GPU 资源先于
+/// Backend 析构（pump Exit 路径已清，这里覆盖「未泵即 destroy」的短生命周期）。
 #[no_mangle]
 pub extern "C" fn gx_window_destroy(handle: *mut c_void) {
     if !handle.is_null() {
         unsafe {
-            drop(Arc::from_raw(handle as *const Backend));
+            let backend = Arc::from_raw(handle as *const Backend);
+            if let Ok(mut slot) = backend.app.lock() {
+                *slot = None; // 先 drop WinitApp（持窗口 Arc）
+            }
+            if let Ok(mut slot) = backend.el.lock() {
+                *slot = None; // 再 drop 事件循环（surface 随之失效）
+            }
+            if let Ok(mut slot) = backend.renderer.lock() {
+                *slot = None;
+            }
+            drop(backend);
         }
     }
 }

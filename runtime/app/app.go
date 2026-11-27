@@ -760,7 +760,17 @@ func (h *HeadlessWindow) Draw(root *gxscene.Node) error {
 }
 
 // Run 实现 Window：Headless 无事件循环，立即返回。
+// HostedWindow 路径下不再被调用（窗口由 Host 主循环轮询驱动）。
 func (h *HeadlessWindow) Run() error { return nil }
+
+// Poll 实现 HostedWindow：无事件源，no-op。
+func (h *HeadlessWindow) Poll() error { return nil }
+
+// ShouldClose 实现 HostedWindow：Headless 从不主动请求关闭（用 app.Close / Host.Close 终止）。
+func (h *HeadlessWindow) ShouldClose() bool { return false }
+
+// 编译期断言：内置 Headless 窗口参与 Host 轮询主循环。
+var _ HostedWindow = (*HeadlessWindow)(nil)
 
 // Close 实现 Window。
 func (h *HeadlessWindow) Close() error {

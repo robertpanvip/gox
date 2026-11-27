@@ -22,6 +22,8 @@ func (w *closeRaceWindow) Draw(r *gxscene.Node) error {
 	return nil
 }
 func (w *closeRaceWindow) Run() error           { return nil }
+func (w *closeRaceWindow) Poll() error          { return nil }
+func (w *closeRaceWindow) ShouldClose() bool    { return false }
 func (w *closeRaceWindow) Close() error         { return nil }
 func (w *closeRaceWindow) Config() WindowConfig { return w.cfg }
 

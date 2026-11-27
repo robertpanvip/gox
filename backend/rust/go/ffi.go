@@ -13,7 +13,7 @@ extern void*       gx_window_new_ex(int width, int height, const char* title, in
 extern int         gx_window_draw(void* handle, const uint8_t* buf, int len);
 extern int         gx_window_take_fullsync(void* handle);
 extern void        gx_window_set_event_cb(void* handle, gx_event_cb cb, void* ctx);
-extern int         gx_window_run(void* handle);
+extern int         gx_window_pump(void* handle);
 extern void        gx_window_close(void* handle);
 extern void        gx_window_destroy(void* handle);
 extern const char* gx_window_version();
@@ -141,8 +141,10 @@ func cWindowSetEventCb(handle unsafe.Pointer, ctx uintptr) {
 	C.install_event_cb(handle, unsafe.Pointer(ctx))
 }
 
-func cWindowRun(handle unsafe.Pointer) int {
-	return int(C.gx_window_run(handle))
+// cWindowPoll 非阻塞泵一轮 Rust winit 事件。
+// 返回 1=继续；0=事件循环已退出（应走关闭流程）；2=参数错/内部 panic。
+func cWindowPoll(handle unsafe.Pointer) int {
+	return int(C.gx_window_pump(handle))
 }
 
 // cWindowClose 只请求 Rust 事件循环退出，不释放 handle 内存（评审 P0 生命周期）。
@@ -150,8 +152,9 @@ func cWindowClose(handle unsafe.Pointer) {
 	C.gx_window_close(handle)
 }
 
-// cWindowDestroy 在事件循环退出后真正释放 Rust Backend（Arc::from_raw）。
-// 必须与 cWindowRun 返回之后调用，杜绝 Run/Close 竞争下的 use-after-free。
+// cWindowDestroy 真正释放 Rust Backend（Arc::from_raw）。
+// 必须在 cWindowPoll 返回 0（事件循环已退出）之后调用，杜绝 pump/destroy 竞争
+// 下的 use-after-free。
 func cWindowDestroy(handle unsafe.Pointer) {
 	C.gx_window_destroy(handle)
 }

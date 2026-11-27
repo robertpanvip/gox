@@ -3,9 +3,12 @@ package gxapp
 import (
 	"fmt"
 	"sync"
+	"time"
+
+	"github.com/robertpanvip/gox/runtime/loop"
 )
 
-// Host / Handle：进程级应用宿主与接入层（P4 多窗口首版实现）。
+// Host / Handle：进程级应用宿主与接入层（P4 目标态，ui-loop-p4-multiwindows.md §3-§5）。
 //
 // 对应 GX 接入形态（GX 编译产物落到 Use / Handle.Render / Handle.Run 三行）：
 //
@@ -16,31 +19,36 @@ import (
 //	app.Render(func() any { return ui.Settings() }, gxapp.WindowConfig{
 //		Title: "Settings", Width: 600, Height: 400,
 //	})
-//	app.Run() // 统一主循环：全部窗口退出才返回
+//	app.Run() // 唯一主循环：全部窗口退出才返回
 //
 // 后端可插拔模型：gxapp 只定义 Backend 接口形状（backend.go），具体后端实现
 // 它并注入 Use——唯一接入路径，不做字符串分发、没有工厂/注册表便利层，
 // 核心不依赖任何具体后端。
 //
-// 模型（ui-loop-p4-multiwindows.md §3 的首版落地）：
-//   - Host 持有窗口集合，每窗一个独立 App（独立场景树 / signal Runtime / 生命周期），
-//     关闭任意窗口不影响其它窗口。
-//   - 首版各窗口仍由后端自驱事件循环（Host.Run 并行等待全部退出）；"单一 UI Loop
-//     + Host 轮询窗口"的目标态见 P4 文档 §4，需要后端改造为一循环多窗口。
-//   - 故障隔离域 = 窗口：任一窗口的 Run panic 被 recover 归因到该窗口并上报
-//     FaultHandler，不影响其它窗口。
+// 目标态模型（三条不变量，§3）：
+//   - 一个 Loop：Host 持有进程内唯一的 *loop.Queue；所有窗口的 Dispatch / RAF /
+//     帧重绘任务全部汇入同一队列，串行执行，响应式核心单线程假设成立。
+//   - 一个主循环：Host.Run() 是唯一阻塞循环，逐轮「Poll 事件 → DrainTurn 任务 →
+//     收 ShouldClose」；窗口后端不再各自 Run()，而是实现 HostedWindow 被 Host 轮询
+//     （Window.Run 退化为 no-op，不再有自驱回退路径）。
+//   - 故障隔离域 = 窗口：任务 panic（窗口级 guard）与 Poll panic/错误都被 recover
+//     归因上报 FaultHandler，只熔断该窗口，其余窗口继续被主循环驱动。
 //
-// 主线程亲和限制：GLFW 类主线程亲和后端（skia glwindow）的多窗口需 P4 目标态改造；
-// 首版多窗口适用于"事件循环不要求主线程"的后端（rustbackend / headless / 测试桩）。
+// 线程契约：Host.Run 所在 goroutine 就是 UI 线程——所有窗口的事件、任务、绘制
+// 在同一线程串行执行；后台 goroutine 经 app.Dispatch 把更新投递进共享 Loop。
 
-// Fault 是一次窗口级故障的归因记录（Run panic / 关闭失败）。
+// Fault 是一次窗口级故障的归因记录（Host 已 recover，未向上传播）。
 type Fault struct {
-	WindowID  int    // Host 内的窗口序号
+	WindowID  int    // Host 内的窗口序号；Host.Go 的裸故障为 0
 	Backend   string // 窗口所属后端标识（Backend.Name()）
-	Phase     string // "run" / "close"
-	Panic     any    // recover 捕获的 panic 值（nil 表示非 panic 故障）
+	Phase     string // "poll"（取事件）/ "task"（UI 任务）/ "close"（关闭）/ "go"（受保护 goroutine）
+	Panic     any    // recover 捕获的 panic 值（nil 表示非 panic 故障，如 Poll 返回错误）
 	Recovered bool   // 恒为 true：Host 已隔离，未向上传播
 }
+
+// 默认空闲等待：主循环无任务无事件时的轮询间隔。Loop 有任务入队时 Wake
+// 会立即打断等待，因此这只影响「平台事件到达但 Loop 无任务」的感知延迟。
+const defaultIdleWait = 16 * time.Millisecond
 
 // WindowBinder 是后端可选扩展：Host 装配完一个窗口并 Render 后通知后端
 // 启用增量流（rustbackend 的 BindApp 约定在 Render 之后调用）。
@@ -56,40 +64,80 @@ type hostWindow struct {
 	win     Window
 }
 
-// Host 是进程级应用宿主：持有窗口集合，提供统一 Run / Close 与故障隔离。
+// Host 是进程级应用宿主：持有唯一 UI Loop 与全部窗口，提供统一主循环与故障隔离。
 type Host struct {
-	mu      sync.Mutex
-	seq     int
-	windows []*hostWindow
-	fault   func(Fault)
-	closed  bool
-	inited  map[Backend]bool // 已 Init 的 BackendInitializer（幂等去重）
-	shut    map[Backend]bool // 已 Shutdown 的后端（幂等去重）
+	mu       sync.Mutex
+	seq      int
+	windows  []*hostWindow
+	fault    func(Fault)
+	closed   bool
+	inited   map[Backend]bool // 已 Init 的 BackendInitializer（幂等去重）
+	shut     map[Backend]bool // 已 Shutdown 的后端（幂等去重）
+	loopq    *loop.Queue      // 唯一 UI Loop（WithLoop 可复用外部实例）
+	wake     chan struct{}    // Loop.Wake → 主循环空闲等待的即时打断
+	idleWait time.Duration    // 主循环空闲轮询间隔
 }
 
 // HostOption 配置 Host。
 type HostOption func(*Host)
 
-// WithFaultHandler 注册窗口故障回调（Run panic / 关闭失败归因）。
+// WithFaultHandler 注册窗口故障回调（Poll/任务 panic、关闭失败归因）。
 func WithFaultHandler(fn func(Fault)) HostOption {
 	return func(h *Host) { h.fault = fn }
 }
 
-// NewHost 创建进程级宿主。
+// WithLoop 复用外部 UI Loop（缺省自建唯一实例）。
+func WithLoop(q *loop.Queue) HostOption {
+	return func(h *Host) { h.loopq = q }
+}
+
+// WithIdleWait 调整主循环空闲轮询间隔（默认 16ms）。
+func WithIdleWait(d time.Duration) HostOption {
+	return func(h *Host) { h.idleWait = d }
+}
+
+// NewHost 创建进程级宿主（自建唯一 UI Loop；Wake 接主循环空闲打断）。
 func NewHost(opts ...HostOption) *Host {
-	h := &Host{}
+	h := &Host{idleWait: defaultIdleWait, wake: make(chan struct{}, 1)}
 	for _, o := range opts {
 		o(h)
+	}
+	if h.loopq == nil {
+		h.loopq = loop.New(loop.Config{Wake: h.wakeUp})
 	}
 	return h
 }
 
+// wakeUp 非阻塞唤醒主循环（Loop 首个任务入队时触发；容量 1 合并高频唤醒）。
+func (h *Host) wakeUp() {
+	select {
+	case h.wake <- struct{}{}:
+	default:
+	}
+}
+
+// Loop 返回宿主唯一的 UI Loop（诊断/高级用法：Watchdog 联动、外部任务投递）。
+func (h *Host) Loop() *loop.Queue { return h.loopq }
+
+// Go 以受保护方式在后台 goroutine 执行 fn：panic 被 recover 归因上报
+// FaultHandler（Phase="go"），不会带崩进程。Go 运行时无法 recover 用户
+// 自己 `go func()` 的裸 panic——需要跨 goroutine 执行时请统一走本入口。
+func (h *Host) Go(fn func()) {
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				h.reportFault(&hostWindow{}, "go", r)
+			}
+		}()
+		fn()
+	}()
+}
+
 // OpenWindow 在 Host 下打开一个窗口并创建其独立 App。
 //
-// 装配顺序（评审 P0）：Open → OpenWith（建 App）→ 若后端实现 UIExecutor 则注入
-// （把 Dispatch/RAF 派发到该窗口的事件泵，避免后台 goroutine 跨线程绘制）。
-// Render 由调用方完成（Handle.Render 或手动 app.Render），随后 Host 经
-// WindowBinder 通知后端启用增量。
+// 装配顺序（评审 P0）：Open → OpenWith（建 App）→ 注入共享 Loop 投递器
+// （Dispatch/RAF/帧重绘全部汇入 Host 唯一 UI Loop）。win 必须实现
+// HostedWindow（P4 目标态：窗口由 Host 主循环轮询，不再自驱 Run）。
 func (h *Host) OpenWindow(cfg WindowConfig, win Window) (*App, error) {
 	cfg = cfg.normalize()
 	entry, err := h.openEntry(cfg, nil, win)
@@ -126,7 +174,7 @@ func backendFromRegistry(name string) (Backend, error) {
 	return registryBackend{name: name, factory: f}, nil
 }
 
-// openEntry 公共装配路径：backend.NewWindow → Open → 建 App → 注入 UIExecutor → 登记。
+// openEntry 公共装配路径：backend.NewWindow → Open → 建 App → 注入共享 Loop 投递器。
 // backend 为 nil 时用内置 Headless（无头测试 / 纯逻辑验收）。
 func (h *Host) openEntry(cfg WindowConfig, backend Backend, win Window) (*hostWindow, error) {
 	h.mu.Lock()
@@ -162,14 +210,16 @@ func (h *Host) openEntry(cfg WindowConfig, backend Backend, win Window) (*hostWi
 		backendName = backend.Name()
 	}
 
+	// P4 目标态硬约束：Host 管理的窗口必须可被主循环轮询。不实现 HostedWindow
+	// 的后端（仍在自驱 Run）直接拒绝接入——没有静默降级路径。
+	hw, ok := win.(HostedWindow)
+	if !ok {
+		return nil, fmt.Errorf("gxapp: Backend %q 的窗口未实现 gxapp.HostedWindow（P4 目标态：窗口由 Host 主循环 Poll 驱动，不再自驱 Run）", backendName)
+	}
+	_ = hw
 	app, err := OpenWith(cfg, win)
 	if err != nil {
 		return nil, err
-	}
-	// 后端自驱 UI 线程（rustbackend.Run 的 select 泵 / glWindow 的 GLFW 主循环）：
-	// Dispatch/RAF 派发进窗口事件泵，与绘制同线程串行。
-	if exec, ok := win.(UIExecutor); ok {
-		app.SetUIExecutor(exec)
 	}
 
 	entry := &hostWindow{id: id, backend: backendName, app: app, win: win}
@@ -181,7 +231,36 @@ func (h *Host) openEntry(cfg WindowConfig, backend Backend, win Window) (*hostWi
 	}
 	h.windows = append(h.windows, entry)
 	h.mu.Unlock()
+
+	// 单一 UI Loop：窗口的全部 UI 任务（Dispatch / RAF / 帧重绘）经共享 Loop
+	// 投递，由 Host.Run 的 DrainTurn 串行执行；外层包窗口级 guard 归因熔断。
+	app.SetUIExecutor(hostUIExecutor{h: h, w: entry})
 	return entry, nil
+}
+
+// hostUIExecutor 把 Host 共享 Loop 适配为 UIExecutor：窗口任务汇入唯一 UI Loop。
+type hostUIExecutor struct {
+	h *Host
+	w *hostWindow
+}
+
+func (e hostUIExecutor) Post(fn func()) error {
+	return e.h.postWindowTask(e.w, fn)
+}
+
+// postWindowTask 把窗口 UI 任务投递进共享 Loop，外层包窗口级 guard：
+// 任务 panic 归因到该窗口并熔断（其余窗口不受影响），不污染 Loop 的
+// 全局 OnTaskPanic 兜底语义（guard 先行 recover，Loop 观察不到该 panic）。
+func (h *Host) postWindowTask(w *hostWindow, fn func()) error {
+	return h.loopq.Post(func() {
+		defer func() {
+			if r := recover(); r != nil {
+				h.reportFault(w, "task", r)
+				_ = h.CloseWindow(w.app)
+			}
+		}()
+		fn()
+	})
 }
 
 // CloseWindow 关闭并移除一个窗口（按 App 句柄定位）。幂等；重复/未知句柄返回 nil。
@@ -219,41 +298,63 @@ func (h *Host) Windows() []*App {
 	return out
 }
 
-// Run 启动全部窗口并阻塞，直到所有窗口退出。
+// Run 启动 Host 唯一主循环并阻塞，直到所有窗口关闭。
 //
-// 每个窗口在自己的 goroutine 里 app.Run()（后端事件循环自驱）；任一窗口 Run
-// panic 被 recover 归因上报 FaultHandler，不传播、不影响其它窗口。返回第一个
-// 非 panic 的 Run 错误（如 rustbackend 的协议错误）。
+// 每轮（ui-loop-p4-multiwindows.md §5.1 的目标态节奏）：
+//  1. 逐窗 Poll：非阻塞取本窗口待处理事件（panic/错误 → 归因 + 熔断该窗口）；
+//  2. DrainTurn：执行共享 Loop 里的全部 UI 任务——后台 Dispatch、响应式更新
+//     触发的帧重绘（dispatcher sink → drawNowErr → Present/Draw）都在这里串行完成；
+//  3. 收 ShouldClose：请求关闭的窗口逐个 CloseWindow。
+//
+// 空闲时等待 Loop.Wake（任务入队即时打断）或 idleWait 超时（感知平台事件）。
+// 全部窗口关闭（或 Host.Close）后返回 nil；本路径没有自驱窗口，不存在并行
+// Run 的错误汇总语义。
 func (h *Host) Run() error {
-	h.mu.Lock()
-	wins := append([]*hostWindow(nil), h.windows...)
-	h.mu.Unlock()
-	if len(wins) == 0 {
-		return nil
-	}
-	done := make(chan error, len(wins))
-	for _, w := range wins {
-		w := w
-		go func() {
-			err := func() (err error) {
-				defer func() {
-					if r := recover(); r != nil {
-						h.reportFault(w, "run", r)
-						err = fmt.Errorf("gxapp: 窗口 %q Run panic（已隔离）: %v", w.win.Config().Title, r)
-					}
-				}()
-				return w.app.Run()
-			}()
-			done <- err
-		}()
-	}
-	var first error
-	for range wins {
-		if err := <-done; err != nil && first == nil {
-			first = err
+	for {
+		h.mu.Lock()
+		wins := append([]*hostWindow(nil), h.windows...)
+		h.mu.Unlock()
+		if len(wins) == 0 {
+			return nil
+		}
+
+		for _, w := range wins {
+			h.pollWindow(w)
+		}
+		h.loopq.DrainTurn()
+		for _, w := range wins {
+			if w.win.(HostedWindow).ShouldClose() {
+				_ = h.CloseWindow(w.app)
+			}
+		}
+
+		select {
+		case <-h.wake:
+		case <-time.After(h.idleWait):
 		}
 	}
-	return first
+}
+
+// pollWindow 取一轮窗口事件。panic 或错误都归因上报并熔断该窗口
+// （CloseWindow 移除后主循环不再轮询它），其余窗口不受影响。
+func (h *Host) pollWindow(w *hostWindow) {
+	panicked := false
+	err := func() (err error) {
+		defer func() {
+			if r := recover(); r != nil {
+				panicked = true
+				h.reportFault(w, "poll", r)
+				err = fmt.Errorf("gxapp: 窗口 %q Poll panic（已隔离）: %v", w.win.Config().Title, r)
+			}
+		}()
+		return w.win.(HostedWindow).Poll()
+	}()
+	if err != nil {
+		if !panicked {
+			h.reportFault(w, "poll", nil)
+		}
+		_ = h.CloseWindow(w.app)
+	}
 }
 
 // initBackend 探测后端是否实现 BackendInitializer，是则幂等 Init 一次
@@ -304,7 +405,7 @@ func (h *Host) WindowOf(app *App) Window {
 	return nil
 }
 
-// Close 关闭全部窗口并拒绝后续新窗口。幂等。
+// Close 关闭全部窗口、停掉 UI Loop 并拒绝后续新窗口。幂等。
 func (h *Host) Close() error {
 	h.mu.Lock()
 	if h.closed {
@@ -325,6 +426,7 @@ func (h *Host) Close() error {
 		}
 	}
 	h.shutdownBackends()
+	_ = h.loopq.Stop() // 丢弃未执行任务（Dropped 计数）；正在执行的任务自然返回
 	return first
 }
 
@@ -341,7 +443,7 @@ func (h *Host) reportFault(w *hostWindow, phase string, p any) {
 
 // ---- 接入层：gx.use(Backend) 的 Go 落点 ----
 
-// Handle 是绑定某个后端的窗口组句柄：每次 Render 开一扇新窗，Run 统一等待。
+// Handle 是绑定某个后端的窗口组句柄：每次 Render 开一扇新窗，Run 统一主循环。
 // 非并发安全：Render / Run / Close 应在装配 goroutine（通常 main）串行调用。
 type Handle struct {
 	h       *Host
@@ -363,7 +465,7 @@ func Use(backend Backend) *Handle {
 	return &Handle{h: NewHost(), backend: backend}
 }
 
-// Host 返回底层宿主（Windows() 快照、故障回调等高级用法）。
+// Host 返回底层宿主（Windows() 快照、Loop()、故障回调等高级用法）。
 func (hd *Handle) Host() *Host { return hd.h }
 
 // Render 打开一个新窗口并渲染根组件（GX: app.render(() => <App/>, cfg)）。
@@ -389,7 +491,7 @@ func (hd *Handle) Render(build func() any, cfg WindowConfig) (*App, error) {
 // WindowOf 返回某窗口的 Window 实例（代理到 Host.WindowOf）。
 func (hd *Handle) WindowOf(app *App) Window { return hd.h.WindowOf(app) }
 
-// Run 启动全部窗口并阻塞，直到所有窗口退出（代理到 Host.Run）。
+// Run 启动唯一主循环并阻塞，直到所有窗口关闭（代理到 Host.Run）。
 func (hd *Handle) Run() error { return hd.h.Run() }
 
 // Close 关闭全部窗口（代理到 Host.Close）。

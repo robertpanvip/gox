@@ -182,8 +182,19 @@ func (w *Window) Draw(root *gxscene.Node) error {
 }
 
 // Run 立即返回：Web 后端没有自己的事件循环，事件由浏览器 DOM 驱动、经
-// FireEvent 回投到场景树。
+// FireEvent 回投到场景树。HostedWindow 路径下不再被调用。
 func (w *Window) Run() error { return nil }
+
+// Poll 实现 gxapp.HostedWindow：浏览器是唯一事件源（DOM 事件经 FireEvent 回投、
+// 帧重绘经 UIExecutor/浏览器 rAF 驱动），Host 主循环侧无可轮询事件，no-op。
+func (w *Window) Poll() error { return nil }
+
+// ShouldClose 实现 gxapp.HostedWindow：Web 窗口不请求关闭（一 tab 一文档，
+// 生命周期归浏览器），恒为 false。
+func (w *Window) ShouldClose() bool { return false }
+
+// 编译期断言：Web 窗口参与 Host 轮询主循环。
+var _ gxapp.HostedWindow = (*Window)(nil)
 
 func (w *Window) Close() error {
 	w.mu.Lock()

@@ -521,12 +521,15 @@ canvas-ops。
    `FrameQueue.pending: VecDeque<Vec<u8>>`——`gx_window_draw` 逐帧入队，redraw 时 drain
    全部按序 `apply_frame`；队列版本由 Go 侧 `Frame.Version` 连续性检查 + draw 失败回退
    全量快照兜底。
-2. **生命周期：退出通知 + Arc 引用计数，消除 use-after-free**（P0）：`gx_window_close`
-   只设置 shutdown 并经 `EventLoopProxy<GxEvent>` 发退出请求，**不释放内存**；
-   `gx_window_run` 用 `Arc::increment_strong_count` 在事件循环期间保活，返回时 drop；
-   新增 `gx_window_destroy` 由 Go 在 `runDone` 之后释放调用方那份 Arc。Go `Window.Close`
-   严格按「请求退出 → 等 runDone → destroy → 注销注册表」顺序执行。同时移除 Go 侧
-   `LockOSThread`（锁定的线程与事件循环线程并非同一条），由 Rust 后端自管事件循环线程。
+2. **生命周期：退出请求 + 非阻塞泵，消除 use-after-free**（P0 / P4 目标态重写）：
+   `gx_window_close` 只设置 shutdown 并经 `EventLoopProxy<GxEvent>` 发退出请求，
+   **不释放内存**；事件循环在 `gx_window_new` 创建、由 `gx_window_pump` 在 Host 主循环
+   goroutine 上逐轮非阻塞泵（winit `pump_events` 嵌入 API，timeout=ZERO），返回
+   0=已退出 / 1=继续 / 2=内部错误；pump 观测到 Exit 即清空渲染器槽。
+   新增 `gx_window_destroy` 由 Go 在 pump 退出后释放调用方那份 Arc（Rust 侧兜底清空
+   app/el/renderer）。Go `Window` 实现 `gxapp.HostedWindow`：`Poll` 泵一轮 + 消费
+   事件通道，`ShouldClose` 读 Exit 标志，`Run` 退化为 no-op——窗口由 Host 主循环
+   轮询驱动（不再有自驱 `gx_window_run` 阻塞循环）。
 3. **事件驱动重绘，停止空转**（P1）：去掉 `RedrawRequested` 结尾的无条件
    `request_redraw`。新帧到达时 `gx_window_draw` 经 proxy 发合并式 `Wake` 请求一次重绘；
    仅当 `Renderer::needs_continuous_redraw()` 为真（transition 动画 / 播放中的视频 /
