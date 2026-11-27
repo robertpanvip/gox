@@ -15,6 +15,33 @@
 use std::ffi::c_long;
 use winit::window::Window;
 
+/// 区域级穿透的输入形状矩形：窗口内容区物理像素坐标（左上原点）。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct InputRect {
+    pub x: i32,
+    pub y: i32,
+    pub w: i32,
+    pub h: i32,
+}
+
+/// 区域级穿透（MousePassthrough 区域模式）：把窗口输入形状设为 rects 的并集——
+/// 只有这些区域接收鼠标事件，其余透明区点击直接落到下层窗口（旧 skia glwindow
+/// 按 DrawLog 逐帧重设 XShape 的同语义）。rects 为空 = 整窗穿透。
+///
+/// X11 经 XShape ShapeInput 实现；Windows/macOS 无区域级公开 API，返回 Err
+/// （Go 侧应回退整窗级模式）。
+pub fn apply_input_shape(window: &Window, rects: &[InputRect]) -> Result<(), String> {
+    #[cfg(target_os = "linux")]
+    {
+        return x11_shape(window, rects);
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (window, rects);
+        Err("region-level passthrough unsupported on this platform".to_string())
+    }
+}
+
 /// 整窗级穿透开关。成功返回 Ok；平台不支持（Wayland）或系统库缺失返回 Err，
 /// Go 侧透传为错误（不静默）。
 pub fn set_mouse_passthrough(window: &Window, enabled: bool) -> Result<(), String> {
@@ -125,76 +152,92 @@ mod x11 {
     }
 }
 
+/// 取窗口的 (Xlib display, X11 window) 原生句柄（Wayland 报错）。
 #[cfg(target_os = "linux")]
-fn x11_apply(window: &Window, enabled: bool) -> Result<(), String> {
+fn x11_handles(window: &Window) -> Result<(*mut std::ffi::c_void, u64), String> {
     use raw_window_handle::{HasDisplayHandle, HasWindowHandle, RawDisplayHandle, RawWindowHandle};
-
-    let (dpy, xwin) = {
-        let dh = window
-            .display_handle()
-            .map_err(|_| "raw display handle unavailable".to_string())?;
-        let wh = window
-            .window_handle()
-            .map_err(|_| "raw window handle unavailable".to_string())?;
-        match (dh.as_raw(), wh.as_raw()) {
-            (RawDisplayHandle::Xlib(d), RawWindowHandle::Xlib(w)) => {
-                let dpy = d
-                    .display
-                    .map(|p| p.as_ptr())
-                    .ok_or("X11 display pointer unavailable")?;
-                (dpy, w.window)
-            }
-            _ => {
-                return Err(
-                    "passthrough requires X11 (Wayland has no equivalent API)".to_string(),
-                )
-            }
+    let dh = window
+        .display_handle()
+        .map_err(|_| "raw display handle unavailable".to_string())?;
+    let wh = window
+        .window_handle()
+        .map_err(|_| "raw window handle unavailable".to_string())?;
+    match (dh.as_raw(), wh.as_raw()) {
+        (RawDisplayHandle::Xlib(d), RawWindowHandle::Xlib(w)) => {
+            let dpy = d
+                .display
+                .map(|p| p.as_ptr())
+                .ok_or("X11 display pointer unavailable")?;
+            Ok((dpy, w.window))
         }
-    };
+        _ => Err("passthrough requires X11 (Wayland has no equivalent API)".to_string()),
+    }
+}
 
+/// 用矩形集合重设 X11 输入形状（空切片 = 整窗穿透）。
+#[cfg(target_os = "linux")]
+fn xshape_apply(dpy: *mut std::ffi::c_void, xwin: u64, rects: &[InputRect]) -> Result<(), String> {
     let Some((shape, xflush)) = x11::symbols() else {
         return Err("libXext not found (XShape unavailable)".to_string());
     };
-
+    // InputRect → XRectangle（物理像素；超 u16 范围钳制——X11 短整形语义）。
+    let conv: Vec<x11::XRectangle> = rects
+        .iter()
+        .map(|r| x11::XRectangle {
+            x: r.x.clamp(i16::MIN as i32, i16::MAX as i32) as i16,
+            y: r.y.clamp(i16::MIN as i32, i16::MAX as i32) as i16,
+            width: r.w.clamp(0, u16::MAX as i32) as u16,
+            height: r.h.clamp(0, u16::MAX as i32) as u16,
+        })
+        .collect();
     unsafe {
-        if enabled {
-            // 空输入形状 = 整窗穿透（n_rects=0）。
-            (shape)(
-                dpy,
-                xwin as c_long,
-                x11::SHAPE_INPUT,
-                0,
-                0,
-                std::ptr::null(),
-                0,
-                x11::SHAPE_SET,
-                x11::UNSORTED,
-            );
-        } else {
-            // 全窗口矩形 = 恢复正常接收。
-            let size = window.inner_size();
-            let rect = x11::XRectangle {
-                x: 0,
-                y: 0,
-                width: size.width.min(u16::MAX as u32) as u16,
-                height: size.height.min(u16::MAX as u32) as u16,
-            };
-            (shape)(
-                dpy,
-                xwin as c_long,
-                x11::SHAPE_INPUT,
-                0,
-                0,
-                &rect,
-                1,
-                x11::SHAPE_SET,
-                x11::UNSORTED,
-            );
-        }
+        (shape)(
+            dpy,
+            xwin as c_long,
+            x11::SHAPE_INPUT,
+            0,
+            0,
+            if conv.is_empty() {
+                std::ptr::null()
+            } else {
+                conv.as_ptr()
+            },
+            conv.len() as i32,
+            x11::SHAPE_SET,
+            x11::UNSORTED,
+        );
         // 立即 flush：Xlib 请求是缓冲的，不等 winit 事件线程的下一次操作。
         let _ = (xflush)(dpy);
     }
     Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn x11_apply(window: &Window, enabled: bool) -> Result<(), String> {
+    let (dpy, xwin) = x11_handles(window)?;
+    if enabled {
+        // 空输入形状 = 整窗穿透。
+        xshape_apply(dpy, xwin, &[])
+    } else {
+        // 全窗口矩形 = 恢复正常接收。
+        let size = window.inner_size();
+        xshape_apply(
+            dpy,
+            xwin,
+            &[InputRect {
+                x: 0,
+                y: 0,
+                w: size.width as i32,
+                h: size.height as i32,
+            }],
+        )
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn x11_shape(window: &Window, rects: &[InputRect]) -> Result<(), String> {
+    let (dpy, xwin) = x11_handles(window)?;
+    xshape_apply(dpy, xwin, rects)
 }
 
 // ---------- Windows ----------

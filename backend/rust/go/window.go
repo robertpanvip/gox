@@ -634,13 +634,31 @@ func (w *Window) SetVSync(mode VSyncMode) error {
 	return nil
 }
 
-// SetMousePassthrough 整窗级鼠标穿透开关（MousePassthrough）：enabled=true 时
-// 本窗口不再接收任何鼠标事件，点击直接落到下层窗口（overlay 场景）。
+// MousePassthroughMode 鼠标穿透模式。
+type MousePassthroughMode int
+
+const (
+	// PassthroughOff 正常接收鼠标（恢复全窗口输入形状）。
+	PassthroughOff MousePassthroughMode = iota
+	// PassthroughWhole 整窗级：窗口不接收任何鼠标事件，点击落到下层窗口。
+	PassthroughWhole
+	// PassthroughRegion 区域级：只有本帧「有内容」的区域（不透明背景/图片/
+	// canvas/video/边框 + 可交互命中框）接收鼠标，其余透明区点击落到下层
+	// 窗口（与旧 skia glwindow 按 DrawLog 逐帧重设 XShape 同语义）。输入形状
+	// 随帧自动更新（内容矩形变更时才调 XShape）。
+	PassthroughRegion
+)
+
+// SetMousePassthroughMode 设置鼠标穿透模式（区域级为推荐形态）。
 //
 // 窗口未打开时拒绝（不静默）——与 SetVSync 同语义：句柄未就绪先经
-// Host.Render/OpenWindow 开窗再设置。X11 经 XShape ShapeInput 实现，
-// Wayland 无等价 API 返回错误；Windows/macOS 走扩展样式 / ignoresMouseEvents。
-func (w *Window) SetMousePassthrough(enabled bool) error {
+// Host.Render/OpenWindow 开窗再设置。区域级 X11 经 XShape ShapeInput 实现，
+// Wayland 与 Windows/macOS 无区域级 API 返回错误（可用整窗级回退）；
+// 整窗级三端全覆盖（X11 XShape / Win 扩展样式 / mac ignoresMouseEvents）。
+func (w *Window) SetMousePassthroughMode(mode MousePassthroughMode) error {
+	if mode < PassthroughOff || mode > PassthroughRegion {
+		return fmt.Errorf("rustbackend: 未知的 MousePassthroughMode %d", mode)
+	}
 	w.mu.Lock()
 	handle := w.handle
 	closed := w.closed
@@ -651,10 +669,18 @@ func (w *Window) SetMousePassthrough(enabled bool) error {
 	if handle == nil {
 		return fmt.Errorf("rustbackend: 窗口未打开（先经 Host.Render/OpenWindow）")
 	}
-	if rc := cWindowSetMousePassthrough(handle, enabled); rc != 0 {
-		return fmt.Errorf("rustbackend: SetMousePassthrough(%v) 失败（rc=%d，平台不支持或系统库缺失）", enabled, rc)
+	if rc := cWindowSetMousePassthrough(handle, int(mode)); rc != 0 {
+		return fmt.Errorf("rustbackend: SetMousePassthroughMode(%d) 失败（rc=%d，平台不支持或系统库缺失）", mode, rc)
 	}
 	return nil
+}
+
+// SetMousePassthrough 整窗级穿透开关（SetMousePassthroughMode 的布尔便利形式）。
+func (w *Window) SetMousePassthrough(enabled bool) error {
+	if enabled {
+		return w.SetMousePassthroughMode(PassthroughWhole)
+	}
+	return w.SetMousePassthroughMode(PassthroughOff)
 }
 
 // VSync 返回当前请求的 vsync 模式（诊断用）。

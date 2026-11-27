@@ -6,6 +6,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	rb "github.com/robertpanvip/gox-backend-rust"
@@ -42,11 +43,11 @@ func main() {
 		cfg.Decorated = gxapp.NoDecorations()
 		cfg.Transparent = true
 	}
-	// 鼠标穿透（GX_PASSTHROUGH=1）：V2 MousePassthrough 能力已接线——整窗级
-	// 开关（X11 经 XShape ShapeInput，点击落到下层窗口）。注意与旧 glwindow 的
-	// 区域级语义差异：旧实现按本帧 DrawLog 逐帧重设输入形状（透明区穿透、内容区
-	// 可点）；V2 先提供整窗级，区域级待渲染端内容框日志补齐（文档遗留项）。
-	passthrough := os.Getenv("GX_PASSTHROUGH") == "1"
+	// 鼠标穿透（GX_PASSTHROUGH=1 区域级 / GX_PASSTHROUGH=whole 整窗级）：
+	// V2 MousePassthrough 已接线。区域级恢复旧 glwindow 语义——透明区点击落到
+	// 后面窗口、内容区可点，输入形状随帧自动更新（内容矩形变更才调 XShape）；
+	// 整窗级为全窗穿透。区域级目前仅 X11 支持（Win/macOS 需回退整窗级）。
+	passthrough := strings.ToLower(os.Getenv("GX_PASSTHROUGH"))
 	handle := gxapp.Use(rb.NewBackend()) // V2 接入层：gx.use(Backend) 接口值注入
 	app, err := handle.Render(func() any {
 		return buildTree()
@@ -57,8 +58,13 @@ func main() {
 	defer handle.Close() // Handle.Close 级联：窗口 Close + 后端 Shutdown
 
 	win := handle.WindowOf(app).(*rb.Window)
-	if passthrough {
-		if err := win.SetMousePassthrough(true); err != nil {
+	switch passthrough {
+	case "1", "region", "true":
+		if err := win.SetMousePassthroughMode(rb.PassthroughRegion); err != nil {
+			panic(err)
+		}
+	case "whole":
+		if err := win.SetMousePassthroughMode(rb.PassthroughWhole); err != nil {
 			panic(err)
 		}
 	}

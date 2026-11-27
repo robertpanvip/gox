@@ -156,14 +156,11 @@ func cWindowSetVSync(handle unsafe.Pointer, mode int) int {
 	return int(C.gx_window_set_vsync(handle, C.int(mode)))
 }
 
-// cWindowSetMousePassthrough 整窗级鼠标穿透开关（MousePassthrough）。
-// 返回 0=成功；1=空句柄；2=平台不支持/系统库缺失（Rust 侧已记日志）。
-func cWindowSetMousePassthrough(handle unsafe.Pointer, enabled bool) int {
-	e := 0
-	if enabled {
-		e = 1
-	}
-	return int(C.gx_window_set_mouse_passthrough(handle, C.int(e)))
+// cWindowSetMousePassthrough 设置鼠标穿透模式（MousePassthrough）。
+// mode：0=关 1=整窗级 2=区域级。返回 0=成功；1=空句柄；2=参数非法；
+// 3=平台不支持/系统库缺失（Rust 侧已记日志）。
+func cWindowSetMousePassthrough(handle unsafe.Pointer, mode int) int {
+	return int(C.gx_window_set_mouse_passthrough(handle, C.int(mode)))
 }
 
 // cWindowGetVSync 读取当前请求的 vsync 模式码（0/1/2；句柄无效 -1）。

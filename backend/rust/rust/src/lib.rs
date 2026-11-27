@@ -264,9 +264,9 @@ struct Backend {
     /// VSync/present 模式请求（0=Fifo 1=Mailbox 2=Immediate；P4.5 VSyncControl）。
     /// gx_window_set_vsync 写入：渲染器已创建则立即 reconfigure，否则首窗 resumed 应用。
     vsync: Arc<std::sync::atomic::AtomicU8>,
-    /// 鼠标穿透请求（P4 遗留补齐 MousePassthrough）：gx_window_set_mouse_passthrough
-    /// 写入；窗口未创建时先缓存，resumed 创建窗口后立即应用，pump Exit 清窗口槽。
-    passthrough: Arc<std::sync::atomic::AtomicBool>,
+    /// 鼠标穿透模式（MousePassthrough）：0=关 1=整窗 2=区域级。窗口未创建时先
+    /// 缓存，resumed 应用整窗级；区域级由每帧 RedrawRequested 用内容矩形应用。
+    passthrough: Arc<std::sync::atomic::AtomicU8>,
     /// winit 窗口共享槽：resumed 创建后填充；pump Exit 清空（与 renderer 槽同契约）。
     window: Arc<Mutex<Option<Arc<Window>>>>,
     /// 事件循环实例（gx_window_new 创建；pump 返回 Exit 后丢弃）。
@@ -310,7 +310,7 @@ pub extern "C" fn gx_window_new_ex(
     let backend = Backend {
         renderer: Arc::new(Mutex::new(None)),
         vsync: Arc::new(std::sync::atomic::AtomicU8::new(0)),
-        passthrough: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        passthrough: Arc::new(std::sync::atomic::AtomicU8::new(0)),
         window: Arc::new(Mutex::new(None)),
         queue: Arc::new(Mutex::new(FrameQueue::new())),
         cb: Arc::new(Mutex::new(None)),
@@ -526,8 +526,8 @@ struct WinitApp {
     hover_cursor: String,
     /// VSync 请求模式（P4.5 VSyncControl）：resumed 创建渲染器后据此应用。
     vsync: Arc<std::sync::atomic::AtomicU8>,
-    /// 鼠标穿透请求（MousePassthrough）：resumed 创建窗口后应用；Exit 清窗口槽。
-    passthrough: Arc<std::sync::atomic::AtomicBool>,
+    /// 鼠标穿透模式（MousePassthrough）：0=关 1=整窗 2=区域级（帧后应用）。
+    passthrough: Arc<std::sync::atomic::AtomicU8>,
     /// Backend 的窗口共享槽（Arc 克隆）：resumed 填充、Exit 清空，供 C ABI 访问。
     win_slot: Arc<Mutex<Option<Arc<Window>>>>,
 }
@@ -577,9 +577,10 @@ impl winit::application::ApplicationHandler<GxEvent> for WinitApp {
                 }
             }
         }
-        // MousePassthrough：创建期请求在这应用（gx_window_set_mouse_passthrough
-        // 先于首窗 pump 调用的场景）。失败只记日志，不阻断窗口创建。
-        if self.passthrough.load(std::sync::atomic::Ordering::Relaxed) {
+        // MousePassthrough：整窗级在创建期应用（gx_window_set_mouse_passthrough
+        // 先于首窗 pump 调用的场景）；区域级等首帧 RedrawRequested 用内容矩形应用。
+        // 失败只记日志，不阻断窗口创建。
+        if self.passthrough.load(std::sync::atomic::Ordering::Relaxed) == 1 {
             if let Err(e) = crate::passthrough::set_mouse_passthrough(&window, true) {
                 eprintln!("[rust-backend] mouse passthrough: {e}");
             }
@@ -641,6 +642,30 @@ impl winit::application::ApplicationHandler<GxEvent> for WinitApp {
                 for buf in &batch {
                     if renderer.apply_frame(buf) {
                         self.queue.lock().unwrap().applied += 1;
+                    }
+                }
+                // 区域级鼠标穿透：随帧更新输入形状（内容矩形变更时才调 XShape；
+                // 缓存在渲染器，模式切换经 gx_window_set_mouse_passthrough 清）。
+                if self.passthrough.load(std::sync::atomic::Ordering::Relaxed) == 2 {
+                    if let Some(w) = self.window.as_ref() {
+                        let scale = w.scale_factor() as f32;
+                        if let Some(rects) = renderer.take_region_rects(scale) {
+                            if std::env::var_os("GX_PT_DEBUG").is_some() {
+                                let sizes: Vec<String> = rects
+                                    .iter()
+                                    .map(|r| format!("{}x{}@{},{}", r.w, r.h, r.x, r.y))
+                                    .collect();
+                                eprintln!(
+                                    "[rust-backend] region rects n={} scale={}: {}",
+                                    rects.len(),
+                                    scale,
+                                    sizes.join(", ")
+                                );
+                            }
+                            if let Err(e) = crate::passthrough::apply_input_shape(w, &rects) {
+                                eprintln!("[rust-backend] mouse passthrough(region): {e}");
+                            }
+                        }
                     }
                 }
                 let t_pre_render = if self.probe {
@@ -1091,23 +1116,56 @@ pub extern "C" fn gx_window_get_vsync(handle: *mut c_void) -> c_int {
 /// 窗口未创建（首 pump 前）：只缓存请求，resumed 创建窗口后自动应用——这与
 /// gx_window_set_vsync 的创建期语义一致，Go 侧可在 openEntry 装配段直接调用。
 #[no_mangle]
-pub extern "C" fn gx_window_set_mouse_passthrough(handle: *mut c_void, enabled: c_int) -> c_int {
+pub extern "C" fn gx_window_set_mouse_passthrough(handle: *mut c_void, mode: c_int) -> c_int {
     if handle.is_null() {
         return 1;
+    }
+    if !(0..=2).contains(&mode) {
+        return 2;
     }
     let backend = unsafe { &*(handle as *const Backend) };
     backend
         .passthrough
-        .store(enabled != 0, std::sync::atomic::Ordering::Relaxed);
+        .store(mode as u8, std::sync::atomic::Ordering::Relaxed);
     // 已有窗口：立即应用；没有：等 resumed 应用。
     let win = backend.window.lock().unwrap().clone();
-    if let Some(w) = win {
-        if let Err(e) = crate::passthrough::set_mouse_passthrough(&w, enabled != 0) {
-            eprintln!("[rust-backend] mouse passthrough: {e}");
-            return 2;
+    let Some(w) = win else {
+        return 0;
+    };
+    match mode {
+        // 整窗级：立即切换。
+        1 => match crate::passthrough::set_mouse_passthrough(&w, true) {
+            Ok(()) => 0,
+            Err(e) => {
+                eprintln!("[rust-backend] mouse passthrough: {e}");
+                3
+            }
+        },
+        // 关闭：恢复正常接收（全窗口输入形状）。
+        0 => match crate::passthrough::set_mouse_passthrough(&w, false) {
+            Ok(()) => 0,
+            Err(e) => {
+                eprintln!("[rust-backend] mouse passthrough: {e}");
+                3
+            }
+        },
+        // 区域级：输入形状随帧更新——清缓存并立即用当前 DisplayList 应用一次
+        // （渲染器未就绪时由首帧 RedrawRequested 应用）。
+        _ => {
+            let mut slot = backend.renderer.lock().unwrap();
+            if let Some(r) = slot.as_mut() {
+                r.invalidate_region();
+                let scale = w.scale_factor() as f32;
+                if let Some(rects) = r.take_region_rects(scale) {
+                    if let Err(e) = crate::passthrough::apply_input_shape(&w, &rects) {
+                        eprintln!("[rust-backend] mouse passthrough(region): {e}");
+                        return 3;
+                    }
+                }
+            }
+            0
         }
     }
-    0
 }
 
 /// E2E 调试导出：{"win_w":..,"win_h":..,"boxes":[{label,testid,kind,x,y,w,h},...]}。

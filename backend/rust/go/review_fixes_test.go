@@ -125,3 +125,11 @@ func TestMousePassthroughCapability(t *testing.T) {
 		t.Fatal("rustbackend 应上报 MousePassthrough=true")
 	}
 }
+
+// 非法模式拒绝（不触发 cgo：参数校验在锁前）。
+func TestMousePassthroughModeGuard(t *testing.T) {
+	w := NewWindow()
+	if err := w.SetMousePassthroughMode(MousePassthroughMode(9)); err == nil {
+		t.Fatal("未知模式应报错")
+	}
+}

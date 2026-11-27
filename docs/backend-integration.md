@@ -554,8 +554,15 @@ canvas-ops。
    Wayland 无等价 API 返回 rc=2（Go 侧透传错误，不静默）。窗口未创建时只缓存请求，
    首窗 resumed 自动应用（与 gx_window_set_vsync 创建期语义一致）。Go 侧
    `Capabilities().MousePassthrough=true`，`rb.Window.SetMousePassthrough(bool)`。
-   区域级精确穿透（透明区穿透、内容区可点——旧 skia glwindow 按 DrawLog 逐帧重设
-   XShape 的语义）待渲染端内容框日志补齐。
+   **区域级精确穿透已落地**：`rb.Window.SetMousePassthroughMode(mode)`
+   （`PassthroughOff/PassthroughWhole/PassthroughRegion`）——区域级从本帧
+   DisplayList 提取「有内容」矩形（不透明 bg/渐变/图片/canvas/video/边框 +
+   可交互命中框，裁剪到窗口物理边界），随帧自动更新 XShape（内容矩形变更时
+   才调，缓存在渲染器）；根节点不透明时区域级自然退化为整窗形状。区域级仅
+   X11 支持（Win/macOS 无区域级公开 API，返回错误需回退整窗级）。诊断：
+   `GX_PT_DEBUG=1` 打印每帧矩形集合。坑：**`build.sh` 重建静态库后 cgo 包
+   不会自动重链（Go 构建缓存不感知外部 .a 变更），验证需 `go build -a` 或
+   `go clean -cache` 强制重链**。
 
 此外：**Wire 版本协商**（P2）——`Open` 时解析 `gx_window_version()` 的 major，与
 `expectedProtocolMajor` 不一致直接拒绝启动，防止 core 更新协议而用户仍用旧后端；

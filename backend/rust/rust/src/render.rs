@@ -92,6 +92,9 @@ pub struct Renderer {
     display: DisplayList,
     /// 最近一次布局导出的实测尺寸，待渲染后经 eventCb 回传 Host（回流）。
     pending_measured: Vec<(u64, f32, f32)>,
+    /// 区域级穿透（MousePassthrough 区域模式）上一次应用的输入形状（物理像素）。
+    /// None = 尚未应用（首次/模式切换后必发）；Some 相同 = 跳过 XShape 调用。
+    last_region: Option<Vec<crate::passthrough::InputRect>>,
     /// transition 插值引擎（跨帧持有动画状态）
     animator: crate::style::Animator,
     /// 动画时钟原点
@@ -216,6 +219,7 @@ impl Renderer {
             bg: (11, 16, 32),
             display: DisplayList::new(),
             pending_measured: vec![],
+            last_region: None,
             animator: crate::style::Animator::new(),
             anim_origin: std::time::Instant::now(),
             scrollbar_alpha: 0.0,
@@ -1135,6 +1139,30 @@ impl Renderer {
         self.provider.request_redraw();
     }
 
+    /// 区域级穿透（MousePassthrough 区域模式）：从本帧 DisplayList 提取
+    /// 「有内容」的矩形集合（窗口内容区物理像素，左上原点）。口径与旧
+    /// skia glwindow 的 drawLogToInputRects 一致：只收真正画出来的不透明
+    /// 内容（bg/渐变/图片/canvas/video/边框）+ 可交互命中框（无 bg 的
+    /// 按钮/输入框也要可点）。空结果 = 整窗穿透。
+    ///
+    /// 带变更缓存：与上次应用结果相同返回 None（跳过 XShape 调用），
+    /// 不同（或首帧/模式切换）返回 Some 并更新缓存。
+    pub fn take_region_rects(&mut self, scale: f32) -> Option<Vec<crate::passthrough::InputRect>> {
+        // 裁剪到窗口物理边界：滚动容器的内容盒可超出窗口底（命中框随内容移动），
+        // 越界矩形无输入意义，反而让 XShape 集合无谓膨胀。
+        let rects = region_rects(&self.display, scale, self.width, self.height);
+        if self.last_region.as_deref() == Some(&rects[..]) {
+            return None; // 与上次相同：无需重设 XShape
+        }
+        self.last_region = Some(rects.clone());
+        Some(rects)
+    }
+
+    /// 模式切换（关闭→区域）后强制下一次 take_region_rects 必发。
+    pub fn invalidate_region(&mut self) {
+        self.last_region = None;
+    }
+
     /// 运行时切换 present 模式（VSyncControl，P4.5 高刷专项）。
     /// 支持则重 configure 立即生效并返回 true；本 surface 不支持该模式返回 false
     /// （调用方保留原模式，不产生半配置状态）。与当前一致时也返回 true（幂等）。
@@ -1752,4 +1780,121 @@ fn find_by_nid_mut(
         }
     }
     false
+}
+
+/// 从 DisplayList 提取区域级穿透的输入形状（物理像素）。见 take_region_rects。
+fn region_rects(
+    dl: &DisplayList,
+    scale: f32,
+    phys_w: u32,
+    phys_h: u32,
+) -> Vec<crate::passthrough::InputRect> {
+    let mut rects: Vec<crate::passthrough::InputRect> = Vec::new();
+    let mut push = |x: f32, y: f32, w: f32, h: f32| {
+        // 物理像素 + 窗口边界裁剪（与 [0,0,phys_w,phys_h] 求交）。
+        let mut x0 = (x * scale).floor() as i32;
+        let mut y0 = (y * scale).floor() as i32;
+        let mut x1 = ((x + w) * scale).ceil() as i32;
+        let mut y1 = ((y + h) * scale).ceil() as i32;
+        x0 = x0.max(0);
+        y0 = y0.max(0);
+        x1 = x1.min(phys_w as i32);
+        y1 = y1.min(phys_h as i32);
+        if x1 - x0 <= 0 || y1 - y0 <= 0 {
+            return;
+        }
+        rects.push(crate::passthrough::InputRect {
+            x: x0,
+            y: y0,
+            w: x1 - x0,
+            h: y1 - y0,
+        });
+    };
+    for sh in &dl.shapes {
+        // 真正画出来的内容：纯色底（bg_present）、渐变（shader 画底）、
+        // 图片、canvas、video、边框；opacity==0 的节点整树不可见。
+        let painted = sh.bg_present
+            || sh.bg_gradient.is_some()
+            || sh.img.is_some()
+            || sh.canvas.is_some()
+            || sh.video.is_some()
+            || sh.border.is_some();
+        if painted && sh.alpha > 0.0 {
+            push(sh.x, sh.y, sh.w, sh.h);
+        }
+    }
+    // 可交互命中框：无 bg 的按钮/文字输入等也必须可点（与 Web 命中语义一致）。
+    for hb in &dl.hitboxes {
+        push(hb.0, hb.1, hb.2, hb.3);
+    }
+    rects
+}
+
+#[cfg(test)]
+mod region_tests {
+    use super::*;
+
+    #[test]
+    fn region_rects_filters_content_and_scale() {
+        let mut dl = DisplayList::new();
+        // 有 bg 的内容矩形（逻辑 10,20,30,40 → 物理 ×2）。
+        dl.shapes.push(ShapeDraw {
+            x: 10.0, y: 20.0, w: 30.0, h: 40.0,
+            bg: (255, 0, 0),
+            bg_present: true,
+            bg_gradient: None,
+            radius: 0.0,
+            border: None,
+            shadow: None,
+            clip: ClipRect::default(),
+            img: None,
+            canvas: None,
+            alpha: 1.0,
+            video: None,
+            video_id: String::new(),
+        });
+        // 透明节点（无 bg 无图片）：不算内容。
+        dl.shapes.push(ShapeDraw {
+            x: 0.0, y: 0.0, w: 500.0, h: 500.0,
+            bg: (0, 0, 0),
+            bg_present: false,
+            bg_gradient: None,
+            radius: 0.0,
+            border: None,
+            shadow: None,
+            clip: ClipRect::default(),
+            img: None,
+            canvas: None,
+            alpha: 1.0,
+            video: None,
+            video_id: String::new(),
+        });
+        // opacity=0 的内容：整树不可见，剔除。
+        dl.shapes.push(ShapeDraw {
+            x: 1.0, y: 1.0, w: 9.0, h: 9.0,
+            bg: (0, 255, 0),
+            bg_present: true,
+            bg_gradient: None,
+            radius: 0.0,
+            border: None,
+            shadow: None,
+            clip: ClipRect::default(),
+            img: None,
+            canvas: None,
+            alpha: 0.0,
+            video: None,
+            video_id: String::new(),
+        });
+        // 无 bg 的可交互命中框：必须可点。
+        dl.hitboxes.push((100.0, 200.0, 50.0, 25.0, 7, "onclick".into(), false, ClipRect::default(), String::new()));
+
+        // 部分越界命中框（右下角 20x10 逻辑像素在窗外）：裁剪到窗口物理边界（500x450）。
+        dl.hitboxes.push((240.0, 220.0, 40.0, 40.0, 9, "onclick".into(), false, ClipRect::default(), String::new()));
+
+        let rects = region_rects(&dl, 2.0, 500, 450);
+        assert_eq!(rects.len(), 3, "透明容器与 opacity=0 剔除；bg 内容 + 命中框 + 裁剪命中框保留");
+        assert_eq!(rects[0], crate::passthrough::InputRect { x: 20, y: 40, w: 60, h: 80 });
+        assert_eq!(rects[1], crate::passthrough::InputRect { x: 200, y: 400, w: 100, h: 50 });
+        assert_eq!(rects[2], crate::passthrough::InputRect { x: 480, y: 440, w: 20, h: 10 }, "越界部分裁掉");
+    }
 }
