@@ -95,11 +95,11 @@ func TestBottomTabSwitch(t *testing.T) {
 
 func TestProjectPanelToggle(t *testing.T) {
 	SetProjectPanelVisible(true)
-	if !treeContainsText(rendered(), "PROJECT") {
+	if !treeContainsText(rendered(), "Project") {
 		t.Fatal("可见时项目面板应在树中")
 	}
 	SetProjectPanelVisible(false)
-	if treeContainsText(rendered(), "PROJECT") {
+	if treeContainsText(rendered(), "Project") {
 		t.Error("隐藏后项目面板不应在树中")
 	}
 	SetProjectPanelVisible(true)

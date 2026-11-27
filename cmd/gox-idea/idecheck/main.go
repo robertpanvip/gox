@@ -166,6 +166,38 @@ func (h *Harness) ClickTextN(substr string, n int) error {
 	return fmt.Errorf("文本 %q 只出现 %d 次，取不到第 %d 个", substr, seen, n)
 }
 
+// testIDBox 按 testid 取命中框。
+func (h *Harness) testIDBox(id string) (skia.HitBox, bool) {
+	for i := range h.hits {
+		n := h.hits[i].Node
+		if n == nil || n.Props == nil {
+			continue
+		}
+		if v, _ := n.Props["testid"].(string); v == id && h.hits[i].W > 0 && h.hits[i].H > 0 {
+			return h.hits[i], true
+		}
+	}
+	return skia.HitBox{}, false
+}
+
+// ClickTestIDBox 点击 testid 元素中心（真实命中链）。
+func (h *Harness) ClickTestIDBox(id string) error {
+	box, ok := h.testIDBox(id)
+	if !ok {
+		return fmt.Errorf("找不到 testid %q", id)
+	}
+	if !h.clickPoint(box.X+box.W/2, box.Y+box.H/2) {
+		return fmt.Errorf("testid %q 坐标无命中", id)
+	}
+	h.Render()
+	return nil
+}
+
+func mustBox(h *Harness, id string) error {
+	_, ok := h.testIDBox(id)
+	return expect(ok, "缺少 testid: "+id)
+}
+
 // HasText 渲染断言：DrawLog 中存在包含 substr 的文本指令。
 func (h *Harness) HasText(substr string) bool {
 	for _, op := range h.log {
@@ -198,6 +230,7 @@ func (h *Harness) reset() {
 	ui.SetMenu("")
 	ui.CloseAllTabs()
 	ui.SetBottomTab("Terminal")
+	ui.SetTerminalOpen(true)
 	ui.SetProjectPanelVisible(true)
 	ui.SetLayoutTerminalH(180)
 	ui.LoadSample(0)
@@ -337,27 +370,28 @@ var features = []Feature{
 	}},
 
 	// ---- 工具栏 / 面板 ----
-	{"P1", "folder 图标按钮收起项目面板", func(h *Harness) error {
-		if err := h.ClickTestID("btn-folder"); err != nil {
+	{"P1", "活动条 folder 收起项目面板（New UI）", func(h *Harness) error {
+		if err := h.ClickTestIDBox("stripe-folder"); err != nil {
 			return err
 		}
-		if err := expect(!h.HasText("PROJECT"), "点 folder 后应隐藏项目面板"); err != nil {
+		if err := expect(!h.HasText("files"), "点 folder 后应隐藏项目面板"); err != nil {
 			return err
 		}
-		if err := h.ClickTestID("btn-folder"); err != nil {
+		if err := h.ClickTestIDBox("stripe-folder"); err != nil {
 			return err
 		}
-		return expect(h.HasText("PROJECT"), "再点应恢复")
+		return expect(h.HasText("files"), "再点应恢复")
 	}},
 	{"P1b", "项目面板隐藏后 PROJECT 不在树中", func(h *Harness) error {
 		ui.SetProjectPanelVisible(false)
 		h.Render()
-		if err := expect(!h.HasText("PROJECT"), "隐藏后不应渲染 PROJECT 头"); err != nil {
+		if err := expect(!h.HasText("files"), "隐藏后不应渲染项目窗头部"); err != nil {
 			return err
 		}
+		ui.SetTerminalOpen(true)
 		ui.SetProjectPanelVisible(true)
 		h.Render()
-		return expect(h.HasText("PROJECT"), "恢复可见")
+		return expect(h.HasText("files"), "恢复可见")
 	}},
 	{"S1", "主题切换改变标签栏文字色", func(h *Harness) error {
 		h.Render()
@@ -503,6 +537,55 @@ var features = []Feature{
 			}
 		}
 		return expect(found == "col-resize", "gx-splitter-v 应带 col-resize 光标, got ["+found+"]")
+	}},
+
+	// ---- WebStorm New UI 布局对齐（G 类） ----
+	{"G1", "Run 按钮位于工具栏右段（x>1000）", func(h *Harness) error {
+		box, ok := h.testIDBox("btn-run")
+		if !ok {
+			return fmt.Errorf("找不到 testid btn-run")
+		}
+		cx := int(box.X + box.W/2)
+		return expect(cx > 1000, "Run 按钮应在右段, 中心x="+strconv.Itoa(cx))
+	}},
+	{"G2", "工具栏左段项目名下拉 chip", func(h *Harness) error {
+		return mustBox(h, "chip-project")
+	}},
+	{"G3", "运行配置 chip 点击弹出 Run 菜单", func(h *Harness) error {
+		if err := h.ClickTestIDBox("chip-run-config"); err != nil {
+			return err
+		}
+		return expect(h.HasText("Clear Console"), "应弹出 Run 菜单")
+	}},
+	{"G4", "项目窗头部 Project 下拉样式", func(h *Harness) error {
+		return mustBox(h, "chip-project-view")
+	}},
+	{"G5", "标签栏右端拆分图标", func(h *Harness) error {
+		return mustBox(h, "tabs-split")
+	}},
+	{"G6", "状态栏通知区真动作 + 内存指示", func(h *Harness) error {
+		if err := mustBox(h, "st-notif"); err != nil {
+			return err
+		}
+		if err := mustBox(h, "st-memory"); err != nil {
+			return err
+		}
+		if err := h.ClickTestIDBox("st-notif"); err != nil {
+			return err
+		}
+		return expect(ui.BottomTab() == "Problems", "点通知区应切到 Problems")
+	}},
+	{"G7", "活动条选中态指示条", func(h *Harness) error {
+		return mustBox(h, "stripe-indicator")
+	}},
+	{"G8", "底部工具窗关闭动作收起面板", func(h *Harness) error {
+		if err := mustBox(h, "tb-bottom-close"); err != nil {
+			return err
+		}
+		if err := h.ClickTestIDBox("tb-bottom-close"); err != nil {
+			return err
+		}
+		return expect(!h.HasText("Problems"), "关闭后底部工具窗应收起")
 	}},
 }
 

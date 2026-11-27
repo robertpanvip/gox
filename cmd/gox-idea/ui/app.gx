@@ -122,6 +122,7 @@ pub func SetLayoutTerminalH(h int) {
     Signal.batch(func() { layoutTerminalH = v })
 }
 pub func ToggleTerminal() { Signal.batch(func() { layoutTerminalOpen = !layoutTerminalOpen }) }
+pub func SetTerminalOpen(v bool) { Signal.batch(func() { layoutTerminalOpen = v }) }
 // SetSplitDragging 由装配层在分隔条按下/松开时切换高亮反馈。
 pub func SetSplitDragging(on bool) { Signal.batch(func() { layoutSplitActive = on }) }
 
@@ -265,6 +266,13 @@ func TerminalView() *gxscene.Instance {
             {bottomTabItem("Terminal")}{bottomTabItem("Run")}{bottomTabItem("Problems")}
             <div style={{ flexGrow: 1 }}/>
             {widgets.Text(gxscene.Props{"value": terminalLines(), "size": termTabSize, "tone": "muted"})}
+            <div
+                onClick={() => ToggleTerminal()}
+                testid={"tb-bottom-close"}
+                style={{ width: 20, height: 20, alignItems: "center", justifyContent: "center", borderRadius: widgets.RadiusSmall, cursor: "pointer", hover: { background: widgets.UseToken("panelalt")() } }}
+            >
+                {widgets.Icon(gxscene.Props{"name": "close", "size": 12, "tone": "muted"})}
+            </div>
         </div>
         <div
             style={{ background: canvasBg(), padding: "6 12", height: terminalHeightPx(), overflow: "auto", fontSize: termTabSize, fontFamily: termOutFont, color: widgets.UseToken("success")() }}
@@ -822,8 +830,14 @@ func projectPanel() *gxscene.Instance {
     // 剩余高度，minHeight:0 允许被压缩——否则内容高度会把列表撑出壳外）。
     return <div style={{ flexDirection: "column", gap: 0, height: 500 }}>
         <div style={{ flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 6 }}>
-            {widgets.Icon(gxscene.Props{"name": "folder", "size": 14, "color": accentColor()})}
-            {widgets.Text(gxscene.Props{"value": "PROJECT", "size": widgets.FontFootnote, "weight": "bold", "tone": "muted"})}
+            <div
+                onClick={func(e gxscene.EventContext) { if e.Synthetic != nil { e.Synthetic.StopPropagation() }; SetMenu("View") }}
+                testid={"chip-project-view"}
+                style={{ flexDirection: "row", alignItems: "center", gap: 4, padding: "1 6", borderRadius: widgets.RadiusSmall, cursor: "pointer", hover: { background: widgets.UseToken("panelalt")() } }}
+            >
+                {widgets.Text(gxscene.Props{"value": "Project", "size": widgets.FontFootnote, "weight": "bold", "tone": "text"})}
+                {widgets.Text(gxscene.Props{"value": "▾", "size": widgets.FontFootnote, "tone": "muted"})}
+            </div>
             {widgets.Text(gxscene.Props{"value": "· " + strconv.Itoa(cnt) + " files", "size": widgets.FontFootnote, "tone": "muted"})}
         </div>
         <div style={{ flexDirection: "row", gap: 4, padding: "2 0", marginBottom: 8 }}>
@@ -993,6 +1007,7 @@ func iconButton(name string, fn func()) *gxscene.Instance {
 func runButton() *gxscene.Instance {
     return <div
         onClick={() => TriggerRun()}
+        testid={"btn-run"}
         style={{ flexDirection: "row", alignItems: "center", gap: 6, height: 26, padding: "0 12", borderRadius: widgets.RadiusSmall, background: accentColor(), cursor: "pointer" }}
     >
         {widgets.Icon(gxscene.Props{"name": "play", "size": 14, "color": widgets.UseToken("onaccent")()})}
@@ -1018,20 +1033,49 @@ func breadcrumbText() string {
     return "gox-idea  ›  " + groupOfSample(sampleIndex) + "  ›  " + sampleFile(sampleIndex)
 }
 
+// projectChip New UI 主工具栏左段：项目名+下拉箭头，点击切换项目工具窗
+// （WebStorm New UI 里项目名 chip 就是第一入口）。
+func projectChip() *gxscene.Instance {
+    return <div
+        onClick={() => ToggleProjectPanel()}
+        testid={"chip-project"}
+        style={{ flexDirection: "row", alignItems: "center", gap: 6, padding: "3 8", borderRadius: widgets.RadiusSmall, cursor: "pointer", hover: { background: widgets.UseToken("panelalt")() } }}
+    >
+        {widgets.Text(gxscene.Props{"value": "gox-idea", "size": "12", "weight": "bold", "tone": "text"})}
+        {widgets.Text(gxscene.Props{"value": "▾", "size": "12", "tone": "muted"})}
+    </div>
+}
+
+// runConfigChip New UI 运行配置选择器：点击弹 Run 菜单（与菜单栏 Run 同状态）。
+func runConfigChip() *gxscene.Instance {
+    return <div
+        onClick={func(e gxscene.EventContext) { if e.Synthetic != nil { e.Synthetic.StopPropagation() }; SetMenu("Run") }}
+        testid={"chip-run-config"}
+        style={{ flexDirection: "row", alignItems: "center", gap: 5, padding: "3 8", borderRadius: widgets.RadiusSmall, background: widgets.UseToken("panelalt")(), cursor: "pointer" }}
+    >
+        {widgets.Icon(gxscene.Props{"name": "play", "size": 11, "tone": "muted"})}
+        {widgets.Text(gxscene.Props{"value": "Current Example", "size": "12", "tone": "text"})}
+        {widgets.Text(gxscene.Props{"value": "▾", "size": "12", "tone": "muted"})}
+    </div>
+}
+
+// ideToolbar WebStorm New UI 主工具栏：左段=项目+导航，右段=运行配置/Run/重跑/
+// 终端/搜索/主题/设置。Run 按钮按 New UI 归右段。
 func ideToolbar() *gxscene.Instance {
     return <div
         style={{ flexDirection: "row", alignItems: "center", gap: 6, height: 36, padding: "0 10", background: chromeBg(), borderWidth: widgets.HairlineWidth, border: borderColor() }}
     >
-        {iconButton("folder", ToggleProjectPanel)}{iconButton("doc", NewFile)}
-        {iconButton("search", ideNoop)}
+        {projectChip()}
         <div style={{ width: 1, height: 18, background: borderColor() }}/>
         {iconButton("chevron-left", prevSample)}{iconButton("chevron-right", nextSample)}
-        <div style={{ width: 1, height: 18, background: borderColor() }}/>
-        {runButton()}{iconButton("refresh", TriggerRun)}
         <div style={{ flexGrow: 1 }}/>
         {widgets.Text(gxscene.Props{"value": breadcrumbText(), "size": widgets.FontFootnote, "tone": "muted"})}
-        <div style={{ width: 8 }}/>
-        {iconButton("panel", ToggleTerminal)}{iconButton("moon", ToggleTheme)}
+        <div style={{ width: 10 }}/>
+        {runConfigChip()}
+        {runButton()}
+        {iconButton("refresh", TriggerRun)}
+        <div style={{ width: 1, height: 18, background: borderColor() }}/>
+        {iconButton("panel", ToggleTerminal)}{iconButton("search", ideNoop)}{iconButton("moon", ToggleTheme)}{iconButton("cog", ideNoop)}
     </div>
 }
 
@@ -1044,6 +1088,13 @@ func editorTabBar() *gxscene.Instance {
             {(t string) => tabItem(t)}
         </For>
         <div style={{ flexGrow: 1 }}/>
+        <div
+            onClick={func(e gxscene.EventContext) { if e.Synthetic != nil { e.Synthetic.StopPropagation() }; SetMenu("View") }}
+            testid={"tabs-split"}
+            style={{ width: 24, height: 24, alignItems: "center", justifyContent: "center", marginRight: 6, borderRadius: widgets.RadiusSmall, cursor: "pointer", hover: { background: widgets.UseToken("panelalt")() } }}
+        >
+            {widgets.Icon(gxscene.Props{"name": "panel", "size": 13, "tone": "muted"})}
+        </div>
     </div>
 }
 
@@ -1072,15 +1123,23 @@ func tabItem(name func() string) *gxscene.Instance {
 }
 
 // toolStripe 最左侧工具窗口竖栏（Project / Search / VCS / Settings），纯展示导航。
-func stripeButton(name string, active bool) *gxscene.Instance {
+func stripeButton(name string, active bool, fn func()) *gxscene.Instance {
     bg := ""
     tone := "muted"
     if active { bg = widgets.UseToken("panelalt")(); tone = "blue" }
     return <div
+        onClick={() => fn()}
         testid={"stripe-" + name}
-        style={{ width: 34, height: 34, alignItems: "center", justifyContent: "center", borderRadius: widgets.RadiusSmall, background: bg, cursor: "pointer", hover: { background: widgets.UseToken("panelalt")() } }}
+        style={{ flexDirection: "row", alignItems: "center", width: 38, height: 34, borderRadius: widgets.RadiusSmall, background: bg, cursor: "pointer", hover: { background: widgets.UseToken("panelalt")() } }}
     >
-        {widgets.Icon(gxscene.Props{"name": name, "size": 18, "tone": tone})}
+        if active {
+            <div testid={"stripe-indicator"} style={{ width: 3, height: 18, borderRadius: 2, background: accentColor(), marginRight: 4, flexShrink: 0 }}/>
+        } else {
+            <div style={{ width: 7, flexShrink: 0 }}/>
+        }
+        <div style={{ flexGrow: 1, alignItems: "center", justifyContent: "center" }}>
+            {widgets.Icon(gxscene.Props{"name": name, "size": 18, "tone": tone})}
+        </div>
     </div>
 }
 
@@ -1088,10 +1147,10 @@ func toolStripe() *gxscene.Instance {
     return <div
         style={{ flexDirection: "column", alignItems: "center", gap: 4, width: 40, padding: "6 0", background: chromeBg(), borderWidth: widgets.HairlineWidth, border: borderColor() }}
     >
-        {stripeButton("folder", true)}{stripeButton("search", false)}{stripeButton("graph", false)}
-        {stripeButton("cog", false)}
+        {stripeButton("folder", true, ToggleProjectPanel)}{stripeButton("search", false, ideNoop)}{stripeButton("graph", false, ideNoop)}
+        {stripeButton("cog", false, ideNoop)}
         <div style={{ flexGrow: 1 }}/>
-        {stripeButton("gear", false)}
+        {stripeButton("gear", false, ideNoop)}
     </div>
 }
 
@@ -1102,12 +1161,37 @@ func statusBar() *gxscene.Instance {
         {widgets.Icon(gxscene.Props{"name": "bolt", "size": 13, "tone": "muted"})}
         {widgets.Text(gxscene.Props{"value": "main", "size": widgets.FontFootnote, "tone": "muted"})}
         {widgets.Text(gxscene.Props{"value": "GoX IDE 1.0", "size": widgets.FontFootnote, "tone": "muted"})}
+        <div
+            onClick={func(e gxscene.EventContext) { if e.Synthetic != nil { e.Synthetic.StopPropagation() }; SetBottomTab("Problems") }}
+            testid={"st-notif"}
+            style={{ flexDirection: "row", alignItems: "center", gap: 4, cursor: "pointer" }}
+        >
+            {widgets.Text(gxscene.Props{"value": notifText(), "size": widgets.FontFootnote, "tone": "muted"})}
+        </div>
         <div style={{ flexGrow: 1 }}/>
         {widgets.Text(gxscene.Props{"value": EditorStatus(), "size": widgets.FontFootnote, "tone": "muted"})}
         {widgets.Text(gxscene.Props{"value": "Spaces: 4", "size": widgets.FontFootnote, "tone": "muted"})}
         {widgets.Text(gxscene.Props{"value": "UTF-8", "size": widgets.FontFootnote, "tone": "muted"})}
         {widgets.Text(gxscene.Props{"value": "LF", "size": widgets.FontFootnote, "tone": "muted"})}
         {widgets.Text(gxscene.Props{"value": "GX", "size": widgets.FontFootnote, "tone": "muted"})}
+        {memoryIndicator()}
+    </div>
+}
+
+// notifText 状态栏通知摘要：绑定真实 Run 错误态（WebStorm 通知区同款语义）。
+func notifText() string {
+    if runErr != "" { return "1 issue" }
+    return "No Notifications"
+}
+
+// memoryIndicator WebStorm 内存指示样式（轨道+填充）。真实堆数据需装配层接
+// runtime 探针，这里为布局占位、不写假数字。
+func memoryIndicator() *gxscene.Instance {
+    return <div
+        testid={"st-memory"}
+        style={{ flexDirection: "row", alignItems: "center", width: 46, height: 12, borderRadius: 6, background: widgets.UseToken("panelalt")(), padding: "0 0 0 2" }}
+    >
+        <div style={{ width: 14, height: 8, borderRadius: 4, background: widgets.UseToken("success")() }}/>
     </div>
 }
 
@@ -1129,7 +1213,11 @@ func editorAndTerminal() *gxscene.Instance {
             class="gx-splitter-h"
             style={{ height: 6, flexShrink: 0, cursor: "row-resize", background: splitActiveBg(), hover: { background: accentColor() } }}
         />
-        {TerminalView()}
+        if layoutTerminalOpen {
+            {TerminalView()}
+        } else {
+            <div/>
+        }
     </div>
 }
 

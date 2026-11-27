@@ -108,10 +108,10 @@ func TestPlaygroundSceneTree(t *testing.T) {
 		t.Fatal("Root 为 nil")
 	}
 	txt := (gxscene.TextBackend{}).Paint(root)
-	// WebStorm 三区布局：菜单栏、工具竖栏、PROJECT 区、编辑器标签、Terminal 区、底部状态栏。
+	// WebStorm 三区布局：菜单栏、工具竖栏、Project 项目窗区、编辑器标签、Terminal 区、底部状态栏。
 	// 注意：编辑器源码被切成逐 token 的 span，示例名不会连成连续串，
 	// 故断言 IDE 外壳的稳定文案（不再有 playground 的营销副标题/快捷键页脚）。
-	for _, want := range []string{"File", "PROJECT", "Terminal", "GoX IDE", "Spaces: 4", "UTF-8"} {
+	for _, want := range []string{"File", "Project", "Terminal", "GoX IDE", "Spaces: 4", "UTF-8"} {
 		if !strings.Contains(txt, want) {
 			t.Errorf("场景树缺少 %q\n---\n%s\n---", want, txt)
 		}
