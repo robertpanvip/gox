@@ -84,10 +84,52 @@ func TestMergeableEventKeepsLatest(t *testing.T) {
 
 func TestRegisterKeyAssigned(t *testing.T) {
 	w := NewWindow()
-	if w.runDone == nil || w.pump == nil {
-		t.Fatal("NewWindow 应初始化 runDone/pump 通道")
+	if w.pump == nil || w.postCh == nil {
+		t.Fatal("NewWindow 应初始化 pump/postCh 通道")
 	}
 }
 
 // App.Close 错误传递（评审 P2）的测试在 runtime/app 包内（需访问未导出的 App 字段），
 // 见 close_concurrency_test.go 同目录的 TestClosePropagatesWindowError。
+
+// ---- VSyncControl（P4.5 高刷专项）——纯逻辑验证，不触发 cgo ----
+
+// 未开窗/未知模式：SetVSync 拒绝（不静默）；VSync 兜底 Fifo。
+func TestVSyncGuards(t *testing.T) {
+	w := NewWindow()
+	if err := w.SetVSync(VSyncFifo); err == nil {
+		t.Fatal("未开窗时应拒绝 SetVSync（先经 Host.Render/OpenWindow）")
+	}
+	if err := w.SetVSync(VSyncMode(9)); err == nil {
+		t.Fatal("未知模式应报错")
+	}
+	if w.VSync() != VSyncFifo {
+		t.Fatal("未开窗 VSync 应回退 Fifo")
+	}
+}
+
+// ---- MousePassthrough（P4 遗留补齐）——纯逻辑验证，不触发 cgo ----
+
+// 未开窗/已关窗：SetMousePassthrough 拒绝（不静默），语义与 SetVSync 一致。
+func TestMousePassthroughGuards(t *testing.T) {
+	w := NewWindow()
+	if err := w.SetMousePassthrough(true); err == nil {
+		t.Fatal("未开窗时应拒绝 SetMousePassthrough（先经 Host.Render/OpenWindow）")
+	}
+}
+
+// Capabilities 上报 MousePassthrough=true（能力位转正，Host 探测可见）。
+func TestMousePassthroughCapability(t *testing.T) {
+	b := Backend{}
+	if !b.Capabilities().MousePassthrough {
+		t.Fatal("rustbackend 应上报 MousePassthrough=true")
+	}
+}
+
+// 非法模式拒绝（不触发 cgo：参数校验在锁前）。
+func TestMousePassthroughModeGuard(t *testing.T) {
+	w := NewWindow()
+	if err := w.SetMousePassthroughMode(MousePassthroughMode(9)); err == nil {
+		t.Fatal("未知模式应报错")
+	}
+}

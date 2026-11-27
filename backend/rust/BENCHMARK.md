@@ -212,3 +212,16 @@ kill $XPID
 补充基准源码：
 - 启动探针：`rust/src/lib.rs`（`GX_STARTUP_PROBE` 门控，`gx_window_run`/`resumed`/`RedrawRequested` 三处）
 - 启动基准消费端：`go/cmd/startupbench/main.go`
+
+## GPU quad 管线接入（2026-11）
+
+渲染路径已从「tiny-skia CPU 全帧光栅 → 纹理上传 → blit」升级为
+「GpuFrame 纯数据 → gx_gpu GPU quad 管线（instanced + SDF shader）→ 同 pass
+叠加 glyphon 文本」。独立 crate 见 `backend/gpu`（GPU 优先 / 打包期可选 CPU
+接管，三端一套 WGSL）。
+
+- 旧管线每帧上传整屏位图（1280×800 ≈ 4MB/帧 @PCIe）；新管线仅上传实例数据
+  （每图元 64B）与变化纹理（图片一次性、视频按帧）——数据量下降两个数量级。
+- 图片纹理按源指针跨帧常驻，只上传一次；视频按帧序去重；canvas 按内容哈希。
+- 验证：Rust 85 项单测 + gx_gpu 22 项（CPU 像素级 13 + GPU 离屏 9）+
+  Go 桥全部测试通过；demo 在 llvmpipe (Gl) 上端到端出图正常。

@@ -78,6 +78,11 @@ func main() {
 	// 且事件回调不再被同步绘制阻塞。必须在 Render 之前设置。
 	app.SetUIExecutor(win)
 
+	// 统一帧调度（BACKEND_ARCHITECTURE_V2 阶段 1）：Signal 更新只标脏 + 预约
+	// requestAnimationFrame，同帧合并为一次提交，无变化零 DOM 变更；动画 RAF
+	// 续帧经同一时钟（与 postRAF 队列互补：时钟管帧时机，队列管任务）。
+	app.SetFrameClock(win.FrameClock())
+
 	// 输出双通道：解释器的 println / print / fmt.* 输出同时进浏览器
 	// DevTools console（调试可查）与内置终端面板（页内可见）。
 	console := js.Global().Get("console")

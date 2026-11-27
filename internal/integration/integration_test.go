@@ -13,6 +13,7 @@ import (
 
 	"github.com/robertpanvip/gox/internal/buildcheck"
 	"github.com/robertpanvip/gox/pkg/compiler"
+	"github.com/robertpanvip/gox/widgets"
 )
 
 const modulePath = "github.com/robertpanvip/gox"
@@ -1250,7 +1251,6 @@ func main() {
 	}
 }
 
-
 // GX 语言层 Context/Provider 端到端：小写 .use()/.provider() 还原为 Go API、
 // Provider 子树隔离、sig 驱动 value 响应式穿透 consumer。对应 examples/jsxapp-context.gx。
 func TestIntegrationContextProvider(t *testing.T) {
@@ -1303,13 +1303,18 @@ func main() {
 }
 `
 	out := runGX(t, src)
-	// 初始：Score=2，子树主题=DarkTheme accent(#0a84ff)
+	// 初始：Score=2，子树主题=DarkTheme accent
 	if !strings.Contains(out, "INIT") || !strings.Contains(out, "2") {
 		t.Errorf("初始渲染应含分数 2, got:\n%s", out)
 	}
-	// 子树隔离：ThemeProvider 内 accent 必须是深色 #0a84ff，而非全局浅色 #007aff
-	if !strings.Contains(out, "#0a84ff") {
-		t.Errorf("ThemeProvider 子树应读到 DarkTheme accent #0a84ff, got:\n%s", out)
+	// 子树隔离：ThemeProvider 内 accent 必须是 DarkTheme.DarkBlue，而非全局
+	// 浅色 LightBlue。断言引用 widgets 常量——主题换色（如曾短暂切到
+	// Material Oceanic 青色）不会打破本用例。
+	if !strings.Contains(out, widgets.DarkBlue) {
+		t.Errorf("ThemeProvider 子树应读到 DarkTheme accent %s, got:\n%s", widgets.DarkBlue, out)
+	}
+	if strings.Contains(out, widgets.LightBlue) {
+		t.Errorf("ThemeProvider 子树不应回落到全局浅色 %s, got:\n%s", widgets.LightBlue, out)
 	}
 	// 响应式：bonus=7 后 Score 应更新为 7（产物里出现两次分数，CHANGED 段为 7）
 	if !strings.Contains(out, "CHANGED") || !strings.Contains(out, "7") {

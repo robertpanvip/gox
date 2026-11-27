@@ -314,7 +314,9 @@ impl TextEffects {
                 };
             }
         }
-        Self { fill: TextFill::None }
+        Self {
+            fill: TextFill::None,
+        }
     }
 }
 
@@ -322,7 +324,11 @@ impl TextEffects {
 /// 相邻同色 rune 合并成一段，减少 glyphon TextArea 数量。
 ///
 /// 返回 (分段文本, RGBA) 列表。未落入任何色段的字符用 fallback 颜色。
-pub fn gradient_spans(text: &str, grad: &LinearGradient, fallback: (u8, u8, u8)) -> Vec<(String, (u8, u8, u8))> {
+pub fn gradient_spans(
+    text: &str,
+    grad: &LinearGradient,
+    fallback: (u8, u8, u8),
+) -> Vec<(String, (u8, u8, u8))> {
     let mut out: Vec<(String, (u8, u8, u8))> = Vec::new();
     let mut ch = 0i32;
     let mut si = 0usize;
@@ -330,15 +336,14 @@ pub fn gradient_spans(text: &str, grad: &LinearGradient, fallback: (u8, u8, u8))
         while si < grad.stops.len() && ch >= grad.stops[si].end_ch {
             si += 1;
         }
-        let color = if si < grad.stops.len()
-            && ch >= grad.stops[si].start_ch
-            && ch < grad.stops[si].end_ch
-        {
-            let c = grad.stops[si].color;
-            (c.0, c.1, c.2)
-        } else {
-            fallback
-        };
+        let color =
+            if si < grad.stops.len() && ch >= grad.stops[si].start_ch && ch < grad.stops[si].end_ch
+            {
+                let c = grad.stops[si].color;
+                (c.0, c.1, c.2)
+            } else {
+                fallback
+            };
         if let Some(last) = out.last_mut() {
             if last.1 == color {
                 last.0.push(r);
@@ -366,18 +371,28 @@ pub fn selection_spans(
     // 先把 base 展开成逐 char 颜色表（rune 顺序）。
     let mut base_colors: Vec<(u8, u8, u8)> = Vec::new();
     if base.is_empty() {
-        for _ in text.chars() { base_colors.push(fallback); }
+        for _ in text.chars() {
+            base_colors.push(fallback);
+        }
     } else {
         for seg in base {
-            for _ in seg.0.chars() { base_colors.push(seg.1); }
+            for _ in seg.0.chars() {
+                base_colors.push(seg.1);
+            }
         }
         // 长度不匹配（理论上不会）时用 fallback 补齐。
         let need = text.chars().count();
-        while base_colors.len() < need { base_colors.push(fallback); }
+        while base_colors.len() < need {
+            base_colors.push(fallback);
+        }
     }
     let mut out: Vec<(String, (u8, u8, u8))> = Vec::new();
     for (i, r) in text.chars().enumerate() {
-        let color = if i >= start && i < end { sel_color } else { base_colors[i] };
+        let color = if i >= start && i < end {
+            sel_color
+        } else {
+            base_colors[i]
+        };
         if let Some(last) = out.last_mut() {
             if last.1 == color {
                 last.0.push(r);
@@ -401,21 +416,27 @@ mod selection_tests {
             ("ef".into(), (3, 3, 3)),
         ];
         let out = selection_spans("abcdef", &base, (9, 9, 9), 2, 4, (255, 255, 255));
-        assert_eq!(out, vec![
-            ("ab".into(), (1, 1, 1)),
-            ("cd".into(), (255, 255, 255)),
-            ("ef".into(), (3, 3, 3)),
-        ]);
+        assert_eq!(
+            out,
+            vec![
+                ("ab".into(), (1, 1, 1)),
+                ("cd".into(), (255, 255, 255)),
+                ("ef".into(), (3, 3, 3)),
+            ]
+        );
     }
 
     #[test]
     fn selection_spans_without_base_uses_fallback() {
         let out = selection_spans("abcd", &[], (7, 7, 7), 1, 2, (255, 0, 0));
-        assert_eq!(out, vec![
-            ("a".into(), (7, 7, 7)),
-            ("b".into(), (255, 0, 0)),
-            ("cd".into(), (7, 7, 7)),
-        ]);
+        assert_eq!(
+            out,
+            vec![
+                ("a".into(), (7, 7, 7)),
+                ("b".into(), (255, 0, 0)),
+                ("cd".into(), (7, 7, 7)),
+            ]
+        );
     }
 }
 
@@ -457,30 +478,32 @@ mod tests {
 
     #[test]
     fn gradient_spans_merges_adjacent_same_color() {
-        let g = parse_linear_gradient(
-            "linear-gradient(90deg, #c586c0 0ch 3ch, #d4d4d4 3ch 6ch)",
-        )
-        .unwrap();
+        let g = parse_linear_gradient("linear-gradient(90deg, #c586c0 0ch 3ch, #d4d4d4 3ch 6ch)")
+            .unwrap();
         // f/u/n 在 [0,3) 紫色；c/空格/x 在 [3,6) 灰色并合并为一段。
         let spans = gradient_spans("func x", &g, (212, 212, 212));
-        assert_eq!(spans, vec![
-            ("fun".to_string(), (197, 134, 192)),
-            ("c x".to_string(), (212, 212, 212)),
-        ]);
+        assert_eq!(
+            spans,
+            vec![
+                ("fun".to_string(), (197, 134, 192)),
+                ("c x".to_string(), (212, 212, 212)),
+            ]
+        );
     }
 
     #[test]
     fn gradient_spans_respects_cjk_double_ch() {
-        let g = parse_linear_gradient(
-            "linear-gradient(90deg, #ff0000 0ch 2ch, #0000ff 2ch 4ch)",
-        )
-        .unwrap();
+        let g = parse_linear_gradient("linear-gradient(90deg, #ff0000 0ch 2ch, #0000ff 2ch 4ch)")
+            .unwrap();
         // 中文各占 2ch：第一个字落在 [0,2) 红，第二个落在 [2,4) 蓝。
         let spans = gradient_spans("中文", &g, (0, 0, 0));
-        assert_eq!(spans, vec![
-            ("中".to_string(), (255, 0, 0)),
-            ("文".to_string(), (0, 0, 255)),
-        ]);
+        assert_eq!(
+            spans,
+            vec![
+                ("中".to_string(), (255, 0, 0)),
+                ("文".to_string(), (0, 0, 255)),
+            ]
+        );
     }
 
     #[test]

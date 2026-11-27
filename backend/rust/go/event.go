@@ -8,4 +8,5 @@ type inputEvent struct {
 	Text   string  `json:"text"`
 	X      float32 `json:"x"`
 	Y      float32 `json:"y"`
+	Mods   string  `json:"mods"`
 }

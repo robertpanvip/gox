@@ -6,27 +6,51 @@ use crate::scene::SceneNode;
 use std::collections::HashMap;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub enum Position { Relative, Absolute }
+pub enum Position {
+    Relative,
+    Absolute,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub enum Overflow { Visible, Hidden, Scroll, Auto }
+pub enum Overflow {
+    Visible,
+    Hidden,
+    Scroll,
+    Auto,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub enum Easing { Linear, Ease, EaseIn, EaseOut, EaseInOut }
+pub enum Easing {
+    Linear,
+    Ease,
+    EaseIn,
+    EaseOut,
+    EaseInOut,
+}
 
 #[derive(Clone, Debug)]
 pub struct BoxShadow {
-    pub offset_x: f32, pub offset_y: f32,
-    pub blur: f32, pub spread: f32,
+    pub offset_x: f32,
+    pub offset_y: f32,
+    pub blur: f32,
+    pub spread: f32,
     pub color: (u8, u8, u8, u8), // ARGB alpha
 }
 
 #[derive(Clone, Copy, Debug)]
 pub struct Transform {
-    pub translate_x: f32, pub translate_y: f32, pub scale: f32,
+    pub translate_x: f32,
+    pub translate_y: f32,
+    pub scale: f32,
 }
 impl Default for Transform {
-    fn default() -> Self { Self { translate_x: 0.0, translate_y: 0.0, scale: 1.0 } }
+    fn default() -> Self {
+        Self {
+            translate_x: 0.0,
+            translate_y: 0.0,
+            scale: 1.0,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -55,10 +79,15 @@ pub struct Style {
 impl Default for Style {
     fn default() -> Self {
         Self {
-            opacity: 1.0, position: Position::Relative,
-            inset: [f32::NAN; 4], overflow: Overflow::Visible,
-            scroll_top: 0.0, scroll_left: 0.0,
-            transform: Transform::default(), shadow: None, transition: vec![],
+            opacity: 1.0,
+            position: Position::Relative,
+            inset: [f32::NAN; 4],
+            overflow: Overflow::Visible,
+            scroll_top: 0.0,
+            scroll_left: 0.0,
+            transform: Transform::default(),
+            shadow: None,
+            transition: vec![],
             z_index: 0,
         }
     }
@@ -75,10 +104,18 @@ impl AnimationSpec {
     /// 按绝对时钟 now_ms 采样 blink 的 opacity。返回 None 表示不覆盖基础 opacity。
     /// 相位 < 50% → 1.0，否则 0.0；有限次数结束后不覆盖（fill-mode:none）。
     pub fn sample_blink(&self, now_ms: i64) -> Option<f32> {
-        if self.duration_ms <= 0 { return None; }
-        if self.iterations > 0 && now_ms >= self.duration_ms * self.iterations { return None; }
+        if self.duration_ms <= 0 {
+            return None;
+        }
+        if self.iterations > 0 && now_ms >= self.duration_ms * self.iterations {
+            return None;
+        }
         let phase = now_ms % self.duration_ms;
-        Some(if phase * 2 < self.duration_ms { 1.0 } else { 0.0 })
+        Some(if phase * 2 < self.duration_ms {
+            1.0
+        } else {
+            0.0
+        })
     }
 }
 
@@ -97,18 +134,35 @@ fn parse_duration_ms(s: &str) -> Option<i64> {
 pub fn parse_animation(s: &str) -> Option<AnimationSpec> {
     let lowered = s.trim().to_ascii_lowercase();
     let toks: Vec<&str> = lowered.split_whitespace().collect();
-    if toks.is_empty() || toks[0] != "blink" { return None; }
-    let mut spec = AnimationSpec { duration_ms: 0, iterations: -1 };
+    if toks.is_empty() || toks[0] != "blink" {
+        return None;
+    }
+    let mut spec = AnimationSpec {
+        duration_ms: 0,
+        iterations: -1,
+    };
     for t in &toks[1..] {
-        if *t == "infinite" { spec.iterations = -1; continue; }
+        if *t == "infinite" {
+            spec.iterations = -1;
+            continue;
+        }
         if let Ok(n) = t.parse::<i64>() {
-            if n > 0 { spec.iterations = n; continue; }
+            if n > 0 {
+                spec.iterations = n;
+                continue;
+            }
         }
         if let Some(d) = parse_duration_ms(t) {
-            if d > 0 { spec.duration_ms = d; }
+            if d > 0 {
+                spec.duration_ms = d;
+            }
         }
     }
-    if spec.duration_ms > 0 { Some(spec) } else { None }
+    if spec.duration_ms > 0 {
+        Some(spec)
+    } else {
+        None
+    }
 }
 
 /// 从节点 props 读取 animation 并解析。
@@ -119,7 +173,9 @@ pub fn animation_from_props(n: &SceneNode) -> Option<AnimationSpec> {
 /// 扫描整棵树是否存在活跃的声明式动画。用于渲染前置判断：周期动画无外部事件
 /// 唤醒，即使 transition 静止也必须进入全量重建路径逐帧采样。
 pub fn tree_has_animation(n: &SceneNode) -> bool {
-    if animation_from_props(n).is_some() { return true; }
+    if animation_from_props(n).is_some() {
+        return true;
+    }
     n.children.iter().any(tree_has_animation)
 }
 
@@ -131,11 +187,16 @@ pub fn parse_px(s: &str) -> Option<f32> {
 /// 3 值=上/左右/下，4 值=上右下左。返回 [top, right, bottom, left]。
 /// 任一分量非法则整体返回 None（与 Go 端 cssbox.Float32s 语义一致）。
 pub fn parse_edges(s: &str) -> Option<[f32; 4]> {
-    let parts: Vec<f32> = s.split_whitespace()
+    let parts: Vec<f32> = s
+        .split_whitespace()
         .map(|t| t.trim().trim_end_matches("px").trim().parse::<f32>())
-        .collect::<Result<_, _>>().ok()?;
+        .collect::<Result<_, _>>()
+        .ok()?;
     match parts.len() {
-        1 => { let v = parts[0]; Some([v, v, v, v]) }
+        1 => {
+            let v = parts[0];
+            Some([v, v, v, v])
+        }
         2 => Some([parts[0], parts[1], parts[0], parts[1]]),
         3 => Some([parts[0], parts[1], parts[2], parts[1]]),
         4 => Some([parts[0], parts[1], parts[2], parts[3]]),
@@ -159,9 +220,15 @@ pub fn white_space_collapses(v: &str) -> bool {
 pub fn font_weight_from_props(props: &std::collections::HashMap<String, String>) -> Option<u32> {
     let raw = props.get("font-weight").or_else(|| props.get("weight"))?;
     let t = raw.trim().to_ascii_lowercase();
-    if t.is_empty() { return None; }
-    if t == "bold" || t == "bolder" { return Some(700); }
-    if t == "normal" || t == "lighter" { return Some(400); }
+    if t.is_empty() {
+        return None;
+    }
+    if t == "bold" || t == "bolder" {
+        return Some(700);
+    }
+    if t == "normal" || t == "lighter" {
+        return Some(400);
+    }
     let v: f32 = t.trim_end_matches("px").parse().ok()?;
     Some(v.clamp(100.0, 900.0) as u32)
 }
@@ -178,14 +245,24 @@ pub fn text_align_of(s: &str) -> u8 {
 /// line-height 解析：无单位数值（<4，如 1.5）按字号倍数；带 px 的数值（>=4）
 /// 按绝对像素。返回 (倍数, 像素)，未设置/非法返回 (0.0, 0.0)。
 pub fn line_height_of(s: &str) -> (f32, f32) {
-    let Some(v) = parse_px(s) else { return (0.0, 0.0) };
-    if v <= 0.0 { return (0.0, 0.0); }
-    if v < 4.0 { (v, 0.0) } else { (0.0, v) }
+    let Some(v) = parse_px(s) else {
+        return (0.0, 0.0);
+    };
+    if v <= 0.0 {
+        return (0.0, 0.0);
+    }
+    if v < 4.0 {
+        (v, 0.0)
+    } else {
+        (0.0, v)
+    }
 }
 
 /// CSS text-align 落笔偏移：内容宽 tw 小于盒宽 w 时 center/right 生效。
 pub fn align_offset(align: u8, w: f32, tw: f32) -> f32 {
-    if tw <= 0.0 || tw >= w { return 0.0; }
+    if tw <= 0.0 || tw >= w {
+        return 0.0;
+    }
     match align {
         1 => (w - tw) / 2.0,
         2 => w - tw,
@@ -197,7 +274,9 @@ fn prop<'a>(n: &'a SceneNode, k: &str) -> Option<&'a str> {
     n.props.get(k).map(|s| s.as_str())
 }
 
-fn num(v: &str) -> Option<f32> { parse_px(v) }
+fn num(v: &str) -> Option<f32> {
+    parse_px(v)
+}
 
 pub fn parse_style(n: &SceneNode) -> Style {
     let mut s = Style::default();
@@ -205,30 +284,47 @@ pub fn parse_style(n: &SceneNode) -> Style {
         s.opacity = v.clamp(0.0, 1.0);
     }
     if let Some(v) = prop(n, "position") {
-        if v.trim().eq_ignore_ascii_case("absolute") { s.position = Position::Absolute; }
+        if v.trim().eq_ignore_ascii_case("absolute") {
+            s.position = Position::Absolute;
+        }
     }
     for (i, k) in ["top", "right", "bottom", "left"].iter().enumerate() {
         if let Some(v) = prop(n, k) {
-            if v.trim().eq_ignore_ascii_case("auto") { s.inset[i] = f32::NAN; }
-            else if let Some(x) = num(v) { s.inset[i] = x; }
+            if v.trim().eq_ignore_ascii_case("auto") {
+                s.inset[i] = f32::NAN;
+            } else if let Some(x) = num(v) {
+                s.inset[i] = x;
+            }
         }
     }
     if let Some(v) = prop(n, "overflow") {
         s.overflow = match v.trim().to_ascii_lowercase().as_str() {
-            "hidden" => Overflow::Hidden, "scroll" => Overflow::Scroll,
-            "auto" => Overflow::Auto, _ => Overflow::Visible,
+            "hidden" => Overflow::Hidden,
+            "scroll" => Overflow::Scroll,
+            "auto" => Overflow::Auto,
+            _ => Overflow::Visible,
         };
     }
-    if let Some(v) = prop(n, "scroll-top").and_then(num) { s.scroll_top = v; }
-    if let Some(v) = prop(n, "scroll-left").and_then(num) { s.scroll_left = v; }
-    if let Some(v) = prop(n, "transform") { s.transform = parse_transform(v); }
+    if let Some(v) = prop(n, "scroll-top").and_then(num) {
+        s.scroll_top = v;
+    }
+    if let Some(v) = prop(n, "scroll-left").and_then(num) {
+        s.scroll_left = v;
+    }
+    if let Some(v) = prop(n, "transform") {
+        s.transform = parse_transform(v);
+    }
     if let Some(v) = prop(n, "box-shadow") {
         if !v.trim().is_empty() && !v.trim().eq_ignore_ascii_case("none") {
             s.shadow = parse_box_shadow(v);
         }
     }
-    if let Some(v) = prop(n, "transition") { s.transition = parse_transition(v); }
-    if let Some(v) = prop(n, "z-index").and_then(num) { s.z_index = v as i32; }
+    if let Some(v) = prop(n, "transition") {
+        s.transition = parse_transition(v);
+    }
+    if let Some(v) = prop(n, "z-index").and_then(num) {
+        s.z_index = v as i32;
+    }
     s
 }
 
@@ -239,23 +335,35 @@ pub fn parse_transform(s: &str) -> Transform {
         if let Some(j) = s[i..].find(')') {
             let inner = &s[i + "translate(".len()..i + j];
             let parts: Vec<&str> = inner.split(',').collect();
-            if let Some(v) = parts.get(0).and_then(|x| num(x)) { t.translate_x = v; }
-            if let Some(v) = parts.get(1).and_then(|x| num(x)) { t.translate_y = v; }
+            if let Some(v) = parts.get(0).and_then(|x| num(x)) {
+                t.translate_x = v;
+            }
+            if let Some(v) = parts.get(1).and_then(|x| num(x)) {
+                t.translate_y = v;
+            }
         }
     }
     if let Some(i) = low.find("translatex(") {
         if let Some(j) = s[i..].find(')') {
-            if let Some(v) = num(&s[i + "translatex(".len()..i + j]) { t.translate_x = v; }
+            if let Some(v) = num(&s[i + "translatex(".len()..i + j]) {
+                t.translate_x = v;
+            }
         }
     }
     if let Some(i) = low.find("translatey(") {
         if let Some(j) = s[i..].find(')') {
-            if let Some(v) = num(&s[i + "translatey(".len()..i + j]) { t.translate_y = v; }
+            if let Some(v) = num(&s[i + "translatey(".len()..i + j]) {
+                t.translate_y = v;
+            }
         }
     }
     if let Some(i) = low.find("scale(") {
         if let Some(j) = s[i..].find(')') {
-            if let Some(v) = num(&s[i + "scale(".len()..i + j]) { if v > 0.0 { t.scale = v; } }
+            if let Some(v) = num(&s[i + "scale(".len()..i + j]) {
+                if v > 0.0 {
+                    t.scale = v;
+                }
+            }
         }
     }
     t
@@ -264,17 +372,30 @@ pub fn parse_transform(s: &str) -> Transform {
 /// 解析 "offsetX offsetY blur spread color"；spread/color 可省略。
 pub fn parse_box_shadow(s: &str) -> Option<BoxShadow> {
     let fields: Vec<&str> = s.split_whitespace().collect();
-    if fields.len() < 2 { return None; }
+    if fields.len() < 2 {
+        return None;
+    }
     let mut nums = Vec::new();
     let mut color = (0u8, 0u8, 0u8, 90u8);
     for f in &fields {
-        if let Some(c) = parse_color_rgba(f) { color = c; continue; }
-        if let Some(v) = num(f) { nums.push(v); } else { break; }
+        if let Some(c) = parse_color_rgba(f) {
+            color = c;
+            continue;
+        }
+        if let Some(v) = num(f) {
+            nums.push(v);
+        } else {
+            break;
+        }
     }
-    if nums.len() < 2 { return None; }
+    if nums.len() < 2 {
+        return None;
+    }
     Some(BoxShadow {
-        offset_x: nums[0], offset_y: nums[1],
-        blur: *nums.get(2).unwrap_or(&0.0), spread: *nums.get(3).unwrap_or(&0.0),
+        offset_x: nums[0],
+        offset_y: nums[1],
+        blur: *nums.get(2).unwrap_or(&0.0),
+        spread: *nums.get(3).unwrap_or(&0.0),
         color,
     })
 }
@@ -284,14 +405,19 @@ pub fn parse_color_rgba(s: &str) -> Option<(u8, u8, u8, u8)> {
     let s = s.trim().to_ascii_lowercase();
     if let Some(h) = s.strip_prefix('#') {
         let expand = |x: &str| -> String {
-            if x.len() == 3 { x.chars().map(|c| format!("{}{}", c, c)).collect() } else { x.to_string() }
+            if x.len() == 3 {
+                x.chars().map(|c| format!("{}{}", c, c)).collect()
+            } else {
+                x.to_string()
+            }
         };
         let h = expand(h);
         if h.len() == 6 {
             return Some((
                 u8::from_str_radix(&h[0..2], 16).ok()?,
                 u8::from_str_radix(&h[2..4], 16).ok()?,
-                u8::from_str_radix(&h[4..6], 16).ok()?, 255,
+                u8::from_str_radix(&h[4..6], 16).ok()?,
+                255,
             ));
         }
         if h.len() == 8 {
@@ -304,7 +430,7 @@ pub fn parse_color_rgba(s: &str) -> Option<(u8, u8, u8, u8)> {
         }
     }
     if s.starts_with("rgba(") && s.ends_with(')') {
-        let p: Vec<&str> = s[5..s.len()-1].split(',').collect();
+        let p: Vec<&str> = s[5..s.len() - 1].split(',').collect();
         if p.len() == 4 {
             let r = p[0].trim().parse().ok()?;
             let g = p[1].trim().parse().ok()?;
@@ -315,18 +441,23 @@ pub fn parse_color_rgba(s: &str) -> Option<(u8, u8, u8, u8)> {
         }
     }
     if s.starts_with("rgb(") && s.ends_with(')') {
-        let p: Vec<&str> = s[4..s.len()-1].split(',').collect();
+        let p: Vec<&str> = s[4..s.len() - 1].split(',').collect();
         if p.len() == 3 {
             return Some((
-                p[0].trim().parse().ok()?, p[1].trim().parse().ok()?,
-                p[2].trim().parse().ok()?, 255,
+                p[0].trim().parse().ok()?,
+                p[1].trim().parse().ok()?,
+                p[2].trim().parse().ok()?,
+                255,
             ));
         }
     }
     Some(match s.as_str() {
-        "white" => (255, 255, 255, 255), "black" => (0, 0, 0, 255),
-        "red" => (220, 40, 40, 255), "green" => (40, 180, 60, 255),
-        "blue" => (40, 90, 220, 255), "gray" | "grey" => (128, 128, 128, 255),
+        "white" => (255, 255, 255, 255),
+        "black" => (0, 0, 0, 255),
+        "red" => (220, 40, 40, 255),
+        "green" => (40, 180, 60, 255),
+        "blue" => (40, 90, 220, 255),
+        "gray" | "grey" => (128, 128, 128, 255),
         "yellow" => (230, 200, 40, 255),
         _ => return None,
     })
@@ -336,14 +467,25 @@ pub fn parse_transition(s: &str) -> Vec<TransitionItem> {
     let mut out = Vec::new();
     for seg in s.split(',') {
         let seg = seg.trim();
-        if seg.is_empty() || seg.eq_ignore_ascii_case("none") { continue; }
-        let mut it = TransitionItem { property: String::new(), duration: 0.0, delay: 0.0, easing: Easing::Ease };
+        if seg.is_empty() || seg.eq_ignore_ascii_case("none") {
+            continue;
+        }
+        let mut it = TransitionItem {
+            property: String::new(),
+            duration: 0.0,
+            delay: 0.0,
+            easing: Easing::Ease,
+        };
         for tok in seg.split_whitespace() {
             let t = tok.to_ascii_lowercase();
             if let Some(x) = t.strip_suffix("ms") {
-                if let Ok(v) = x.parse() { it.duration = v; }
+                if let Ok(v) = x.parse() {
+                    it.duration = v;
+                }
             } else if let Some(x) = t.strip_suffix('s') {
-                if let Ok(v) = x.parse::<f32>() { it.duration = v * 1000.0; }
+                if let Ok(v) = x.parse::<f32>() {
+                    it.duration = v * 1000.0;
+                }
             } else {
                 match t.as_str() {
                     "linear" => it.easing = Easing::Linear,
@@ -351,11 +493,17 @@ pub fn parse_transition(s: &str) -> Vec<TransitionItem> {
                     "ease-out" => it.easing = Easing::EaseOut,
                     "ease-in-out" => it.easing = Easing::EaseInOut,
                     "ease" => it.easing = Easing::Ease,
-                    _ => { if it.property.is_empty() { it.property = t.clone(); } }
+                    _ => {
+                        if it.property.is_empty() {
+                            it.property = t.clone();
+                        }
+                    }
                 }
             }
         }
-        if !it.property.is_empty() && it.duration > 0.0 { out.push(it); }
+        if !it.property.is_empty() && it.duration > 0.0 {
+            out.push(it);
+        }
     }
     out
 }
@@ -367,7 +515,11 @@ pub fn easing_value(e: Easing, t: f32) -> f32 {
         Easing::EaseIn => t * t * t,
         Easing::EaseOut => 1.0 - (1.0 - t).powi(3),
         Easing::EaseInOut => {
-            if t < 0.5 { 4.0 * t * t * t } else { 1.0 - (-2.0 * t + 2.0).powi(3) / 2.0 }
+            if t < 0.5 {
+                4.0 * t * t * t
+            } else {
+                1.0 - (-2.0 * t + 2.0).powi(3) / 2.0
+            }
         }
         Easing::Ease => t * t * (3.0 - 2.0 * t),
     }
@@ -387,9 +539,15 @@ fn overlay_pseudo(props: &mut std::collections::HashMap<String, String>, pseudo:
         .get(pseudo)
         .or_else(|| props.get(&pseudo.replacen("&:", "$:", 1)))
         .cloned();
-    let Some(json) = val else { return false; };
-    let Ok(obj) = serde_json::from_str::<serde_json::Value>(&json) else { return false; };
-    let Some(map) = obj.as_object() else { return false; };
+    let Some(json) = val else {
+        return false;
+    };
+    let Ok(obj) = serde_json::from_str::<serde_json::Value>(&json) else {
+        return false;
+    };
+    let Some(map) = obj.as_object() else {
+        return false;
+    };
     let mut changed = false;
     for (k, v) in map {
         let s = match v {
@@ -407,7 +565,11 @@ fn overlay_pseudo(props: &mut std::collections::HashMap<String, String>, pseudo:
 /// 判断节点是否禁用。props 由 host 原样透传，禁用标记兼容 bool 与字符串：
 /// "true"/"1" 视为禁用；其余（含缺省、"false"/"0"）视为启用。
 fn is_disabled(n: &SceneNode) -> bool {
-    match n.props.get("disabled").map(|s| s.trim().to_ascii_lowercase()) {
+    match n
+        .props
+        .get("disabled")
+        .map(|s| s.trim().to_ascii_lowercase())
+    {
         Some(v) => v == "true" || v == "1",
         None => false,
     }
@@ -437,15 +599,16 @@ pub fn apply_pseudo_state(
         focused: Option<&str>,
     ) -> SceneNode {
         let mut out = n.clone();
-        let id = n.id.as_str();
+        // 交互态匹配：nid 优先（GRX3 整数身份）、id 字符串兜底（GRX1/测试）。
+        let hit = |target: &Option<&str>| target.map(|t| n.matches(t)).unwrap_or(false);
         // 交互态：hover 先、focus 次、active 后，逐级覆盖同名属性。
-        if Some(id) == hovered {
+        if hit(&hovered) {
             overlay_pseudo(&mut out.props, "&:hover");
         }
-        if Some(id) == focused {
+        if hit(&focused) {
             overlay_pseudo(&mut out.props, "&:focus");
         }
-        if Some(id) == active {
+        if hit(&active) {
             overlay_pseudo(&mut out.props, "&:active");
         }
         // 禁用态优先级最高：盖过 hover/focus/active 的覆盖结果。
@@ -489,16 +652,27 @@ pub struct Animator {
 
 impl Animator {
     pub fn new() -> Self {
-        Self { anims: AnimMap::new(), targets: HashMap::new(), now_ms: 0, has_animation: false }
+        Self {
+            anims: AnimMap::new(),
+            targets: HashMap::new(),
+            now_ms: 0,
+            has_animation: false,
+        }
     }
 
-    pub fn set_now(&mut self, now_ms: u128) { self.now_ms = now_ms; }
+    pub fn set_now(&mut self, now_ms: u128) {
+        self.now_ms = now_ms;
+    }
 
     /// 是否仍有进行中的动画。无变化帧可据此决定是否需要继续重绘。
-    pub fn is_active(&self) -> bool { !self.anims.is_empty() }
+    pub fn is_active(&self) -> bool {
+        !self.anims.is_empty()
+    }
 
     /// 本帧是否采样到活跃的声明式动画（如 blink），供宿主持续重绘。
-    pub fn has_active_animation(&self) -> bool { self.has_animation }
+    pub fn has_active_animation(&self) -> bool {
+        self.has_animation
+    }
 
     /// 返回当前插值值（若动画已结束则返回 to 并移除动画）。
     fn sample(&mut self, key: &(String, String)) -> Option<f32> {
@@ -534,10 +708,17 @@ impl Animator {
             }
         }
         // 收集该节点的 transition 声明（属性名 -> duration/easing）。
-        let trs = parse_transition(src.props.get("transition").map(|s| s.as_str()).unwrap_or(""));
+        let trs = parse_transition(
+            src.props
+                .get("transition")
+                .map(|s| s.as_str())
+                .unwrap_or(""),
+        );
         if !trs.is_empty() {
             for tr in &trs {
-                if tr.property == "all" { continue; } // all 需要枚举属性，留作后续
+                if tr.property == "all" {
+                    continue;
+                } // all 需要枚举属性，留作后续
                 let key = (src.id.clone(), tr.property.clone());
                 let target = src.props.get(&tr.property).and_then(|s| parse_px(s));
                 // 颜色属性用特殊通道，这里只处理数值属性。
@@ -546,10 +727,16 @@ impl Animator {
                     if prev != Some(target) {
                         // 目标变化：从「当前插值值」起新动画，平滑衔接。
                         let from = self.sample(&key).or(prev).unwrap_or(target);
-                        self.anims.insert(key.clone(), Anim {
-                            from, to: target, start_ms: self.now_ms,
-                            duration: tr.duration, easing: tr.easing,
-                        });
+                        self.anims.insert(
+                            key.clone(),
+                            Anim {
+                                from,
+                                to: target,
+                                start_ms: self.now_ms,
+                                duration: tr.duration,
+                                easing: tr.easing,
+                            },
+                        );
                         self.targets.insert(key.clone(), target);
                     }
                     if let Some(v) = self.sample(&key) {
@@ -571,10 +758,18 @@ mod tests {
 
     fn node(props: &[(&str, &str)]) -> SceneNode {
         let mut p = HashMap::new();
-        for (k, v) in props { p.insert(k.to_string(), v.to_string()); }
+        for (k, v) in props {
+            p.insert(k.to_string(), v.to_string());
+        }
         SceneNode {
-            typ: NodeType::Div, kind: "div".into(), id: "n1".into(), text: String::new(),
-            props: p, events: vec![], children: vec![],
+            typ: NodeType::Div,
+            kind: "div".into(),
+            id: "n1".into(),
+            text: String::new(),
+            nid: 1010,
+            props: p,
+            events: vec![],
+            children: vec![],
         }
     }
 
@@ -583,9 +778,12 @@ mod tests {
         let mut n = node(&[]);
         n.id = "btn".into();
         n.props.insert("bg".into(), "#fff".into());
-        n.props.insert("&:hover".into(), r##"{"bg":"#eee","color":"#333"}"##.into());
-        n.props.insert("&:focus".into(), r##"{"border":"#00f"}"##.into());
-        n.props.insert("&:active".into(), r##"{"bg":"#ddd"}"##.into());
+        n.props
+            .insert("&:hover".into(), r##"{"bg":"#eee","color":"#333"}"##.into());
+        n.props
+            .insert("&:focus".into(), r##"{"border":"#00f"}"##.into());
+        n.props
+            .insert("&:active".into(), r##"{"bg":"#ddd"}"##.into());
         let mut child = node(&[]);
         child.id = "label".into();
         child.props.insert("bg".into(), "#000".into());
@@ -623,14 +821,23 @@ mod tests {
         n.id = "btn".into();
         n.props.insert("bg".into(), "#3b82f6".into());
         n.props.insert("disabled".into(), "true".into());
-        n.props.insert("&:hover".into(), r##"{"bg":"#2563eb"}"##.into());
-        n.props.insert("&:active".into(), r##"{"bg":"#1d4ed8"}"##.into());
-        n.props.insert("&:focus".into(), r##"{"bg":"#60a5fa"}"##.into());
-        n.props.insert("&:disabled".into(), r##"{"bg":"#9ca3af","opacity":"0.6"}"##.into());
+        n.props
+            .insert("&:hover".into(), r##"{"bg":"#2563eb"}"##.into());
+        n.props
+            .insert("&:active".into(), r##"{"bg":"#1d4ed8"}"##.into());
+        n.props
+            .insert("&:focus".into(), r##"{"bg":"#60a5fa"}"##.into());
+        n.props.insert(
+            "&:disabled".into(),
+            r##"{"bg":"#9ca3af","opacity":"0.6"}"##.into(),
+        );
 
         // 禁用是节点自身属性，无外部载体也应生效，且盖过任何交互态。
         let dis = apply_pseudo_state(&n, Some("btn"), Some("btn"), Some("btn"));
-        assert_eq!(dis.props["bg"], "#9ca3af", "disabled 应盖过 hover/focus/active");
+        assert_eq!(
+            dis.props["bg"], "#9ca3af",
+            "disabled 应盖过 hover/focus/active"
+        );
         assert_eq!(dis.props["opacity"], "0.6", "disabled 子表新增属性");
 
         // 字符串 "1" 同样识别为禁用。
@@ -650,8 +857,14 @@ mod tests {
 
     #[test]
     fn parse_position_inset_and_overflow() {
-        let n = node(&[("position", "absolute"), ("top", "10"), ("left", "20px"),
-                       ("right", "auto"), ("overflow", "scroll"), ("scroll-top", "42")]);
+        let n = node(&[
+            ("position", "absolute"),
+            ("top", "10"),
+            ("left", "20px"),
+            ("right", "auto"),
+            ("overflow", "scroll"),
+            ("scroll-top", "42"),
+        ]);
         let s = parse_style(&n);
         assert_eq!(s.position, Position::Absolute);
         assert_eq!(s.inset[0], 10.0);
@@ -663,9 +876,11 @@ mod tests {
 
     #[test]
     fn parse_transform_shadow_transition() {
-        let n = node(&[("transform", "translate(10px, -4px) scale(1.5)"),
-                       ("box-shadow", "0 4px 12px 2px rgba(0,0,0,0.35)"),
-                       ("transition", "opacity 300ms ease-in-out")]);
+        let n = node(&[
+            ("transform", "translate(10px, -4px) scale(1.5)"),
+            ("box-shadow", "0 4px 12px 2px rgba(0,0,0,0.35)"),
+            ("transition", "opacity 300ms ease-in-out"),
+        ]);
         let s = parse_style(&n);
         assert_eq!(s.transform.translate_x, 10.0);
         assert_eq!(s.transform.translate_y, -4.0);
@@ -726,7 +941,10 @@ mod tests {
         assert!(a.is_active(), "动画进行中应为 active");
         a.set_now(1000); // 超过 duration
         let _ = a.apply(&target); // sample 到期移除动画
-        assert!(!a.is_active(), "动画结束后应回到 inactive（允许无变化帧跳过重算）");
+        assert!(
+            !a.is_active(),
+            "动画结束后应回到 inactive（允许无变化帧跳过重算）"
+        );
     }
 
     #[test]
@@ -858,8 +1076,14 @@ mod parity_tests {
         let mut props = std::collections::HashMap::new();
         props.insert("z-index".to_string(), "-5".to_string());
         let n = crate::scene::SceneNode {
-            typ: NodeType::Div, kind: "div".into(), id: "n".into(), text: String::new(),
-            props, events: vec![], children: vec![],
+            typ: NodeType::Div,
+            kind: "div".into(),
+            id: "n".into(),
+            text: String::new(),
+            nid: 1011,
+            props,
+            events: vec![],
+            children: vec![],
         };
         assert_eq!(parse_style(&n).z_index, -5);
     }

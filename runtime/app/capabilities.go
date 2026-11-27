@@ -135,6 +135,13 @@ func (a *App) scheduleRAFNext(inst *gxscene.Instance) {
 	if !a.rafPending.CompareAndSwap(false, true) {
 		return
 	}
+	// FrameClock 模式下 RequestFrame 只是标脏+预约（非阻塞、不重入 commit gate），
+	// 无需 goroutine 隔离；老路径保持 goroutine 异步派发（Inline 同步会重入）。
+	if a.frameSched != nil {
+		a.rafPending.Store(false)
+		a.requestDrawFrame()
+		return
+	}
 	go func() {
 		if a.closed.Load() {
 			a.rafPending.Store(false)
@@ -150,7 +157,7 @@ func (a *App) requestCAPaintDirty() {
 	if a.closed.Load() || a.inRAF.Load() {
 		return
 	}
-	a.dispatcher.RequestFrame()
+	a.requestDrawFrame()
 }
 
 // flushMeasures 在一帧 Present/Draw 成功后调用：把挂起的异步布局读取用最新

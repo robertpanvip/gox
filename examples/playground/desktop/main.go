@@ -1,40 +1,81 @@
-// GX Playground —— 桌面端装配（skia 后端 + GLFW）。
+// GX Playground —— 桌面端装配（V2 rustbackend）。
 //
 // 这个 main.go 是纯装配样板：唯一业务代码是 ui.Playground()，来自
 // 与网页端共用的 GX 源码（ui/app.gx + ui/editor.gx，编译产物 ui/*.go）。
-// 键盘/鼠标输入由 glwindow.go 翻译成 GX 编辑命令，编辑逻辑零条件编译。
+// 键盘/鼠标输入由 input_translate.go 翻译成 GX 编辑命令，编辑逻辑零条件编译。
 package main
 
 import (
+	"encoding/json"
+	"os"
+	"time"
+
+	rb "github.com/robertpanvip/gox-backend-rust"
 	"github.com/robertpanvip/gox-playground/ui"
 	"github.com/robertpanvip/gox-playground/ui/interp"
-	skia "github.com/robertpanvip/gox-backend-skia"
 	gxapp "github.com/robertpanvip/gox/runtime/app"
 	"github.com/robertpanvip/gox/widgets"
 )
 
 func main() {
-	// 窗口需容纳 Playground() 的 1360x760 界面，另留边距，否则内容被裁切。
-	win := openGL()
-	app, err := gxapp.OpenWith(gxapp.WindowConfig{
-		Title:  "GX Playground (Desktop)",
-		Width:  1400,
-		Height: 860,
-	}, win)
+	// V2 接入层装配：gx.use(Backend) → Use(接口值) + 逐窗 Render。
+	handle := gxapp.Use(rb.NewBackend())
+	app, err := handle.Render(func() any { return ui.Playground() },
+		gxapp.WindowConfig{Title: "GX Playground (Desktop)", Width: 1400, Height: 860})
 	if err != nil {
 		panic(err)
 	}
-	defer app.Close()
+	defer handle.Close() // Handle.Close 级联：窗口 Close + 后端 Shutdown
 
-	// P2 宿主接线（提案 §5.1/§6.1，须在 Render 前）：Loop 作为 UIExecutor 注入，
-	// 帧请求、后台 Dispatch、微任务全部进入共享 Loop 队列，由 Run() 在
-	// GLFW 线程 drain 执行；不启动第二个事件循环。
-	app.SetUIExecutor(win)
+	// 统一帧调度（BACKEND_ARCHITECTURE_V2 阶段 1）：Signal 更新只标脏 + 唤醒
+	// 事件泵，同轮次合并为一帧；无变化零绘制；动画 RAF 续帧经同一时钟。
+	app.SetFrameClock(handle.Host().WindowOf(app).(*rb.Window).FrameClock())
+
+	// rustbackend 专属扩展：SetDispatcher 接输入翻译层（V2 输入面：key 携带
+	// 键名与 mods、pointer 分 down/move/up、wheel 仅编辑器滚动回传）。
+	bridge := &inputBridge{app: app}
+	bridge.win = handle.WindowOf(app).(*rb.Window)
+	bridge.win.SetDispatcher(bridge.dispatch)
+
+	// GUI 端到端测试钩子：设置 GOX_PLAYGROUND_STATE_FILE 后，每 100ms 把 UI 状态
+	// 快照写到指定文件，供脚本在真实鼠标/键盘操作后硬断言（点击定位、拖动选区、
+	// 滚轮、主题、Run 等状态进程外不可见）。快照在 UI 线程生成，避免与编辑并发；
+	// 未设置环境变量时完全不启用，正常用户零开销。
+	if stateFile := os.Getenv("GOX_PLAYGROUND_STATE_FILE"); stateFile != "" {
+		win := bridge.win
+		go func() {
+			ticker := time.NewTicker(100 * time.Millisecond)
+			defer ticker.Stop()
+			for range ticker.C {
+				path := stateFile
+				if err := win.Post(func() {
+					data := ui.DebugStateJSON()
+					var snap map[string]any
+					if json.Unmarshal(data, &snap) == nil {
+						ww, wh := win.DebugWindowSize()
+						snap["window_w"] = ww
+						snap["window_h"] = wh
+						snap["boxes"] = win.DebugAllBoxes()
+						if merged, err := json.Marshal(snap); err == nil {
+							data = merged
+						}
+					}
+					// 原子替换，避免脚本读到半截 JSON。
+					tmp := path + ".tmp"
+					if os.WriteFile(tmp, data, 0644) == nil {
+						_ = os.Rename(tmp, path)
+					}
+				}); err != nil {
+					return
+				}
+			}
+		}()
+	}
 
 	// 字符宽度实测注入：编辑器点击换算/光标渲染依赖字符宽度，默认值 7.83 与
-	// 桌面 Skia 实际等宽族（Windows 上 Consolas 13px ≈ 7.15）不符，不注入会导致
-	// 点击定位随列号累计偏移。与 Web 端 playground/web/main.go 同源。
-	narrow, wide := skia.MeasureEditorAdvances(widgets.EditorCodeFont(), widgets.EditorCodeFontSize)
+	// 桌面实际等宽族不符，不注入会导致点击定位随列号累计偏移。V2 后端测量走
+	// glyphon 真实 shaping（与绘制端字形同源），语义与 skia 路径对齐。
+	narrow, wide := rb.MeasureEditorAdvances(widgets.EditorCodeFont(), widgets.EditorCodeFontSize)
 	ui.SetCharWidth(narrow)
 	ui.SetWideWidth(wide)
 
@@ -69,7 +110,7 @@ func main() {
 		}
 	})
 
-	// 注入实测字宽：让编辑器的列↔像素换算与 Skia 绘制端一致。
+	// 注入实测字宽：让编辑器的列↔像素换算与绘制端一致。
 	// 必须在首帧 Render 前完成，否则 caret 与点击命中会用默认字宽而错位。
 	injectEditorCharWidth()
 
@@ -77,10 +118,8 @@ func main() {
 	ui.LoadSample(0)
 
 	// 同一份 GX 场景树：桌面与网页唯一的差别只在后端装配。
-	if err := app.Render(func() any { return ui.Playground() }); err != nil {
-		panic(err)
-	}
-	if err := app.Run(); err != nil {
+	// P4 目标态：app.Run 退化为 no-op，主循环统一走 Handle.Run（Host 轮询）。
+	if err := handle.Run(); err != nil {
 		panic(err)
 	}
 }

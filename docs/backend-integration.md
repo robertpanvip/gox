@@ -521,12 +521,15 @@ canvas-ops。
    `FrameQueue.pending: VecDeque<Vec<u8>>`——`gx_window_draw` 逐帧入队，redraw 时 drain
    全部按序 `apply_frame`；队列版本由 Go 侧 `Frame.Version` 连续性检查 + draw 失败回退
    全量快照兜底。
-2. **生命周期：退出通知 + Arc 引用计数，消除 use-after-free**（P0）：`gx_window_close`
-   只设置 shutdown 并经 `EventLoopProxy<GxEvent>` 发退出请求，**不释放内存**；
-   `gx_window_run` 用 `Arc::increment_strong_count` 在事件循环期间保活，返回时 drop；
-   新增 `gx_window_destroy` 由 Go 在 `runDone` 之后释放调用方那份 Arc。Go `Window.Close`
-   严格按「请求退出 → 等 runDone → destroy → 注销注册表」顺序执行。同时移除 Go 侧
-   `LockOSThread`（锁定的线程与事件循环线程并非同一条），由 Rust 后端自管事件循环线程。
+2. **生命周期：退出请求 + 非阻塞泵，消除 use-after-free**（P0 / P4 目标态重写）：
+   `gx_window_close` 只设置 shutdown 并经 `EventLoopProxy<GxEvent>` 发退出请求，
+   **不释放内存**；事件循环在 `gx_window_new` 创建、由 `gx_window_pump` 在 Host 主循环
+   goroutine 上逐轮非阻塞泵（winit `pump_events` 嵌入 API，timeout=ZERO），返回
+   0=已退出 / 1=继续 / 2=内部错误；pump 观测到 Exit 即清空渲染器槽。
+   新增 `gx_window_destroy` 由 Go 在 pump 退出后释放调用方那份 Arc（Rust 侧兜底清空
+   app/el/renderer）。Go `Window` 实现 `gxapp.HostedWindow`：`Poll` 泵一轮 + 消费
+   事件通道，`ShouldClose` 读 Exit 标志，`Run` 退化为 no-op——窗口由 Host 主循环
+   轮询驱动（不再有自驱 `gx_window_run` 阻塞循环）。
 3. **事件驱动重绘，停止空转**（P1）：去掉 `RedrawRequested` 结尾的无条件
    `request_redraw`。新帧到达时 `gx_window_draw` 经 proxy 发合并式 `Wake` 请求一次重绘；
    仅当 `Renderer::needs_continuous_redraw()` 为真（transition 动画 / 播放中的视频 /
@@ -536,6 +539,30 @@ canvas-ops。
    把 IME 提交/预编辑、键盘、点击、焦点等归为可靠事件——通道满时进 mutex 保护的
    `overflow` 无界队列（不丢、有序），`pump` 信号唤醒 Run 去 drain；光标/hover 等高频
    状态事件用 `mergeSlot` 只保留最新。全程非阻塞，不卡 Rust 事件线程。
+5. **VSyncControl（P4.5 高刷专项）**：`gx_window_set_vsync(handle, mode)` 运行时切换
+   present 模式（0=Fifo 默认帧节奏对齐屏幕刷新率 / 1=Mailbox 低延迟三缓冲 / 2=Immediate
+   关 vsync 压测用），渲染器已创建则立即 reconfigure、未创建则首窗 resumed 应用；
+   surface 不支持该模式返回 1（保持原值，如 llvmpipe 仅支持 Fifo），创建期缓存
+   `get_capabilities().present_modes` 作为判据；`gx_window_get_vsync` 读回模式码。
+   Go 侧 `Capabilities().VSyncControl=true`，`rb.Window.SetVSync/VSync`。实测工具：
+   `examples/fpsbench`（RAF 连帧 + 帧时间直方图 + V 键切模式 + GX_AUTOCLOSE_MS 关窗汇总）。
+6. **MousePassthrough（P4 遗留补齐）**：`gx_window_set_mouse_passthrough(handle, enabled)`
+   整窗级穿透开关——true 时窗口不接收任何鼠标事件，点击落到下层窗口（overlay 场景）。
+   X11 经 dlopen libXext 调 `XShapeCombineRectangles(ShapeInput)`（空输入形状=穿透，
+   不引入链接期依赖；winit XConnection 已调 XInitThreads，跨线程安全），Windows 走
+   `WS_EX_TRANSPARENT|WS_EX_LAYERED` 扩展样式，macOS 走 `setIgnoresMouseEvents`；
+   Wayland 无等价 API 返回 rc=2（Go 侧透传错误，不静默）。窗口未创建时只缓存请求，
+   首窗 resumed 自动应用（与 gx_window_set_vsync 创建期语义一致）。Go 侧
+   `Capabilities().MousePassthrough=true`，`rb.Window.SetMousePassthrough(bool)`。
+   **区域级精确穿透已落地**：`rb.Window.SetMousePassthroughMode(mode)`
+   （`PassthroughOff/PassthroughWhole/PassthroughRegion`）——区域级从本帧
+   DisplayList 提取「有内容」矩形（不透明 bg/渐变/图片/canvas/video/边框 +
+   可交互命中框，裁剪到窗口物理边界），随帧自动更新 XShape（内容矩形变更时
+   才调，缓存在渲染器）；根节点不透明时区域级自然退化为整窗形状。区域级仅
+   X11 支持（Win/macOS 无区域级公开 API，返回错误需回退整窗级）。诊断：
+   `GX_PT_DEBUG=1` 打印每帧矩形集合。坑：**`build.sh` 重建静态库后 cgo 包
+   不会自动重链（Go 构建缓存不感知外部 .a 变更），验证需 `go build -a` 或
+   `go clean -cache` 强制重链**。
 
 此外：**Wire 版本协商**（P2）——`Open` 时解析 `gx_window_version()` 的 major，与
 `expectedProtocolMajor` 不一致直接拒绝启动，防止 core 更新协议而用户仍用旧后端；

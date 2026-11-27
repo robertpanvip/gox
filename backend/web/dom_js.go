@@ -311,6 +311,11 @@ func (d *jsDriver) SetAttr(e ElemID, key, value string) {
 			// 注意只在有值时设置，清属性不反向删除 display（避免误伤宿主自己的布局）。
 			if isFlexLayoutKey(key) {
 				style.Call("setProperty", "display", "flex")
+				// GX 三端约定：flex 容器默认主轴 column（Skia 零值 / Rust
+				// unwrap_or("column")）。浏览器初始值 row，未显式声明时补齐。
+				if flexDefaultColumn(key, style.Call("getPropertyValue", "flex-direction").String()) {
+					style.Call("setProperty", "flex-direction", "column")
+				}
 			}
 			style.Call("setProperty", styleTargetProp(key, value), cssValue(key, value))
 		}
@@ -669,4 +674,23 @@ func applyPath(ctx js.Value, d string) {
 // 当前实现不修改 DOM，返回 nil 恢复列表——伪状态权威值来自 CSS，非内联。
 func applyPseudo(_ js.Value, _ string, _ js.Value) []func() {
 	return nil
+}
+
+// ProbeRAF 诊断 RAF 投递链状态：scheduled=是否已注册浏览器回调、
+// queueLen=排队未执行的任务数。scheduled=true 且 queueLen>0 说明浏览器
+// 没有回调 rafOnce（投递链断在浏览器侧）；scheduled=false 且 queueLen>0
+// 说明注册被复位但队列未消费（异常路径）。
+// 方法体引用 jsDriver（仅 js/wasm 构建存在），因此必须定义在本文件而非
+// window.go——否则 native（memDriver）构建因找不到该类型而编译失败。
+func (w *Window) ProbeRAF() map[string]any {
+	d, ok := w.driver.(*jsDriver)
+	if !ok {
+		return nil
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return map[string]any{
+		"scheduled": d.rafScheduled,
+		"queueLen":  len(d.rafQueue),
+	}
 }

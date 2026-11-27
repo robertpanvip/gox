@@ -57,7 +57,8 @@ pub struct SceneFrame {
 /// Rust → Go 的事件消息（JSON），经事件回调传回 Go 侧 DispatchBubble。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InputEvent {
-    /// "click" / "ime_preedit" / "ime_commit" / "focus" / "blur"
+    /// "click" / "pointer_down" / "pointer_up" / "pointer_move" / "wheel" /
+    /// "key" / "ime_preedit" / "ime_commit" / "focus" / "blur" / "backspace"
     pub kind: String,
     /// 命中的 host 节点 id
     #[serde(default)]
@@ -68,11 +69,15 @@ pub struct InputEvent {
     /// ime 文本 / preedit
     #[serde(default)]
     pub text: String,
-    /// 位置（点击）
+    /// 位置（点击 / 指针 / 滚轮增量）
     #[serde(default)]
     pub x: f32,
     #[serde(default)]
     pub y: f32,
+    /// 修饰键（key / pointer 事件）：空串或 "ctrl" / "ctrl+shift+alt+super" 之一。
+    /// 独立字段而非布尔位：翻译层按 contains 判断，可读性与跨语言序列化都更稳。
+    #[serde(default)]
+    pub mods: String,
 }
 
 impl InputEvent {

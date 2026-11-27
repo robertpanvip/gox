@@ -52,21 +52,17 @@ func main() {
 		}
 	}()
 
-	// 装配层注册后端并按名选择：核心 gxapp 不 import 本后端，依赖方向保持单向。
-	// （直接注入仍可用：gxapp.OpenWith(cfg, win)。）
-	win := rb.NewWindow()
-	gxapp.MustRegister("rust", func(cfg gxapp.WindowConfig) (gxapp.Window, error) {
-		return win, nil
-	})
+	// 接入层装配：gx.use(Backend) → Use(接口值) + 逐窗 Render。核心 gxapp
+	// 不 import 本后端，依赖方向保持单向（后端实现 gxapp.Backend 接口形状）。
+	handle := gxapp.Use(rb.NewBackend())
 	// 注册 Rust 后端的文件对话框能力：FilePicker 组件点击时由它弹出原生对话框。
 	rb.RegisterFileDialog()
-	app, err := gxapp.OpenBackend(gxapp.WindowConfig{
-		Title: "PULSE Dashboard", Width: 760, Height: 560, Backend: "rust",
-	})
+	app, err := handle.Render(func() any { return gxscene.Render(gxscene.Template{}) },
+		gxapp.WindowConfig{Title: "PULSE Dashboard", Width: 760, Height: 560})
 	if err != nil {
 		panic(err)
 	}
-	defer app.Close()
+	defer handle.Close()
 
 	// 全部外观来自预制组件库；业务只描述语义。Rust 后端理解同一套属性
 	// （含 align-items/justify-content 与样式继承），无需改一行组件代码。
@@ -147,12 +143,12 @@ func main() {
 					}),
 					// 新增组件验证：Tooltip / TimePicker / FilePicker / Table 均走同一套 GX 场景树。
 					widgets.Tooltip(gxscene.Props{
-						"trigger": func() any { return widgets.Button(gxscene.Props{"label": "悬停我", "variant": "secondary"}) },
-						"content": func() any { return textNode("这是 Tooltip 提示", "#ffffff", "12") },
+						"trigger":   func() any { return widgets.Button(gxscene.Props{"label": "悬停我", "variant": "secondary"}) },
+						"content":   func() any { return textNode("这是 Tooltip 提示", "#ffffff", "12") },
 						"placement": "top",
 					}),
 					widgets.TimePicker(gxscene.Props{
-						"value": func() any { return "09:30" },
+						"value":    func() any { return "09:30" },
 						"onChange": widgets.BindValue(func(string) {}),
 					}),
 					widgets.FilePicker(gxscene.Props{
@@ -164,7 +160,7 @@ func main() {
 							{Key: "k", Title: "键", Width: "120", Sortable: true},
 							{Key: "v", Title: "值", Width: "120"},
 						},
-						"rows": func() any { return []any{[]string{"A", "1"}, []string{"B", "2"}} },
+						"rows":       func() any { return []any{[]string{"A", "1"}, []string{"B", "2"}} },
 						"row-height": 32, "viewport-height": 72,
 					}),
 					// 底部说明
@@ -173,6 +169,10 @@ func main() {
 			},
 		})
 	})
+
+	// rustbackend 专属扩展（BindApp 增量流 / SetDispatcher 输入映射）按能力
+	// 经 WindowOf 取回窗口实例后调用——接入层接口保持后端无关。
+	win := handle.WindowOf(app).(*rb.Window)
 
 	win.BindApp(app)
 
@@ -198,7 +198,7 @@ func main() {
 		}
 	})
 
-	if err := app.Run(); err != nil {
+	if err := handle.Run(); err != nil { // Host 唯一主循环（P4 目标态）：app.Run 已退化为 no-op
 		panic(err)
 	}
 }

@@ -5,9 +5,9 @@ package main
 import (
 	"fmt"
 
+	rb "github.com/robertpanvip/gox-backend-rust"
 	gxapp "github.com/robertpanvip/gox/runtime/app"
 	gxscene "github.com/robertpanvip/gox/runtime/scene"
-	rb "github.com/robertpanvip/gox-backend-rust"
 	widgets "github.com/robertpanvip/gox/widgets"
 )
 
@@ -42,14 +42,9 @@ func main() {
 	// 默认打开，方便首帧截图验证浮层。
 	state := widgets.NewPopoverState(true)
 
-	win := rb.NewWindow()
-	app, err := gxapp.OpenWith(gxapp.WindowConfig{Title: "Overlay Demo", Width: 640, Height: 480}, win)
-	if err != nil {
-		panic(err)
-	}
-	defer app.Close()
-
-	app.Render(func() any {
+	// 接入层装配：gx.use(Backend) → Use(接口值) + 逐窗 Render。
+	handle := gxapp.Use(rb.NewBackend())
+	app, err := handle.Render(func() any {
 		return widgets.Col(gxscene.Props{
 			"width": "640", "height": "480", "padding": "24", "gap": "16",
 			"bg": widgets.ThemeBg, "align": "center",
@@ -82,7 +77,15 @@ func main() {
 				}
 			},
 		})
-	})
+	}, gxapp.WindowConfig{Title: "Overlay Demo", Width: 640, Height: 480})
+	if err != nil {
+		panic(err)
+	}
+	defer handle.Close()
+
+	// rustbackend 专属扩展经 WindowOf 取回窗口实例后调用——接入层接口保持后端无关。
+	win := handle.WindowOf(app).(*rb.Window)
+
 	win.BindApp(app)
 
 	// 事件回传：命中节点后派发到场景树，触发 Popover scrim 的 onClick 关闭浮层。
@@ -96,9 +99,13 @@ func main() {
 		if n == nil {
 			var dump func(*gxscene.Node, int)
 			dump = func(nd *gxscene.Node, d int) {
-				if d > 6 { return }
+				if d > 6 {
+					return
+				}
 				fmt.Printf("[overlaydemo]   tree id=%s kind=%s role=%v\n", nd.ID, nd.Kind, nd.Props["gx-role"])
-				for _, c := range nd.Children { dump(c, d+1) }
+				for _, c := range nd.Children {
+					dump(c, d+1)
+				}
 			}
 			dump(app.Instance().Root(), 0)
 		}
@@ -113,7 +120,7 @@ func main() {
 		}
 	})
 
-	if err := app.Run(); err != nil {
+	if err := handle.Run(); err != nil { // Host 唯一主循环（P4 目标态）：app.Run 已退化为 no-op
 		panic(err)
 	}
 }

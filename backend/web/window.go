@@ -64,14 +64,14 @@ func (w *Window) ProbeFrame() map[string]any {
 
 // mirrorNode 记录一个场景节点在 DOM 侧的镜像状态。
 type mirrorNode struct {
-	id        gxscene.NodeID
-	elem      ElemID
-	kind      string
-	text      string
-	node      *gxscene.Node                // 最新场景节点指针（结构变化后刷新，供事件回投）
-	firstElem ElemID                       // 透明节点(#frag)第一个真实 DOM 子元素；作为 before 锚点时用
-	attrs     map[string]string           // 最近一次下传的普通属性/样式（含空串=已移除）
-	richHTML  string                      // 最近一次下传的富文本 HTML（rich-text 属性）
+	id             gxscene.NodeID
+	elem           ElemID
+	kind           string
+	text           string
+	node           *gxscene.Node               // 最新场景节点指针（结构变化后刷新，供事件回投）
+	firstElem      ElemID                      // 透明节点(#frag)第一个真实 DOM 子元素；作为 before 锚点时用
+	attrs          map[string]string           // 最近一次下传的普通属性/样式（含空串=已移除）
+	richHTML       string                      // 最近一次下传的富文本 HTML（rich-text 属性）
 	selection      gxscene.SelectionStyle      // 最近一次下传的 &::selection 子表（富文本选区配色）
 	selectionRange gxscene.SelectionRange      // 最近一次下传的 selection-range（rune 区间）
 	handlers       map[string]func(FiredEvent) // 已注册的事件监听（key=规范化事件名）
@@ -182,25 +182,19 @@ func (w *Window) Draw(root *gxscene.Node) error {
 }
 
 // Run 立即返回：Web 后端没有自己的事件循环，事件由浏览器 DOM 驱动、经
-// FireEvent 回投到场景树。
+// FireEvent 回投到场景树。HostedWindow 路径下不再被调用。
 func (w *Window) Run() error { return nil }
 
-// ProbeRAF 诊断 RAF 投递链状态：scheduled=是否已注册浏览器回调、
-// queueLen=排队未执行的任务数。scheduled=true 且 queueLen>0 说明浏览器
-// 没有回调 rafOnce（投递链断在浏览器侧）；scheduled=false 且 queueLen>0
-// 说明注册被复位但队列未消费（异常路径）。
-func (w *Window) ProbeRAF() map[string]any {
-	d, ok := w.driver.(*jsDriver)
-	if !ok {
-		return nil
-	}
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	return map[string]any{
-		"scheduled": d.rafScheduled,
-		"queueLen":  len(d.rafQueue),
-	}
-}
+// Poll 实现 gxapp.HostedWindow：浏览器是唯一事件源（DOM 事件经 FireEvent 回投、
+// 帧重绘经 UIExecutor/浏览器 rAF 驱动），Host 主循环侧无可轮询事件，no-op。
+func (w *Window) Poll() error { return nil }
+
+// ShouldClose 实现 gxapp.HostedWindow：Web 窗口不请求关闭（一 tab 一文档，
+// 生命周期归浏览器），恒为 false。
+func (w *Window) ShouldClose() bool { return false }
+
+// 编译期断言：Web 窗口参与 Host 轮询主循环。
+var _ gxapp.HostedWindow = (*Window)(nil)
 
 func (w *Window) Close() error {
 	w.mu.Lock()

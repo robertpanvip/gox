@@ -38,17 +38,14 @@ func main() {
 		applyTheme(widgets.DarkTheme, "dark")
 	}
 
-	win := gxweb.MustOpen("#app")
-	app, err := gxapp.OpenWith(gxapp.WindowConfig{Title: "Widget Showcase · Apple macOS", Backend: "web"}, win)
+	// 接入层装配：gx.use(Backend) → Use(接口值) + 逐窗 Render（与桌面后端同一路径）。
+	handle := gxapp.Use(gxweb.NewBackend())
+	app, err := handle.Render(func() any { return showcase.Build(showcase.DefaultWidth, 1500) },
+		gxapp.WindowConfig{Title: "Widget Showcase · Apple macOS", Width: showcase.DefaultWidth, Height: 1500})
 	if err != nil {
 		panic(err)
 	}
-	defer app.Close()
-	// 用 Web 后端的 RAF UIExecutor 驱动帧投递（远程 P0/P3 决议：Web 复用浏览器事件循环）。
-	app.SetUIExecutor(win)
-	if err := app.Render(func() any { return showcase.Build(showcase.DefaultWidth, 1500) }); err != nil {
-		panic(err)
-	}
+	defer handle.Close()
 	if err := app.Run(); err != nil {
 		panic(err)
 	}

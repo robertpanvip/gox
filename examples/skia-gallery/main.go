@@ -1,10 +1,11 @@
-// GX 组件库 Gallery：在真实 Skia 后端里展示全部预制组件。
+// GX 组件库 Gallery（V2 rustbackend）：展示全部预制组件。
 // 受控状态用 signal 持有，交互（勾选/切换/选择/滑块）通过 widgets.Bind* 回写。
 package main
 
 import (
 	"os"
 
+	rb "github.com/robertpanvip/gox-backend-rust"
 	gxapp "github.com/robertpanvip/gox/runtime/app"
 	gxscene "github.com/robertpanvip/gox/runtime/scene"
 	"github.com/robertpanvip/gox/runtime/signal"
@@ -181,15 +182,8 @@ func main() {
 		)),
 	)
 
-	app, err := gxapp.OpenWith(gxapp.WindowConfig{
-		Title: "GX 组件库 Gallery", Width: 860, Height: 1040,
-	}, openGL())
-	if err != nil {
-		panic(err)
-	}
-	defer app.Close()
-
-	app.Render(func() any {
+	handle := gxapp.Use(rb.NewBackend()) // V2 接入层：gx.use(Backend) 接口值注入
+	app, err := handle.Render(func() any {
 		return widgets.Col(gxscene.Props{
 			"width": "860", "height": "1040", "padding": "18", "gap": "12", "bg": widgets.ThemeBg,
 			"children": func() any { return []any{
@@ -250,7 +244,68 @@ func main() {
 				}),
 			} },
 		})
+	}, gxapp.WindowConfig{Title: "GX 组件库 Gallery", Width: 860, Height: 1040})
+	if err != nil {
+		panic(err)
+	}
+	defer handle.Close() // Handle.Close 级联：窗口 Close + 后端 Shutdown
+
+	win := handle.WindowOf(app).(*rb.Window)
+	win.BindApp(app) // GRX3 增量流：Render 后建基线，signal 更新走 delta
+
+	// 输入接线（Rust 端命中/IME → 场景树）：click 冒泡派发、焦点与受控 Input 命令，
+	// 与 desktop-demo / playground-desktop 同一翻译层模式。
+	win.SetDispatcher(func(ev rb.InputEvent) {
+		switch ev.Kind {
+		case "ime_commit":
+			for _, ch := range ev.Text {
+				widgets.InputChar(focusedInput(app), ch)
+			}
+		case "focus":
+			widgets.Focus(findNode(app, ev.NodeID))
+		case "backspace":
+			widgets.InputBackspace(focusedInput(app))
+		case "click":
+			if n := findNode(app, ev.NodeID); n != nil {
+				n.DispatchBubble("onClick", gxscene.EventContext{
+					Raw: "rust-pointer",
+					Synthetic: &gxscene.SyntheticEvent{
+						Type:          gxscene.EvClick,
+						NativeName:    "onClick",
+						Target:        n,
+						CurrentTarget: n,
+						X:             float64(ev.X),
+						Y:             float64(ev.Y),
+					},
+				})
+			}
+		}
 	})
 
-	app.Run()
+	handle.Run() // Host 唯一主循环（P4 目标态）
+}
+
+// findNode 在当前帧场景树里按 NodeID 找节点（click/焦点事件定位用）。
+func findNode(app *gxapp.App, id string) *gxscene.Node {
+	return findNodeIn(app.Instance().Root(), id)
+}
+
+func findNodeIn(n *gxscene.Node, id string) *gxscene.Node {
+	if n == nil {
+		return nil
+	}
+	if n.ID.String() == id {
+		return n
+	}
+	for _, c := range n.Children {
+		if hit := findNodeIn(c, id); hit != nil {
+			return hit
+		}
+	}
+	return nil
+}
+
+// focusedInput 从当前帧取回聚焦的输入框节点。
+func focusedInput(app *gxapp.App) *gxscene.Node {
+	return widgets.FocusedInputIn(app.Instance().Root())
 }

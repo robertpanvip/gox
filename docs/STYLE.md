@@ -296,3 +296,16 @@ host（struct/JSX）是三端样式白名单的**上界**，但三端对同一�
 
 - Go：`backend/skia/style_text_parity_test.go`（字重数值/优先级、text-align 落笔、line-height 行盒、空白折叠、z-index 绘制顺序、pointer-events 命中豁免、cursor 透出）。
 - Rust：`style.rs::parity_tests`（edges 简写/空白折叠/字重解析/对齐偏移/z-index 解析）+ `render.rs::parity_tests`（TextDraw 的对齐/行高/继承、z-index 绘制顺序、hitbox cursor/pointer-events、text_sig 字重失效）。
+- **三端一致性矩阵**：`testdata/threeway/cases.json` + `scripts/threeway-parity.sh`。22 个共享用例（margin 简写/四值、min/max、flex-grow/shrink/wrap/默认方向、align-content、row/column-gap、padding、absolute inset、z-index、pointer-events 命中、cursor、text-align、line-height、white-space、scroll-top、样式透传）分别由三端无头消费并断言同一期望：
+  - Skia（`backend/skia/threeway_test.go`）：无头 `Window.Draw` → DrawLog 矩形/文本/绘制序 + 命中框；
+  - Rust（`render.rs::threeway_tests`）：`DisplayList::from_scene`（Taffy 布局同源）→ shape/text/hitbox；
+  - Web（`backend/web/threeway_test.go`）：memDriver 镜像断言每个 prop **原样**到达元素属性面（透传链路）+ cssName/cssValue 转换抽查。
+  跑 `bash scripts/threeway-parity.sh` 输出「用例 × 后端」矩阵，任一端断言失败即退出非零。三端任何一端"没实现/传值不对/语义漂移"都会在这里被点名。
+
+### 已知默认值分歧（测试放行但需拍板统一）
+
+矩阵显式声明属性以测传值链路；以下**默认值**三端不一致，改动任一侧都有大范围视觉回归风险，留待统一决策：
+
+1. **white-space 默认值**：未声明时 Rust（`white_space_collapses("")`=false）**逐字节保留**；Skia（`whiteSpaceCollapses("")`=true）与浏览器 CSS 默认均**折叠空白**。STYLE.md 第 14 节文本语义细节描述的是 Rust 语义；编辑器等依赖原样空格的组件三端均须**显式声明 pre/pre-wrap** 才安全。
+2. **flex-shrink 默认值**：Skia/Yoga 默认 0（不收缩），Rust/Taffy 与浏览器 CSS 默认 1（收缩）。内容超宽的容器三端行为不同；需要确定行为的容器应显式声明 flex-shrink。
+3. **flex 容器默认主轴**：Skia/Rust 约定 column（零值 / `unwrap_or("column")`）；Web 端浏览器初始值 row，已由 js 驱动在 flex 意图属性出现时补 `flex-direction:column` 对齐（`flexDefaultColumn`，native 单测覆盖）。

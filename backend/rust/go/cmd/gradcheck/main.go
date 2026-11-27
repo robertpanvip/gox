@@ -1,6 +1,8 @@
 // gradcheck 是三端渐变统一的 Rust 后端可视化验收程序。
 // 渲染：① 分段渐变文字（模拟编辑器代码高亮，红→绿→蓝按 ch 边界）
-//       ② 平滑渐变背景块（通用 linear-gradient，90deg 红→蓝）
+//
+//	② 平滑渐变背景块（通用 linear-gradient，90deg 红→蓝）
+//
 // 在 xvfb 下运行并用截图采样像素，确认 Rust 后端与 Web/Go 桌面端语义一致。
 package main
 
@@ -33,19 +35,9 @@ func gradientText(text, grad string) *gxscene.Instance {
 }
 
 func main() {
-	win := rb.NewWindow()
-	gxapp.MustRegister("rust", func(cfg gxapp.WindowConfig) (gxapp.Window, error) {
-		return win, nil
-	})
-	app, err := gxapp.OpenBackend(gxapp.WindowConfig{
-		Title: "GradCheck", Width: 620, Height: 260, Backend: "rust",
-	})
-	if err != nil {
-		panic(err)
-	}
-	defer app.Close()
-
-	app.Render(func() any {
+	// 接入层装配：gx.use(Backend) → Use(接口值) + 逐窗 Render。
+	handle := gxapp.Use(rb.NewBackend())
+	build := func() any {
 		return gxscene.Render(gxscene.Template{
 			Ops: []gxscene.Op{
 				{Code: gxscene.OpElem, Arg: "div"},
@@ -72,7 +64,13 @@ func main() {
 			return gradientText("ABCDEF",
 				"linear-gradient(90deg, #ff0000 0ch 2ch, #00ff00 2ch 4ch, #0000ff 4ch 6ch)")
 		})
-	})
+	}
+
+	app, err := handle.Render(build, gxapp.WindowConfig{Title: "GradCheck", Width: 620, Height: 260})
+	if err != nil {
+		panic(err)
+	}
+	defer handle.Close()
 
 	// 渲染稳定后自动退出，便于 xvfb 下截图。
 	go func() {
@@ -81,7 +79,7 @@ func main() {
 		_ = app.Close()
 	}()
 
-	if err := app.Run(); err != nil {
+	if err := handle.Run(); err != nil { // Host 唯一主循环（P4 目标态）：app.Run 已退化为 no-op
 		panic(err)
 	}
 }

@@ -1,8 +1,10 @@
 # P4 多窗口设计：共享单一 UI Loop + 窗口级故障隔离
 
-> 状态：设计方案（待评审，尚未实现）
-> 前置：`ui-loop-p0.md`（UIExecutor / Runtime 隔离）、`ui-loop-p2-desktop.md`（桌面 Loop）、`ui-loop-p3-web.md`（Web 边界）
-> 硬约束（用户拍板）：**一个窗口崩溃，不得带崩整个应用**；所有窗口**共享同一个 UI Loop**。
+> 状态：目标态已落地（Go 侧 Host 轮询 + Rust pump_events 嵌入泵；真机 vsync 与
+> 多窗口交互实测待验证）。前置：`ui-loop-p0.md`（UIExecutor / Runtime 隔离）、
+> `ui-loop-p2-desktop.md`（桌面 Loop）、`ui-loop-p3-web.md`（Web 边界）
+> 硬约束（用户拍板）：**一个窗口崩溃，不得带崩整个应用**；所有窗口**共享同一个 UI Loop**；
+> **不做自驱回退兼容**——Host 管理的窗口必须实现 `HostedWindow`，未实现的后端开窗即拒绝。
 
 ---
 
@@ -61,6 +63,59 @@
 
 ## 4. API 设计
 
+### 4.0 接入层已落地：gx.use(Backend) → gxapp.Use / Handle.Render
+
+GX 接入形态与 Go 落点的对应关系（首版已实现）：
+
+```
+const app = gx.use(Backend)              →  app := gxapp.Use(rustbackend.NewBackend())  // 接口注入
+app.render(() => <App />, {              →  app.Render(func() any { return ui.App() },
+    title: "Main Window",                    gxapp.WindowConfig{Title: "Main Window", Width: 1200, Height: 800})
+    width: 1200, height: 800,
+})
+app.render(() => <Settings />, {...})    →  app.Render(func() any { return ui.Settings() }, gxapp.WindowConfig{...})
+app.run()                                →  app.Run()   // 全部窗口退出才返回
+```
+
+**Backend 是接口注入，不是字符串分发**（gxapp.Backend，runtime/app/backend.go）：
+
+```go
+// gxapp 只定义接口形状，后端实现它即可插拔；核心不依赖任何具体后端。
+// Use(接口值) 是唯一接入路径——没有工厂函数、没有按名字分发。
+type Backend interface {
+    Name() string                                             // 故障归因 / 调试标识
+    NewWindow(cfg WindowConfig) (Window, error)               // 每窗一次，独立实例
+}
+```
+
+后端侧实现（rustbackend/backend.go 为参考）：`type Backend struct{}` + `Name() string` +
+`NewWindow(cfg) (Window, error)`。
+
+**Backend 可选能力段**（按需实现 + Host 探测，与 Window 的 UIExecutor / WindowBinder 同一模式；
+没有某能力的后端不实现即可，接口不做肥）：
+
+| 可选接口 | 方法 | 语义 |
+|---|---|---|
+| `BackendInitializer` | `InitBackend() error` / `ShutdownBackend()` | 进程级生命周期：首个窗口创建前幂等 Init（失败阻断开窗）；Host/Handle 全关后 Shutdown |
+| `BackendDescriptor` | `Describe() BackendInfo` | 静态描述：版本 / 协议（GRX3…）/ 渲染器，供诊断与协议分支 |
+| `BackendCapabilities` | `Capabilities() Capabilities` | 能力声明：MultiWindow / Transparent / MousePassthrough / Incremental / VSyncControl |
+
+**窗口实例访问**：装配层需要调后端专属扩展（rustbackend 的 `SetDispatcher` / `BindApp` /
+`RequestClose`）时，经 `handle.WindowOf(app)`（Host.WindowOf 同名代理）取回 Window 再自行断言
+类型——接入层接口本身保持后端无关。
+
+demo 接入现状：examples/desktop-demo、examples/widget-showcase、rustbackend cmd（demo /
+gradcheck / overlaydemo / startupbench）、examples/wasm-demo、examples/web-widget-showcase
+（gxweb.NewBackend，挂 "#app" DOM 容器）均已切 `Use(接口值)` 路径。
+Window 的可选扩展（UIExecutor / WindowBinder）由 Host 装配时按能力探测注入，后端无需转发。
+
+首版语义：每次 `Render` = 一扇独立窗口 + 独立 App（独立场景树 / signal Runtime）；
+后端实现 `UIExecutor` 时自动注入（Dispatch/RAF 进窗口事件泵）；实现 `WindowBinder`
+（rustbackend.BindApp）时 Render 后自动启用增量流。窗口 Run panic 由 Host recover
+归因上报 `FaultHandler`，只熔断该窗口。已知边界：响应式帧边界（signal.AfterEffects）
+是进程级全局，跨窗 flush 会唤醒其它窗口的帧边界——但树内容不变，增量后端对无变化
+帧短路，不产生真实绘制/传输；GLFW 主线程亲和后端的多窗口待目标态改造。
+
 ### 4.1 Host（新增，`runtime/app/host.go`）
 
 ```go
@@ -97,18 +152,21 @@ const (
 )
 ```
 
-### 4.2 窗口后端新角色（可选接口，向后兼容）
+### 4.2 窗口后端新角色（强制接口，目标态唯一路径）
 
 ```go
-// HostedWindow 由 Host 单一主循环驱动；实现后 Window.Run() 退化为 no-op。
-// 未实现的老后端仍走原路径（单窗口兼容）。
+// HostedWindow 由 Host 单一主循环轮询驱动；实现后 Window.Run() 退化为 no-op。
+// Host 管理的窗口必须实现它——不实现的后端在 openEntry 直接拒绝（无回退路径）。
 type HostedWindow interface {
     Window
-    Poll() error        // 非阻塞处理本窗口待处理事件
-    Paint() error       // 脏则绘制一帧
+    Poll() error        // 非阻塞处理本窗口待处理事件；错误/panic → 归因 + 熔断该窗
     ShouldClose() bool  // 本窗口是否请求关闭
 }
 ```
+
+**注意**：设计稿中的 `Paint()` 未进入接口——绘制经共享 Loop 的帧任务自然驱动
+（dispatcher sink → `drawNowErr` → Present/Draw，走 commit gate 与 Frame 契约），
+FramePresenter 后端在 Present 里收增量、无变化帧由后端短路，无需第三个方法。
 
 ### 4.3 App 侧最小增补
 
@@ -147,9 +205,16 @@ for h.hasOpenWindows() {
 - **`glfw.Terminate()` 从 `glWindow.Close()` 移到 `Host.Close()`**（所有窗口归零后调一次）——这是多窗口不互相带崩的关键。
 - `glWindow.Post()` 转发给 `host.Loop().Post`，而非自己 `loop.New()`。
 
-### 5.2 Rust / winit（P2）
+### 5.2 Rust / winit（已落地）
 
-winit 一个 event loop 可创建多个 window（`ActiveEventLoop::create_window`）。当前 `WinitApp::resumed()` 里 `if self.state.is_some() { return }` 的单窗口假设改成 `HashMap<WindowId, Renderer>`；`gx_window_run` 从"每 handle 一个 loop"改成"每 Host 一个 loop、多 handle 注册到同一 loop"。
+事件循环在 `gx_window_new` 创建（proxy 注入提前到创建期），由 `gx_window_pump` 在
+Host 主循环 goroutine 上逐轮非阻塞泵（winit 0.30 `pump_events` 嵌入 API，
+timeout=ZERO）：返回 0=已退出（宿主走关闭流程）/ 1=继续 / 2=内部错误。应用状态
+（窗口句柄/修饰键/首帧探针）跨 pump 持久化在 `Backend.app`；pump 返回 Exit 即清空
+渲染器槽并丢弃事件循环。自驱 `gx_window_run` 已删除——rustbackend 的 Go `Window`
+实现 `HostedWindow`（Poll 泵一轮 + 消费事件通道；ShouldClose 读 Exit 标志）。
+多窗口 = 各窗一个事件循环实例，由同一 Host 主循环交替泵；单一 UI Loop 不变量由
+Go 侧 Host 的共享 `loop.Queue` 保证。
 
 ### 5.3 Web（P3，边界说明）
 

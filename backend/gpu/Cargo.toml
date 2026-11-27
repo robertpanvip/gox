@@ -1,0 +1,57 @@
+[package]
+name = "gx_gpu"
+version = "0.1.0"
+edition = "2021"
+
+# GX 独立 GPU 渲染管线（quad 管线），从 Rust 桌面后端抽离复用。
+#
+# 后端选择是【打包期参数】（cargo feature），不做运行时动态检测——
+# 两套实现不共存，包体积各自最小：
+#   - GPU 版（默认）：cargo build
+#       feature "gpu" → wgpu（Vulkan/Metal/DX12/GL），同一份 WGSL 三端统一；
+#   - CPU 版：cargo build --no-default-features --features cpu
+#       feature "cpu" → tiny-skia 软光栅，同一套 GpuFrame API 由 CPU 接管；
+#   - GPU 版不适配时直接报错返回（不静默回退 CPU——两套实现不同时编译，
+#     调用方按部署环境打包时选定）。
+#
+# API 不随 feature 变化：GpuFrame 数据模型与 C ABI（gx_gpu.h）完全一致，
+# 调用方（Rust 后端 / Go CGO / Android NDK）只面向 GPU 形状的 API 编码。
+#
+# 独立抽离约束：本 crate 不依赖 GX 场景协议与任何 GX 模块，只消费 GpuFrame。
+#   1) rlib     —— Rust 后端（backend/rust）直接 use gx_gpu；
+#   2) staticlib —— Go 侧 CGO（含 backend/skia 的 Go 桌面端）经 gx_gpu.h 链接；
+#   3) staticlib —— Android NDK 经 JNI/NDK 直调同一份 C ABI。
+#
+# 颜色语义：全链路 sRGB 编码值（0..255），混合发生在 gamma 空间——与
+# tiny-skia / Skia raster / 浏览器 canvas 的混合口径一致。表面格式固定
+# Bgra8Unorm（非 sRGB target，写入即显示），GPU/CPU 后端视觉语义相同。
+
+[lib]
+name = "gx_gpu"
+crate-type = ["rlib", "staticlib"]
+
+[features]
+default = ["gpu"]
+# GPU 后端（wgpu 三端统一 shader）。
+gpu = ["dep:wgpu", "dep:raw-window-handle", "dep:pollster"]
+# CPU 软光栅后端（tiny-skia；GPU 不可用/无头/超小包体场景）。
+cpu = ["dep:tiny-skia"]
+# WebGPU 后端（阶段 6）：wasm32-unknown-unknown 浏览器目标。wgpu 在 wasm 上
+# 默认只启用 webgl 兜底；显式开启 webgpu 才走原生 WebGPU 管线（同一份 WGSL）。
+#   cargo check --target wasm32-unknown-unknown --features webgpu
+webgpu = ["gpu", "wgpu/webgpu"]
+
+[dependencies]
+tiny-skia = { version = "0.11", optional = true }
+wgpu = { version = "25", optional = true }
+raw-window-handle = { version = "0.6", optional = true }
+pollster = { version = "0.4", optional = true }
+
+[dev-dependencies]
+pollster = "0.4"
+
+[profile.release]
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
+strip = "symbols"

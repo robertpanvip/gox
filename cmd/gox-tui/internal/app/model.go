@@ -136,7 +136,10 @@ func (m *Model) openFile(path string) {
 	if err != nil {
 		content = []byte("")
 	}
-	m.buffers = append(m.buffers, editor.New(path, string(content)))
+	text, enc := editor.Decode(content)
+	b := editor.New(path, text)
+	b.Encoding = enc
+	m.buffers = append(m.buffers, b)
 	m.active = len(m.buffers) - 1
 	// 打开新文件必须回到顶部：scrollLn 是全局滚动态，沿用上一个文件的
 	// 滚动位置会让新文件直接从中途（甚至旧滚动行附近）显示。
@@ -161,7 +164,7 @@ func (m *Model) saveActive() {
 		m.statusMsg = "未命名文件，请用终端指定路径"
 		return
 	}
-	if err := os.WriteFile(b.Path, []byte(b.Text()), 0o644); err != nil {
+	if err := os.WriteFile(b.Path, editor.Encode(b.Text(), b.Encoding), 0o644); err != nil {
 		m.statusMsg = "保存失败: " + err.Error()
 		return
 	}

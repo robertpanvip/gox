@@ -196,6 +196,7 @@ type slotKind uint8
 const (
 	slotChild slotKind = iota
 	slotAttr
+	slotNoop    // 未被模板引用的补全插槽：写入一律忽略（防御路径若指向根会毁树）
 	slotComp    // 复合组件：getter 返回一个 *Instance，挂载为子树，Update 递归驱动
 	slotBranch  // 动态子树：getter 返回 subtreeController（*Branch 条件分支 / *For keyed 列表）
 	slotEvent   // 事件绑定：getter 返回 handler 原值，写入节点的 Handlers（不进 Props）
@@ -299,7 +300,7 @@ func (i *Instance) DebugDumpStructural(depth int) string {
 	}
 	var b strings.Builder
 	for s, sl := range i.slots {
-		if sl.kind != slotBranch && sl.kind != slotDynamic {
+		if sl.kind != slotBranch && sl.kind != slotDynamic && sl.kind != slotNoop {
 			continue
 		}
 		fmt.Fprintf(&b, "%sbranch slot=%d wired=%v ctrl=%v get=%v evals=%d child=%v tpl=%s\n",
@@ -481,7 +482,7 @@ func compile(t Template) *compiledTemplate {
 	// 补全未被引用的插槽，避免 nil 解引用（编译期应保证 slot 连续，这里做防御）。
 	for i := range slots {
 		if slots[i] == nil {
-			slots[i] = &slot{kind: slotChild, path: []int{}}
+			slots[i] = &slot{kind: slotNoop, path: []int{}}
 		}
 	}
 	return &compiledTemplate{root: root, slots: slots}
@@ -1217,6 +1218,9 @@ func (i *Instance) SetPart(slot int, v any) {
 		return
 	}
 	s := i.slots[slot]
+	if s.kind == slotNoop {
+		return
+	}
 	// 动态子树控制器（条件分支 / keyed 列表）：v 是 subtreeController（getter
 	// 每次返回同一稳定对象）。Resolve 在当前 effect 上下文读依赖并重建/复用子树。
 	if s.kind == slotBranch {

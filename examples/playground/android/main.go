@@ -1,22 +1,29 @@
+//go:build android
+
 package main
 
-// GX Playground —— Android 端装配（NativeActivity + GLES2 blit）。
+// GX Playground —— Android 端装配（能力层接入）。
 //
 // 与桌面端 main.go 同构：唯一业务代码 ui.Playground()，来自与网页/桌面共用的
-// GX 源码（ui/app.gx + ui/editor.gx）。触摸事件在 window.go 翻译成 GX 编辑
-// 命令与 onClick 冒泡，编辑逻辑零条件编译。
+// GX 源码。渲染能力由 gx-backend-android 提供（gxapp.Backend + Window），本文件
+// 只负责把 golang.org/x/mobile 的平台事件转发给能力包，业务 touch 语义通过
+// TouchSink 回调实现——与桌面 inputBridge 同角色。
 //
-// 可行性演示版限制：无软键盘（文本编辑待接 Android IME）、无滚轮路由
-// （编辑器拖动滚动已覆盖）。
+// 装配形态（与桌面一致）：
+//	handle := gxapp.Use(rbandroid.NewBackend())
+//	app, _ := handle.Render(func() any { return ui.Playground() }, cfg)
+//	win := handle.WindowOf(app).(*rbandroid.Window)
+//	app.SetFrameClock(win.FrameClock())
 
 import (
 	"fmt"
 	"log"
 	"time"
 
-	gxapp "github.com/robertpanvip/gox/runtime/app"
+	rbandroid "github.com/robertpanvip/gox-backend-android"
 	"github.com/robertpanvip/gox-playground/ui"
 	"github.com/robertpanvip/gox-playground/ui/interp"
+	gxapp "github.com/robertpanvip/gox/runtime/app"
 	"github.com/robertpanvip/gox/widgets"
 
 	"golang.org/x/mobile/app"
@@ -28,42 +35,49 @@ import (
 )
 
 var (
-	gxWin   *androidWindow
+	gxWin   *rbandroid.Window
 	gxApp   *gxapp.App
+	host    *gxapp.Handle
 	setUp   bool
-	glReady bool
-	// lastSize 记录最近的窗口尺寸：size 事件可能早于 gxWin 创建（setupGX
-	// 在首个 paint 事件才执行），若不暂存，画布尺寸永远是 0。
+	glReady   bool
+	glctx     gl.Context
+	sendPaint func() // = func() { a.Send(paint.Event{}) }，供能力包唤醒 paint 循环
+
+	// lastSize 暂存启动阶段（gxWin 尚未创建）收到的尺寸事件。
 	lastSize size.Event
+
+	// lastDpr 记录最近 DPR，供 size 事件转发使用。
+	lastDpr float32
 )
 
 func main() {
+	log.Printf("MAIN: 进入 app.Main（能力层接入）")
+	go func() {
+		for i := 1; ; i++ {
+			time.Sleep(10 * time.Second)
+			log.Printf("HEARTBEAT %d alive", i)
+		}
+	}()
 	app.Main(func(a app.App) {
-		// 渲染唤醒：停帧后 Present/Post 置脏必须能再次触发 paint 事件
-		//（a.Send 可从任意 goroutine 调用）。
-		androidSetWake(func() { a.Send(paint.Event{}) })
-		var glctx gl.Context
+		sendPaint = func() { a.Send(paint.Event{}) }
 		for e := range a.Events() {
 			switch e := a.Filter(e).(type) {
 			case lifecycle.Event:
 				switch e.Crosses(lifecycle.StageVisible) {
 				case lifecycle.CrossOn:
-					// EGL 上下文随可见性建立：GL 显示端在这里初始化。
 					glctx, _ = e.DrawContext.(gl.Context)
-					if glctx != nil {
-						if gxWin != nil {
-							if err := gxWin.ensureGL(glctx); err != nil {
-								log.Fatalf("GLES blit 初始化: %v", err)
-							}
-							a.Send(paint.Event{})
+					glReady = glctx != nil
+					if glReady && gxWin != nil {
+						if err := gxWin.OnSurfaceReady(glctx); err != nil {
+							log.Printf("OnSurfaceReady: %v", err)
 						}
-						glReady = true
+						a.Send(paint.Event{})
 					}
 				case lifecycle.CrossOff:
 					glctx = nil
 					glReady = false
 					if gxWin != nil {
-						gxWin.suspendGL()
+						gxWin.OnSurfaceLost()
 					}
 				}
 				if e.Crosses(lifecycle.StageDead) == lifecycle.CrossOn {
@@ -74,13 +88,17 @@ func main() {
 				}
 			case size.Event:
 				lastSize = e
+				if e.PixelsPerPt > 0 {
+					lastDpr = e.PixelsPerPt * 72 / 160 // pt(72dpi) → CSS px(160dpi)
+				}
+				if lastDpr <= 0 {
+					lastDpr = 1
+				}
 				if gxWin != nil {
-					gxWin.resize(e)
-					// 视口建立/变化 → 响应式布局重排（四端统一断点）。
-					// size 事件频率低（启动与旋转），直接重建整树。
+					gxWin.OnSize(e.WidthPx, e.HeightPx, lastDpr)
+					lw, lh := gxWin.LogicalSize()
+					ui.SetViewport(lw, lh)
 					if gxApp != nil {
-						lw, lh := gxWin.logicalSize()
-						ui.SetViewport(lw, lh)
 						if rerr := gxApp.Render(func() any { return ui.Playground() }); rerr != nil {
 							log.Printf("viewport 重渲染失败: %v", rerr)
 						}
@@ -89,72 +107,78 @@ func main() {
 			case paint.Event:
 				if !setUp && glReady {
 					setUp = true
+					log.Printf("PAINT 首帧：开始 setupGX")
 					if err := setupGX(); err != nil {
 						log.Fatalf("GX 装配失败: %v", err)
-					}
-					// gxWin 在 setupGX 里才创建：首个 lifecycle.CrossOn 到达时
-					// 它还不存在，ensureGL 被跳过——必须在首个 paint 前补做，
-					// 否则 visible=false、blit=nil，paintNow 永远早退（黑屏）。
-					if glctx != nil && gxWin != nil {
-						if err := gxWin.ensureGL(glctx); err != nil {
-							log.Fatalf("GLES blit 初始化: %v", err)
-						}
 					}
 				}
 				if gxWin == nil {
 					break
 				}
-				gxWin.drainLoop()
-				gxWin.paintNow()
-				a.Publish()
-				// 光标 blink 等旁路动画没有 frame.Changes，paintNow 会保持
-				// dirty——自发下一帧 paint 事件，动画消失后自动停帧。
-				if gxWin.hasPendingPaint() {
+				// Host 装配注入的 UIExecutor 把 drawNow/RAF 任务投递到 Host 共享
+				// Loop；Android 事件循环由 app.Main 驱动（不跑 Host.Run），故在
+				// 每个 paint 周期手动 drain 一轮，等价于桌面 Host.Run 的 DrainTurn。
+				if host != nil {
+					host.Host().Loop().DrainTurn()
+				}
+				needPublish := gxWin.OnPaint()
+				if needPublish {
+					a.Publish() // GLES 回退路径：swap EGL buffer
+				}
+				if gxWin.HasPendingPaint() {
 					a.Send(paint.Event{})
 				}
 			case touch.Event:
 				if gxWin != nil {
-					gxWin.onTouch(e)
+					gxWin.OnTouch(e)
 				}
 			}
 		}
 	})
 }
 
-// setupGX 完成 GX 整条装配，与桌面 main.go 同构。Run 解释器、主题切换、
-// 示例加载全部与桌面/网页共用。
+// setupGX 用统一 Backend 契约装配整条链，与桌面 main.go 同构。
 func setupGX() error {
-	win := newAndroidWindow()
-	// 补放启动阶段（gxWin 尚不存在时）收到的尺寸事件。
+	handle := gxapp.Use(rbandroid.NewBackend())
+	host = handle
+	lw, lh := 1080, 720
 	if lastSize.WidthPx > 0 {
-		win.resize(lastSize)
+		dpr := lastDpr
+		if dpr <= 0 {
+			dpr = 1
+		}
+		lw, lh = int(float32(lastSize.WidthPx)/dpr), int(float32(lastSize.HeightPx)/dpr)
 	}
-	gxWin = win
-	// GL 显示端已在 lifecycle.CrossOn 里初始化（ensureGL）。
 
-	// 窗口逻辑尺寸：以当前已知物理尺寸/DPR 兜底（真实 size 事件会再校正）。
-	lw, lh := win.logicalSize()
-	gxappCfg := gxapp.WindowConfig{
-		Title:  "GX Playground (Android)",
-		Width:  lw,
-		Height: lh,
-	}
-	gxApp, err := gxapp.OpenWith(gxappCfg, win)
+	gxa, err := handle.Render(func() any { return ui.Playground() }, gxapp.WindowConfig{
+		Title: "GX Playground (Android)", Width: lw, Height: lh,
+	})
 	if err != nil {
-		return fmt.Errorf("OpenWith: %w", err)
+		return fmt.Errorf("Render: %w", err)
+	}
+	gxApp = gxa
+	win := handle.WindowOf(gxa).(*rbandroid.Window)
+	gxWin = win
+
+	// 帧时钟 + paint 唤醒：能力包 owns 帧调度，装配层注入 a.Send 与平台尺寸。
+	win.SetWakePaint(sendPaint)
+	gxa.SetFrameClock(win.FrameClock())
+	win.SetTouchSink(&playgroundTouch{})
+	if glReady && glctx != nil {
+		if err := win.OnSurfaceReady(glctx); err != nil {
+			log.Printf("OnSurfaceReady（setup 补做）: %v", err)
+		}
+	}
+	if lastSize.WidthPx > 0 {
+		win.OnSize(lastSize.WidthPx, lastSize.HeightPx, lastDpr)
 	}
 
-	// 触屏端：启用虚拟键盘（紧凑布局底部），并按当前视口切响应式布局。
-	// 必须在初始 Render 之前——首帧就要按真实视口渲染紧凑布局。
+	// 触屏端布局前置：首帧按真实视口渲染紧凑布局。
 	ui.SetKeyboardEnabled(true)
 	ui.SetViewport(lw, lh)
 
-	// P2 宿主接线：UIExecutor 注入共享 Loop（paint 循环 drain）。
-	gxApp.SetUIExecutor(win)
-
 	// Run 解释器接内置终端面板（与桌面/网页同源）。
 	interp.SetOutput(ui.ConsolePrint)
-	gxApp2 := gxApp
 	ui.SetRunHandler(func() {
 		ui.ConsoleMark("Run")
 		res, err := interp.Interpret(ui.EditorText())
@@ -164,7 +188,7 @@ func setupGX() error {
 		} else {
 			ui.SetRunResult(res.Instance, "")
 		}
-		if rerr := gxApp2.Render(func() any { return ui.Playground() }); rerr != nil {
+		if rerr := gxa.Render(func() any { return ui.Playground() }); rerr != nil {
 			ui.SetRunResult(nil, "重渲染失败: "+rerr.Error())
 		}
 	})
@@ -176,24 +200,19 @@ func setupGX() error {
 		} else {
 			widgets.SetTheme(widgets.DarkTheme)
 		}
-		if rerr := gxApp2.Render(func() any { return ui.Playground() }); rerr != nil {
+		if rerr := gxa.Render(func() any { return ui.Playground() }); rerr != nil {
 			log.Printf("主题重渲染失败: %v", rerr)
 		}
 	})
 
-	// 注入实测字宽（必须在首帧 Render 前，否则点击/光标错位）。
 	injectEditorCharWidth()
-
-	// 初始化第一个示例，让编辑器有内容（Render 前写 signal，首帧即正确）。
 	ui.LoadSample(0)
-
-	// 初始渲染（与桌面端 main.go 同款）：Render 建立场景树并产出首帧。
-	// 漏掉这一步会导致树永远不建立、屏幕全黑。
-	if rerr := gxApp2.Render(func() any { return ui.Playground() }); rerr != nil {
-		return fmt.Errorf("初始渲染: %w", rerr)
+	// Render 已建立首帧；viewport/尺寸变化后再 Render 一次确保紧凑布局生效。
+	if rerr := gxa.Render(func() any { return ui.Playground() }); rerr != nil {
+		return fmt.Errorf("初始重渲染: %w", rerr)
 	}
 
-	// 测试桥：周期输出 UI 状态与可点元素坐标（E2E 脚本经 logcat 消费）。
+	// E2E 测试桥：周期输出 UI 状态与可点元素坐标。
 	go func() {
 		for {
 			time.Sleep(1500 * time.Millisecond)
@@ -203,14 +222,6 @@ func setupGX() error {
 			log.Printf("GXTEST state %s", ui.TestSnapshot())
 			log.Printf("GXTEST dpr %v", gxWin.Dpr())
 			log.Printf("GXTEST elems %s", gxWin.TestElements())
-		}
-	}()
-
-	// gxapp.Run → win.Run：androidWindow.Run 阻塞等待生命周期退出，
-	// 事件循环已由 app.Main 驱动，放独立 goroutine 即可。
-	go func() {
-		if rerr := gxApp2.Run(); rerr != nil {
-			log.Printf("app.Run: %v", rerr)
 		}
 	}()
 	return nil

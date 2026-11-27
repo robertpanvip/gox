@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# shim：Windows runner 上 setup-python 注册的是 python.exe，部分环境没有 python3.exe。
+# 本 shim 把脚本里所有 `python3` 调用映射到真实 python；Linux 下 shims 不启用，
+# 直接用系统 python3，不受影响。
+exec python "$@"

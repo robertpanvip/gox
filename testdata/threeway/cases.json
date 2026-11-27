@@ -1,0 +1,985 @@
+{
+  "viewport": [
+    300,
+    200
+  ],
+  "_comment": "三端一致性共享用例（Web/DOM、Skia/Yoga、Rust/Taffy）。节点 kind=div|text；props 值一律字符串（与 GRX 协议透传形态一致）；name 会以 gx-name 属性附带，供 Web 端定位元素。expect 种类：rect（按 bg 色定位矩形）、text（文本存在）、text-dy（相对锚文本的 y 位移）、order（bg 绘制顺序）、hit（命中目标 bg + cursor）、style（Web 元素样式原样透传）、css（Web cssName/cssValue 转换抽查）。rect/text-dy/order/hit 仅 Skia+Rust 评估；style/css 仅 Web 评估。",
+  "cases": [
+    {
+      "name": "bg-rect-basic",
+      "scene": {
+        "kind": "div",
+        "children": [
+          {
+            "kind": "div",
+            "props": {
+              "bg": "#e10000",
+              "width": "100",
+              "height": "50"
+            }
+          }
+        ]
+      },
+      "expect": [
+        {
+          "kind": "rect",
+          "bg": "#e10000",
+          "x": 0,
+          "y": 0,
+          "w": 100,
+          "h": 50,
+          "tol": 1
+        }
+      ]
+    },
+    {
+      "name": "margin-shorthand",
+      "scene": {
+        "kind": "div",
+        "children": [
+          {
+            "kind": "div",
+            "props": {
+              "bg": "#e10100",
+              "width": "100",
+              "height": "50",
+              "margin": "10 20"
+            }
+          }
+        ]
+      },
+      "expect": [
+        {
+          "kind": "rect",
+          "bg": "#e10100",
+          "x": 20,
+          "y": 10,
+          "w": 100,
+          "h": 50,
+          "tol": 1
+        }
+      ]
+    },
+    {
+      "name": "margin-4value",
+      "scene": {
+        "kind": "div",
+        "children": [
+          {
+            "kind": "div",
+            "props": {
+              "bg": "#e10200",
+              "width": "100",
+              "height": "50",
+              "margin": "2 4 6 8"
+            }
+          }
+        ]
+      },
+      "expect": [
+        {
+          "kind": "rect",
+          "bg": "#e10200",
+          "x": 8,
+          "y": 2,
+          "w": 100,
+          "h": 50,
+          "tol": 1
+        }
+      ]
+    },
+    {
+      "name": "max-width-clamp",
+      "scene": {
+        "kind": "div",
+        "children": [
+          {
+            "kind": "div",
+            "props": {
+              "bg": "#e10300",
+              "width": "200",
+              "max-width": "80",
+              "height": "30"
+            }
+          }
+        ]
+      },
+      "expect": [
+        {
+          "kind": "rect",
+          "bg": "#e10300",
+          "x": 0,
+          "y": 0,
+          "w": 80,
+          "h": 30,
+          "tol": 1
+        }
+      ]
+    },
+    {
+      "name": "flex-grow-ratio",
+      "scene": {
+        "kind": "div",
+        "props": {
+          "width": "300",
+          "flex-direction": "row"
+        },
+        "children": [
+          {
+            "kind": "div",
+            "props": {
+              "bg": "#e10400",
+              "width": "100",
+              "height": "30",
+              "flex-grow": "2"
+            }
+          },
+          {
+            "kind": "div",
+            "props": {
+              "bg": "#e10401",
+              "width": "100",
+              "height": "30",
+              "flex-grow": "1"
+            }
+          }
+        ]
+      },
+      "expect": [
+        {
+          "kind": "rect",
+          "bg": "#e10400",
+          "x": 0,
+          "y": 0,
+          "w": 166.7,
+          "h": 30,
+          "tol": 1.5
+        },
+        {
+          "kind": "rect",
+          "bg": "#e10401",
+          "x": 166.7,
+          "y": 0,
+          "w": 133.3,
+          "h": 30,
+          "tol": 1.5
+        }
+      ]
+    },
+    {
+      "name": "flex-shrink-1",
+      "scene": {
+        "kind": "div",
+        "props": {
+          "width": "100",
+          "flex-direction": "row"
+        },
+        "children": [
+          {
+            "kind": "div",
+            "props": {
+              "bg": "#e10500",
+              "width": "100",
+              "height": "30",
+              "flex-shrink": "1"
+            }
+          },
+          {
+            "kind": "div",
+            "props": {
+              "bg": "#e10501",
+              "width": "100",
+              "height": "30",
+              "flex-shrink": "1"
+            }
+          }
+        ]
+      },
+      "expect": [
+        {
+          "kind": "rect",
+          "bg": "#e10500",
+          "x": 0,
+          "y": 0,
+          "w": 50,
+          "h": 30,
+          "tol": 1
+        },
+        {
+          "kind": "rect",
+          "bg": "#e10501",
+          "x": 50,
+          "y": 0,
+          "w": 50,
+          "h": 30,
+          "tol": 1
+        }
+      ]
+    },
+    {
+      "name": "flex-default-column",
+      "scene": {
+        "kind": "div",
+        "props": {
+          "width": "100",
+          "gap": "4"
+        },
+        "children": [
+          {
+            "kind": "div",
+            "props": {
+              "bg": "#e10510",
+              "width": "50",
+              "height": "20"
+            }
+          },
+          {
+            "kind": "div",
+            "props": {
+              "bg": "#e10511",
+              "width": "50",
+              "height": "20"
+            }
+          }
+        ]
+      },
+      "expect": [
+        {
+          "kind": "rect",
+          "bg": "#e10511",
+          "x": 0,
+          "y": 24,
+          "w": 50,
+          "h": 20,
+          "tol": 1
+        }
+      ]
+    },
+    {
+      "name": "flex-wrap-rows",
+      "scene": {
+        "kind": "div",
+        "props": {
+          "width": "100",
+          "flex-direction": "row",
+          "flex-wrap": "wrap",
+          "align-content": "flex-start"
+        },
+        "children": [
+          {
+            "kind": "div",
+            "props": {
+              "bg": "#e10600",
+              "width": "50",
+              "height": "20"
+            }
+          },
+          {
+            "kind": "div",
+            "props": {
+              "bg": "#e10601",
+              "width": "50",
+              "height": "20"
+            }
+          },
+          {
+            "kind": "div",
+            "props": {
+              "bg": "#e10602",
+              "width": "50",
+              "height": "20"
+            }
+          }
+        ]
+      },
+      "expect": [
+        {
+          "kind": "rect",
+          "bg": "#e10602",
+          "x": 0,
+          "y": 20,
+          "w": 50,
+          "h": 20,
+          "tol": 1
+        }
+      ]
+    },
+    {
+      "name": "align-content-end",
+      "scene": {
+        "kind": "div",
+        "props": {
+          "width": "100",
+          "height": "100",
+          "flex-wrap": "wrap",
+          "align-content": "flex-end",
+          "flex-direction": "row"
+        },
+        "children": [
+          {
+            "kind": "div",
+            "props": {
+              "bg": "#e10700",
+              "width": "50",
+              "height": "20"
+            }
+          },
+          {
+            "kind": "div",
+            "props": {
+              "bg": "#e10701",
+              "width": "50",
+              "height": "20"
+            }
+          },
+          {
+            "kind": "div",
+            "props": {
+              "bg": "#e10702",
+              "width": "50",
+              "height": "20"
+            }
+          },
+          {
+            "kind": "div",
+            "props": {
+              "bg": "#e10703",
+              "width": "50",
+              "height": "20"
+            }
+          }
+        ]
+      },
+      "expect": [
+        {
+          "kind": "rect",
+          "bg": "#e10700",
+          "x": 0,
+          "y": 60,
+          "w": 50,
+          "h": 20,
+          "tol": 1
+        },
+        {
+          "kind": "rect",
+          "bg": "#e10702",
+          "x": 0,
+          "y": 80,
+          "w": 50,
+          "h": 20,
+          "tol": 1
+        }
+      ]
+    },
+    {
+      "name": "column-gap",
+      "scene": {
+        "kind": "div",
+        "props": {
+          "width": "300",
+          "column-gap": "10",
+          "flex-direction": "row"
+        },
+        "children": [
+          {
+            "kind": "div",
+            "props": {
+              "bg": "#e10800",
+              "width": "90",
+              "height": "30"
+            }
+          },
+          {
+            "kind": "div",
+            "props": {
+              "bg": "#e10801",
+              "width": "90",
+              "height": "30"
+            }
+          },
+          {
+            "kind": "div",
+            "props": {
+              "bg": "#e10802",
+              "width": "90",
+              "height": "30"
+            }
+          }
+        ]
+      },
+      "expect": [
+        {
+          "kind": "rect",
+          "bg": "#e10801",
+          "x": 100,
+          "y": 0,
+          "w": 90,
+          "h": 30,
+          "tol": 1
+        },
+        {
+          "kind": "rect",
+          "bg": "#e10802",
+          "x": 200,
+          "y": 0,
+          "w": 90,
+          "h": 30,
+          "tol": 1
+        }
+      ]
+    },
+    {
+      "name": "row-gap",
+      "scene": {
+        "kind": "div",
+        "props": {
+          "width": "100",
+          "row-gap": "10"
+        },
+        "children": [
+          {
+            "kind": "div",
+            "props": {
+              "bg": "#e10900",
+              "width": "100",
+              "height": "30"
+            }
+          },
+          {
+            "kind": "div",
+            "props": {
+              "bg": "#e10901",
+              "width": "100",
+              "height": "30"
+            }
+          }
+        ]
+      },
+      "expect": [
+        {
+          "kind": "rect",
+          "bg": "#e10901",
+          "x": 0,
+          "y": 40,
+          "w": 100,
+          "h": 30,
+          "tol": 1
+        }
+      ]
+    },
+    {
+      "name": "padding-shorthand",
+      "scene": {
+        "kind": "div",
+        "props": {
+          "width": "100",
+          "height": "50",
+          "padding": "4 8"
+        },
+        "children": [
+          {
+            "kind": "div",
+            "props": {
+              "bg": "#e10a00",
+              "width": "10",
+              "height": "10"
+            }
+          }
+        ]
+      },
+      "expect": [
+        {
+          "kind": "rect",
+          "bg": "#e10a00",
+          "x": 8,
+          "y": 4,
+          "w": 10,
+          "h": 10,
+          "tol": 1
+        }
+      ]
+    },
+    {
+      "name": "absolute-left-top",
+      "scene": {
+        "kind": "div",
+        "props": {
+          "width": "200",
+          "height": "100"
+        },
+        "children": [
+          {
+            "kind": "div",
+            "props": {
+              "bg": "#e10b00",
+              "width": "30",
+              "height": "30",
+              "position": "absolute",
+              "left": "10",
+              "top": "20"
+            }
+          }
+        ]
+      },
+      "expect": [
+        {
+          "kind": "rect",
+          "bg": "#e10b00",
+          "x": 10,
+          "y": 20,
+          "w": 30,
+          "h": 30,
+          "tol": 1
+        }
+      ]
+    },
+    {
+      "name": "absolute-right-bottom",
+      "scene": {
+        "kind": "div",
+        "props": {
+          "width": "200",
+          "height": "100"
+        },
+        "children": [
+          {
+            "kind": "div",
+            "props": {
+              "bg": "#e10c00",
+              "width": "30",
+              "height": "30",
+              "position": "absolute",
+              "right": "10",
+              "bottom": "20"
+            }
+          }
+        ]
+      },
+      "expect": [
+        {
+          "kind": "rect",
+          "bg": "#e10c00",
+          "x": 160,
+          "y": 50,
+          "w": 30,
+          "h": 30,
+          "tol": 1
+        }
+      ]
+    },
+    {
+      "name": "z-index-order",
+      "scene": {
+        "kind": "div",
+        "children": [
+          {
+            "kind": "div",
+            "props": {
+              "bg": "#e10d00",
+              "width": "100",
+              "height": "100",
+              "position": "absolute",
+              "left": "0",
+              "top": "0",
+              "z-index": "1"
+            }
+          },
+          {
+            "kind": "div",
+            "props": {
+              "bg": "#e10d01",
+              "width": "80",
+              "height": "80",
+              "position": "absolute",
+              "left": "40",
+              "top": "40",
+              "z-index": "2"
+            }
+          },
+          {
+            "kind": "div",
+            "props": {
+              "bg": "#e10d02",
+              "width": "40",
+              "height": "40",
+              "position": "absolute",
+              "left": "10",
+              "top": "10",
+              "z-index": "-1"
+            }
+          }
+        ]
+      },
+      "expect": [
+        {
+          "kind": "order",
+          "bgs": [
+            "#e10d02",
+            "#e10d00",
+            "#e10d01"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "pointer-events-hit",
+      "scene": {
+        "kind": "div",
+        "children": [
+          {
+            "kind": "div",
+            "props": {
+              "bg": "#e10e00",
+              "width": "100",
+              "height": "100",
+              "cursor": "text"
+            }
+          },
+          {
+            "kind": "div",
+            "props": {
+              "bg": "#e10e01",
+              "width": "60",
+              "height": "60",
+              "position": "absolute",
+              "left": "20",
+              "top": "20",
+              "pointer-events": "none",
+              "cursor": "pointer"
+            }
+          }
+        ]
+      },
+      "expect": [
+        {
+          "kind": "hit",
+          "x": 50,
+          "y": 50,
+          "target": "#e10e00",
+          "cursor": "text"
+        },
+        {
+          "kind": "hit",
+          "x": 10,
+          "y": 10,
+          "target": "#e10e00",
+          "cursor": "text"
+        },
+        {
+          "kind": "rect",
+          "bg": "#e10e01",
+          "x": 20,
+          "y": 20,
+          "w": 60,
+          "h": 60,
+          "tol": 1
+        }
+      ]
+    },
+    {
+      "name": "text-align-center",
+      "scene": {
+        "kind": "div",
+        "props": {
+          "width": "200",
+          "height": "40",
+          "text-align": "center"
+        },
+        "children": [
+          {
+            "kind": "text",
+            "text": "abcd"
+          }
+        ]
+      },
+      "expect": [
+        {
+          "kind": "text-dx",
+          "text": "abcd",
+          "x": 81,
+          "tol": 2.5
+        }
+      ]
+    },
+    {
+      "name": "line-height-stack",
+      "scene": {
+        "kind": "div",
+        "props": {
+          "width": "100",
+          "line-height": "2"
+        },
+        "children": [
+          {
+            "kind": "text",
+            "text": "AAA"
+          },
+          {
+            "kind": "text",
+            "text": "BBB"
+          }
+        ]
+      },
+      "expect": [
+        {
+          "kind": "text-dy",
+          "text": "BBB",
+          "anchor": "AAA",
+          "dy": 32,
+          "tol": 1
+        }
+      ]
+    },
+    {
+      "name": "white-space-collapse",
+      "scene": {
+        "kind": "div",
+        "children": [
+          {
+            "kind": "div",
+            "name": "ws1",
+            "props": {
+              "width": "100",
+              "white-space": "normal"
+            },
+            "children": [
+              {
+                "kind": "text",
+                "text": "a   b"
+              }
+            ]
+          }
+        ]
+      },
+      "expect": [
+        {
+          "kind": "text",
+          "text": "a b"
+        },
+        {
+          "kind": "style",
+          "name": "ws1",
+          "prop": "white-space",
+          "value": "normal"
+        }
+      ]
+    },
+    {
+      "name": "white-space-pre-raw",
+      "scene": {
+        "kind": "div",
+        "props": {
+          "width": "100",
+          "white-space": "pre"
+        },
+        "children": [
+          {
+            "kind": "text",
+            "text": "a   b"
+          }
+        ]
+      },
+      "expect": [
+        {
+          "kind": "text",
+          "text": "a   b"
+        }
+      ]
+    },
+    {
+      "name": "scroll-top-offset",
+      "scene": {
+        "kind": "div",
+        "props": {
+          "width": "100",
+          "height": "50",
+          "overflow": "scroll",
+          "scroll-top": "30"
+        },
+        "children": [
+          {
+            "kind": "div",
+            "props": {
+              "bg": "#e11000",
+              "width": "50",
+              "height": "50"
+            }
+          },
+          {
+            "kind": "div",
+            "props": {
+              "bg": "#e11001",
+              "width": "50",
+              "height": "50"
+            }
+          }
+        ]
+      },
+      "expect": [
+        {
+          "kind": "rect",
+          "bg": "#e11000",
+          "x": 0,
+          "y": -30,
+          "w": 50,
+          "h": 50,
+          "tol": 1
+        },
+        {
+          "kind": "rect",
+          "bg": "#e11001",
+          "x": 0,
+          "y": 20,
+          "w": 50,
+          "h": 50,
+          "tol": 1
+        }
+      ]
+    },
+    {
+      "name": "style-passthrough",
+      "scene": {
+        "kind": "div",
+        "children": [
+          {
+            "kind": "div",
+            "props": {
+              "bg": "#e11100",
+              "width": "10",
+              "height": "10"
+            }
+          },
+          {
+            "kind": "div",
+            "name": "p1",
+            "props": {
+              "bg": "#e11101",
+              "width": "50",
+              "min-width": "80",
+              "height": "20",
+              "margin": "10 20",
+              "line-height": "1.5",
+              "z-index": "3",
+              "pointer-events": "none",
+              "white-space": "normal",
+              "row-gap": "6",
+              "column-gap": "8",
+              "flex-wrap": "wrap",
+              "align-content": "center",
+              "cursor": "pointer",
+              "text-align": "right",
+              "weight": "600"
+            }
+          }
+        ]
+      },
+      "expect": [
+        {
+          "kind": "rect",
+          "bg": "#e11101",
+          "x": 20,
+          "y": 20,
+          "w": 80,
+          "h": 20,
+          "tol": 1
+        },
+        {
+          "kind": "style",
+          "name": "p1",
+          "prop": "min-width",
+          "value": "80"
+        },
+        {
+          "kind": "style",
+          "name": "p1",
+          "prop": "margin",
+          "value": "10 20"
+        },
+        {
+          "kind": "style",
+          "name": "p1",
+          "prop": "line-height",
+          "value": "1.5"
+        },
+        {
+          "kind": "style",
+          "name": "p1",
+          "prop": "z-index",
+          "value": "3"
+        },
+        {
+          "kind": "style",
+          "name": "p1",
+          "prop": "pointer-events",
+          "value": "none"
+        },
+        {
+          "kind": "style",
+          "name": "p1",
+          "prop": "white-space",
+          "value": "normal"
+        },
+        {
+          "kind": "style",
+          "name": "p1",
+          "prop": "row-gap",
+          "value": "6"
+        },
+        {
+          "kind": "style",
+          "name": "p1",
+          "prop": "column-gap",
+          "value": "8"
+        },
+        {
+          "kind": "style",
+          "name": "p1",
+          "prop": "flex-wrap",
+          "value": "wrap"
+        },
+        {
+          "kind": "style",
+          "name": "p1",
+          "prop": "align-content",
+          "value": "center"
+        },
+        {
+          "kind": "style",
+          "name": "p1",
+          "prop": "cursor",
+          "value": "pointer"
+        },
+        {
+          "kind": "style",
+          "name": "p1",
+          "prop": "text-align",
+          "value": "right"
+        },
+        {
+          "kind": "css",
+          "prop": "min-width",
+          "value": "80",
+          "css": "80px"
+        },
+        {
+          "kind": "css",
+          "prop": "margin",
+          "value": "10 20",
+          "css": "10px 20px"
+        },
+        {
+          "kind": "css",
+          "prop": "bg",
+          "value": "#e11101",
+          "css": "#e11101"
+        },
+        {
+          "kind": "style",
+          "name": "p1",
+          "prop": "weight",
+          "value": "600"
+        }
+      ]
+    }
+  ]
+}

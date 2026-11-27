@@ -122,6 +122,83 @@ echo "  选行复制内容: $COPIED"
 assert_eq "选行复制包含完整行" "$COPIED" "    return <div>Hello, {name}!</div>"
 
 echo ""
+# ---- 场景 3：打字链路（点击定位 → 输入字符 → 剪贴板回读落点） ----
+echo "== 场景3：打字落点 =="
+DISPLAY="$DISP" xdotool mousemove 500 312 click 1 >/dev/null 2>&1
+sleep 0.3
+DISPLAY="$DISP" xdotool type --delay 40 "Q" >/dev/null 2>&1
+sleep 0.4
+L3=$(read_editor | sed -n ""10p"")
+echo "  输入后第10行: $L3"
+if [ -n "$L3" ] && echo "$L3" | grep -q Q; then
+  echo "  [PASS] 字符写入编辑器"; PASS=$((PASS+1))
+else
+  echo "  [FAIL] 点击后输入字符未出现在文档"; FAIL=$((FAIL+1))
+fi
+DISPLAY="$DISP" xdotool key ctrl+z >/dev/null 2>&1
+sleep 0.3
+
+# ---- 场景 4：滚轮滚动（先把文档撑超过可视高度，滚轮应改变可视内容） ----
+echo "== 场景4：滚动 =="
+WID=$(DISPLAY="$DISP" xdotool search --name "GoX IDE" | head -1)
+DISPLAY="$DISP" xdotool mousemove 700 400 click 1 >/dev/null 2>&1   # 聚焦编辑器
+sleep 0.3
+DISPLAY="$DISP" xdotool key --repeat 40 --delay 25 Return >/dev/null 2>&1  # 撑到 50+ 行
+sleep 0.8
+DISPLAY="$DISP" xdotool key ctrl+Home >/dev/null 2>&1               # 回顶部
+sleep 0.6
+DISPLAY="$DISP" import -window "$WID" /tmp/e2e_scroll_before.png 2>/dev/null
+DISPLAY="$DISP" xdotool mousemove 700 400 click --repeat 10 --delay 40 5 >/dev/null 2>&1  # 下滚 10 格
+sleep 0.8
+DISPLAY="$DISP" import -window "$WID" /tmp/e2e_scroll_after.png 2>/dev/null
+DIFFPIX=$(compare -metric AE /tmp/e2e_scroll_before.png /tmp/e2e_scroll_after.png null: 2>&1 | cut -d. -f1)
+echo "  滚动后变化像素: ${DIFFPIX:-NA}"
+if [ -n "$DIFFPIX" ] && [ "$DIFFPIX" -gt 30 ] 2>/dev/null; then
+  echo "  [PASS] 滚轮驱动视图滚动"; PASS=$((PASS+1))
+else
+  echo "  [FAIL] 滚轮无视图响应（变化像素 ${DIFFPIX:-0}）"; FAIL=$((FAIL+1))
+fi
+# 确定性复位：点文件树首节点重载基线示例（不依赖 undo 合并策略）
+DISPLAY="$DISP" xdotool mousemove 150 148 click 1 >/dev/null 2>&1
+sleep 0.6
+DISPLAY="$DISP" xdotool key ctrl+Home >/dev/null 2>&1
+sleep 0.3
+
+# ---- 场景 5：项目面板分隔条拖拽（按住 6px 分隔条右移，树区边界应移动） ----
+echo "== 场景5：分隔条拖拽 =="
+WID=$(DISPLAY="$DISP" xdotool search --name "GoX IDE" | head -1)
+DISPLAY="$DISP" xdotool mousemove 700 400 click 1 >/dev/null 2>&1
+sleep 0.3
+DISPLAY="$DISP" xdotool key ctrl+Home >/dev/null 2>&1
+sleep 0.4
+DISPLAY="$DISP" import -window "$WID" /tmp/e2e_split_before.png 2>/dev/null
+# 竖向分隔条真实位置 x=306..312（活动条40 + 面板266）；269 落在树行内会假绿
+DISPLAY="$DISP" xdotool mousemove 303 400 mousedown 1 >/dev/null 2>&1
+sleep 0.4
+DISPLAY="$DISP" xdotool mousemove_relative -- 70 0 >/dev/null 2>&1
+sleep 0.3
+DISPLAY="$DISP" xdotool mousemove_relative -- 70 0 >/dev/null 2>&1
+sleep 0.4
+DISPLAY="$DISP" xdotool mouseup 1 >/dev/null 2>&1
+sleep 0.8
+DISPLAY="$DISP" import -window "$WID" /tmp/e2e_split_after.png 2>/dev/null
+SDIFF=$(compare -metric AE /tmp/e2e_split_before.png /tmp/e2e_split_after.png null: 2>&1 | cut -d. -f1)
+echo "  拖拽后变化像素: ${SDIFF:-NA}"
+if [ -n "$SDIFF" ] && [ "$SDIFF" -gt 800 ] 2>/dev/null; then
+  echo "  [PASS] 分隔条拖拽改变布局"; PASS=$((PASS+1))
+else
+  echo "  [FAIL] 分隔条拖拽无布局响应（变化像素 ${SDIFF:-0}）"; FAIL=$((FAIL+1))
+fi
+# 复位：拖回原宽（同一路径反向）
+DISPLAY="$DISP" xdotool mousemove 443 400 mousedown 1 >/dev/null 2>&1
+sleep 0.3
+DISPLAY="$DISP" xdotool mousemove_relative -- -70 0 >/dev/null 2>&1
+sleep 0.2
+DISPLAY="$DISP" xdotool mousemove_relative -- -70 0 >/dev/null 2>&1
+sleep 0.3
+DISPLAY="$DISP" xdotool mouseup 1 >/dev/null 2>&1
+sleep 0.5
+
 echo "== 汇总：PASS=$PASS FAIL=$FAIL =="
 if [ "$FAIL" -gt 0 ]; then
   echo "结论：检测到 GUI 缺陷（$FAIL 项）。"

@@ -2,6 +2,7 @@ package rustbackend
 
 import (
 	"encoding/binary"
+	"strconv"
 
 	gxscene "github.com/robertpanvip/gox/runtime/scene"
 )
@@ -163,6 +164,158 @@ func serializeDelta(changes []gxscene.Change, root *gxscene.Node, width, height 
 		le.PutUint32(buf[off+16:off+20], a.key)
 		le.PutUint32(buf[off+20:off+24], a.val)
 		off += actionSize
+	}
+	copy(buf[off:], pool.buf)
+	off += len(pool.buf)
+	copy(buf[off:], blobs)
+	return buf, true
+}
+
+// ---------- GRX3 delta：NodeID uint64 直传 ----------
+//
+// magic 0x33585247，动作 48 字节：
+//
+//	o+0  kind u8 | o+8 node_id u64 | o+16 child_id u64 | o+24 before_id u64
+//	o+32 key_off u32 | o+36 blob_off u32 | o+40 val_off u32 | o+44 blob_len u32
+//
+// id 全部 u64 直传（Change.NodeID 字符串 → strconv.ParseUint 还原；空串 =
+// NoNode=0）。Insert/Replace 的内嵌子树 blob 用 GRX3 帧。任何无法还原为整数的
+// id → ok=false，调用方回退全量快照（与 GRX2 的失败语义一致）。
+
+const (
+	deltaMagicV3 = 0x33585247 // "GRX3"
+	actionSizeV3 = 48
+)
+
+// parseChangeID 把 Change 的字符串 NodeID 还原成整数身份（GRX3 直传）。
+// 空串 = NoNode = 0（合法）；非数字 → false（回退全量）。
+func parseChangeID(s string) (uint64, bool) {
+	if s == "" {
+		return 0, true
+	}
+	v, err := strconv.ParseUint(s, 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	return v, true
+}
+
+// serializeDeltaV3 把 changes 序列化成 GRX3 动作帧（id u64 直传）。
+// 返回 (bytes, ok)：ok=false 表示存在无法编码的动作（非数字 id / 子树缺失），
+// 调用方回退 GRX1 全量快照。
+func serializeDeltaV3(changes []gxscene.Change, root *gxscene.Node, width, height uint32) ([]byte, bool) {
+	if len(changes) == 0 {
+		return nil, true
+	}
+	pool := newStrPool()
+	type v3Action struct {
+		kind              byte
+		nodeID            uint64
+		childID           uint64
+		beforeID          uint64
+		keyOff, blobOff   uint32
+		valOff, blobLen   uint32
+		blob              []byte
+	}
+	var acts []v3Action
+	var blobs []byte
+
+	addBlob := func(sub *gxscene.Node) (off, length uint32, ok bool) {
+		if sub == nil {
+			return 0, 0, false
+		}
+		buf, err := serializeFrameBinV3(sub, width, height)
+		if err != nil || len(buf) == 0 {
+			return 0, 0, false
+		}
+		off = uint32(len(blobs))
+		blobs = append(blobs, buf...)
+		length = uint32(len(buf))
+		return off, length, true
+	}
+
+	for _, c := range changes {
+		nodeID, ok := parseChangeID(c.NodeID)
+		if !ok {
+			return nil, false
+		}
+		switch c.Kind {
+		case gxscene.ChangeSetAttr:
+			acts = append(acts, v3Action{
+				kind: actSetAttr, nodeID: nodeID,
+				keyOff: pool.add(c.Key), valOff: pool.add(binPropValue(c.Value)),
+			})
+		case gxscene.ChangeSetText:
+			s, _ := c.Value.(string)
+			acts = append(acts, v3Action{
+				kind: actSetText, nodeID: nodeID, valOff: pool.add(s),
+			})
+		case gxscene.ChangeSetHandler:
+			acts = append(acts, v3Action{
+				kind: actSetHandle, nodeID: nodeID, keyOff: pool.add(c.Key),
+			})
+		case gxscene.ChangeInsertBefore:
+			beforeID, ok := parseChangeID(c.BeforeID)
+			if !ok {
+				return nil, false
+			}
+			off, n, bok := addBlob(subtreeOf(c, root))
+			if !bok {
+				return nil, false
+			}
+			acts = append(acts, v3Action{
+				kind: actInsertBefore, nodeID: nodeID, beforeID: beforeID,
+				blobOff: off, blobLen: n,
+			})
+		case gxscene.ChangeReplaceChildren:
+			sub := findNodeByID(root, c.NodeID)
+			off, n, bok := addBlob(sub)
+			if !bok {
+				return nil, false
+			}
+			acts = append(acts, v3Action{
+				kind: actReplaceChildren, nodeID: nodeID,
+				blobOff: off, blobLen: n,
+			})
+		case gxscene.ChangeRemoveChild:
+			childID, ok := parseChangeID(c.ChildID)
+			if !ok {
+				return nil, false
+			}
+			acts = append(acts, v3Action{kind: actRemoveChild, nodeID: nodeID, childID: childID})
+		case gxscene.ChangeMoveChild:
+			childID, ok1 := parseChangeID(c.ChildID)
+			beforeID, ok2 := parseChangeID(c.BeforeID)
+			if !ok1 || !ok2 {
+				return nil, false
+			}
+			acts = append(acts, v3Action{
+				kind: actMoveChild, nodeID: nodeID, childID: childID, beforeID: beforeID,
+			})
+		default:
+			return nil, false
+		}
+	}
+
+	total := deltaHeader + len(acts)*actionSizeV3 + len(pool.buf) + len(blobs)
+	buf := make([]byte, total)
+	le := binary.LittleEndian
+	le.PutUint32(buf[0:4], deltaMagicV3)
+	le.PutUint32(buf[4:8], width)
+	le.PutUint32(buf[8:12], uint32(len(acts)))
+	le.PutUint32(buf[12:16], uint32(len(pool.buf)))
+
+	off := deltaHeader
+	for _, a := range acts {
+		buf[off] = a.kind
+		le.PutUint64(buf[off+8:off+16], a.nodeID)
+		le.PutUint64(buf[off+16:off+24], a.childID)
+		le.PutUint64(buf[off+24:off+32], a.beforeID)
+		le.PutUint32(buf[off+32:off+36], a.keyOff)
+		le.PutUint32(buf[off+36:off+40], a.blobOff)
+		le.PutUint32(buf[off+40:off+44], a.valOff)
+		le.PutUint32(buf[off+44:off+48], a.blobLen)
+		off += actionSizeV3
 	}
 	copy(buf[off:], pool.buf)
 	off += len(pool.buf)

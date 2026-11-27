@@ -16,8 +16,9 @@ type Buffer struct {
 	Path      string
 	Name      string
 	Dirty     bool
-	cursorLn  int // 0-based 行
-	cursorCol int // 0-based 列（rune 计）
+	Encoding  string // 磁盘文件编码（UTF-8 / GBK），保存时按此写回
+	cursorLn  int    // 0-based 行
+	cursorCol int    // 0-based 列（rune 计）
 }
 
 // New 从路径与内容建缓冲。
@@ -26,7 +27,7 @@ func New(path, content string) *Buffer {
 	if i := strings.LastIndexAny(path, "/\\"); i >= 0 {
 		name = path[i+1:]
 	}
-	return &Buffer{rope: Rope.Of(content), Path: path, Name: name}
+	return &Buffer{rope: Rope.Of(content), Path: path, Name: name, Encoding: EncUTF8}
 }
 
 // Text 返回全文。

@@ -17,9 +17,9 @@ import (
 	"os"
 	"time"
 
+	rb "github.com/robertpanvip/gox-backend-rust"
 	gxapp "github.com/robertpanvip/gox/runtime/app"
 	gxscene "github.com/robertpanvip/gox/runtime/scene"
-	rb "github.com/robertpanvip/gox-backend-rust"
 )
 
 var procMainStart = time.Now()
@@ -62,8 +62,10 @@ func buildScene() gxscene.Node {
 func main() {
 	ms := func(t time.Time) float64 { return float64(t.Sub(procMainStart).Microseconds()) / 1000.0 }
 
-	win := rb.NewWindow()
-	app, err := gxapp.OpenWith(gxapp.WindowConfig{Title: "startupbench", Width: 760, Height: 560}, win)
+	// 接入层装配：gx.use(Backend) → Use(接口值) + 逐窗 Render。
+	handle := gxapp.Use(rb.NewBackend())
+	app, err := handle.Render(func() any { return buildScene() },
+		gxapp.WindowConfig{Title: "startupbench", Width: 760, Height: 560})
 	if err != nil {
 		fmt.Println("ERR open:", err)
 		os.Exit(1)
@@ -72,6 +74,9 @@ func main() {
 	root := buildScene()
 	_ = app.Render(func() any { return &root })
 	tRender := time.Now()
+
+	// rustbackend 专属扩展（SetDispatcher 首帧探针）经 WindowOf 取回。
+	win := handle.WindowOf(app).(*rb.Window)
 
 	got := make(chan string, 1)
 	win.SetDispatcher(func(ev rb.InputEvent) {
@@ -84,7 +89,7 @@ func main() {
 	})
 
 	done := make(chan struct{})
-	go func() { _ = app.Run(); close(done) }()
+	go func() { _ = handle.Run(); close(done) }() // Host 唯一主循环
 
 	select {
 	case rustInfo := <-got:
@@ -98,6 +103,6 @@ func main() {
 		fmt.Println("ERR timeout waiting for first frame (set GX_STARTUP_PROBE=1)")
 		os.Exit(2)
 	}
-	_ = app.Close()
+	_ = handle.Close() // Handle.Close 级联：窗口 Close + 后端 Shutdown
 	_ = done
 }

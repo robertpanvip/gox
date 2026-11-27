@@ -7,22 +7,38 @@ use serde::Deserialize;
 #[derive(Debug, Clone, Deserialize)]
 pub struct CanvasOp {
     pub op: String,
-    #[serde(default)] pub x: f32,
-    #[serde(default)] pub y: f32,
-    #[serde(default)] pub w: f32,
-    #[serde(default)] pub h: f32,
-    #[serde(default)] pub cx: f32,
-    #[serde(default)] pub cy: f32,
-    #[serde(default)] pub r: f32,
-    #[serde(default)] pub x1: f32,
-    #[serde(default)] pub y1: f32,
-    #[serde(default)] pub x2: f32,
-    #[serde(default)] pub y2: f32,
-    #[serde(default)] pub radius: f32,
-    #[serde(default)] pub d: String,
-    #[serde(default)] pub fill: String,
-    #[serde(default)] pub stroke: String,
-    #[serde(default, rename = "stroke-width")] pub stroke_width: f32,
+    #[serde(default)]
+    pub x: f32,
+    #[serde(default)]
+    pub y: f32,
+    #[serde(default)]
+    pub w: f32,
+    #[serde(default)]
+    pub h: f32,
+    #[serde(default)]
+    pub cx: f32,
+    #[serde(default)]
+    pub cy: f32,
+    #[serde(default)]
+    pub r: f32,
+    #[serde(default)]
+    pub x1: f32,
+    #[serde(default)]
+    pub y1: f32,
+    #[serde(default)]
+    pub x2: f32,
+    #[serde(default)]
+    pub y2: f32,
+    #[serde(default)]
+    pub radius: f32,
+    #[serde(default)]
+    pub d: String,
+    #[serde(default)]
+    pub fill: String,
+    #[serde(default)]
+    pub stroke: String,
+    #[serde(default, rename = "stroke-width")]
+    pub stroke_width: f32,
 }
 
 /// 解析指令串；非法/空输入返回空列表（安全降级）。
@@ -48,7 +64,9 @@ fn fill_paint(s: &str) -> Option<tiny_skia::Paint<'static>> {
 
 fn stroke_paint(s: &str, width: f32) -> Option<tiny_skia::Paint<'static>> {
     let c = color(s)?;
-    if width <= 0.0 { return None; }
+    if width <= 0.0 {
+        return None;
+    }
     let mut p = tiny_skia::Paint::default();
     p.set_color(c);
     p.anti_alias = true;
@@ -72,14 +90,36 @@ fn paint_rect(pm: &mut tiny_skia::Pixmap, op: &CanvasOp, ox: f32, oy: f32) {
     if op.w <= 0.0 || op.h <= 0.0 {
         return;
     }
-    let path = round_rect(ox + op.x, oy + op.y, op.w, op.h, op.radius.min(op.w / 2.0).min(op.h / 2.0));
-    let Some(path) = path else { return; };
+    let path = round_rect(
+        ox + op.x,
+        oy + op.y,
+        op.w,
+        op.h,
+        op.radius.min(op.w / 2.0).min(op.h / 2.0),
+    );
+    let Some(path) = path else {
+        return;
+    };
     if let Some(p) = fill_paint(&op.fill) {
-        pm.fill_path(&path, &p, tiny_skia::FillRule::Winding, tiny_skia::Transform::identity(), None);
+        pm.fill_path(
+            &path,
+            &p,
+            tiny_skia::FillRule::Winding,
+            tiny_skia::Transform::identity(),
+            None,
+        );
     }
     if let Some(p) = stroke_paint(&op.stroke, op.stroke_width) {
-        pm.stroke_path(&path, &p, &tiny_skia::Stroke { width: op.stroke_width, ..Default::default() },
-            tiny_skia::Transform::identity(), None);
+        pm.stroke_path(
+            &path,
+            &p,
+            &tiny_skia::Stroke {
+                width: op.stroke_width,
+                ..Default::default()
+            },
+            tiny_skia::Transform::identity(),
+            None,
+        );
     }
 }
 
@@ -119,13 +159,29 @@ fn paint_circle(pm: &mut tiny_skia::Pixmap, op: &CanvasOp, ox: f32, oy: f32) {
     pb.cubic_to(cx - r, cy - k, cx - k, cy - r, cx, cy - r);
     pb.cubic_to(cx + k, cy - r, cx + r, cy - k, cx + r, cy);
     pb.close();
-    let Some(path) = pb.finish() else { return; };
+    let Some(path) = pb.finish() else {
+        return;
+    };
     if let Some(p) = fill_paint(&op.fill) {
-        pm.fill_path(&path, &p, tiny_skia::FillRule::Winding, tiny_skia::Transform::identity(), None);
+        pm.fill_path(
+            &path,
+            &p,
+            tiny_skia::FillRule::Winding,
+            tiny_skia::Transform::identity(),
+            None,
+        );
     }
     if let Some(p) = stroke_paint(&op.stroke, op.stroke_width) {
-        pm.stroke_path(&path, &p, &tiny_skia::Stroke { width: op.stroke_width, ..Default::default() },
-            tiny_skia::Transform::identity(), None);
+        pm.stroke_path(
+            &path,
+            &p,
+            &tiny_skia::Stroke {
+                width: op.stroke_width,
+                ..Default::default()
+            },
+            tiny_skia::Transform::identity(),
+            None,
+        );
     }
 }
 
@@ -133,8 +189,14 @@ fn paint_line(pm: &mut tiny_skia::Pixmap, op: &CanvasOp, ox: f32, oy: f32) {
     let mut pb = tiny_skia::PathBuilder::new();
     pb.move_to(ox + op.x1, oy + op.y1);
     pb.line_to(ox + op.x2, oy + op.y2);
-    let Some(path) = pb.finish() else { return; };
-    let width = if op.stroke_width > 0.0 { op.stroke_width } else { 1.0 };
+    let Some(path) = pb.finish() else {
+        return;
+    };
+    let width = if op.stroke_width > 0.0 {
+        op.stroke_width
+    } else {
+        1.0
+    };
     let mut p = tiny_skia::Paint::default();
     if let Some(c) = color(&op.stroke) {
         p.set_color(c);
@@ -142,18 +204,42 @@ fn paint_line(pm: &mut tiny_skia::Pixmap, op: &CanvasOp, ox: f32, oy: f32) {
         return;
     }
     p.anti_alias = true;
-    pm.stroke_path(&path, &p, &tiny_skia::Stroke { width, ..Default::default() },
-        tiny_skia::Transform::identity(), None);
+    pm.stroke_path(
+        &path,
+        &p,
+        &tiny_skia::Stroke {
+            width,
+            ..Default::default()
+        },
+        tiny_skia::Transform::identity(),
+        None,
+    );
 }
 
 fn paint_path(pm: &mut tiny_skia::Pixmap, op: &CanvasOp, ox: f32, oy: f32) {
-    let Some(path) = parse_svg_path(&op.d, ox, oy) else { return; };
+    let Some(path) = parse_svg_path(&op.d, ox, oy) else {
+        return;
+    };
     if let Some(p) = fill_paint(&op.fill) {
-        pm.fill_path(&path, &p, tiny_skia::FillRule::Winding, tiny_skia::Transform::identity(), None);
+        pm.fill_path(
+            &path,
+            &p,
+            tiny_skia::FillRule::Winding,
+            tiny_skia::Transform::identity(),
+            None,
+        );
     }
     if let Some(p) = stroke_paint(&op.stroke, op.stroke_width) {
-        pm.stroke_path(&path, &p, &tiny_skia::Stroke { width: op.stroke_width, ..Default::default() },
-            tiny_skia::Transform::identity(), None);
+        pm.stroke_path(
+            &path,
+            &p,
+            &tiny_skia::Stroke {
+                width: op.stroke_width,
+                ..Default::default()
+            },
+            tiny_skia::Transform::identity(),
+            None,
+        );
     }
 }
 
@@ -164,7 +250,10 @@ fn parse_svg_path(d: &str, ox: f32, oy: f32) -> Option<tiny_skia::Path> {
     // 让命令与紧随的数字正确分离（SVG path 允许 M0 这种紧凑写法）。
     let mut spaced = String::with_capacity(d.len() * 2);
     for c in d.chars() {
-        if matches!(c, 'M'|'L'|'H'|'V'|'C'|'Q'|'Z'|'m'|'l'|'h'|'v'|'c'|'q'|'z') {
+        if matches!(
+            c,
+            'M' | 'L' | 'H' | 'V' | 'C' | 'Q' | 'Z' | 'm' | 'l' | 'h' | 'v' | 'c' | 'q' | 'z'
+        ) {
             spaced.push(' ');
             spaced.push(c);
             spaced.push(' ');
@@ -172,7 +261,10 @@ fn parse_svg_path(d: &str, ox: f32, oy: f32) -> Option<tiny_skia::Path> {
         }
         spaced.push(c);
     }
-    let toks: Vec<&str> = spaced.split(|c: char| c == ',' || c.is_whitespace()).filter(|s| !s.is_empty()).collect();
+    let toks: Vec<&str> = spaced
+        .split(|c: char| c == ',' || c.is_whitespace())
+        .filter(|s| !s.is_empty())
+        .collect();
     let mut i = 0;
     let num = |s: &str| -> f32 { s.parse().unwrap_or(0.0) };
     let (mut cx, mut cy) = (0.0f32, 0.0f32);
@@ -181,30 +273,66 @@ fn parse_svg_path(d: &str, ox: f32, oy: f32) -> Option<tiny_skia::Path> {
         i += 1;
         match cmd {
             b'M' | b'L' => {
-                if i + 1 >= toks.len() { return None; }
-                let (x, y) = (ox + num(toks[i]), oy + num(toks[i + 1])); i += 2;
-                if cmd == b'M' { pb.move_to(x, y); } else { pb.line_to(x, y); }
-                cx = x; cy = y;
+                if i + 1 >= toks.len() {
+                    return None;
+                }
+                let (x, y) = (ox + num(toks[i]), oy + num(toks[i + 1]));
+                i += 2;
+                if cmd == b'M' {
+                    pb.move_to(x, y);
+                } else {
+                    pb.line_to(x, y);
+                }
+                cx = x;
+                cy = y;
             }
             b'H' => {
-                if i >= toks.len() { return None; }
-                cx = ox + num(toks[i]); i += 1;
+                if i >= toks.len() {
+                    return None;
+                }
+                cx = ox + num(toks[i]);
+                i += 1;
                 pb.line_to(cx, cy);
             }
             b'V' => {
-                if i >= toks.len() { return None; }
-                cy = oy + num(toks[i]); i += 1;
+                if i >= toks.len() {
+                    return None;
+                }
+                cy = oy + num(toks[i]);
+                i += 1;
                 pb.line_to(cx, cy);
             }
             b'Q' => {
-                if i + 3 >= toks.len() { return None; }
-                let (x1, y1, x2, y2) = (ox + num(toks[i]), oy + num(toks[i+1]), ox + num(toks[i+2]), oy + num(toks[i+3])); i += 4;
-                pb.quad_to(x1, y1, x2, y2); cx = x2; cy = y2;
+                if i + 3 >= toks.len() {
+                    return None;
+                }
+                let (x1, y1, x2, y2) = (
+                    ox + num(toks[i]),
+                    oy + num(toks[i + 1]),
+                    ox + num(toks[i + 2]),
+                    oy + num(toks[i + 3]),
+                );
+                i += 4;
+                pb.quad_to(x1, y1, x2, y2);
+                cx = x2;
+                cy = y2;
             }
             b'C' => {
-                if i + 5 >= toks.len() { return None; }
-                let (x1, y1, x2, y2, x3, y3) = (ox+num(toks[i]), oy+num(toks[i+1]), ox+num(toks[i+2]), oy+num(toks[i+3]), ox+num(toks[i+4]), oy+num(toks[i+5])); i += 6;
-                pb.cubic_to(x1, y1, x2, y2, x3, y3); cx = x3; cy = y3;
+                if i + 5 >= toks.len() {
+                    return None;
+                }
+                let (x1, y1, x2, y2, x3, y3) = (
+                    ox + num(toks[i]),
+                    oy + num(toks[i + 1]),
+                    ox + num(toks[i + 2]),
+                    oy + num(toks[i + 3]),
+                    ox + num(toks[i + 4]),
+                    oy + num(toks[i + 5]),
+                );
+                i += 6;
+                pb.cubic_to(x1, y1, x2, y2, x3, y3);
+                cx = x3;
+                cy = y3;
             }
             b'Z' | b'z' => pb.close(),
             _ => return None,
@@ -253,20 +381,28 @@ mod tests {
         assert!(path.is_some(), "图标矢量 path 应解析有效");
 
         let mut pm = tiny_skia::Pixmap::new(24, 24).unwrap();
-        let ops = decode(&format!(r##"[{{"op":"path","d":"{}","fill":"#ff0000"}}]"##, d));
+        let ops = decode(&format!(
+            r##"[{{"op":"path","d":"{}","fill":"#ff0000"}}]"##,
+            d
+        ));
         paint(&mut pm, &ops, 0.0, 0.0);
-        assert!(pm.data().iter().any(|&x| x != 0), "图标 path 应画出非透明像素");
+        assert!(
+            pm.data().iter().any(|&x| x != 0),
+            "图标 path 应画出非透明像素"
+        );
     }
 
     #[test]
     fn paint_all_ops_no_panic() {
         let mut pm = tiny_skia::Pixmap::new(100, 100).unwrap();
-        let ops = decode(r##"[
+        let ops = decode(
+            r##"[
             {"op":"rect","x":1,"y":1,"w":20,"h":10,"fill":"#f00","stroke":"#000","stroke-width":1,"radius":3},
             {"op":"circle","cx":50,"cy":50,"r":20,"fill":"blue"},
             {"op":"line","x1":0,"y1":0,"x2":99,"y2":99,"stroke":"#000","stroke-width":2},
             {"op":"path","d":"M0 0 L20 20 L40 0 Z","fill":"green"}
-        ]"##);
+        ]"##,
+        );
         paint(&mut pm, &ops, 0.0, 0.0);
     }
 }

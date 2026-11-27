@@ -153,7 +153,7 @@ var DarkTheme = Theme{
 // LightTheme 是 Apple macOS HIG 浅色主题（系统色精确取值）。
 var LightTheme = Theme{
 	Name: "light",
-	Bg:   "#ffffff", GroupedBg: "#f2f2f7", Panel: "#ffffff", PanelAlt: "#f2f2f7",
+	Bg:   "#eeede9", GroupedBg: "#e3e2de", Panel: "#eeede9", PanelAlt: "#e3e2de",
 	Skeleton: "#d8d8dd",
 	InputBg:  "#ffffff", Border: "#c6c6c8", Border2: "#d1d1d6", Hairline: LightHairline,
 	Material: "#ffffffeb", Scrim: "#0000004d",

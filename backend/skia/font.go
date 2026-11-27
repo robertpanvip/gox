@@ -121,6 +121,15 @@ func covers(f sk.Font, r rune) bool {
 	return !f.IsNil() && f.UnicharToGlyph(r) != 0
 }
 
+// HasCJKFont 报告当前系统是否装有覆盖 CJK 字形的字体。CI runner 等精简
+// Linux 环境往往没装中文字体（fonts-noto-cjk 等），此时 resolveFont 对
+// 中文字符只能回退到主字体（tofu），依赖 CJK 字形与字宽的测试用例应据此
+// 跳过而不是误报回归——那测的是环境，不是代码。
+func HasCJKFont() bool {
+	f := resolveFont('中', 16, false, "")
+	return covers(f, '中')
+}
+
 // resolveFont 为字符 r 挑选可渲染的字体：主字体优先，缺字则按 cjkFamilies
 // 顺序找第一个覆盖 r 的候选；全部缺失时返回主字体（届时显示为 tofu，属环境缺字体）。
 // family 是节点 font-family 栈的首个可用族名；空串表示默认 sans-serif。

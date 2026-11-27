@@ -173,6 +173,19 @@ func isFlexLayoutKey(key string) bool {
 	return false
 }
 
+// flexDefaultColumn 报告设置 flex 意图属性 key 时，是否需要给容器补 GX 三端
+// 约定的默认主轴 flex-direction:column。Skia（flexDirection 零值）与 Rust
+// （Taffy unwrap_or("column")）的 flex 容器默认都是列向；浏览器初始值是 row，
+// 不补声明的话，带 flex 意图属性但未显式声明方向的容器在 Web 上会横排，
+// 与两端布局不一致。existing 是元素当前已生效的 flex-direction 值（空=未声明），
+// 已显式声明（含 row）时不覆盖。native 单测覆盖本函数，js 驱动调用它。
+func flexDefaultColumn(key, existing string) bool {
+	if strings.EqualFold(key, "flex-direction") {
+		return false
+	}
+	return strings.TrimSpace(existing) == ""
+}
+
 // expandBoxShadow 把单层 GX box-shadow token 展开成复刻 Skia/Rust 6 层矩形
 // 近似的 CSS 多层阴影，使 Web 端与桌面/Rust 端的阴影视觉一致。
 //

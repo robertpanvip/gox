@@ -644,3 +644,8 @@ pub func EditorText() string                 { return editorState.Text() }
 pub func EditorStatus() string               { return editorState.Status() }
 pub func PickColumn(idx int, x float64) int  { return editorState.PickColumn(idx, x) }
 pub func EditorLineText(idx int, slot int) string { return editorState.LineText(idx, slot) }
+
+// ---- GUI E2E 只读观测钩子（仅测试快照使用，正常用户零开销）----
+pub func EditorScrollTop() float64  { return editorState.ScrollTop() }
+pub func EditorHasSelection() bool  { return editorState.HasSelection() }
+pub func ConsoleTextSnapshot() string { return consoleState.Text() }
