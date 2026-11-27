@@ -17,6 +17,7 @@ extern int         gx_window_pump(void* handle);
 extern void        gx_window_close(void* handle);
 extern void        gx_window_destroy(void* handle);
 extern int         gx_window_set_vsync(void* handle, int mode);
+extern int         gx_window_set_mouse_passthrough(void* handle, int enabled);
 extern int         gx_window_get_vsync(void* handle);
 extern const char* gx_window_version();
 extern char* gx_window_debug_info();
@@ -153,6 +154,16 @@ func cWindowPoll(handle unsafe.Pointer) int {
 // 返回 0=成功；1=surface 不支持（保持原值）；2=参数/句柄无效。
 func cWindowSetVSync(handle unsafe.Pointer, mode int) int {
 	return int(C.gx_window_set_vsync(handle, C.int(mode)))
+}
+
+// cWindowSetMousePassthrough 整窗级鼠标穿透开关（MousePassthrough）。
+// 返回 0=成功；1=空句柄；2=平台不支持/系统库缺失（Rust 侧已记日志）。
+func cWindowSetMousePassthrough(handle unsafe.Pointer, enabled bool) int {
+	e := 0
+	if enabled {
+		e = 1
+	}
+	return int(C.gx_window_set_mouse_passthrough(handle, C.int(e)))
 }
 
 // cWindowGetVSync 读取当前请求的 vsync 模式码（0/1/2；句柄无效 -1）。

@@ -25,6 +25,7 @@ mod canvas;
 mod image;
 mod layout;
 mod paint;
+mod passthrough;
 mod protocol;
 mod render;
 mod scene;
@@ -263,6 +264,11 @@ struct Backend {
     /// VSync/present 模式请求（0=Fifo 1=Mailbox 2=Immediate；P4.5 VSyncControl）。
     /// gx_window_set_vsync 写入：渲染器已创建则立即 reconfigure，否则首窗 resumed 应用。
     vsync: Arc<std::sync::atomic::AtomicU8>,
+    /// 鼠标穿透请求（P4 遗留补齐 MousePassthrough）：gx_window_set_mouse_passthrough
+    /// 写入；窗口未创建时先缓存，resumed 创建窗口后立即应用，pump Exit 清窗口槽。
+    passthrough: Arc<std::sync::atomic::AtomicBool>,
+    /// winit 窗口共享槽：resumed 创建后填充；pump Exit 清空（与 renderer 槽同契约）。
+    window: Arc<Mutex<Option<Arc<Window>>>>,
     /// 事件循环实例（gx_window_new 创建；pump 返回 Exit 后丢弃）。
     el: Mutex<Option<EventLoop<GxEvent>>>,
     /// 跨 pump 持久的 winit 应用状态（窗口句柄 / 修饰键 / 首帧探针等）。
@@ -304,6 +310,8 @@ pub extern "C" fn gx_window_new_ex(
     let backend = Backend {
         renderer: Arc::new(Mutex::new(None)),
         vsync: Arc::new(std::sync::atomic::AtomicU8::new(0)),
+        passthrough: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        window: Arc::new(Mutex::new(None)),
         queue: Arc::new(Mutex::new(FrameQueue::new())),
         cb: Arc::new(Mutex::new(None)),
         cb_ctx: Arc::new(Mutex::new(std::ptr::null_mut())),
@@ -420,6 +428,8 @@ fn winit_app_for(backend: &Backend) -> WinitApp {
         modifiers: winit::keyboard::ModifiersState::empty(),
         hover_cursor: String::new(),
         vsync: backend.vsync.clone(),
+        passthrough: backend.passthrough.clone(),
+        win_slot: backend.window.clone(),
     }
 }
 
@@ -454,6 +464,8 @@ pub extern "C" fn gx_window_pump(handle: *mut c_void) -> c_int {
                 // pump 退出即清空渲染器槽：Renderer 的 surface/设备与事件循环同
                 // 生命周期，事件循环外不得再经 debug/时钟 ABI 访问（评审 P0 契约）。
                 *app.state.lock().unwrap() = None;
+                // 窗口槽同契约清空：穿透等 C ABI 在泵外不得再访问 winit 窗口。
+                *app.win_slot.lock().unwrap() = None;
                 0
             }
         }
@@ -514,6 +526,10 @@ struct WinitApp {
     hover_cursor: String,
     /// VSync 请求模式（P4.5 VSyncControl）：resumed 创建渲染器后据此应用。
     vsync: Arc<std::sync::atomic::AtomicU8>,
+    /// 鼠标穿透请求（MousePassthrough）：resumed 创建窗口后应用；Exit 清窗口槽。
+    passthrough: Arc<std::sync::atomic::AtomicBool>,
+    /// Backend 的窗口共享槽（Arc 克隆）：resumed 填充、Exit 清空，供 C ABI 访问。
+    win_slot: Arc<Mutex<Option<Arc<Window>>>>,
 }
 
 impl winit::application::ApplicationHandler<GxEvent> for WinitApp {
@@ -561,6 +577,15 @@ impl winit::application::ApplicationHandler<GxEvent> for WinitApp {
                 }
             }
         }
+        // MousePassthrough：创建期请求在这应用（gx_window_set_mouse_passthrough
+        // 先于首窗 pump 调用的场景）。失败只记日志，不阻断窗口创建。
+        if self.passthrough.load(std::sync::atomic::Ordering::Relaxed) {
+            if let Err(e) = crate::passthrough::set_mouse_passthrough(&window, true) {
+                eprintln!("[rust-backend] mouse passthrough: {e}");
+            }
+        }
+        // 窗口槽：debug/穿透等 C ABI 在泵运行期间经它访问窗口句柄。
+        *self.win_slot.lock().unwrap() = Some(window.clone());
         // 首帧主动请求一次重绘：绘制首帧/应用 run 前已提交的帧。之后靠事件驱动。
         self.state
             .lock()
@@ -1057,6 +1082,32 @@ pub extern "C" fn gx_window_get_vsync(handle: *mut c_void) -> c_int {
     }
     let backend = unsafe { &*(handle as *const Backend) };
     backend.vsync.load(std::sync::atomic::Ordering::Relaxed) as c_int
+}
+
+/// 鼠标穿透开关（MousePassthrough，整窗级）。enabled!=0 = 整窗穿透（点击落到
+/// 下层窗口）；0 = 恢复正常接收。
+///
+/// 返回 0=成功；1=空句柄；2=平台不支持/系统库缺失（错误经 eprintln 记录）。
+/// 窗口未创建（首 pump 前）：只缓存请求，resumed 创建窗口后自动应用——这与
+/// gx_window_set_vsync 的创建期语义一致，Go 侧可在 openEntry 装配段直接调用。
+#[no_mangle]
+pub extern "C" fn gx_window_set_mouse_passthrough(handle: *mut c_void, enabled: c_int) -> c_int {
+    if handle.is_null() {
+        return 1;
+    }
+    let backend = unsafe { &*(handle as *const Backend) };
+    backend
+        .passthrough
+        .store(enabled != 0, std::sync::atomic::Ordering::Relaxed);
+    // 已有窗口：立即应用；没有：等 resumed 应用。
+    let win = backend.window.lock().unwrap().clone();
+    if let Some(w) = win {
+        if let Err(e) = crate::passthrough::set_mouse_passthrough(&w, enabled != 0) {
+            eprintln!("[rust-backend] mouse passthrough: {e}");
+            return 2;
+        }
+    }
+    0
 }
 
 /// E2E 调试导出：{"win_w":..,"win_h":..,"boxes":[{label,testid,kind,x,y,w,h},...]}。

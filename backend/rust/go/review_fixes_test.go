@@ -107,3 +107,21 @@ func TestVSyncGuards(t *testing.T) {
 		t.Fatal("未开窗 VSync 应回退 Fifo")
 	}
 }
+
+// ---- MousePassthrough（P4 遗留补齐）——纯逻辑验证，不触发 cgo ----
+
+// 未开窗/已关窗：SetMousePassthrough 拒绝（不静默），语义与 SetVSync 一致。
+func TestMousePassthroughGuards(t *testing.T) {
+	w := NewWindow()
+	if err := w.SetMousePassthrough(true); err == nil {
+		t.Fatal("未开窗时应拒绝 SetMousePassthrough（先经 Host.Render/OpenWindow）")
+	}
+}
+
+// Capabilities 上报 MousePassthrough=true（能力位转正，Host 探测可见）。
+func TestMousePassthroughCapability(t *testing.T) {
+	b := Backend{}
+	if !b.Capabilities().MousePassthrough {
+		t.Fatal("rustbackend 应上报 MousePassthrough=true")
+	}
+}

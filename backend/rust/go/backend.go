@@ -73,9 +73,9 @@ func (Backend) Describe() gxapp.BackendInfo {
 // MousePassthrough=false：XShape 命中形状未接线。
 func (Backend) Capabilities() gxapp.Capabilities {
 	return gxapp.Capabilities{
-		Incremental:  true,
-		Transparent:  true,
-		VSyncControl: true,
+		Incremental:      true,
+		Transparent:      true,
+		MousePassthrough: true,
 	}
 }
 

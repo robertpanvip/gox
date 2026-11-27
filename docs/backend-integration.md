@@ -546,6 +546,16 @@ canvas-ops。
    `get_capabilities().present_modes` 作为判据；`gx_window_get_vsync` 读回模式码。
    Go 侧 `Capabilities().VSyncControl=true`，`rb.Window.SetVSync/VSync`。实测工具：
    `examples/fpsbench`（RAF 连帧 + 帧时间直方图 + V 键切模式 + GX_AUTOCLOSE_MS 关窗汇总）。
+6. **MousePassthrough（P4 遗留补齐）**：`gx_window_set_mouse_passthrough(handle, enabled)`
+   整窗级穿透开关——true 时窗口不接收任何鼠标事件，点击落到下层窗口（overlay 场景）。
+   X11 经 dlopen libXext 调 `XShapeCombineRectangles(ShapeInput)`（空输入形状=穿透，
+   不引入链接期依赖；winit XConnection 已调 XInitThreads，跨线程安全），Windows 走
+   `WS_EX_TRANSPARENT|WS_EX_LAYERED` 扩展样式，macOS 走 `setIgnoresMouseEvents`；
+   Wayland 无等价 API 返回 rc=2（Go 侧透传错误，不静默）。窗口未创建时只缓存请求，
+   首窗 resumed 自动应用（与 gx_window_set_vsync 创建期语义一致）。Go 侧
+   `Capabilities().MousePassthrough=true`，`rb.Window.SetMousePassthrough(bool)`。
+   区域级精确穿透（透明区穿透、内容区可点——旧 skia glwindow 按 DrawLog 逐帧重设
+   XShape 的语义）待渲染端内容框日志补齐。
 
 此外：**Wire 版本协商**（P2）——`Open` 时解析 `gx_window_version()` 的 major，与
 `expectedProtocolMajor` 不一致直接拒绝启动，防止 core 更新协议而用户仍用旧后端；

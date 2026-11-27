@@ -634,6 +634,29 @@ func (w *Window) SetVSync(mode VSyncMode) error {
 	return nil
 }
 
+// SetMousePassthrough 整窗级鼠标穿透开关（MousePassthrough）：enabled=true 时
+// 本窗口不再接收任何鼠标事件，点击直接落到下层窗口（overlay 场景）。
+//
+// 窗口未打开时拒绝（不静默）——与 SetVSync 同语义：句柄未就绪先经
+// Host.Render/OpenWindow 开窗再设置。X11 经 XShape ShapeInput 实现，
+// Wayland 无等价 API 返回错误；Windows/macOS 走扩展样式 / ignoresMouseEvents。
+func (w *Window) SetMousePassthrough(enabled bool) error {
+	w.mu.Lock()
+	handle := w.handle
+	closed := w.closed
+	w.mu.Unlock()
+	if closed {
+		return fmt.Errorf("rustbackend: 窗口已关闭")
+	}
+	if handle == nil {
+		return fmt.Errorf("rustbackend: 窗口未打开（先经 Host.Render/OpenWindow）")
+	}
+	if rc := cWindowSetMousePassthrough(handle, enabled); rc != 0 {
+		return fmt.Errorf("rustbackend: SetMousePassthrough(%v) 失败（rc=%d，平台不支持或系统库缺失）", enabled, rc)
+	}
+	return nil
+}
+
 // VSync 返回当前请求的 vsync 模式（诊断用）。
 func (w *Window) VSync() VSyncMode {
 	w.mu.Lock()

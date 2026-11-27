@@ -42,8 +42,11 @@ func main() {
 		cfg.Decorated = gxapp.NoDecorations()
 		cfg.Transparent = true
 	}
-	// 鼠标穿透（原 GX_PASSTHROUGH=1）：旧 glwindow 经 XShape 实现，rustbackend
-	// 的 MousePassthrough 能力尚未接线（Capabilities 上报 false），接入后恢复。
+	// 鼠标穿透（GX_PASSTHROUGH=1）：V2 MousePassthrough 能力已接线——整窗级
+	// 开关（X11 经 XShape ShapeInput，点击落到下层窗口）。注意与旧 glwindow 的
+	// 区域级语义差异：旧实现按本帧 DrawLog 逐帧重设输入形状（透明区穿透、内容区
+	// 可点）；V2 先提供整窗级，区域级待渲染端内容框日志补齐（文档遗留项）。
+	passthrough := os.Getenv("GX_PASSTHROUGH") == "1"
 	handle := gxapp.Use(rb.NewBackend()) // V2 接入层：gx.use(Backend) 接口值注入
 	app, err := handle.Render(func() any {
 		return buildTree()
@@ -54,6 +57,12 @@ func main() {
 	defer handle.Close() // Handle.Close 级联：窗口 Close + 后端 Shutdown
 
 	win := handle.WindowOf(app).(*rb.Window)
+	if passthrough {
+		if err := win.SetMousePassthrough(true); err != nil {
+			panic(err)
+		}
+	}
+	win.BindApp(app) // GRX3 增量流
 	win.BindApp(app) // GRX3 增量流
 	win.SetDispatcher(func(ev rb.InputEvent) {
 		switch ev.Kind {
@@ -78,6 +87,17 @@ func main() {
 			scrollTop(float64(i * 40))
 		}
 	}()
+
+	// 脚本化验收：GX_AUTOCLOSE_MS=N 毫秒后自动关窗退出（截图/CI 冒烟）。
+	if v := os.Getenv("GX_AUTOCLOSE_MS"); v != "" {
+		var n int
+		if _, err := fmt.Sscanf(v, "%d", &n); err == nil && n > 0 {
+			go func() {
+				time.Sleep(time.Duration(n) * time.Millisecond)
+				win.RequestClose()
+			}()
+		}
+	}
 
 	handle.Run() // Host 唯一主循环（P4 目标态）
 }
