@@ -12,6 +12,7 @@ package main
 import (
 	"fmt"
 	"log"
+	"time"
 
 	gxapp "github.com/robertpanvip/gox/runtime/app"
 	"github.com/robertpanvip/gox-playground/ui"
@@ -75,6 +76,15 @@ func main() {
 				lastSize = e
 				if gxWin != nil {
 					gxWin.resize(e)
+					// 视口建立/变化 → 响应式布局重排（四端统一断点）。
+					// size 事件频率低（启动与旋转），直接重建整树。
+					if gxApp != nil {
+						lw, lh := gxWin.logicalSize()
+						ui.SetViewport(lw, lh)
+						if rerr := gxApp.Render(func() any { return ui.Playground() }); rerr != nil {
+							log.Printf("viewport 重渲染失败: %v", rerr)
+						}
+					}
 				}
 			case paint.Event:
 				if !setUp && glReady {
@@ -134,6 +144,11 @@ func setupGX() error {
 		return fmt.Errorf("OpenWith: %w", err)
 	}
 
+	// 触屏端：启用虚拟键盘（紧凑布局底部），并按当前视口切响应式布局。
+	// 必须在初始 Render 之前——首帧就要按真实视口渲染紧凑布局。
+	ui.SetKeyboardEnabled(true)
+	ui.SetViewport(lw, lh)
+
 	// P2 宿主接线：UIExecutor 注入共享 Loop（paint 循环 drain）。
 	gxApp.SetUIExecutor(win)
 
@@ -177,6 +192,19 @@ func setupGX() error {
 	if rerr := gxApp2.Render(func() any { return ui.Playground() }); rerr != nil {
 		return fmt.Errorf("初始渲染: %w", rerr)
 	}
+
+	// 测试桥：周期输出 UI 状态与可点元素坐标（E2E 脚本经 logcat 消费）。
+	go func() {
+		for {
+			time.Sleep(1500 * time.Millisecond)
+			if gxApp == nil || gxWin == nil {
+				continue
+			}
+			log.Printf("GXTEST state %s", ui.TestSnapshot())
+			log.Printf("GXTEST dpr %v", gxWin.Dpr())
+			log.Printf("GXTEST elems %s", gxWin.TestElements())
+		}
+	}()
 
 	// gxapp.Run → win.Run：androidWindow.Run 阻塞等待生命周期退出，
 	// 事件循环已由 app.Main 驱动，放独立 goroutine 即可。

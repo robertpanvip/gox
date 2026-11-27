@@ -7,6 +7,7 @@ package ui
 
 import (
     "strconv"
+    "strings"
     demos "github.com/robertpanvip/gox-playground/ui/demos"
     Signal "github.com/robertpanvip/gox/runtime/signal"
     gxscene "github.com/robertpanvip/gox/runtime/scene"
@@ -106,6 +107,81 @@ func RunInfoColor() string {
 func hasRunResult() bool { return runInstance != nil }
 func currentRunErr() string { return runErr }
 func currentRunStamp() int { return runStamp }
+
+// ---- 视口（响应式布局，四端统一）----
+// 各端装配层在窗口尺寸建立/变化时注入逻辑视口（CSS px）：desktop=GLFW 窗口
+// 尺寸，web=浏览器视口，Android=物理像素/DPR。Playground 按断点自适应：
+// <720 切竖屏紧凑布局（含虚拟键盘），<1024 收缩预览列，其余保持桌面三列。
+// 注入后装配层需调用 gxApp.Render 重建整树（与主题切换同机制）。
+var vpW = 1360
+var vpH = 760
+
+pub func SetViewport(w int, h int) {
+    if w > 0 && h > 0 {
+        vpW = w
+        vpH = h
+        // 紧凑布局（<720）联动编辑器视口高度：扣除固定预算，下限 120。
+        if w < 720 {
+            eh := h - 600
+            if eh < 120 { eh = 120 }
+            editorState.SetViewportHeight(eh)
+        }
+    }
+}
+pub func ViewportW() int { return vpW }
+pub func ViewportH() int { return vpH }
+
+// ---- 虚拟键盘（触屏端）----
+// Android 等无物理键盘的平台由装配层置 true，紧凑布局底部渲染 KeyboardBar。
+// 按键点击走与桌面键盘回调同一组 Editor* 命令——编辑逻辑零平台差异。
+var KeyboardEnabled = false
+pub func SetKeyboardEnabled(v bool) { KeyboardEnabled = v }
+
+pub sig vkShift = false
+pub sig vkSymbol = false
+
+func toggleVKShift() {
+    Signal.batch(func() {
+        vkShift = !vkShift
+    })
+}
+func setVKSymbol(v bool) {
+    if vkSymbol != v {
+        Signal.batch(func() {
+            vkSymbol = v
+            vkShift = false
+        })
+    }
+}
+
+// vkInsert 把按键字符插入编辑器：Shift 决定大小写，插入后自动复位 Shift。
+func vkInsert(ch string) {
+    if vkShift && len(ch) == 1 {
+        ch = strings.ToUpper(ch)
+    }
+    EditorInsert(ch)
+    if vkShift {
+        Signal.batch(func() {
+            vkShift = false
+        })
+    }
+}
+
+// ---- 测试桥 ----
+// TestSnapshot 供 E2E 装配层读取的单行 JSON 状态快照（示例/光标/滚动/运行态）。
+// 文本截断到 200 个 rune 并走 strconv.Quote（保证合法 JSON 转义）。
+func TestSnapshot() string {
+    rs := []rune(EditorText())
+    if len(rs) > 200 { rs = rs[:200] }
+    return "{\"sample\":" + strconv.Itoa(sampleIndex) +
+        ",\"count\":" + strconv.Itoa(len(samples())) +
+        ",\"line\":" + strconv.Itoa(EditorLine()) +
+        ",\"col\":" + strconv.Itoa(EditorCol()) +
+        ",\"scroll\":" + strconv.Itoa(int(editorState.ScrollTop())) +
+        ",\"runStamp\":" + strconv.Itoa(runStamp) +
+        ",\"runErr\":" + strconv.Quote(runErr) +
+        ",\"text\":" + strconv.Quote(string(rs)) + "}"
+}
 
 // ---- 示例库：元数据 + 源码文本（由 gen_samples.py 生成） ----
 
@@ -227,6 +303,8 @@ func sampleRow(i int) *gxscene.Instance {
             cursor: "pointer",
             transition: "background .15s",
         }}
+        class="gx-sample-row"
+        data-index={strconv.Itoa(i)}
         onClick={() => loadSample(i)}
     >
         {widgets.Text(gxscene.Props{"value": s.name, "size": widgets.FontBody, "weight": "bold", "tone": sampleRowFg(i)})}
@@ -252,20 +330,38 @@ func toolbarButton(label string, icon string, variant string, fn func()) *gxscen
     })
 }
 
+// toolButton 带定位标记的工具按钮（class/data-action 供 E2E 测试桥导出坐标）。
+func toolButton(label string, icon string, variant string, action string, fn func()) *gxscene.Instance {
+    return <div class="gx-tool-btn" data-action={action}>
+        {toolbarButton(label, icon, variant, fn)}
+    </div>
+}
+
 func toolbar() *gxscene.Instance {
     return <div style={{ flexDirection: "row", gap: 8, alignItems: "center" }}>
-        {toolbarButton("上一个", "chevron-left", "secondary", prevSample)}
-        {toolbarButton("下一个", "chevron-right", "secondary", nextSample)}
-        {toolbarButton("运行", "play", "primary", TriggerRun)}
-        {toolbarButton("主题", "moon", "secondary", ToggleTheme)}
+        {toolButton("上一个", "chevron-left", "secondary", "prev", prevSample)}
+        {toolButton("下一个", "chevron-right", "secondary", "next", nextSample)}
+        {toolButton("运行", "play", "primary", "run", TriggerRun)}
+        {toolButton("主题", "moon", "secondary", "theme", ToggleTheme)}
         {widgets.Text(gxscene.Props{"value": EditorStatus(), "size": widgets.FontFootnote, "tone": "muted"})}
     </div>
 }
 
-// ---- 主界面 ----
-
+// ---- 主界面（响应式，四端统一）----
+// 断点：>=1024 桌面三列（示例 / 编辑器 / 预览）；720-1023 收缩两列；
+// <720 竖屏紧凑单列（示例 / 工具栏 / 编辑器 / 预览 / 虚拟键盘）。
 pub func Playground() *gxscene.Instance {
+    if ViewportW() < 720 {
+        return playgroundCompact()
+    }
+    return playgroundFull()
+}
+
+// playgroundFull 桌面/平板布局：原三列结构，根尺寸由视口驱动。
+pub func playgroundFull() *gxscene.Instance {
     n := len(samples())
+    leftW := 240
+    if ViewportW() < 1024 { leftW = 190 }
     return <div
         style={{
             background: canvasBg(),
@@ -273,8 +369,8 @@ pub func Playground() *gxscene.Instance {
             padding: 0,
             flexDirection: "column",
             gap: 0,
-            width: 1360,
-            height: 760,
+            width: strconv.Itoa(ViewportW()),
+            height: strconv.Itoa(ViewportH()),
             borderRadius: RadiusPanelLocal(),
             borderWidth: widgets.HairlineWidth,
             border: borderColor(),
@@ -296,14 +392,14 @@ pub func Playground() *gxscene.Instance {
                 "size": widgets.FontCallout, "tone": "muted",
             })}
         </div>
-        <div style={{ flexDirection: "row", gap: 12, padding: 16, flexGrow: 1, height: 620 }}>
+        <div style={{ flexDirection: "row", gap: 12, padding: 16, flexGrow: 1, height: strconv.Itoa(ViewportH() - 120) }}>
             <div
-                style={{ background: panelBg(), padding: 12, borderRadius: widgets.RadiusCard, width: 240, flexDirection: "column", gap: 8, borderWidth: widgets.HairlineWidth, border: borderColor(), boxShadow: cardShadow() }}
+                style={{ background: panelBg(), padding: 12, borderRadius: widgets.RadiusCard, width: strconv.Itoa(leftW), flexDirection: "column", gap: 8, borderWidth: widgets.HairlineWidth, border: borderColor(), boxShadow: cardShadow() }}
             >
                 {widgets.Text(gxscene.Props{"value": "示例  /  " + strconv.Itoa(n), "size": widgets.FontFootnote, "weight": "bold", "tone": "muted"})}
                 {sampleList()}
             </div>
-            <div style={{ flexDirection: "column", gap: 8, width: 660 }}>
+            <div style={{ flexDirection: "column", gap: 8, flexGrow: 1 }}>
                 {toolbar()}
                 <div
                     style={{ background: panelBg(), padding: 12, borderRadius: widgets.RadiusCard, borderWidth: widgets.HairlineWidth, border: borderColor(), boxShadow: cardShadow() }}
@@ -311,31 +407,202 @@ pub func Playground() *gxscene.Instance {
                     {Editor()}
                 </div>
             </div>
-            <div
-                style={{ background: panelBg(), padding: 12, borderRadius: widgets.RadiusCard, width: 400, flexDirection: "column", gap: 8, borderWidth: widgets.HairlineWidth, border: borderColor(), boxShadow: cardShadow() }}
-            >
-                <div style={{ flexDirection: "column", gap: 3 }}>
-                    <div style={{ color: accentColor(), fontSize: widgets.FontBody, weight: "bold" }}>
-                        ⬤ 实时预览
-                    </div>
-                    {widgets.Text(gxscene.Props{
-                        "value": samples()[sampleIndex].name + " · " + samples()[sampleIndex].desc,
-                        "size": widgets.FontFootnote, "tone": "muted",
-                    })}
-                </div>
-                <div
-                    style={{ background: appBg(), padding: 12, borderRadius: widgets.RadiusSmall, minHeight: 400, overflow: "auto", borderWidth: widgets.HairlineWidth, border: borderColor() }}
-                >
-                    {demoPreview()}
-                </div>
-                <div style={{ color: RunInfoColor(), fontSize: widgets.FontFootnote }}>{RunInfo()}</div>
-                <div style={{ flexDirection: "column", gap: 4 }}>
-                    {widgets.Terminal(gxscene.Props{"state": consoleState, "height": "140", "title": "Console · println 输出"})}
-                </div>
-            </div>
+            {previewPane()}
         </div>
         <div style={{ color: mutedColor(), fontSize: widgets.FontFootnote, padding: "12 16" }}>
             ⌘↵ 运行 · ⌘Z 撤销 · ⌃空格 补全 · ⇧⌥F 格式化 · 悬停看符号
+        </div>
+    </div>
+}
+
+// previewPane 实时预览列：宽 <1024 时让位给编辑器（预览折叠）。
+func previewPane() *gxscene.Instance {
+    if ViewportW() < 1024 { return <div/> }
+    return <div
+        style={{ background: panelBg(), padding: 12, borderRadius: widgets.RadiusCard, width: 400, flexDirection: "column", gap: 8, borderWidth: widgets.HairlineWidth, border: borderColor(), boxShadow: cardShadow() }}
+    >
+        <div style={{ flexDirection: "column", gap: 3 }}>
+            <div style={{ color: accentColor(), fontSize: widgets.FontBody, weight: "bold" }}>
+                ⬤ 实时预览
+            </div>
+            {widgets.Text(gxscene.Props{
+                "value": samples()[sampleIndex].name + " · " + samples()[sampleIndex].desc,
+                "size": widgets.FontFootnote, "tone": "muted",
+            })}
+        </div>
+        <div
+            style={{ background: appBg(), padding: 12, borderRadius: widgets.RadiusSmall, minHeight: 400, overflow: "auto", borderWidth: widgets.HairlineWidth, border: borderColor() }}
+        >
+            {demoPreview()}
+        </div>
+        <div style={{ color: RunInfoColor(), fontSize: widgets.FontFootnote }}>{RunInfo()}</div>
+        <div style={{ flexDirection: "column", gap: 4 }}>
+            {widgets.Terminal(gxscene.Props{"state": consoleState, "height": "140", "title": "Console · println 输出"})}
+        </div>
+    </div>
+}
+
+// playgroundCompact 竖屏单列：示例列表折叠为固定高度区块，预览与 console
+// 收进编辑器下方，底部挂虚拟键盘（KeyboardEnabled 时）。
+pub func playgroundCompact() *gxscene.Instance {
+    n := len(samples())
+    return <div
+        style={{
+            background: canvasBg(),
+            color: textColor(),
+            padding: 0,
+            flexDirection: "column",
+            gap: 0,
+            width: strconv.Itoa(ViewportW()),
+            height: strconv.Itoa(ViewportH()),
+            overflow: "hidden",
+        }}
+    >
+        <div style={{ background: panelBg(), padding: "8 12", flexDirection: "column", gap: 2 }}>
+            {widgets.Heading(gxscene.Props{"value": "GX Playground", "level": 3, "tone": "text"})}
+        </div>
+        <div style={{ flexDirection: "row", gap: 6, padding: "4 12", alignItems: "center" }}>
+            {toolButton("‹ 上一个", "chevron-left", "secondary", "prev", prevSample)}
+            {toolButton("下一个 ›", "chevron-right", "secondary", "next", nextSample)}
+            {toolButton("运行", "play", "primary", "run", TriggerRun)}
+            {toolButton("主题", "moon", "secondary", "theme", ToggleTheme)}
+        </div>
+        <div style={{ flexDirection: "column", gap: 6, padding: "4 12", height: 132 }}>
+            <div
+                style={{ background: panelBg(), padding: 8, borderRadius: widgets.RadiusCard, flexDirection: "column", gap: 6, borderWidth: widgets.HairlineWidth, border: borderColor(), boxShadow: cardShadow(), height: 124, overflow: "hidden" }}
+            >
+                {widgets.Text(gxscene.Props{"value": "示例  /  " + strconv.Itoa(n), "size": widgets.FontFootnote, "weight": "bold", "tone": "muted"})}
+                <div style={{ flexDirection: "column", gap: 4, flexGrow: 1, overflow: "auto" }} class="gx-sample-list">
+                    <For each={Indices(len(samples()))}>{(i int) => sampleRow(i())}</For>
+                </div>
+            </div>
+        </div>
+        <div style={{ flexDirection: "column", gap: 6, padding: "0 12", flexGrow: 1 }}>
+            <div
+                style={{ background: panelBg(), padding: 8, borderRadius: widgets.RadiusCard, borderWidth: widgets.HairlineWidth, border: borderColor(), boxShadow: cardShadow(), flexGrow: 1, overflow: "hidden" }}
+            >
+                {Editor()}
+            </div>
+        </div>
+        <div style={{ flexDirection: "column", gap: 4, padding: "6 12" }}>
+            <div style={{ color: RunInfoColor(), fontSize: widgets.FontFootnote }}>{RunInfo()}</div>
+            {widgets.Terminal(gxscene.Props{"state": consoleState, "height": "64", "title": "Console"})}
+        </div>
+        {KeyboardBar()}
+    </div>
+}
+
+// ---- 虚拟键盘（GX 自绘，触屏端与桌面键盘命令同源）----
+
+func vkRows() [][]string {
+    if vkSymbol {
+        return [][]string{
+            {"1", "2", "3", "4", "5", "6", "7", "8", "9", "0"},
+            {"-", "/", ":", ";", "(", ")", "$", "&", "@", "\""},
+            {"+", "=", "<", ">", "{", "}", "[", "]", ".", ",", "_"},
+        }
+    }
+    return [][]string{
+        {"q", "w", "e", "r", "t", "y", "u", "i", "o", "p"},
+        {"a", "s", "d", "f", "g", "h", "j", "k", "l"},
+        {"z", "x", "c", "v", "b", "n", "m"},
+    }
+}
+
+func vkCharLabel(ch string) string {
+    if vkSymbol { return ch }
+    if vkShift { return strings.ToUpper(ch) }
+    return ch
+}
+
+func vkSymLabel() string {
+    if vkSymbol { return "ABC" }
+    return "123"
+}
+
+// vkDispatch 按键语义统一分发：key 既是 data-key 标记也是字符键的输入值。
+// 避免在 For 回调里嵌套箭头函数——转译器对嵌套闭包实参支持有限。
+func vkDispatch(key string) {
+    if key == "shift" { toggleVKShift(); return }
+    if key == "sym" { setVKSymbol(!vkSymbol); return }
+    if key == "backspace" { EditorBackspace(); return }
+    if key == "enter" { EditorNewline(); return }
+    if key == "up" { EditorMoveEx(-1, 0, false); return }
+    if key == "down" { EditorMoveEx(1, 0, false); return }
+    if key == "left" { EditorMoveEx(0, -1, false); return }
+    if key == "right" { EditorMoveEx(0, 1, false); return }
+    if key == "undo" { EditorUndo(); return }
+    if key == "redo" { EditorRedo(); return }
+    if key == "selectall" { EditorSelectAll(); return }
+    if key == "home" { EditorKeyHome(false); return }
+    if key == "end" { EditorKeyEnd(false); return }
+    vkInsert(key)
+}
+
+// vkKey 渲染单个按键。class/data-key 供 E2E 测试桥从命中框导出坐标；
+// 点击行为统一走 vkDispatch（按 data-key 分发）。
+func vkKey(label string, key string, w int) *gxscene.Instance {
+    return <div
+        style={{
+            background: panelBg(),
+            width: strconv.Itoa(w),
+            height: "30",
+            borderRadius: widgets.RadiusSmall,
+            borderWidth: widgets.HairlineWidth,
+            border: borderColor(),
+            flexDirection: "row",
+            alignItems: "center",
+            justifyContent: "center",
+            cursor: "pointer",
+        }}
+        class="gx-vk-key"
+        data-key={key}
+        onClick={gxscene.Handler(func(e gxscene.EventContext) { vkDispatch(key) })}
+    >
+        {widgets.Text(gxscene.Props{"value": label, "size": widgets.FontFootnote, "tone": "text"})}
+    </div>
+}
+
+// vkRowCharRow 渲染一行字符键（For 内不做嵌套闭包实参）。
+func vkRowCharRow(chars []string, keyW int) *gxscene.Instance {
+    return <div style={{ flexDirection: "row", gap: "4", justifyContent: "center" }} class="gx-vk-row">
+        <For each={chars}>{(c string) => vkKey(vkCharLabel(c()), c(), keyW)}</For>
+    </div>
+}
+
+pub func KeyboardBar() *gxscene.Instance {
+    if !KeyboardEnabled { return <div/> }
+    keyW := (ViewportW() - 24 - 9 * 4) / 10
+    row1 := vkRows()[0]
+    row2 := vkRows()[1]
+    row3 := vkRows()[2]
+    fnW := keyW * 2 + 4
+    return <div
+        style={{ background: appBg(), padding: "6 12", flexDirection: "column", gap: "4" }}
+        class="gx-vk-bar"
+    >
+        {vkRowCharRow(row1, keyW)}
+        {vkRowCharRow(row2, keyW)}
+        <div style={{ flexDirection: "row", gap: "4", justifyContent: "center" }} class="gx-vk-row">
+            {vkKey("⇧", "shift", fnW)}
+            <For each={row3}>{(c string) => vkKey(vkCharLabel(c()), c(), keyW)}</For>
+            {vkKey("⌫", "backspace", fnW)}
+        </div>
+        <div style={{ flexDirection: "row", gap: "4", justifyContent: "center" }} class="gx-vk-row">
+            {vkKey(vkSymLabel(), "sym", fnW)}
+            {vkKey("↑", "up", keyW)}
+            {vkKey("↓", "down", keyW)}
+            {vkKey("←", "left", keyW)}
+            {vkKey("→", "right", keyW)}
+            {vkKey("␣", "space", fnW + keyW)}
+            {vkKey("⏎", "enter", fnW)}
+        </div>
+        <div style={{ flexDirection: "row", gap: "4", justifyContent: "center" }} class="gx-vk-row">
+            {vkKey("撤销", "undo", fnW)}
+            {vkKey("重做", "redo", fnW)}
+            {vkKey("全选", "selectall", fnW)}
+            {vkKey("Home", "home", fnW)}
+            {vkKey("End", "end", fnW)}
         </div>
     </div>
 }
