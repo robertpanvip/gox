@@ -9,9 +9,9 @@ package main
 
 import (
 	gxweb "github.com/robertpanvip/gox-backend-web"
-	gxapp "github.com/robertpanvip/gox/runtime/app"
-	gxscene "github.com/robertpanvip/gox/runtime/scene"
-	"github.com/robertpanvip/gox/runtime/signal"
+	gxapp "github.com/robertpanvip/gox-core/runtime/app"
+	gxscene "github.com/robertpanvip/gox-core/runtime/scene"
+	"github.com/robertpanvip/gox-core/runtime/signal"
 )
 
 // view 是一棵计数器场景树：点击按钮 → signal+1 → 精确更新文本 → Web 后端增量重绘 DOM。

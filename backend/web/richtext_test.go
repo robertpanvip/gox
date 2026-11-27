@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	gxapp "github.com/robertpanvip/gox/runtime/app"
-	gxscene "github.com/robertpanvip/gox/runtime/scene"
+	gxapp "github.com/robertpanvip/gox-core/runtime/app"
+	gxscene "github.com/robertpanvip/gox-core/runtime/scene"
 )
 
 // 富文本节点（NodeText + rich-text 属性）在 web 后端应建成真实 span 元素，

@@ -3,7 +3,7 @@ package complete
 import (
 	"sync"
 
-	"github.com/robertpanvip/gox/pkg/gxcomplete"
+	"github.com/robertpanvip/gox-core/pkg/gxcomplete"
 )
 
 // MemberProvider 用 go/types 做点号成员补全（obj. / pkg. 弹成员）。

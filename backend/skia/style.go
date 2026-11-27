@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/robertpanvip/gox/cssbox"
+	"github.com/robertpanvip/gox-core/cssbox"
 )
 
 // 本后端对 Node.Props 的样式约定（additive，host 不解释这些键）。

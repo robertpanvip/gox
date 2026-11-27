@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	gxapp "github.com/robertpanvip/gox/runtime/app"
-	gxscene "github.com/robertpanvip/gox/runtime/scene"
+	gxapp "github.com/robertpanvip/gox-core/runtime/app"
+	gxscene "github.com/robertpanvip/gox-core/runtime/scene"
 )
 
 func TestPlaceCentered(t *testing.T) {

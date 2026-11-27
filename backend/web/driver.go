@@ -3,7 +3,7 @@ package gxweb
 import (
 	"errors"
 
-	gxscene "github.com/robertpanvip/gox/runtime/scene"
+	gxscene "github.com/robertpanvip/gox-core/runtime/scene"
 )
 
 // ElemID 是 DOM 元素的后端句柄。js 驱动下是 js.Value 的索引，mem 驱动下是

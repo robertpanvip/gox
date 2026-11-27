@@ -3,8 +3,8 @@ package ui
 import (
 	"testing"
 
-	gxicon "github.com/robertpanvip/gox/runtime/icon"
-	"github.com/robertpanvip/gox/runtime/signal"
+	gxicon "github.com/robertpanvip/gox-core/runtime/icon"
+	"github.com/robertpanvip/gox-core/runtime/signal"
 )
 
 // resetProjectState 把项目树信号恢复到「全展开、无目录选中、回到第 0 个示例」，

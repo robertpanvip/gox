@@ -20,7 +20,7 @@ package androidbackend
 import (
 	"errors"
 
-	gxapp "github.com/robertpanvip/gox/runtime/app"
+	gxapp "github.com/robertpanvip/gox-core/runtime/app"
 )
 
 var errWindowNil = errors.New("androidbackend: NewWindow 返回 nil")

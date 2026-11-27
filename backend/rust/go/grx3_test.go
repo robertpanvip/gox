@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	gxscene "github.com/robertpanvip/gox/runtime/scene"
+	gxscene "github.com/robertpanvip/gox-core/runtime/scene"
 )
 
 // ---------- GRX3：NodeID uint64 直传端到端验证 ----------

@@ -4,8 +4,8 @@ import (
 	"reflect"
 	"strings"
 
-	"github.com/robertpanvip/gox/pkg/compiler"
-	gxscene "github.com/robertpanvip/gox/runtime/scene"
+	"github.com/robertpanvip/gox-core/pkg/compiler"
+	gxscene "github.com/robertpanvip/gox-core/runtime/scene"
 )
 
 // jsxBuilder 把一段 JSX 原文构建成 gxscene.Instance。

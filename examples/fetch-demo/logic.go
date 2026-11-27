@@ -8,8 +8,8 @@ package main
 import (
 	"fmt"
 
-	"github.com/robertpanvip/gox/runtime/fetch"
-	"github.com/robertpanvip/gox/runtime/loop"
+	"github.com/robertpanvip/gox-core/runtime/fetch"
+	"github.com/robertpanvip/gox-core/runtime/loop"
 )
 
 // User 是示例数据结构。

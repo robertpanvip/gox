@@ -62,8 +62,8 @@ END = "    // @@END-GENERATED-SAMPLES@@"
 
 # 按需 import：仅当源码里出现 `pkg.` 时才注入，避免未使用 import。
 IMPORT_LINES = {
-    "gxscene": 'gxscene "github.com/robertpanvip/gox/runtime/scene"',
-    "Signal":  'Signal "github.com/robertpanvip/gox/runtime/signal"',
+    "gxscene": 'gxscene "github.com/robertpanvip/gox-core/runtime/scene"',
+    "Signal":  'Signal "github.com/robertpanvip/gox-core/runtime/signal"',
     "fmt":     '"fmt"',
     "strconv": '"strconv"',
     "strings": '"strings"',
@@ -205,7 +205,7 @@ def main():
         "package demos",
         "",
         "import (",
-        '    gxscene "github.com/robertpanvip/gox/runtime/scene"',
+        '    gxscene "github.com/robertpanvip/gox-core/runtime/scene"',
     ]
     for i, pkg in enumerate(pkgs, 1):
         registry.append('    d%02d "github.com/robertpanvip/gox-playground/ui/demos/%s"' % (i, pkg))

@@ -3,8 +3,8 @@ package skia
 import (
 	"testing"
 
-	gxapp "github.com/robertpanvip/gox/runtime/app"
-	gxscene "github.com/robertpanvip/gox/runtime/scene"
+	gxapp "github.com/robertpanvip/gox-core/runtime/app"
+	gxscene "github.com/robertpanvip/gox-core/runtime/scene"
 )
 
 // TestFrameCacheReuse：连续 Draw 同一棵树，第二帧应命中整帧复用（不清屏不重画），

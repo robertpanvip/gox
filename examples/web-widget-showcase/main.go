@@ -11,9 +11,9 @@ import (
 	"syscall/js"
 
 	gxweb "github.com/robertpanvip/gox-backend-web"
-	gxapp "github.com/robertpanvip/gox/runtime/app"
-	"github.com/robertpanvip/gox/showcase"
-	widgets "github.com/robertpanvip/gox/widgets"
+	gxapp "github.com/robertpanvip/gox-core/runtime/app"
+	"github.com/robertpanvip/gox-core/showcase"
+	widgets "github.com/robertpanvip/gox-core/widgets"
 )
 
 func main() {

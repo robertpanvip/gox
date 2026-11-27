@@ -5,8 +5,8 @@ import (
 	"testing"
 	"unsafe"
 
-	gxapp "github.com/robertpanvip/gox/runtime/app"
-	gxscene "github.com/robertpanvip/gox/runtime/scene"
+	gxapp "github.com/robertpanvip/gox-core/runtime/app"
+	gxscene "github.com/robertpanvip/gox-core/runtime/scene"
 )
 
 // presentProbe 记录每次 draw 的字节帧，并可指定返回码。

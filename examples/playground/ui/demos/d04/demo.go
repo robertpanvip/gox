@@ -1,7 +1,7 @@
 package d04
 
 import (
-    gxscene "github.com/robertpanvip/gox/runtime/scene"
+    gxscene "github.com/robertpanvip/gox-core/runtime/scene"
 )
 
 // style={{...}} 强类型 struct + 驼峰 key + 伪状态单词 key

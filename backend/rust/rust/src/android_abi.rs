@@ -97,8 +97,7 @@ pub extern "C" fn gx_android_render(host: *mut AndroidHost) -> c_int {
     };
     match g.as_mut() {
         Some(r) => {
-            r.render();
-            0
+            if r.render_now() { 0 } else { 3 }
         }
         None => 2,
     }

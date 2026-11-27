@@ -9,7 +9,7 @@ package main
 import (
 	rbandroid "github.com/robertpanvip/gox-backend-android"
 	"github.com/robertpanvip/gox-playground/ui"
-	gxscene "github.com/robertpanvip/gox/runtime/scene"
+	gxscene "github.com/robertpanvip/gox-core/runtime/scene"
 )
 
 var _ rbandroid.TouchSink = (*playgroundTouch)(nil)

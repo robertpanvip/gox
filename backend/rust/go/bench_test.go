@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"testing"
 
-	gxscene "github.com/robertpanvip/gox/runtime/scene"
+	gxscene "github.com/robertpanvip/gox-core/runtime/scene"
 )
 
 // makeBenchTree 构造 n 张卡片 + n 个文本的场景树，规模可控。

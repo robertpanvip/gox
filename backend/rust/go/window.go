@@ -17,9 +17,9 @@ import (
 	"time"
 	"unsafe"
 
-	gxapp "github.com/robertpanvip/gox/runtime/app"
-	gxscene "github.com/robertpanvip/gox/runtime/scene"
-	"github.com/robertpanvip/gox/runtime/scheduler"
+	gxapp "github.com/robertpanvip/gox-core/runtime/app"
+	gxscene "github.com/robertpanvip/gox-core/runtime/scene"
+	"github.com/robertpanvip/gox-core/runtime/scheduler"
 )
 
 // Window 实现 gxapp.Window + gxapp.FramePresenter，把绘制委托给 Rust 静态库。

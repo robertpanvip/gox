@@ -3,7 +3,7 @@ module github.com/robertpanvip/gox-widget-showcase
 go 1.27.2
 
 require (
-	github.com/robertpanvip/gox v0.0.0
+	github.com/robertpanvip/gox-core v0.0.0
 	github.com/robertpanvip/gox-backend-rust v0.0.0
 )
 
@@ -14,6 +14,6 @@ require (
 	golang.org/x/image v0.45.0 // indirect
 )
 
-replace github.com/robertpanvip/gox => ../..
+replace github.com/robertpanvip/gox-core => ../../../gox-core
 
 replace github.com/robertpanvip/gox-backend-rust => ../../backend/rust/go

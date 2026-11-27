@@ -7,8 +7,8 @@ import (
 	"sync"
 	"unicode/utf8"
 
-	gxapp "github.com/robertpanvip/gox/runtime/app"
-	gxscene "github.com/robertpanvip/gox/runtime/scene"
+	gxapp "github.com/robertpanvip/gox-core/runtime/app"
+	gxscene "github.com/robertpanvip/gox-core/runtime/scene"
 )
 
 // Window 是 Web 后端窗口，实现 gxapp.Window + gxapp.FramePresenter，以及可选的

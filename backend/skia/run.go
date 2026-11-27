@@ -1,7 +1,7 @@
 package skia
 
 import (
-	gxapp "github.com/robertpanvip/gox/runtime/app"
+	gxapp "github.com/robertpanvip/gox-core/runtime/app"
 )
 
 // Run 是接入胶水层：业务侧只调这一个函数，不必关心 openWith 的协议细节。

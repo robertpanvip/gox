@@ -1,9 +1,9 @@
 package d12
 
-import Signal "github.com/robertpanvip/gox/runtime/signal"
+import Signal "github.com/robertpanvip/gox-core/runtime/signal"
 
 import (
-    gxscene "github.com/robertpanvip/gox/runtime/scene"
+    gxscene "github.com/robertpanvip/gox-core/runtime/scene"
 )
 
 // 组件：pub func 返回场景树，props 的 sig 字段保鲜（读到的是实时值）

@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	gxscene "github.com/robertpanvip/gox/runtime/scene"
-	"github.com/robertpanvip/gox/runtime/signal"
+	gxscene "github.com/robertpanvip/gox-core/runtime/scene"
+	"github.com/robertpanvip/gox-core/runtime/signal"
 )
 
 // rendered 构造场景并接线响应式（单测里 Branch/浮层需要手动 BindReactive，

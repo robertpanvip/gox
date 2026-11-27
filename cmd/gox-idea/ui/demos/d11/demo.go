@@ -1,7 +1,7 @@
 package d11
 
 import (
-    gxscene "github.com/robertpanvip/gox/runtime/scene"
+    gxscene "github.com/robertpanvip/gox-core/runtime/scene"
     "fmt"
 )
 

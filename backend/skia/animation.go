@@ -3,7 +3,7 @@ package skia
 import (
 	"time"
 
-	gxscene "github.com/robertpanvip/gox/runtime/scene"
+	gxscene "github.com/robertpanvip/gox-core/runtime/scene"
 )
 
 // animation.go —— Skia 后端的声明式动画采样引擎，语义与 Rust/Web 端严格对齐。

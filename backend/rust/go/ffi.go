@@ -48,7 +48,7 @@ import (
 	"encoding/json"
 	"unsafe"
 
-	gxscene "github.com/robertpanvip/gox/runtime/scene"
+	gxscene "github.com/robertpanvip/gox-core/runtime/scene"
 )
 
 //export goEventBridge

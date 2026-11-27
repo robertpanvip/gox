@@ -1,9 +1,9 @@
 package d01
 
-import Signal "github.com/robertpanvip/gox/runtime/signal"
+import Signal "github.com/robertpanvip/gox-core/runtime/signal"
 
 import (
-    gxscene "github.com/robertpanvip/gox/runtime/scene"
+    gxscene "github.com/robertpanvip/gox-core/runtime/scene"
 )
 
 // sig 声明 + 裸读（编译器自动补 ()）

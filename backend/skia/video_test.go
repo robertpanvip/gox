@@ -5,9 +5,9 @@ import (
 	"testing"
 	"time"
 
-	gxapp "github.com/robertpanvip/gox/runtime/app"
-	gxscene "github.com/robertpanvip/gox/runtime/scene"
-	gxvideo "github.com/robertpanvip/gox/runtime/video"
+	gxapp "github.com/robertpanvip/gox-core/runtime/app"
+	gxscene "github.com/robertpanvip/gox-core/runtime/scene"
+	gxvideo "github.com/robertpanvip/gox-core/runtime/video"
 )
 
 const testVideo = "/tmp/gx-test-video.mp4"

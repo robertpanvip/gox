@@ -1,7 +1,7 @@
 package d10
 
 import (
-    gxscene "github.com/robertpanvip/gox/runtime/scene"
+    gxscene "github.com/robertpanvip/gox-core/runtime/scene"
 )
 
 // 对象解构：{ x, y } := p 逐字段取值

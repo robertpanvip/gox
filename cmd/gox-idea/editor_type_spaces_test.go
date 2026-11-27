@@ -6,7 +6,7 @@ import (
 
 	skia "github.com/robertpanvip/gox-backend-rust"
 	"github.com/robertpanvip/gox-idea/ui"
-	"github.com/robertpanvip/gox/widgets"
+	"github.com/robertpanvip/gox-core/widgets"
 )
 
 // TestEditorTypeSpacesAfterStyle 复现用户报障序列：光标停在 return <div style

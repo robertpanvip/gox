@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	sk "github.com/robertpanvip/gox-skia/compat"
-	gxscene "github.com/robertpanvip/gox/runtime/scene"
+	gxscene "github.com/robertpanvip/gox-core/runtime/scene"
 )
 
 func skCanvas(w, h int) sk.Canvas {

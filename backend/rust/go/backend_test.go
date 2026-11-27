@@ -3,7 +3,7 @@ package rustbackend
 import (
 	"testing"
 
-	gxapp "github.com/robertpanvip/gox/runtime/app"
+	gxapp "github.com/robertpanvip/gox-core/runtime/app"
 )
 
 // Backend 实现接入接口形状（gxapp.Backend），可注入 gxapp.Use。

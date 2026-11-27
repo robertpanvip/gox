@@ -6,9 +6,9 @@ import (
 	"testing"
 	"strings"
 
-	"github.com/robertpanvip/gox/runtime/signal"
+	"github.com/robertpanvip/gox-core/runtime/signal"
 
-	gxscene "github.com/robertpanvip/gox/runtime/scene"
+	gxscene "github.com/robertpanvip/gox-core/runtime/scene"
 )
 
 // TestInterpretSamples 逐个解释 15 个 demo 源码，确保都能产出场景树。

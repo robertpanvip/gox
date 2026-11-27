@@ -1,8 +1,8 @@
 package d05
 
 import (
-    gxscene "github.com/robertpanvip/gox/runtime/scene"
-    Signal "github.com/robertpanvip/gox/runtime/signal"
+    gxscene "github.com/robertpanvip/gox-core/runtime/scene"
+    Signal "github.com/robertpanvip/gox-core/runtime/signal"
 )
 
 // Signal.computed 派生 + Signal.batch 合并 + 事件传函数原值

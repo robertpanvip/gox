@@ -3,9 +3,9 @@ package skia
 import (
 	"testing"
 
-	gxapp "github.com/robertpanvip/gox/runtime/app"
-	gxscene "github.com/robertpanvip/gox/runtime/scene"
-	"github.com/robertpanvip/gox/widgets"
+	gxapp "github.com/robertpanvip/gox-core/runtime/app"
+	gxscene "github.com/robertpanvip/gox-core/runtime/scene"
+	"github.com/robertpanvip/gox-core/widgets"
 )
 
 // fixedMeasure 是测试用的确定性文本测宽：每个字符 10px，行高固定 20px。

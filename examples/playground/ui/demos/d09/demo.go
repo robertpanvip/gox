@@ -1,10 +1,10 @@
 package d09
 
-import Signal "github.com/robertpanvip/gox/runtime/signal"
+import Signal "github.com/robertpanvip/gox-core/runtime/signal"
 import "fmt"
 
 import (
-    gxscene "github.com/robertpanvip/gox/runtime/scene"
+    gxscene "github.com/robertpanvip/gox-core/runtime/scene"
 )
 
 // 模板字符串（反引号内插值）+ 参数默认值（尾部缺失参数自动补全）

@@ -3,7 +3,7 @@ package interp
 import (
 	"fmt"
 
-	gxscene "github.com/robertpanvip/gox/runtime/scene"
+	gxscene "github.com/robertpanvip/gox-core/runtime/scene"
 )
 
 // Result 是一次解释执行的结果。

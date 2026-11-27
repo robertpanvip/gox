@@ -4,7 +4,7 @@ import (
 	"encoding/binary"
 	"strconv"
 
-	gxscene "github.com/robertpanvip/gox/runtime/scene"
+	gxscene "github.com/robertpanvip/gox-core/runtime/scene"
 )
 
 // 增量动作协议 GRX2：只传变化字段 / 结构动作，Rust 侧按 nodeID 打补丁到本地镜像树。

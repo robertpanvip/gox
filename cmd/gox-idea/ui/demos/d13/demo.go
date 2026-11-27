@@ -1,9 +1,9 @@
 package d13
 
-import Signal "github.com/robertpanvip/gox/runtime/signal"
+import Signal "github.com/robertpanvip/gox-core/runtime/signal"
 
 import (
-    gxscene "github.com/robertpanvip/gox/runtime/scene"
+    gxscene "github.com/robertpanvip/gox-core/runtime/scene"
 )
 
 // 事件传函数原值：具名函数 / 箭头 / func 字面量 / 带 EventContext 签名

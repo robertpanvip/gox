@@ -1,7 +1,7 @@
 package skia
 
 import (
-	gxapp "github.com/robertpanvip/gox/runtime/app"
+	gxapp "github.com/robertpanvip/gox-core/runtime/app"
 	"testing"
 )
 

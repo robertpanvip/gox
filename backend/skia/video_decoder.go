@@ -22,7 +22,7 @@ import (
 	"sync"
 	"time"
 
-	gxvideo "github.com/robertpanvip/gox/runtime/video"
+	gxvideo "github.com/robertpanvip/gox-core/runtime/video"
 )
 
 // ffmpegPath 按 FFMPEG_PATH → PATH 探测 ffmpeg，结果缓存一次。

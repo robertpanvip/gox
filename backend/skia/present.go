@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"time"
 
-	gxapp "github.com/robertpanvip/gox/runtime/app"
-	gxscene "github.com/robertpanvip/gox/runtime/scene"
+	gxapp "github.com/robertpanvip/gox-core/runtime/app"
+	gxscene "github.com/robertpanvip/gox-core/runtime/scene"
 )
 
 // 本文件让 skia.Window 实现 gxapp.FramePresenter，消费 Host 的增量变更流。

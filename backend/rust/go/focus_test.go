@@ -3,7 +3,7 @@ package rustbackend
 import (
 	"testing"
 
-	gxscene "github.com/robertpanvip/gox/runtime/scene"
+	gxscene "github.com/robertpanvip/gox-core/runtime/scene"
 )
 
 // TestWindowFocus 验证 ref 句柄的 Focus 走与原生点击输入框完全相同的

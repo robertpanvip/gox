@@ -28,9 +28,9 @@ import (
 	rustbackend "github.com/robertpanvip/gox-backend-rust"
 	skia "github.com/robertpanvip/gox-backend-skia"
 	sk "github.com/robertpanvip/gox-skia/compat"
-	gxapp "github.com/robertpanvip/gox/runtime/app"
-	gxscene "github.com/robertpanvip/gox/runtime/scene"
-	"github.com/robertpanvip/gox/runtime/scheduler"
+	gxapp "github.com/robertpanvip/gox-core/runtime/app"
+	gxscene "github.com/robertpanvip/gox-core/runtime/scene"
+	"github.com/robertpanvip/gox-core/runtime/scheduler"
 
 	"golang.org/x/mobile/event/touch"
 	"golang.org/x/mobile/gl"

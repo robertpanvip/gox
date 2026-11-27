@@ -3,7 +3,7 @@ package rustbackend
 import (
 	"testing"
 
-	gxapp "github.com/robertpanvip/gox/runtime/app"
+	gxapp "github.com/robertpanvip/gox-core/runtime/app"
 )
 
 func TestDecoratedC(t *testing.T) {

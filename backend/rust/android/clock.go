@@ -7,7 +7,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/robertpanvip/gox/runtime/scheduler"
+	"github.com/robertpanvip/gox-core/runtime/scheduler"
 )
 
 // PaintClock 把 x/mobile 的 paint.Event（系统 Choreographer / vsync 驱动）

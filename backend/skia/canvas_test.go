@@ -6,9 +6,9 @@ package skia
 import (
 	"testing"
 
-	gxapp "github.com/robertpanvip/gox/runtime/app"
-	"github.com/robertpanvip/gox/runtime/canvas"
-	gxscene "github.com/robertpanvip/gox/runtime/scene"
+	gxapp "github.com/robertpanvip/gox-core/runtime/app"
+	"github.com/robertpanvip/gox-core/runtime/canvas"
+	gxscene "github.com/robertpanvip/gox-core/runtime/scene"
 )
 
 func canvasTemplate(ops string) gxscene.Template {

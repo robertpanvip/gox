@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/robertpanvip/gox/runtime/signal"
+	"github.com/robertpanvip/gox-core/runtime/signal"
 
-	gxscene "github.com/robertpanvip/gox/runtime/scene"
+	gxscene "github.com/robertpanvip/gox-core/runtime/scene"
 )
 
 // TestInterpretSamples 逐个解释 15 个 demo 源码，确保都能产出场景树。
@@ -168,7 +168,7 @@ func TestPrintlnOutputSink(t *testing.T) {
 	res, err := Interpret(`package main
 import (
     "fmt"
-    gxscene "github.com/robertpanvip/gox/runtime/scene"
+    gxscene "github.com/robertpanvip/gox-core/runtime/scene"
 )
 sig n = 3
 func side() {

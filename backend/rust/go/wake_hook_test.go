@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/robertpanvip/gox/runtime/scheduler"
+	"github.com/robertpanvip/gox-core/runtime/scheduler"
 )
 
 // ---- P4 唤醒注入验收：帧时钟 wake 绝不阻塞（fpsbench 第二帧死锁回归） ----

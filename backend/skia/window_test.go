@@ -3,8 +3,8 @@ package skia
 import (
 	"testing"
 
-	gxapp "github.com/robertpanvip/gox/runtime/app"
-	gxscene "github.com/robertpanvip/gox/runtime/scene"
+	gxapp "github.com/robertpanvip/gox-core/runtime/app"
+	gxscene "github.com/robertpanvip/gox-core/runtime/scene"
 )
 
 // textNode / elemNode 构造测试用场景树节点（不依赖编译器，直接构造协议数据）。

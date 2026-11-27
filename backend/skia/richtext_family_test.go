@@ -5,8 +5,8 @@ import (
 
 	sk "github.com/robertpanvip/gox-skia/compat"
 
-	"github.com/robertpanvip/gox/widgets"
-	gxscene "github.com/robertpanvip/gox/runtime/scene"
+	"github.com/robertpanvip/gox-core/widgets"
+	gxscene "github.com/robertpanvip/gox-core/runtime/scene"
 )
 
 // TestRichTextStyleKeepsMonospaceFamily 锁定富文本绘制的字体口径：

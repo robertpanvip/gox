@@ -7,7 +7,7 @@ import (
 	"unicode/utf8"
 
 	sk "github.com/robertpanvip/gox-skia/compat"
-	gxscene "github.com/robertpanvip/gox/runtime/scene"
+	gxscene "github.com/robertpanvip/gox-core/runtime/scene"
 )
 
 // DrawOp 是一条被记录下来的绘制指令（观测面，非 host 协议）。

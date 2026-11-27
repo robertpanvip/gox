@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/robertpanvip/gox/runtime/signal"
-	gxscene "github.com/robertpanvip/gox/runtime/scene"
+	"github.com/robertpanvip/gox-core/runtime/signal"
+	gxscene "github.com/robertpanvip/gox-core/runtime/scene"
 )
 
 // 本文件是「GUI 缺陷自动化检测」的解释器层探针。

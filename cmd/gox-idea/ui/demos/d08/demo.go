@@ -1,9 +1,9 @@
 package d08
 
-import Signal "github.com/robertpanvip/gox/runtime/signal"
+import Signal "github.com/robertpanvip/gox-core/runtime/signal"
 
 import (
-    gxscene "github.com/robertpanvip/gox/runtime/scene"
+    gxscene "github.com/robertpanvip/gox-core/runtime/scene"
 )
 
 // enum 枚举：类型 + 常量 + String() + Parse<T>()，三种拼写指向同一符号

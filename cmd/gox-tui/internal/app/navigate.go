@@ -6,7 +6,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/robertpanvip/gox-tui/internal/editor"
-	"github.com/robertpanvip/gox/pkg/gxcomplete"
+	"github.com/robertpanvip/gox-core/pkg/gxcomplete"
 )
 
 // ---- 导航动作 ----
