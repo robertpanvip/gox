@@ -1303,13 +1303,18 @@ func main() {
 }
 `
 	out := runGX(t, src)
-	// 初始：Score=2，子树主题=DarkTheme accent(#0a84ff)
+	// 初始：Score=2，子树主题=DarkTheme accent
 	if !strings.Contains(out, "INIT") || !strings.Contains(out, "2") {
 		t.Errorf("初始渲染应含分数 2, got:\n%s", out)
 	}
-	// 子树隔离：ThemeProvider 内 accent 必须是深色 #0a84ff，而非全局浅色 #007aff
-	if !strings.Contains(out, "#0a84ff") {
-		t.Errorf("ThemeProvider 子树应读到 DarkTheme accent #0a84ff, got:\n%s", out)
+	// 子树隔离：ThemeProvider 内 accent 必须是 DarkTheme.DarkBlue，而非全局
+	// 浅色 LightBlue #007aff。DarkBlue 随主题实拍调整（现为 Material Oceanic
+	// 青色 #26a69a，见 widgets/apple_theme.go），换色时同步更新此字面量。
+	if !strings.Contains(out, "#26a69a") {
+		t.Errorf("ThemeProvider 子树应读到 DarkTheme accent #26a69a, got:\n%s", out)
+	}
+	if strings.Contains(out, "\"#007aff\"") {
+		t.Errorf("ThemeProvider 子树不应回落到全局浅色 #007aff, got:\n%s", out)
 	}
 	// 响应式：bonus=7 后 Score 应更新为 7（产物里出现两次分数，CHANGED 段为 7）
 	if !strings.Contains(out, "CHANGED") || !strings.Contains(out, "7") {
