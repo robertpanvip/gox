@@ -32,7 +32,7 @@ const (
 
 // ---- 系统色：暗色模式（Apple HIG system colors, Dark Appearance）----
 const (
-	DarkBlue   = "#26a69a" // 实拍：青色 accent（tab 下划线/选中高亮）
+	DarkBlue   = "#0a84ff"
 	DarkGreen  = "#30D158"
 	DarkRed    = "#FF453A"
 	DarkOrange = "#FF9F0A"
@@ -50,17 +50,17 @@ const (
 // 亮：window=#fff, grouped=#f2f2f7, elevated=#fff；
 // 暗：window=#1e1e1e(窗口内容区), grouped=#000(分组底), elevated=#2c2c2e(卡片)。
 const (
-	AppleWindowBg   = "#233239" // 实拍：编辑器/内容主底（MOceanic） // window / content background
-	AppleGroupedBg  = "#1c272d" // 实拍：左侧工具窗（树+图标条）比主区更沉 // grouped background（更深的分组底）
-	AppleElevated   = "#233239" // 实拍：chrome(顶栏/标签行/状态栏)与编辑器同色带 // secondarySystemBackground / 卡片
-	AppleFill       = "#2c454a" // 实拍：树选中块青灰 // tertiarySystemBackground / 控件填充
-	AppleFill2      = "#375057" // hover 档（青灰亮一档） // 更亮填充（systemGray3 暗 / hover）
-	AppleSeparator  = "#2e3f47" // opaque separator / 常规描边
-	AppleSeparator2 = "#3a4d55" // separator（更亮的描边）
-	AppleLabel      = "#d4e3e8" // 实拍：青白正文 // label（主文字）
-	AppleLabel2     = "#a8b7be" // 实拍：状态栏文字档 // secondaryLabel
-	AppleLabel3     = "#5d6f76" // tertiaryLabel
-	AppleInputBg    = "#18252b" // 输入框底
+	AppleWindowBg   = "#1e1e1e" // window / content background
+	AppleGroupedBg  = "#000000" // grouped background（更深的分组底）
+	AppleElevated   = "#2c2c2e" // secondarySystemBackground / 卡片
+	AppleFill       = "#3a3a3c" // tertiarySystemBackground / 控件填充
+	AppleFill2      = "#48484a" // 更亮填充（systemGray3 暗 / hover）
+	AppleSeparator  = "#38383a" // opaque separator / 常规描边
+	AppleSeparator2 = "#545458" // separator（更亮的描边）
+	AppleLabel      = "#f5f5f7" // label（主文字）
+	AppleLabel2     = "#a1a1a6" // secondaryLabel
+	AppleLabel3     = "#6e6e73" // tertiaryLabel
+	AppleInputBg    = "#1c1c1e" // 输入框底
 )
 
 // ---- 系统强调色（暗色模式，Theme* 兼容值的默认来源）----
@@ -78,11 +78,11 @@ const (
 
 // ---- 半透明材质（#rrggbbaa，alpha 近似 vibrancy）----
 const (
-	AppleMaterialThin  = "#1c272dcc" // thin：工具栏/浮层（80%）
-	AppleMaterialReg   = "#2c454ae6" // regular：卡片/弹窗（90%）
-	AppleMaterialThick = "#233239f2" // thick：模态面板（95%）
+	AppleMaterialThin  = "#2c2c2ecc" // thin：工具栏/浮层（80%）
+	AppleMaterialReg   = "#3a3a3ce6" // regular：卡片/弹窗（90%）
+	AppleMaterialThick = "#1e1e1ef2" // thick：模态面板（95%）
 	AppleScrim         = "#00000099" // 60% 黑遮罩
-	AppleHairline      = "#ffffff0f" // 实拍近无界线 // 8% 白高光描边（WebStorm 像素评审：面板分隔近不可见）
+	AppleHairline      = "#ffffff14" // 8% 白高光描边（WebStorm 像素评审：面板分隔近不可见）
 	LightHairline      = "#0000000d" // 5% 黑（对齐参照图近乎无界的浅色分隔）
 )
 

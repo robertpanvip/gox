@@ -679,22 +679,21 @@ func onProjectRowClick(n ProjectNode) {
 }
 
 func projectRowBg(n ProjectNode) string {
-    // 选中态对齐实拍：青灰块 #2c454a + 白字，而非高饱和 accent。
     if n.IsDir {
         if ProjectDirSelected() == n.Path { return widgets.UseToken("panelalt")() }
-        return widgets.UseToken("grouped")()
+        return panelBg()
     }
     if projectRoot != "" {
-        if ProjectFileSelected() == n.Path { return widgets.UseToken("panelalt")() }
-        return widgets.UseToken("grouped")()
+        if ProjectFileSelected() == n.Path { return accentColor() }
+        return panelBg()
     }
-    if n.Sample == SampleIndex() { return widgets.UseToken("panelalt")() }
-    return widgets.UseToken("grouped")()
+    if n.Sample == SampleIndex() { return accentColor() }
+    return panelBg()
 }
 func projectRowFg(n ProjectNode) string {
     if !n.IsDir {
         if projectRoot != "" { return textColor() }
-        if n.Sample == SampleIndex() { return textColor() }
+        if n.Sample == SampleIndex() { return widgets.UseToken("onaccent")() }
     }
     return textColor()
 }
@@ -729,9 +728,9 @@ func projectRowIcon(n ProjectNode) *gxscene.Instance {
         }
         return widgets.Icon(gxscene.Props{"name": "folder", "size": 16, "tone": "faint"})
     }
-    // 选中块是深青灰（#2c454a），doc 图标提亮到 text 色保证对比度。
+    // 选中行背景是 accent 蓝，图标用 onaccent 提亮，避免蓝图标配蓝底隐形。
     if projectRoot == "" && n.Sample == SampleIndex() {
-        return widgets.Icon(gxscene.Props{"name": "doc", "size": 16, "tone": "text"})
+        return widgets.Icon(gxscene.Props{"name": "doc", "size": 16, "tone": "onaccent"})
     }
     return widgets.Icon(gxscene.Props{"name": "doc", "size": 16, "tone": projectIconTone(n.Label)})
 }
@@ -962,7 +961,7 @@ return 1 }, func() *gxscene.Instance { return gxscene.Render(gxscene.Template{Op
 }
 
 func toolStripe() *gxscene.Instance {
-    return gxscene.Render(gxscene.Template{Ops:[]gxscene.Op{gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:0,},gxscene.Op{Code:gxscene.OpDynChild,Slot:1,},gxscene.Op{Code:gxscene.OpDynChild,Slot:2,},gxscene.Op{Code:gxscene.OpDynChild,Slot:3,},gxscene.Op{Code:gxscene.OpDynChild,Slot:4,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:5,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpDynChild,Slot:6,},gxscene.Op{Code:gxscene.OpClose,},},N:7,}, func() any{ return gxscene.Style{FlexDirection:"column",AlignItems:"center",Gap:"4",Width:"40",Padding:"6 0",Background:widgets.UseToken("grouped")(),BorderWidth:widgets.HairlineWidth,Border:borderColor(),} }, func() any{ return stripeButton("folder", true, ToggleProjectPanel) }, func() any{ return stripeButton("search", false, ideNoop) }, func() any{ return stripeButton("graph", false, ideNoop) }, func() any{ return stripeButton("cog", false, ideNoop) }, func() any{ return gxscene.Style{FlexGrow:"1",} }, func() any{ return stripeButton("gear", false, ideNoop) })
+    return gxscene.Render(gxscene.Template{Ops:[]gxscene.Op{gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:0,},gxscene.Op{Code:gxscene.OpDynChild,Slot:1,},gxscene.Op{Code:gxscene.OpDynChild,Slot:2,},gxscene.Op{Code:gxscene.OpDynChild,Slot:3,},gxscene.Op{Code:gxscene.OpDynChild,Slot:4,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:5,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpDynChild,Slot:6,},gxscene.Op{Code:gxscene.OpClose,},},N:7,}, func() any{ return gxscene.Style{FlexDirection:"column",AlignItems:"center",Gap:"4",Width:"40",Padding:"6 0",Background:chromeBg(),BorderWidth:widgets.HairlineWidth,Border:borderColor(),} }, func() any{ return stripeButton("folder", true, ToggleProjectPanel) }, func() any{ return stripeButton("search", false, ideNoop) }, func() any{ return stripeButton("graph", false, ideNoop) }, func() any{ return stripeButton("cog", false, ideNoop) }, func() any{ return gxscene.Style{FlexGrow:"1",} }, func() any{ return stripeButton("gear", false, ideNoop) })
 }
 
 func statusBar() *gxscene.Instance {
@@ -1010,7 +1009,7 @@ return 1 }, func() *gxscene.Instance { return gxscene.Render(gxscene.Template{Op
 
  func Playground() *gxscene.Instance {
     return gxscene.Render(gxscene.Template{Ops:[]gxscene.Op{gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpEvent,Key:"onClick",Slot:0,},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:1,},gxscene.Op{Code:gxscene.OpDynChild,Slot:2,},gxscene.Op{Code:gxscene.OpDynChild,Slot:3,},gxscene.Op{Code:gxscene.OpBranch,Slot:4,},gxscene.Op{Code:gxscene.OpDynChild,Slot:5,},gxscene.Op{Code:gxscene.OpClose,},},N:6,}, func() any{ return func(e gxscene.EventContext) { OpenMenu("" )} }, func() any{ return gxscene.Style{Background:canvasBg(),Color:textColor(),Padding:"0",FlexDirection:"column",Gap:"0",Width:"1400",Height:"860",Overflow:"hidden",} }, func() any{ return menuBar() }, func() any{ return ideToolbar() }, gxscene.BranchGetter(func() int{if projectPanelVisible() { return 0 }
-return 1 }, func() *gxscene.Instance { return gxscene.Render(gxscene.Template{Ops:[]gxscene.Op{gxscene.Op{Code:gxscene.OpElem,Arg:"#frag",},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:0,},gxscene.Op{Code:gxscene.OpDynChild,Slot:1,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:2,},gxscene.Op{Code:gxscene.OpDynChild,Slot:3,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpAttr,Arg:"gx-splitter-v",Key:"class",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:4,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpDynChild,Slot:5,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpClose,},},N:6,}, func() any{ return gxscene.Style{FlexDirection:"row",Gap:"0",FlexGrow:"1",Height:"768",} }, func() any{ return toolStripe() }, func() any{ return gxscene.Style{Background:widgets.UseToken("grouped")(),Padding:"4 6",Width:projectWidthPx(),Height:"768",FlexShrink:"0",FlexDirection:"column",Gap:"4",BorderWidth:widgets.HairlineWidth,Border:borderColor(),Overflow:"hidden",} }, func() any{ return projectPanel() }, func() any{ return gxscene.Style{Width:"6",Height:"768",FlexShrink:"0",Cursor:"col-resize",Background:splitActiveBg(),Hover:&gxscene.Style{Background:accentColor(),},} }, func() any{ return editorAndTerminal() }) }, func() *gxscene.Instance { return gxscene.Render(gxscene.Template{Ops:[]gxscene.Op{gxscene.Op{Code:gxscene.OpElem,Arg:"#frag",},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:0,},gxscene.Op{Code:gxscene.OpDynChild,Slot:1,},gxscene.Op{Code:gxscene.OpDynChild,Slot:2,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpClose,},},N:3,}, func() any{ return gxscene.Style{FlexDirection:"row",Gap:"0",FlexGrow:"1",Height:"768",} }, func() any{ return toolStripe() }, func() any{ return editorAndTerminal() }) }), func() any{ return statusBar() })
+return 1 }, func() *gxscene.Instance { return gxscene.Render(gxscene.Template{Ops:[]gxscene.Op{gxscene.Op{Code:gxscene.OpElem,Arg:"#frag",},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:0,},gxscene.Op{Code:gxscene.OpDynChild,Slot:1,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:2,},gxscene.Op{Code:gxscene.OpDynChild,Slot:3,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpAttr,Arg:"gx-splitter-v",Key:"class",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:4,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpDynChild,Slot:5,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpClose,},},N:6,}, func() any{ return gxscene.Style{FlexDirection:"row",Gap:"0",FlexGrow:"1",Height:"768",} }, func() any{ return toolStripe() }, func() any{ return gxscene.Style{Background:panelBg(),Padding:"4 6",Width:projectWidthPx(),Height:"768",FlexShrink:"0",FlexDirection:"column",Gap:"4",BorderWidth:widgets.HairlineWidth,Border:borderColor(),Overflow:"hidden",} }, func() any{ return projectPanel() }, func() any{ return gxscene.Style{Width:"6",Height:"768",FlexShrink:"0",Cursor:"col-resize",Background:splitActiveBg(),Hover:&gxscene.Style{Background:accentColor(),},} }, func() any{ return editorAndTerminal() }) }, func() *gxscene.Instance { return gxscene.Render(gxscene.Template{Ops:[]gxscene.Op{gxscene.Op{Code:gxscene.OpElem,Arg:"#frag",},gxscene.Op{Code:gxscene.OpElem,Arg:"div",},gxscene.Op{Code:gxscene.OpDynAttr,Key:"style",Slot:0,},gxscene.Op{Code:gxscene.OpDynChild,Slot:1,},gxscene.Op{Code:gxscene.OpDynChild,Slot:2,},gxscene.Op{Code:gxscene.OpClose,},gxscene.Op{Code:gxscene.OpClose,},},N:3,}, func() any{ return gxscene.Style{FlexDirection:"row",Gap:"0",FlexGrow:"1",Height:"768",} }, func() any{ return toolStripe() }, func() any{ return editorAndTerminal() }) }), func() any{ return statusBar() })
 }
 // ---- 编辑器命令转发（装配层 ui.Editor* API 保持兼容）----
 

@@ -727,22 +727,21 @@ func onProjectRowClick(n projectNode) {
 }
 
 func projectRowBg(n projectNode) string {
-    // 选中态对齐实拍：青灰块 #2c454a + 白字，而非高饱和 accent。
     if n.isDir {
         if projectDirSelected == n.path { return widgets.UseToken("panelalt")() }
-        return widgets.UseToken("grouped")()
+        return panelBg()
     }
     if projectRoot != "" {
-        if projectFileSelected == n.path { return widgets.UseToken("panelalt")() }
-        return widgets.UseToken("grouped")()
+        if projectFileSelected == n.path { return accentColor() }
+        return panelBg()
     }
-    if n.sample == SampleIndex() { return widgets.UseToken("panelalt")() }
-    return widgets.UseToken("grouped")()
+    if n.sample == SampleIndex() { return accentColor() }
+    return panelBg()
 }
 func projectRowFg(n projectNode) string {
     if !n.isDir {
         if projectRoot != "" { return textColor() }
-        if n.sample == SampleIndex() { return textColor() }
+        if n.sample == SampleIndex() { return widgets.UseToken("onaccent")() }
     }
     return textColor()
 }
@@ -783,9 +782,9 @@ func projectRowIcon(n projectNode) *gxscene.Instance {
         }
         return widgets.Icon(gxscene.Props{"name": "folder", "size": 16, "tone": "faint"})
     }
-    // 选中块是深青灰（#2c454a），doc 图标提亮到 text 色保证对比度。
+    // 选中行背景是 accent 蓝，图标用 onaccent 提亮，避免蓝图标配蓝底隐形。
     if projectRoot == "" && n.sample == SampleIndex() {
-        return widgets.Icon(gxscene.Props{"name": "doc", "size": 16, "tone": "text"})
+        return widgets.Icon(gxscene.Props{"name": "doc", "size": 16, "tone": "onaccent"})
     }
     return widgets.Icon(gxscene.Props{"name": "doc", "size": 16, "tone": projectIconTone(n.label)})
 }
@@ -1190,7 +1189,7 @@ func stripeButton(name string, active bool, fn func()) *gxscene.Instance {
 
 func toolStripe() *gxscene.Instance {
     return <div
-        style={{ flexDirection: "column", alignItems: "center", gap: 4, width: 40, padding: "6 0", background: widgets.UseToken("grouped")(), borderWidth: widgets.HairlineWidth, border: borderColor() }}
+        style={{ flexDirection: "column", alignItems: "center", gap: 4, width: 40, padding: "6 0", background: chromeBg(), borderWidth: widgets.HairlineWidth, border: borderColor() }}
     >
         {stripeButton("folder", true, ToggleProjectPanel)}{stripeButton("search", false, ideNoop)}{stripeButton("graph", false, ideNoop)}
         {stripeButton("cog", false, ideNoop)}
@@ -1313,7 +1312,7 @@ pub func Playground() *gxscene.Instance {
             <div style={{ flexDirection: "row", gap: 0, flexGrow: 1, height: 768 }}>
                 {toolStripe()}
                 <div
-                    style={{ background: widgets.UseToken("grouped")(), padding: "4 6", width: projectWidthPx(), height: 768, flexShrink: 0, flexDirection: "column", gap: 4, borderWidth: widgets.HairlineWidth, border: borderColor(), overflow: "hidden" }}
+                    style={{ background: panelBg(), padding: "4 6", width: projectWidthPx(), height: 768, flexShrink: 0, flexDirection: "column", gap: 4, borderWidth: widgets.HairlineWidth, border: borderColor(), overflow: "hidden" }}
                 >
                     {projectPanel()}
                 </div>
