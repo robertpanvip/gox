@@ -2,6 +2,7 @@ package gxapp_test
 
 import (
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -12,17 +13,31 @@ import (
 )
 
 // rafWindow 在每次 Draw 时记录 canvas 节点的 canvas-ops，供验证 RAF 回调里的
-// 命令式绘制是否在本帧 Draw 之前生效。
+// 命令式绘制是否在本帧 Draw 之前生效。Draw 在调度 goroutine 里异步执行，
+// 记录的读写必须加锁（-race 下测试主 goroutine 会在收尾后读取）。
 type rafWindow struct {
 	countingWindow
+	mu  sync.Mutex
 	ops []string
 }
 
 func (w *rafWindow) Draw(r *gxscene.Node) error {
+	w.mu.Lock()
 	w.draws++
 	w.lastRoot = r
 	w.ops = append(w.ops, findCanvasOps(r))
+	w.mu.Unlock()
 	return nil
+}
+
+// lastCanvasOps 返回最近一帧记录的 canvas-ops（加锁快照）。
+func (w *rafWindow) lastCanvasOps() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if len(w.ops) == 0 {
+		return ""
+	}
+	return w.ops[len(w.ops)-1]
 }
 
 func findCanvasOps(n *gxscene.Node) string {
@@ -86,10 +101,10 @@ func TestRAFDrawBeforePaint(t *testing.T) {
 	default:
 		t.Fatal("RAF 回调应在本帧 Draw 前执行")
 	}
-	if len(win.ops) == 0 {
+	last := win.lastCanvasOps()
+	if last == "" {
 		t.Fatal("窗口未记录到绘制")
 	}
-	last := win.ops[len(win.ops)-1]
 	decoded := canvas.Decode(last)
 	if len(decoded) != 1 || decoded[0].Kind != canvas.OpRect || decoded[0].Fill != "#abcdef" {
 		t.Fatalf("本帧 canvas-ops 应含 RAF 回调画的矩形，got %s", last)
@@ -136,7 +151,7 @@ func TestRAFAnimationLoop(t *testing.T) {
 		t.Fatalf("动画应恰好推进 %d 帧，got %d", target, got)
 	}
 	// 最后一帧的 canvas 指令数应等于帧数（每条 RAF 追加一个矩形）。
-	last := findCanvasOps(win.lastRoot)
+	last := win.lastCanvasOps()
 	if got := len(canvas.Decode(last)); int32(got) != target {
 		t.Fatalf("canvas 指令数应等于帧数 %d，got %d (%s)", target, got, last)
 	}
@@ -159,19 +174,29 @@ func TestRAFCancelStopsLoop(t *testing.T) {
 
 	var n atomic.Int32
 	stopped := make(chan struct{})
-	var tick func()
+	// RAF 回调在调度 goroutine 里执行（无 FrameClock 的 InlineDispatcher 路径
+	// 经 scheduleRAFNext 的后台 goroutine），与测试主 goroutine 并发——句柄
+	// 读写必须同步，否则 -race 报测试自身的数据竞争。
+	var handleMu sync.Mutex
 	var handle gxscene.RAFHandle
+	setHandle := func(h gxscene.RAFHandle) { handleMu.Lock(); handle = h; handleMu.Unlock() }
+	getHandle := func() gxscene.RAFHandle {
+		handleMu.Lock()
+		defer handleMu.Unlock()
+		return handle
+	}
+	var tick func()
 	tick = func() {
 		c := n.Add(1)
 		el.GetContext().FillRect(float32(c), 0, 1, 1)
 		if c == 3 {
-			el.CancelAnimationFrame(handle) // 取消自己登记的下一帧
+			el.CancelAnimationFrame(getHandle()) // 取消自己登记的下一帧
 			close(stopped)
 			return
 		}
-		handle = el.RequestAnimationFrame(tick)
+		setHandle(el.RequestAnimationFrame(tick))
 	}
-	handle = el.RequestAnimationFrame(tick)
+	setHandle(el.RequestAnimationFrame(tick))
 
 	select {
 	case <-stopped:

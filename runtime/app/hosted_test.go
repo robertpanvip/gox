@@ -198,3 +198,60 @@ func TestHostRunEndsOnLastWindowClose(t *testing.T) {
 		t.Fatalf("后关闭的窗口应轮询满自己的节奏, got %d", got)
 	}
 }
+
+// ---- IdleWaker 注入验收（P4）：帧时钟 wake 即时打断主循环空闲等待 ----
+
+// wakeWindow 是实现 IdleWaker 的装配桩：记录 Host 注入的空闲打断函数。
+type wakeWindow struct {
+	stubWindow
+	mu   sync.Mutex
+	hook func()
+}
+
+func (w *wakeWindow) SetWakeHook(fn func()) {
+	w.mu.Lock()
+	w.hook = fn
+	w.mu.Unlock()
+}
+
+func (w *wakeWindow) getHook() func() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.hook
+}
+
+// OpenWindow 装配时向实现 IdleWaker 的窗口注入 h.wakeUp——帧时钟 RequestFrame
+// 经此钩子即时唤醒主循环（帧节奏不被 idleWait 量化，高刷前提）。
+func TestOpenWindowInjectsWakeHook(t *testing.T) {
+	host := NewHost(WithIdleWait(time.Millisecond))
+	w := &wakeWindow{stubWindow: stubWindow{closeAfter: 2}}
+	if _, err := host.OpenWindow(WindowConfig{Title: "wake", Backend: "stub"}, w); err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if w.getHook() == nil {
+		t.Fatal("实现 IdleWaker 的窗口应在装配时拿到 wakeHook")
+	}
+	// 注入的钩子必须非阻塞且能真实唤醒空闲中的主循环：调用后 Run 正常推进到
+	// 窗口请求关闭并退出（hook 即 h.wakeUp，唤醒即消耗一次空闲等待）。
+	if err := host.Run(); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !w.closed {
+		t.Fatal("窗口应被主循环关闭")
+	}
+}
+
+// 未实现 IdleWaker 的窗口不受影响（可选扩展，无强制）。
+func TestOpenWindowWithoutIdleWakerStillWorks(t *testing.T) {
+	host := NewHost(WithIdleWait(time.Millisecond))
+	w := &stubWindow{closeAfter: 2}
+	if _, err := host.OpenWindow(WindowConfig{Title: "plain", Backend: "stub"}, w); err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if err := host.Run(); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !w.closed {
+		t.Fatal("窗口应被主循环关闭")
+	}
+}

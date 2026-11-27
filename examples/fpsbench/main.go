@@ -13,10 +13,11 @@
 //	GX_SAMPLE_WINDOW=N                直方图窗口帧数（默认 600）
 //	GX_AUTOCLOSE_MS=N                 N 毫秒后自动关窗（脚本化验收）
 //
-// 已知环境限制：Xvfb / 无 vblank 的虚拟显示下 Fifo 的 get_current_texture
-// 永久阻塞（swapchain 永不被显示方释放），本 demo 需在真实显示器上运行——
-// 这正是 Fifo 背压节奏控制的物理机制，也暴露了「present 阻塞占住 UI 线程」
-// 的多窗口风险（P4.5 遗留：present 线程化，见 BACKEND_ARCHITECTURE_V2）。
+// 环境说明：Xvfb / llvmpipe 无真实 vblank，Fifo 不产生背压（帧率即 CPU 渲染
+// 上限），帧节奏验收需在真实显示器上运行——Fifo 下 present 由 swapchain 对齐
+// 屏幕刷新率。历史教训：FrameClock 的 wake 曾阻塞发送到已无读者的 pump 通道，
+// 第二帧 RAF 续帧即死锁整个 UI 线程；现经 gxapp.IdleWaker 注入 Host 空闲打断，
+// wake 保持「只提示、不等待」（见 backend/rust/go/wake_hook_test.go）。
 package main
 
 import (

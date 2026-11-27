@@ -28,9 +28,14 @@ func (w *closeRaceWindow) Close() error         { return nil }
 func (w *closeRaceWindow) Config() WindowConfig { return w.cfg }
 
 // chanExecutor 是一个测试用 UIExecutor：把任务投递到单一 UI goroutine 执行。
+// widgets 包有全局光标闪烁 ticker goroutine 持续 Safe 投递到「当前」executor，
+// 与 close(exec.ch) 并发会构成 send-on-closed-channel 竞态——关闭必须经
+// Stop 与 Post 互斥（先拒新任务再关通道）。
 type chanExecutor struct {
-	ch   chan func()
-	done chan struct{}
+	ch     chan func()
+	done   chan struct{}
+	mu     sync.Mutex
+	closed bool
 }
 
 func newChanExecutor() *chanExecutor {
@@ -45,12 +50,28 @@ func newChanExecutor() *chanExecutor {
 }
 
 func (e *chanExecutor) Post(fn func()) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.closed {
+		return nil // 已关闭则丢弃，模拟关闭
+	}
 	select {
 	case e.ch <- fn:
 		return nil
 	default:
 		return nil // 队列满则丢弃，模拟关闭
 	}
+}
+
+// Stop 停止接收并关闭底层通道（与 Post 互斥，杜绝并发 close 竞态）。
+func (e *chanExecutor) Stop() {
+	e.mu.Lock()
+	if !e.closed {
+		e.closed = true
+		close(e.ch)
+	}
+	e.mu.Unlock()
+	<-e.done
 }
 
 // 严格单线程模型：后台 goroutine 只通过 Signal.Safe 投递更新，经 UIExecutor
@@ -127,9 +148,9 @@ func TestCloseConcurrentWithSafeMutationAndDraw(t *testing.T) {
 			t.Fatalf("关闭后不应再提交新帧: before=%d after=%d", before, after)
 		}
 
-		// 清理 UI goroutine。
-		close(exec.ch)
-		<-exec.done
+		// 清理 UI goroutine（Stop 与 Post 互斥：闪烁 ticker 的在途投递不会
+		// 撞上通道关闭）。
+		exec.Stop()
 		// 恢复全局 UI post 为 nil，避免影响下一轮/其它测试。
 		signal.SetUIPost(nil)
 	}

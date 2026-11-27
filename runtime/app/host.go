@@ -56,6 +56,14 @@ type WindowBinder interface {
 	BindApp(app *App)
 }
 
+// IdleWaker 是窗口可选扩展（P4）：Host 把主循环空闲等待的即时打断函数注入
+// 窗口。窗口的帧时钟（scheduler.LoopClock wake）经此钩子在 RequestFrame 时
+// 唤醒 Host 主循环——帧调度不受 idleWait 轮询间隔量化，高刷节奏得以保持。
+// 注入的函数自身非阻塞（h.wakeUp：容量 1 合并），窗口侧可在任意线程调用。
+type IdleWaker interface {
+	SetWakeHook(fn func())
+}
+
 // hostWindow 是 Host 管理的一个窗口条目。
 type hostWindow struct {
 	id      int
@@ -220,6 +228,12 @@ func (h *Host) openEntry(cfg WindowConfig, backend Backend, win Window) (*hostWi
 	app, err := OpenWith(cfg, win)
 	if err != nil {
 		return nil, err
+	}
+	// 帧时钟唤醒注入（P4）：实现 IdleWaker 的窗口拿到主循环空闲打断函数，
+	// RAF / Signal 更新的 RequestFrame 即时唤醒 Host（否则帧节奏被 idleWait
+	// 量化，最高 ~62fps，高刷失效）。
+	if wk, ok := win.(IdleWaker); ok {
+		wk.SetWakeHook(h.wakeUp)
 	}
 
 	entry := &hostWindow{id: id, backend: backendName, app: app, win: win}

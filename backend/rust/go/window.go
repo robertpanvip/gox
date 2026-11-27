@@ -57,8 +57,10 @@ type Window struct {
 	regKey         uintptr // 全局注册表 key，Close 时注销（评审 P1 泄漏）
 
 	// 统一帧时钟（BACKEND_ARCHITECTURE_V2 阶段 1）：Signal 更新合并成一帧，
-	// Run 事件泵每轮 Poll 派发绘制（App.SetFrameClock 时启用）。
+	// Host 主循环每轮 Poll 派发绘制（App.SetFrameClock 时启用）。wakeHook 是
+	// Host 注入的空闲打断函数（gxapp.IdleWaker）：RequestFrame 即时唤醒主循环。
 	frameClock *scheduler.LoopClock
+	wakeHook   func()
 
 	// UIExecutor（宿主提案 §6.1）：Post 把绘制回调/微任务投递到 Run 事件泵
 	// goroutine 执行——Run 的 select 循环就是桌面端「UI 线程」。Run 未启动时
@@ -178,11 +180,12 @@ func (w *Window) consumeEvents() {
 	}
 }
 
-// 编译期断言：Frame 契约 + 焦点能力 + P4 目标态的 Host 轮询驱动。
+// 编译期断言：Frame 契约 + 焦点能力 + P4 目标态的 Host 轮询驱动与唤醒注入。
 var (
 	_ gxapp.FramePresenter = (*Window)(nil)
 	_ gxapp.Focuser        = (*Window)(nil)
 	_ gxapp.HostedWindow   = (*Window)(nil)
+	_ gxapp.IdleWaker      = (*Window)(nil)
 )
 
 // 全局注册表：C 回调的 ctx 是注册表 key（uintptr），避免把 Go 指针长期交给 C。
@@ -523,19 +526,46 @@ type InputEvent struct {
 }
 
 // FrameClock 返回统一帧时钟（BACKEND_ARCHITECTURE_V2 阶段 1）：惰性创建。
-// wake 注入本窗口事件泵唤醒（RequestFrame 即时打断 Run 的 select 等待），
-// now 用 time.Now；宿主在 Run 事件泵每轮 Poll 派发绘制（App.SetFrameClock
+// wake 经 SetWakeHook 注入的 Host 空闲打断即时唤醒主循环（RequestFrame 不受
+// idleWait 轮询间隔量化）；宿主在 Run 事件泵每轮 Poll 派发绘制（App.SetFrameClock
 // 接线后 Signal 更新合并成一帧、无变化零绘制）。必须在 Run 前接线生效。
 func (w *Window) FrameClock() scheduler.FrameClock {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if w.frameClock == nil {
 		w.frameClock = scheduler.NewLoopClock(
-			func() { w.pump <- struct{}{} }, // wake：唤醒事件泵
+			w.wakeHost, // wake：即时打断 Host 主循环空闲等待
 			func() time.Duration { return time.Duration(time.Now().UnixNano()) },
 		)
 	}
 	return w.frameClock
+}
+
+// SetWakeHook 实现 gxapp.IdleWaker（P4）：Host 装配窗口时注入主循环空闲打断
+// 函数（h.wakeUp，非阻塞、容量 1 合并）。fn 为 nil 表示解除注入。
+func (w *Window) SetWakeHook(fn func()) {
+	w.mu.Lock()
+	w.wakeHook = fn
+	w.mu.Unlock()
+}
+
+// wakeHost 是帧时钟的 wake 注入点：优先走 Host 注入的 wakeHook（即时打断
+// idleWait）；未注入（窗口未纳入 Host / 独立使用）时退化为非阻塞 pump 信号
+// ——P4 前 pump 由自驱 Run 消费，P4 目标态无读者时为空操作。任何路径都不阻塞：
+// 历史上此处的阻塞发送曾在 pump 无读者时把 UI 线程永久卡死（fpsbench 第二帧
+// 死锁），wake 必须保持「只提示、不等待」语义。
+func (w *Window) wakeHost() {
+	w.mu.Lock()
+	hook := w.wakeHook
+	w.mu.Unlock()
+	if hook != nil {
+		hook()
+		return
+	}
+	select {
+	case w.pump <- struct{}{}:
+	default:
+	}
 }
 
 // pollFrameClock 在 Run 事件泵每轮调用：帧时钟 pending 则派发一次 OnFrame
