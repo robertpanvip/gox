@@ -11,6 +11,7 @@ typedef void (*gx_event_cb)(const char* json, void* ctx);
 extern void*       gx_window_new(int width, int height, const char* title);
 extern void*       gx_window_new_ex(int width, int height, const char* title, int decorated, int transparent, int always_on_top, float opacity);
 extern int         gx_window_draw(void* handle, const uint8_t* buf, int len);
+extern int         gx_window_take_fullsync(void* handle);
 extern void        gx_window_set_event_cb(void* handle, gx_event_cb cb, void* ctx);
 extern int         gx_window_run(void* handle);
 extern void        gx_window_close(void* handle);
@@ -120,6 +121,13 @@ func cWindowDraw(handle unsafe.Pointer, buf []byte) int {
 		return 0
 	}
 	return int(C.gx_window_draw(handle, (*C.uint8_t)(unsafe.Pointer(&buf[0])), C.int(len(buf))))
+}
+
+// cWindowTakeFullSync 查询 Rust 侧是否因队列过载背压丢弃了未消费帧（读后清零）。
+// 返回 1 表示镜像已失步，Go Host 下一帧必须以 FullSync 全量重建
+// （BACKEND_ARCHITECTURE_V2 §六.2）。
+func cWindowTakeFullSync(handle unsafe.Pointer) int {
+	return int(C.gx_window_take_fullsync(handle))
 }
 
 func cWindowSetEventCb(handle unsafe.Pointer, ctx uintptr) {

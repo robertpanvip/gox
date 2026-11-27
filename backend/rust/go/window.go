@@ -253,6 +253,13 @@ func (w *Window) Present(frame *gxapp.Frame) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
+	// 过载恢复（BACKEND_ARCHITECTURE_V2 §六.2）：Rust FrameQueue 过载背压丢弃
+	// 了未消费增量帧——镜像停在更早版本，但 Go 的 Version 看起来仍连续，
+	// 下面的跳号检查发现不了。必须显式查询（读后清零）并强制本帧全量重建。
+	if w.drawFn == nil && cWindowTakeFullSync(w.handle) == 1 {
+		frame.FullSync = true
+	}
+
 	// 版本连续性：有基线时 Version 必须恰好 +1，否则镜像可能已失步，强制全量重建。
 	needFull := false
 	if w.hasBase && frame.Version > 0 && frame.Version != w.lastVersion+1 {

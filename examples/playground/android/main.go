@@ -13,9 +13,9 @@ import (
 	"fmt"
 	"log"
 
-	gxapp "github.com/robertpanvip/gox/runtime/app"
 	"github.com/robertpanvip/gox-playground/ui"
 	"github.com/robertpanvip/gox-playground/ui/interp"
+	gxapp "github.com/robertpanvip/gox/runtime/app"
 	"github.com/robertpanvip/gox/widgets"
 
 	"golang.org/x/mobile/app"
@@ -31,10 +31,17 @@ var (
 	gxApp   *gxapp.App
 	setUp   bool
 	glReady bool
+
+	// frameClock 是统一帧时钟（BACKEND_ARCHITECTURE_V2 阶段 1）：paint.Event
+	// （Choreographer/vsync）驱动 OnFrame，Signal 更新与 Present 解耦。
+	frameClock *paintClock
 )
 
 func main() {
 	app.Main(func(a app.App) {
+		// 帧时钟：RequestFrame → Send paint.Event（CAS 去重），paint.Event 到达时
+		// emit 派发帧回调。动画续帧由 Scheduler 经此时钟预约 vsync 帧。
+		frameClock = newPaintClock(func() { a.Send(paint.Event{}) })
 		var glctx gl.Context
 		for e := range a.Events() {
 			switch e := a.Filter(e).(type) {
@@ -80,10 +87,17 @@ func main() {
 					break
 				}
 				gxWin.drainLoop()
+				// 统一帧调度（阶段 1）：emit → FrameScheduler dirty 门控 →
+				// drawNowErr（Present 标 dirty）。空闲帧不产生任何变更交付。
+				if frameClock != nil {
+					frameClock.emit()
+				}
 				gxWin.paintNow()
 				a.Publish()
 				// 光标 blink 等旁路动画没有 frame.Changes，paintNow 会保持
 				// dirty——自发下一帧 paint 事件，动画消失后自动停帧。
+				// 声明式 RAF 动画的续帧由 frameClock.RequestFrame 在 drawNowErr
+				// 内预约（Send 已发生），不经过这里。
 				if gxWin.hasPendingPaint() {
 					a.Send(paint.Event{})
 				}
@@ -117,6 +131,12 @@ func setupGX() error {
 
 	// P2 宿主接线：UIExecutor 注入共享 Loop（paint 循环 drain）。
 	gxApp.SetUIExecutor(win)
+
+	// 统一帧调度（阶段 1）：Signal 更新只标脏 + 预约 paint.Event，同周期合并，
+	// 无变化停帧；动画 RAF 续帧经同一时钟对齐 Choreographer/vsync。
+	if frameClock != nil {
+		gxApp.SetFrameClock(frameClock)
+	}
 
 	// Run 解释器接内置终端面板（与桌面/网页同源）。
 	interp.SetOutput(ui.ConsolePrint)

@@ -22,6 +22,7 @@ import (
 	"sync/atomic"
 
 	gxscene "github.com/robertpanvip/gox/runtime/scene"
+	"github.com/robertpanvip/gox/runtime/scheduler"
 	"github.com/robertpanvip/gox/runtime/signal"
 )
 
@@ -122,6 +123,8 @@ type App struct {
 	runtime       *signal.Runtime     // 本 App 专属的 UI 任务运行时（多 App 隔离）
 	globalLease   *signal.GlobalLease // 对默认 Runtime 的兼容桥接租约（GX Signal.safe）
 	dispatcher    FrameDispatcher     // 帧重绘派发器（默认 InlineDispatcher）
+	frameClock    scheduler.FrameClock // 可选：平台帧时钟（BACKEND_ARCHITECTURE_V2 阶段 1）
+	frameSched    *scheduler.Scheduler // 可选：统一帧调度器（启用后重绘走 clock 对齐 vsync）
 	unFlush       func()              // 注销帧边界 hook（T1.2）
 	drawPending   atomic.Bool         // 一批 effect 内是否发生需要重绘的变化（预留给 Dispatcher 精确化；并发写用原子）
 	lastDrawErr   error               // 最近一次 Draw 的错误（T2.2）
@@ -539,10 +542,10 @@ func (a *App) bindReactive() {
 			return
 		}
 		a.drawPending.Store(false)
-		// 交给派发器决定在哪执行 Draw：InlineDispatcher 同步执行（headless/测试），
-		// QueueDispatcher 投递到 UI 线程（真实 GUI）。后台 goroutine 写 signal 不会
-		// 在错误线程调用 Window.Draw（T2.1）。
-		a.dispatcher.RequestFrame()
+		// 交给统一派发口决定在哪执行 Draw：未启用 FrameClock 时由 FrameDispatcher
+		// 派发（Inline 同步 / UIExecutor 投 UI 线程）；启用后走 Scheduler 合并到
+		// 下一平台帧时机（vsync 对齐，同周期多次更新只画一帧）。
+		a.requestDrawFrame()
 	})
 
 	// wrap 是所有叶子/结构 effect 的统一入口。effect body 里的 SetPart/graft 是
@@ -586,7 +589,7 @@ func (a *App) Draw() error {
 	if a.closed.Load() {
 		return nil
 	}
-	a.dispatcher.RequestFrame()
+	a.requestDrawFrame()
 	return a.LastDrawError()
 }
 
@@ -621,7 +624,7 @@ func (a *App) Update() int {
 	}
 	n := a.inst.Update()
 	a.commit.unlock()
-	a.dispatcher.RequestFrame()
+	a.requestDrawFrame()
 	return n
 }
 
@@ -666,11 +669,12 @@ func (a *App) Close() error {
 		// signal 写入触发已关闭窗口的重绘。内部已隔离 owner/inst 两段，这里整体
 		// 再捕获一层，保证 panic 不跳过阶段 3/4。
 		caught = append(caught, runFuncSafely(a.teardownTree)...)
-		// 阶段 3：关闭派发器。
+		// 阶段 3：关闭派发器与帧调度器。
 		caught = append(caught, runFuncSafely(func() {
 			if a.dispatcher != nil {
 				a.dispatcher.Close()
 			}
+			a.closeFrameClock()
 		})...)
 		// 阶段 4：窗口关闭兜底——必须最后执行，任何前置 panic 都不阻断。
 		caught = append(caught, runFuncSafely(func() {

@@ -63,6 +63,10 @@ type glWindow struct {
 	// 大幅降低编辑器逐字输入/光标移动时的光栅化量。resize 重建画布时必须清空。
 	frameCache skia.FrameCache
 
+	// frameClock 是统一帧时钟（BACKEND_ARCHITECTURE_V2 阶段 1）：由 FrameClock()
+	// 惰性创建，Run 主循环每轮 emit。Signal 更新经它即时唤醒主循环并合并成帧。
+	frameClock *loopClock
+
 	// 编辑器选区交互状态。GLFW 回调都在主线程（Run 的 WaitEvents 循环里）串行执行，无需加锁。
 	dragging   bool      // 左键按住拖拽选择中
 	clickTime  time.Time // 上次按下时刻/位置：双击、三击判定
@@ -713,6 +717,13 @@ func (g *glWindow) Run() error {
 	for !g.win.ShouldClose() {
 		glfw.WaitEventsTimeout(0.02) // 20ms 超时；Loop.Wake 经 PostEmptyEvent 即时打断
 		g.drainLoop()
+		// 统一帧调度（阶段 1）：emit → FrameScheduler dirty 门控 → drawNowErr
+		// （Present 帧级短路）。空闲轮次 emit 返回 false，paintNow 跳过整条
+		// raster/上传/swap 链（无变化零持续绘制）；Signal 更新经 RequestFrame
+		// 即时唤醒主循环，不受 20ms 轮询延迟。
+		if g.frameClock != nil {
+			g.frameClock.emit()
+		}
 		g.paintNow()
 	}
 	return nil

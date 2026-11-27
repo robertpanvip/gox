@@ -51,9 +51,11 @@ enum GxEvent {
     Close,
 }
 
-/// 队列积压告警阈值（评审 P1：FIFO 保序不等于无限队列安全）。约等于 60fps 下
-/// 2 秒的积压。超过阈值**不丢帧**（增量帧丢弃会永久失步），只计数并上报过载，
-/// 由 Go Host 侧的 FullSync 机制在适当时机合并成完整状态。
+/// 队列积压阈值（BACKEND_ARCHITECTURE_V2 §六.2：有界队列 + FullSync 恢复）。
+/// 约等于 60fps 下 2 秒的积压。超过阈值执行背压：丢弃全部未消费增量帧并置
+/// needs_fullsync，Go Host 在下一帧用最新 Root 全量重建镜像，双方恢复一致。
+/// 高刷 UI 的正确目标是「及时显示最新的正确状态」，而不是把每个中间画面排队
+/// 播完——无限 FIFO 只会让画面越来越落后。
 const MAX_PENDING_FRAMES: usize = 120;
 
 /// 共享帧状态：FIFO 队列保证增量不丢；proxy 用于跨线程唤醒；shutdown 用于优雅退出。
@@ -79,6 +81,9 @@ struct FrameQueue {
     max_latency_ms: u64,
     /// 当前批次最早一帧的入队时间（用于计算提交→消费延迟）。
     first_enqueue: Option<std::time::Instant>,
+    /// 过载背压后请求的 FullSync：Go 侧经 gx_window_take_fullsync 取走（读后清零），
+    /// 下一帧携带全量 Root 重建镜像。
+    needs_fullsync: bool,
 }
 
 impl FrameQueue {
@@ -94,6 +99,7 @@ impl FrameQueue {
             overload_events: 0,
             max_latency_ms: 0,
             first_enqueue: None,
+            needs_fullsync: false,
         }
     }
 
@@ -104,6 +110,12 @@ impl FrameQueue {
         }
         if self.pending.len() >= MAX_PENDING_FRAMES {
             self.overload_events += 1;
+            // 背压：丢弃全部未消费增量帧并请求 FullSync。被丢弃帧的后效由
+            // 全量帧完整覆盖，不会永久失步——这与「直接删除某个中间帧」不同：
+            // 后者的后续增量依赖它，必须配 FullSync 才能安全恢复。
+            self.pending.clear();
+            self.first_enqueue = None;
+            self.needs_fullsync = true;
         }
         self.pending.push_back(frame);
         self.submitted += 1;
@@ -122,6 +134,14 @@ impl FrameQueue {
             }
         }
         self.pending.drain(..).collect()
+    }
+
+    /// 取走过载恢复请求（读后清零）。true 表示镜像已因背压丢帧失步，
+    /// Go Host 下一帧必须携带 FullSync（全量 Root）。
+    fn take_fullsync(&mut self) -> bool {
+        let need = self.needs_fullsync;
+        self.needs_fullsync = false;
+        need
     }
 
     /// 诊断快照：[submitted, applied, peak_pending, overload_events, max_latency_ms]。
@@ -268,6 +288,23 @@ pub extern "C" fn gx_window_frame_stats(handle: *mut c_void, out: *mut u64) -> c
         }
     }
     0
+}
+
+/// 过载恢复查询（BACKEND_ARCHITECTURE_V2 §六.2）：队列过载背压丢弃未消费帧后
+/// 返回 1（读后清零），Go Host 收到 1 后下一帧必须以 FullSync（全量 Root）重建
+/// Rust 镜像。无过载返回 0。
+#[no_mangle]
+pub extern "C" fn gx_window_take_fullsync(handle: *mut c_void) -> c_int {
+    if handle.is_null() {
+        return -1;
+    }
+    let backend = unsafe { &*(handle as *const Backend) };
+    let mut q = backend.queue.lock().unwrap();
+    if q.take_fullsync() {
+        1
+    } else {
+        0
+    }
 }
 
 #[no_mangle]

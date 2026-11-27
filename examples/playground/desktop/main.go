@@ -12,7 +12,6 @@ import (
 
 	"github.com/robertpanvip/gox-playground/ui"
 	"github.com/robertpanvip/gox-playground/ui/interp"
-	skia "github.com/robertpanvip/gox-backend-skia"
 	gxapp "github.com/robertpanvip/gox/runtime/app"
 	"github.com/robertpanvip/gox/widgets"
 )
@@ -34,6 +33,10 @@ func main() {
 	// 帧请求、后台 Dispatch、微任务全部进入共享 Loop 队列，由 Run() 在
 	// GLFW 线程 drain 执行；不启动第二个事件循环。
 	app.SetUIExecutor(win)
+
+	// 统一帧调度（BACKEND_ARCHITECTURE_V2 阶段 1）：Signal 更新只标脏 + 唤醒
+	// 主循环，同轮次合并为一帧；无变化零绘制；动画 RAF 续帧经同一时钟。
+	app.SetFrameClock(win.FrameClock())
 
 	// GUI 端到端测试钩子：设置 GOX_PLAYGROUND_STATE_FILE 后，每 100ms 把 UI 状态
 	// 快照写到指定文件，供脚本在真实鼠标/键盘操作后硬断言（点击定位、拖动选区、
