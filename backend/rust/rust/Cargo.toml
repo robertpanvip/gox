@@ -23,8 +23,13 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # GPU quad 渲染管线（独立 crate backend/gpu：GPU 优先 / 打包期可选 CPU 接管）
 gx_gpu = { path = "../../gpu" }
+# 桌面剪贴板（阶段 4 翻译层 Ctrl+C/V/X 消费）。wasm 构建必须 --no-default-features
+# （arboard 不支持 wasm32，会拉爆编译）。
+arboard = { version = "3", optional = true, default-features = false }
 
 [features]
+default = ["clipboard"]
+clipboard = ["arboard"]
 # Android 交叉编译（阶段 5）：winit 的 android-activity 依赖必须选一个后端
 # feature（NativeActivity 是 x/mobile 路线的宿主）。真机构建：
 #   cargo check/build --target aarch64-linux-android --features android-native-activity

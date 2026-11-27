@@ -75,6 +75,30 @@ impl SceneNode {
     }
 
     /// 按 nodeID 递归查找可变引用。
+    /// 命中节点 → 根的祖先链（含命中节点自身，由内向外）。hover 光标
+    /// （CSS cursor 继承属性）沿链找第一个声明者；找不到返回空 Vec。
+    pub fn find_ancestors(&self, id: &str) -> Vec<&SceneNode> {
+        fn walk<'a>(n: &'a SceneNode, id: &str, path: &mut Vec<&'a SceneNode>) -> bool {
+            path.push(n);
+            if n.matches(id) {
+                return true;
+            }
+            for c in &n.children {
+                if walk(c, id, path) {
+                    return true;
+                }
+            }
+            path.pop();
+            false
+        }
+        let mut path = Vec::new();
+        if walk(self, id, &mut path) {
+            // path 是 根→命中；反转成 由内向外。
+            path.reverse();
+        }
+        path
+    }
+
     pub fn find_mut(&mut self, id: &str) -> Option<&mut SceneNode> {
         if self.matches(id) {
             return Some(self);

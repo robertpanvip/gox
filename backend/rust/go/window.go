@@ -11,12 +11,15 @@
 package rustbackend
 
 import (
+	"encoding/json"
 	"fmt"
 	"sync"
+	"time"
 	"unsafe"
 
 	gxapp "github.com/robertpanvip/gox/runtime/app"
 	gxscene "github.com/robertpanvip/gox/runtime/scene"
+	"github.com/robertpanvip/gox/runtime/scheduler"
 )
 
 // Window 实现 gxapp.Window + gxapp.FramePresenter，把绘制委托给 Rust 静态库。
@@ -52,6 +55,10 @@ type Window struct {
 	destroyed  bool
 	regKey     uintptr // 全局注册表 key，Close 时注销（评审 P1 泄漏）
 
+	// 统一帧时钟（BACKEND_ARCHITECTURE_V2 阶段 1）：Signal 更新合并成一帧，
+	// Run 事件泵每轮 Poll 派发绘制（App.SetFrameClock 时启用）。
+	frameClock *scheduler.LoopClock
+
 	// UIExecutor（宿主提案 §6.1）：Post 把绘制回调/微任务投递到 Run 事件泵
 	// goroutine 执行——Run 的 select 循环就是桌面端「UI 线程」。Run 未启动时
 	// 任务按 FIFO 排队等待（与 skia 装配层 loop.Queue 语义一致）；Close 后拒绝。
@@ -65,15 +72,17 @@ type Window struct {
 }
 
 // reliable 报告事件是否必须可靠、有序交付（评审 P1 事件分级）。
-// IME 提交/预编辑、键盘、点击、焦点、开关输入法属于可靠事件，不能静默丢弃；
-// 光标移动、hover 等高频状态事件可合并，只保留最新（当前 Rust 端在内部边沿
-// 检测处理 hover，未回传此类事件，但分级机制为未来扩展预留）。
+// IME 提交/预编辑、键盘、指针按下/抬起、滚轮、点击、焦点属于可靠事件，
+// 不能静默丢弃（丢失一次滚轮/按下都会让翻译层状态机错乱）；
+// pointer_move 是高频状态事件，可合并只保留最新——拖拽/选区扩展只需
+// 最新位置，丢中间值无语义影响。
 func (e inputEvent) reliable() bool {
 	switch e.Kind {
-	case "click", "focus", "ime_enabled", "ime_commit", "ime_preedit", "backspace", "keydown", "keyup":
+	case "click", "focus", "ime_enabled", "ime_commit", "ime_preedit", "backspace",
+		"keydown", "keyup", "key", "pointer_down", "pointer_up", "wheel":
 		return true
 	default:
-		return false
+		return false // pointer_move 及未来新增的高频状态事件 → 合并槽
 	}
 }
 
@@ -365,6 +374,7 @@ func (w *Window) Run() error {
 		case <-w.postCh:
 			// UIExecutor 任务（帧请求/后台 Dispatch/微任务）在本事件泵执行。
 			w.drainPosts()
+			w.pollFrameClock()
 		case ev := <-w.events:
 			w.mu.Lock()
 			fn := w.dispatcher
@@ -386,7 +396,7 @@ func (w *Window) Run() error {
 				if fn != nil {
 					fn(InputEvent{
 						Kind: ev.Kind, NodeID: ev.NodeID, Event: ev.Event,
-						Text: ev.Text, X: ev.X, Y: ev.Y,
+						Text: ev.Text, X: ev.X, Y: ev.Y, Mods: ev.Mods,
 					})
 				}
 			}
@@ -473,12 +483,72 @@ func (w *Window) Focus(id gxscene.NodeID) {
 
 // InputEvent 是导出给业务的事件类型。
 type InputEvent struct {
-	Kind   string // "click" / "ime_preedit" / "ime_commit" / "focus" / "backspace" / "ime_enabled"
+	Kind   string // "click" / "pointer_down" / "pointer_up" / "pointer_move" / "wheel" / "key" / "ime_preedit" / "ime_commit" / "focus" / "backspace" / "ime_enabled"
 	NodeID string
-	Event  string
-	Text   string
-	X      float32
+	Event  string // click: 事件名；pointer: "left"；key: "down"/"repeat"
+	Text   string // ime 文本 / key: 键名（"Left"/"Home"/"a"…）
+	X      float32 // 点击/指针坐标；wheel: 行增量
 	Y      float32
+	Mods   string // 修饰键（key/pointer）：空串或 "ctrl+shift+alt+super" 的子串
+}
+
+// FrameClock 返回统一帧时钟（BACKEND_ARCHITECTURE_V2 阶段 1）：惰性创建。
+// wake 注入本窗口事件泵唤醒（RequestFrame 即时打断 Run 的 select 等待），
+// now 用 time.Now；宿主在 Run 事件泵每轮 Poll 派发绘制（App.SetFrameClock
+// 接线后 Signal 更新合并成一帧、无变化零绘制）。必须在 Run 前接线生效。
+func (w *Window) FrameClock() scheduler.FrameClock {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.frameClock == nil {
+		w.frameClock = scheduler.NewLoopClock(
+			func() { w.pump <- struct{}{} }, // wake：唤醒事件泵
+			func() time.Duration { return time.Duration(time.Now().UnixNano()) },
+		)
+	}
+	return w.frameClock
+}
+
+// pollFrameClock 在 Run 事件泵每轮调用：帧时钟 pending 则派发一次 OnFrame
+// （App 内部 drawNowErr → Present → Rust 渲染）。未接线 SetFrameClock 时零开销。
+func (w *Window) pollFrameClock() {
+	w.mu.Lock()
+	clock := w.frameClock
+	w.mu.Unlock()
+	if clock != nil {
+		clock.Poll()
+	}
+}
+
+// DebugWindowSize 供 GUI E2E 快照读取窗口逻辑尺寸（点）。
+// V2 后端窗口不可 resize（winit with_resizable(false)），配置尺寸即实际尺寸。
+func (w *Window) DebugWindowSize() (int, int) {
+	cfg := w.Config()
+	return cfg.Width, cfg.Height
+}
+
+// DebugAllBoxes 导出最近一帧全部命中框（x/y/w/h + label/testid/kind），供
+// E2E 按文案动态定位（与旧 skia glwindow 同语义）。数据来自 Rust 渲染端
+// gx_window_debug_info（镜像树反查节点文本），非 Run 状态返回 nil。
+func (w *Window) DebugAllBoxes() []map[string]any {
+	w.mu.Lock()
+	opened := w.handle != nil && w.runStarted
+	w.mu.Unlock()
+	if !opened {
+		return nil
+	}
+	raw := cDebugInfo()
+	if raw == "" {
+		return nil
+	}
+	var info struct {
+		WinW  float32          `json:"win_w"`
+		WinH  float32          `json:"win_h"`
+		Boxes []map[string]any `json:"boxes"`
+	}
+	if json.Unmarshal([]byte(raw), &info) != nil {
+		return nil
+	}
+	return info.Boxes
 }
 
 // RequestClose 请求 Rust 事件循环退出（线程安全、非阻塞）。供后台 goroutine

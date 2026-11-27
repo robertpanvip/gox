@@ -17,6 +17,11 @@ extern int         gx_window_run(void* handle);
 extern void        gx_window_close(void* handle);
 extern void        gx_window_destroy(void* handle);
 extern const char* gx_window_version();
+extern char* gx_window_debug_info();
+extern void gx_window_debug_free(char* ptr);
+extern char* gx_clipboard_get();
+extern void gx_clipboard_free(char* ptr);
+extern int gx_clipboard_set(const char* text);
 extern int         gx_measure_text_advances(const char* family, int size, float* narrow, float* wide);
 extern uint64_t    gx_bench_frame(const uint8_t* buf, int len, float width, float height, int iters);
 extern uint64_t    gx_bench_frame_cached(const uint8_t* buf, int len, float width, float height, int iters);
@@ -153,6 +158,27 @@ func cWindowDestroy(handle unsafe.Pointer) {
 
 func cVersion() string {
 	return C.GoString(C.gx_window_version())
+}
+
+// cDebugInfo 拉取 E2E 调试导出 JSON（窗口逻辑尺寸 + 最近一帧命中框）。
+func cDebugInfo() string {
+	ptr := C.gx_window_debug_info()
+	defer C.gx_window_debug_free(ptr)
+	return C.GoString(ptr)
+}
+
+// cClipboardGet 读取系统剪贴板（无显示服务/feature 关闭返回空串）。
+func cClipboardGet() string {
+	ptr := C.gx_clipboard_get()
+	defer C.gx_clipboard_free(ptr)
+	return C.GoString(ptr)
+}
+
+// cClipboardSet 写系统剪贴板。返回是否成功（无显示环境 false，不 panic）。
+func cClipboardSet(text string) bool {
+	cstr := C.CString(text)
+	defer C.free(unsafe.Pointer(cstr))
+	return int(C.gx_clipboard_set(cstr)) == 0
 }
 
 // cMeasureTextAdvances 调 Rust 编辑器字符 advance 实测（gx_measure_text_advances）。

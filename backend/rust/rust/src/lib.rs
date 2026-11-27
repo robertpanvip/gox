@@ -47,7 +47,7 @@ mod tests_surface;
 use raw_window_handle::{HasRawDisplayHandle as _, HasRawWindowHandle as _};
 use render::Renderer;
 use std::collections::VecDeque;
-use std::ffi::CString;
+use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_int, c_uchar, c_void};
 use std::sync::{Arc, Mutex};
 use winit::{
@@ -73,6 +73,15 @@ impl crate::render::SurfaceProvider for WinitSurface {
     fn pixel_size(&self) -> (u32, u32) {
         let s = self.window.inner_size();
         (s.width, s.height)
+    }
+    /// 逻辑尺寸（点）：物理像素 / scale_factor——E2E 快照与逻辑布局对齐。
+    fn logical_size(&self) -> (f32, f32) {
+        let s = self.window.inner_size();
+        let scale = self.window.scale_factor();
+        (
+            (s.width as f64 / scale) as f32,
+            (s.height as f64 / scale) as f32,
+        )
     }
     fn raw_display_handle(&self) -> raw_window_handle::RawDisplayHandle {
         self.window.raw_display_handle().expect("display handle")
@@ -247,6 +256,9 @@ struct Backend {
     height: u32,
     title: String,
     style: WindowStyle,
+    /// 渲染器共享句柄：gx_window_run 的 resumed 创建后填充；debug 导出 /
+    /// 帧时钟等 C ABI 在 Run 运行期间经它访问（run 退出后置 None）。
+    renderer: Arc<Mutex<Option<Renderer>>>,
 }
 
 unsafe impl Send for Backend {}
@@ -278,6 +290,7 @@ pub extern "C" fn gx_window_new_ex(
 ) -> *mut c_void {
     let title_str = unsafe { cstr(title) };
     let backend = Backend {
+        renderer: Arc::new(Mutex::new(None)),
         queue: Arc::new(Mutex::new(FrameQueue::new())),
         cb: Arc::new(Mutex::new(None)),
         cb_ctx: Arc::new(Mutex::new(std::ptr::null_mut())),
@@ -401,9 +414,9 @@ pub extern "C" fn gx_window_run(handle: *mut c_void) -> c_int {
                 q.wake(GxEvent::Wake);
             }
         }
-        let mut state: Option<Renderer> = None;
-        el.run_app(&mut WinitApp {
-            state: &mut state,
+        let state = backend.renderer.clone();
+        let run_result = el.run_app(&mut WinitApp {
+            state: &state,
             width: w,
             height: h,
             title,
@@ -415,8 +428,14 @@ pub extern "C" fn gx_window_run(handle: *mut c_void) -> c_int {
             t_run_start,
             t_resumed_done: None,
             first_frame_done: false,
-        })
-        .expect("run_app");
+            window: None,
+            modifiers: winit::keyboard::ModifiersState::empty(),
+            hover_cursor: String::new(),
+        });
+        // run 退出即清空渲染器槽：Renderer 的 surface/设备与事件循环同生命周期，
+        // 事件循环外不得再经 debug/时钟 ABI 访问（评审 P0 生命周期契约）。
+        state.lock().unwrap().take();
+        let _ = run_result;
     });
     // backend 在此 drop（-1）。原始那份由 gx_window_destroy 释放。
     if result.is_ok() {
@@ -449,7 +468,9 @@ fn new_event_loop() -> EventLoop<GxEvent> {
 }
 
 struct WinitApp<'a> {
-    state: &'a mut Option<Renderer>,
+    /// 共享渲染器槽：事件循环期间经 Mutex 访问；Backend 的 debug/时钟 ABI
+    /// 在 Run 运行期间经同一 Arc 读取（评审 P0 生命周期：run 退出后随槽释放）。
+    state: &'a Arc<Mutex<Option<Renderer>>>,
     width: u32,
     height: u32,
     title: String,
@@ -462,11 +483,16 @@ struct WinitApp<'a> {
     t_run_start: Option<std::time::Instant>,
     t_resumed_done: Option<std::time::Instant>,
     first_frame_done: bool,
+    // 阶段 4 输入面：window 句柄（hover 消费 CSS cursor 切系统光标）与修饰键状态
+    // （winit 在 KeyboardInput 前派发 ModifiersChanged，缓存供 key/pointer 事件携带）。
+    window: Option<Arc<Window>>,
+    modifiers: winit::keyboard::ModifiersState,
+    hover_cursor: String,
 }
 
 impl winit::application::ApplicationHandler<GxEvent> for WinitApp<'_> {
     fn resumed(&mut self, el: &winit::event_loop::ActiveEventLoop) {
-        if self.state.is_some() {
+        if self.state.lock().unwrap().is_some() {
             return;
         }
         let title = if self.title.is_empty() {
@@ -490,15 +516,21 @@ impl winit::application::ApplicationHandler<GxEvent> for WinitApp<'_> {
         }
         let window = Arc::new(el.create_window(attrs).expect("create window"));
         window.set_ime_allowed(true);
+        self.window = Some(window.clone());
         // opacity: winit 0.30 无跨平台窗口级 opacity API（各平台扩展不一），
         // 透明效果请用 with_transparent + 场景节点的半透明 bg；此处不设置。
         let _ = self.style.opacity;
         let provider: Arc<dyn crate::render::SurfaceProvider> = Arc::new(WinitSurface {
             window: window.clone(),
         });
-        *self.state = Some(pollster::block_on(Renderer::new(provider)));
+        *self.state.lock().unwrap() = Some(pollster::block_on(Renderer::new(provider)));
         // 首帧主动请求一次重绘：绘制首帧/应用 run 前已提交的帧。之后靠事件驱动。
-        self.state.as_ref().unwrap().request_redraw();
+        self.state
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .request_redraw();
         if self.probe {
             self.t_resumed_done = Some(std::time::Instant::now());
         }
@@ -514,7 +546,7 @@ impl winit::application::ApplicationHandler<GxEvent> for WinitApp<'_> {
                     let mut q = self.queue.lock().unwrap();
                     q.wake_in_flight = false;
                 }
-                if let Some(renderer) = self.state.as_mut() {
+                if let Some(renderer) = self.state.lock().unwrap().as_mut() {
                     renderer.request_redraw();
                 }
             }
@@ -527,7 +559,8 @@ impl winit::application::ApplicationHandler<GxEvent> for WinitApp<'_> {
         _id: winit::window::WindowId,
         event: WindowEvent,
     ) {
-        let Some(renderer) = self.state.as_mut() else {
+        let mut renderer_slot = self.state.lock().unwrap();
+        let Some(renderer) = renderer_slot.as_mut() else {
             return;
         };
         match event {
@@ -577,6 +610,7 @@ impl winit::application::ApplicationHandler<GxEvent> for WinitApp<'_> {
                         text: serde_json::to_string(&rows).unwrap_or_default(),
                         x: 0.0,
                         y: 0.0,
+                        mods: String::new(),
                     };
                     fire(&self.cb, &self.cb_ctx, &ev.to_json());
                 }
@@ -589,6 +623,7 @@ impl winit::application::ApplicationHandler<GxEvent> for WinitApp<'_> {
                         text: ve.text,
                         x: 0.0,
                         y: 0.0,
+                        mods: String::new(),
                     };
                     fire(&self.cb, &self.cb_ctx, &ev.to_json());
                 }
@@ -610,6 +645,7 @@ impl winit::application::ApplicationHandler<GxEvent> for WinitApp<'_> {
                         text,
                         x: 0.0,
                         y: 0.0,
+                        mods: String::new(),
                     };
                     fire(&self.cb, &self.cb_ctx, &ev.to_json());
                 }
@@ -621,13 +657,58 @@ impl winit::application::ApplicationHandler<GxEvent> for WinitApp<'_> {
                 }
             }
             WindowEvent::CloseRequested => el.exit(),
+            WindowEvent::ModifiersChanged(m) => {
+                // winit 保证在 KeyboardInput 前派发；缓存供 key/pointer 事件携带。
+                self.modifiers = m.state();
+            }
             WindowEvent::CursorMoved { position, .. } => {
                 let (x, y) = (position.x as f32, position.y as f32);
                 renderer.set_cursor(x, y);
+                // 原始指针移动事件（翻译层消费：分隔条拖拽 / 左键按住扩展选区）。
+                let mods = mods_str(self.modifiers);
+                fire(
+                    &self.cb,
+                    &self.cb_ctx,
+                    &input_json("pointer_move", "", "", "", x, y, &mods),
+                );
                 // 伪状态 hover：命中节点变化时才 request_redraw（边沿检测，避免每帧重绘）。
                 let hit = renderer.hit_node_id(x, y);
+                // hover 消费 CSS cursor 属性切系统光标（边沿：形状变化才 set）。
+                // 先取形状再交出 hit 所有权（set_hover 需要 Option<String> 值）。
+                let shape = hit
+                    .as_deref()
+                    .and_then(|id| renderer.node_cursor(id))
+                    .unwrap_or_default();
                 if renderer.set_hover(hit) {
                     renderer.request_redraw();
+                }
+                if let Some(w) = &self.window {
+                    if shape != self.hover_cursor {
+                        self.hover_cursor = shape.clone();
+                        w.set_cursor(cursor_icon_for(&shape));
+                    }
+                }
+            }
+            WindowEvent::MouseWheel { delta, .. } => {
+                // 滚轮：统一归一为"行数"（LineDelta 原样；PixelDelta 按行高 20px 折算）。
+                // winit 约定 y 正=向上滚；翻译层自行取负转"向下为正"。
+                let (dx, dy) = match delta {
+                    winit::event::MouseScrollDelta::LineDelta(x, y) => (x, y),
+                    winit::event::MouseScrollDelta::PixelDelta(pos) => {
+                        (pos.x as f32 / 20.0, pos.y as f32 / 20.0)
+                    }
+                };
+                // 滚动路由（同 web 端浏览器职责）：光标下 overflow 容器由渲染端
+                // 自治（镜像树补丁 + 重绘）；编辑器区 / 无容器 → 回传翻译层
+                // （playground：EditorScrollLines 信号驱动编辑器虚拟滚动）。
+                let (cx, cy) = renderer.cursor();
+                let handled = renderer.scroll_container_at(cx, cy, dy * 40.0);
+                if !handled {
+                    fire(
+                        &self.cb,
+                        &self.cb_ctx,
+                        &input_json("wheel", "", "", "", dx, dy, ""),
+                    );
                 }
             }
             WindowEvent::MouseInput {
@@ -636,6 +717,13 @@ impl winit::application::ApplicationHandler<GxEvent> for WinitApp<'_> {
                 ..
             } => {
                 let (x, y) = renderer.cursor();
+                let mods = mods_str(self.modifiers);
+                // 原始按下事件（翻译层消费：选区起点 / 分隔条拖拽起点 / 多击计数）。
+                fire(
+                    &self.cb,
+                    &self.cb_ctx,
+                    &input_json("pointer_down", "", "left", "", x, y, &mods),
+                );
                 // active 伪状态：按下命中的节点进入 active（active 优先于 hover）。
                 let hit = renderer.hit_node_id(x, y);
                 if renderer.set_active(hit) {
@@ -650,9 +738,11 @@ impl winit::application::ApplicationHandler<GxEvent> for WinitApp<'_> {
                 if renderer.set_focused(focus_id) {
                     renderer.request_redraw();
                 }
-                if let Some(ev) = renderer.hit_click(x, y) {
+                if let Some(mut ev) = renderer.hit_click(x, y) {
+                    ev.mods = mods;
                     fire(&self.cb, &self.cb_ctx, &ev.to_json());
-                } else if let Some(ev) = input_ev {
+                } else if let Some(mut ev) = input_ev {
+                    ev.mods = mods;
                     fire(&self.cb, &self.cb_ctx, &ev.to_json());
                 }
             }
@@ -661,15 +751,33 @@ impl winit::application::ApplicationHandler<GxEvent> for WinitApp<'_> {
                 button: MouseButton::Left,
                 ..
             } => {
+                let (x, y) = renderer.cursor();
+                fire(
+                    &self.cb,
+                    &self.cb_ctx,
+                    &input_json(
+                        "pointer_up",
+                        "",
+                        "left",
+                        "",
+                        x,
+                        y,
+                        &mods_str(self.modifiers),
+                    ),
+                );
                 // 松开：退出 active，回到仅 hover 状态。
                 if renderer.set_active(None) {
                     renderer.request_redraw();
                 }
             }
             WindowEvent::CursorLeft { .. } => {
-                // 光标离开窗口：退出 hover（否则会停在最后的 hover 态）。
+                // 光标离开窗口：退出 hover（否则会停在最后的 hover 态）+ 恢复默认箭头。
                 if renderer.set_hover(None) {
                     renderer.request_redraw();
+                }
+                if let Some(w) = &self.window {
+                    self.hover_cursor = String::new();
+                    w.set_cursor(cursor_icon_for(""));
                 }
             }
             WindowEvent::Ime(ime) => match ime {
@@ -683,6 +791,7 @@ impl winit::application::ApplicationHandler<GxEvent> for WinitApp<'_> {
                         text: s,
                         x: 0.0,
                         y: 0.0,
+                        mods: String::new(),
                     };
                     fire(&self.cb, &self.cb_ctx, &ev.to_json());
                 }
@@ -694,6 +803,7 @@ impl winit::application::ApplicationHandler<GxEvent> for WinitApp<'_> {
                         text: s,
                         x: 0.0,
                         y: 0.0,
+                        mods: String::new(),
                     };
                     fire(&self.cb, &self.cb_ctx, &ev.to_json());
                 }
@@ -703,10 +813,20 @@ impl winit::application::ApplicationHandler<GxEvent> for WinitApp<'_> {
                     winit::event::KeyEvent {
                         state: ElementState::Pressed,
                         logical_key,
+                        repeat,
                         ..
                     },
                 ..
             } => {
+                // 原始按键事件（翻译层消费：方向键移动 / Home/End / Ctrl 组合快捷键）。
+                // repeat 用 event 字段区分 "down"/"repeat"；Up 不发（现有消费方都只关心按下）。
+                let phase = if repeat { "repeat" } else { "down" };
+                let mods = mods_str(self.modifiers);
+                fire(
+                    &self.cb,
+                    &self.cb_ctx,
+                    &input_json("key", "", phase, &key_name(&logical_key), 0.0, 0.0, &mods),
+                );
                 if logical_key == Key::Named(NamedKey::Backspace) {
                     fire(&self.cb, &self.cb_ctx, ev_json("backspace"));
                 } else if logical_key == Key::Named(NamedKey::Escape) {
@@ -722,6 +842,7 @@ impl winit::application::ApplicationHandler<GxEvent> for WinitApp<'_> {
                             text: text.to_string(),
                             x: 0.0,
                             y: 0.0,
+                            mods: String::new(),
                         };
                         fire(&self.cb, &self.cb_ctx, &ev.to_json());
                     }
@@ -729,6 +850,72 @@ impl winit::application::ApplicationHandler<GxEvent> for WinitApp<'_> {
             }
             _ => {}
         }
+    }
+}
+
+/// 构造原始输入事件 JSON（mods 为空时省略字段，保持事件体最小）。
+fn input_json(
+    kind: &str,
+    node_id: &str,
+    event: &str,
+    text: &str,
+    x: f32,
+    y: f32,
+    mods: &str,
+) -> String {
+    let ev = protocol::InputEvent {
+        kind: kind.into(),
+        node_id: node_id.into(),
+        event: event.into(),
+        text: text.into(),
+        x,
+        y,
+        mods: mods.into(),
+    };
+    ev.to_json()
+}
+
+/// winit LogicalKey → 翻译层键名：Named 键给变体名（Left/Home/Backspace/Escape...），
+/// 字符键给字符本身（"a"），识别不了给空串。
+fn key_name(k: &Key) -> String {
+    match k {
+        Key::Named(n) => format!("{n:?}"),
+        Key::Character(s) => s.to_string(),
+        _ => String::new(),
+    }
+}
+
+/// 修饰键固定顺序串（翻译层按 contains 判断）："ctrl+shift+alt+super"。
+/// 自由函数而非方法：window_event 里 renderer 可变借用 self.state 期间，
+/// 方法调用会触发整 self 借用冲突；ModifiersState 是 Copy，先复制再传值。
+fn mods_str(m: winit::keyboard::ModifiersState) -> String {
+    let mut parts: Vec<&str> = Vec::with_capacity(4);
+    if m.control_key() {
+        parts.push("ctrl");
+    }
+    if m.shift_key() {
+        parts.push("shift");
+    }
+    if m.alt_key() {
+        parts.push("alt");
+    }
+    if m.super_key() {
+        parts.push("super");
+    }
+    parts.join("+")
+}
+
+/// CSS cursor 值 → winit 系统光标（与旧 skia glwindow 的 setHoverCursor 同一张映射）。
+/// "default"/"auto"/空 → Arrow；未识别值（wait/progress/move）暂按箭头。
+fn cursor_icon_for(shape: &str) -> winit::window::CursorIcon {
+    use winit::window::CursorIcon;
+    match shape.trim().to_ascii_lowercase().as_str() {
+        "pointer" | "hand" => CursorIcon::Pointer,
+        "text" => CursorIcon::Text,
+        "crosshair" => CursorIcon::Crosshair,
+        "ew-resize" | "col-resize" => CursorIcon::EwResize,
+        "ns-resize" | "row-resize" => CursorIcon::NsResize,
+        _ => CursorIcon::Default,
     }
 }
 
@@ -773,6 +960,107 @@ pub extern "C" fn gx_window_destroy(handle: *mut c_void) {
         unsafe {
             drop(Arc::from_raw(handle as *const Backend));
         }
+    }
+}
+
+/// E2E 调试导出：{"win_w":..,"win_h":..,"boxes":[{label,testid,kind,x,y,w,h},...]}。
+/// 返回堆上 C 字符串，调用方用 gx_window_debug_free 释放；空场景返回 "boxes":[]。
+#[no_mangle]
+pub extern "C" fn gx_window_debug_info(handle: *mut c_void) -> *mut c_char {
+    if handle.is_null() {
+        return CString::default().into_raw();
+    }
+    let backend = unsafe { &*(handle as *const Backend) };
+    let json = match backend.renderer.lock() {
+        Ok(mut slot) => match slot.as_ref() {
+            Some(r) => r.debug_boxes_json(),
+            None => r#"{"win_w":0,"win_h":0,"boxes":[]}"#.into(),
+        },
+        Err(_) => r#"{"win_w":0,"win_h":0,"boxes":[]}"#.into(),
+    };
+    match CString::new(json) {
+        Ok(c) => c.into_raw(),
+        Err(_) => CString::default().into_raw(),
+    }
+}
+
+/// 释放 gx_window_debug_info 返回的堆串。
+#[no_mangle]
+pub unsafe extern "C" fn gx_window_debug_free(ptr: *mut c_char) {
+    if !ptr.is_null() {
+        drop(CString::from_raw(ptr));
+    }
+}
+
+// ---- 剪贴板 C ABI（阶段 4 输入面：翻译层 Ctrl+C/V/X 消费）----
+//
+// arboard 进程级实例惰性创建（首次读写才建，开销可忽略）；feature 关闭时
+// （wasm 构建用 --no-default-features）get 返回空串 / set no-op。
+
+/// 进程级剪贴板实例。初始化失败（无显示服务 / Wayland 无 data-control）存 None，
+/// 读写按"失败"处理而非 panic——剪贴板不可用不应拖垮渲染进程。
+#[cfg(feature = "clipboard")]
+fn clipboard() -> Option<&'static Mutex<arboard::Clipboard>> {
+    static CLIP: std::sync::OnceLock<Option<Mutex<arboard::Clipboard>>> =
+        std::sync::OnceLock::new();
+    CLIP.get_or_init(|| arboard::Clipboard::new().ok().map(Mutex::new))
+        .as_ref()
+}
+
+/// 读取剪贴板文本。返回堆上 C 字符串（NUL 结尾，UTF-8；失败/空返回 ""），
+/// 调用方必须用 gx_clipboard_free 释放（非借用，避免栈帧生命周期纠缠）。
+#[no_mangle]
+pub extern "C" fn gx_clipboard_get() -> *mut c_char {
+    let text: String = {
+        #[cfg(feature = "clipboard")]
+        {
+            clipboard()
+                .and_then(|c| c.lock().ok())
+                .and_then(|mut c| c.get_text().ok())
+                .unwrap_or_default()
+        }
+        #[cfg(not(feature = "clipboard"))]
+        String::new()
+    };
+    match CString::new(text) {
+        Ok(c) => c.into_raw(),
+        Err(_) => CString::default().into_raw(),
+    }
+}
+
+/// 释放 gx_clipboard_get 返回的堆串。
+#[no_mangle]
+pub unsafe extern "C" fn gx_clipboard_free(ptr: *mut c_char) {
+    if !ptr.is_null() {
+        drop(CString::from_raw(ptr));
+    }
+}
+
+/// 写剪贴板文本（UTF-8，NUL 结尾）。返回 0 成功 / -1 失败（feature 关闭恒 -1）。
+#[no_mangle]
+pub extern "C" fn gx_clipboard_set(text: *const c_char) -> i32 {
+    if text.is_null() {
+        return -1;
+    }
+    let s = unsafe { CStr::from_ptr(text) };
+    let text: &str = match s.to_str() {
+        Ok(t) => t,
+        Err(_) => return -1,
+    };
+    #[cfg(feature = "clipboard")]
+    {
+        match clipboard()
+            .and_then(|c| c.lock().ok())
+            .map(|mut c| c.set_text(text.to_string()))
+        {
+            Some(Ok(())) => 0,
+            _ => -1,
+        }
+    }
+    #[cfg(not(feature = "clipboard"))]
+    {
+        let _ = text;
+        -1
     }
 }
 
@@ -1012,5 +1300,84 @@ mod frame_queue_tests {
         assert!(q.first_enqueue.is_none());
         assert_eq!(q.submitted, 2);
         assert_eq!(q.applied, 0);
+    }
+}
+
+#[cfg(test)]
+mod input_tests {
+    use super::*;
+
+    /// CSS cursor → winit 光标映射：与旧 skia glwindow setHoverCursor 同一张表。
+    #[test]
+    fn cursor_icon_mapping() {
+        use winit::window::CursorIcon;
+        assert_eq!(cursor_icon_for("pointer"), CursorIcon::Pointer);
+        assert_eq!(cursor_icon_for("hand"), CursorIcon::Pointer); // 别名
+        assert_eq!(cursor_icon_for("text"), CursorIcon::Text);
+        assert_eq!(cursor_icon_for("crosshair"), CursorIcon::Crosshair);
+        assert_eq!(cursor_icon_for("ew-resize"), CursorIcon::EwResize);
+        assert_eq!(cursor_icon_for("col-resize"), CursorIcon::EwResize); // 别名
+        assert_eq!(cursor_icon_for("ns-resize"), CursorIcon::NsResize);
+        assert_eq!(cursor_icon_for("row-resize"), CursorIcon::NsResize); // 别名
+                                                                         // default/auto/空/未识别 → Default 箭头
+        assert_eq!(cursor_icon_for(""), CursorIcon::Default);
+        assert_eq!(cursor_icon_for("default"), CursorIcon::Default);
+        assert_eq!(cursor_icon_for("auto"), CursorIcon::Default);
+        assert_eq!(cursor_icon_for("wait"), CursorIcon::Default);
+        assert_eq!(cursor_icon_for("  Text  "), CursorIcon::Text); // 大小写+空白归一
+    }
+
+    /// 修饰键固定顺序串：翻译层按 contains 判断，顺序稳定可读。
+    #[test]
+    fn mods_string_order() {
+        use winit::keyboard::ModifiersState;
+        assert_eq!(mods_str(ModifiersState::empty()), "");
+        assert_eq!(mods_str(ModifiersState::CONTROL), "ctrl");
+        assert_eq!(mods_str(ModifiersState::SHIFT), "shift");
+        assert_eq!(
+            mods_str(ModifiersState::CONTROL | ModifiersState::SHIFT),
+            "ctrl+shift"
+        );
+        assert_eq!(mods_str(ModifiersState::all()), "ctrl+shift+alt+super");
+    }
+
+    /// 键名提取：Named 键给变体名，字符键给字符，未识别空串。
+    #[test]
+    fn key_name_extraction() {
+        use winit::keyboard::{Key, NamedKey};
+        assert_eq!(key_name(&Key::Named(NamedKey::ArrowLeft)), "ArrowLeft");
+        assert_eq!(key_name(&Key::Named(NamedKey::Home)), "Home");
+        assert_eq!(key_name(&Key::Named(NamedKey::Backspace)), "Backspace");
+        assert_eq!(key_name(&Key::Character("a".into())), "a");
+        assert_eq!(key_name(&Key::Character("中".into())), "中");
+    }
+
+    /// 原始输入事件 JSON：mods 为空省略语义（serde default），键序稳定可解析。
+    #[test]
+    fn input_json_shape() {
+        let j = input_json("wheel", "", "", "", 1.0, -3.0, "");
+        let v: serde_json::Value = serde_json::from_str(&j).unwrap();
+        assert_eq!(v["kind"], "wheel");
+        assert_eq!(v["x"], 1.0);
+        assert_eq!(v["y"], -3.0);
+        assert_eq!(v["mods"], "");
+        let j2 = input_json("key", "", "down", "Left", 0.0, 0.0, "ctrl+shift");
+        let v2: serde_json::Value = serde_json::from_str(&j2).unwrap();
+        assert_eq!(v2["kind"], "key");
+        assert_eq!(v2["event"], "down");
+        assert_eq!(v2["text"], "Left");
+        assert_eq!(v2["mods"], "ctrl+shift");
+    }
+
+    /// 剪贴板 C ABI（feature 默认开启）：get 返回堆串可 free；set 往返成功。
+    /// 无头环境 arboard 可能因无显示服务失败——get 应返回合法串（失败时空），
+    /// set 失败返回 -1 不 panic。
+    #[test]
+    fn clipboard_abi_roundtrip() {
+        let ptr = gx_clipboard_get();
+        assert!(!ptr.is_null());
+        unsafe { gx_clipboard_free(ptr) };
+        let text = CString::new("gx-clipboard-test").unwrap();
+        let _ = gx_clipboard_set(text.as_ptr()); // 成功 0 / 无显示环境 -1，均不 panic
     }
 }

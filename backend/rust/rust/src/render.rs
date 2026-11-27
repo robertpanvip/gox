@@ -27,6 +27,12 @@ use wgpu::{
 pub trait SurfaceProvider: Send + Sync {
     /// 当前像素尺寸（物理像素；0 会被渲染内核钳到 1）。
     fn pixel_size(&self) -> (u32, u32);
+    /// 当前逻辑尺寸（点；E2E 调试导出/命中坐标与逻辑布局对齐）。
+    /// 默认与物理尺寸一致（scale=1 的平台/无头提供者）。
+    fn logical_size(&self) -> (f32, f32) {
+        let (w, h) = self.pixel_size();
+        (w as f32, h as f32)
+    }
     /// 平台 display 原始句柄（wgpu SurfaceTargetUnsafe::RawHandle 用）。
     fn raw_display_handle(&self) -> RawDisplayHandle;
     /// 平台 window/surface 原始句柄。
@@ -65,6 +71,8 @@ pub struct Renderer {
     rebuild_gen: u64,
     width: u32,
     height: u32,
+    /// 逻辑尺寸（点，scale 折算后）；resize 时随物理尺寸同步更新（E2E 调试导出）。
+    logical: (f32, f32),
 
     font_system: FontSystem,
     swash_cache: SwashCache,
@@ -119,6 +127,7 @@ impl Renderer {
         let (raw_w, raw_h) = provider.pixel_size();
         let w = raw_w.max(1);
         let h = raw_h.max(1);
+        let logical = provider.logical_size();
         let instance = Instance::new(&InstanceDescriptor::default());
         let adapter = instance
             .request_adapter(&RequestAdapterOptions::default())
@@ -179,6 +188,7 @@ impl Renderer {
 
         let gpu = gx_gpu::QuadGpu::new(device.clone(), queue.clone(), fmt);
         Renderer {
+            logical,
             device,
             queue,
             surface,
@@ -871,7 +881,213 @@ impl Renderer {
                 text: String::new(),
                 x,
                 y,
+                mods: String::new(),
             })
+    }
+
+    /// 当前逻辑尺寸（provider 实时查询——resize/缩放变化立即反映）。
+    fn provider_logical(&self) -> (f32, f32) {
+        self.provider.logical_size()
+    }
+
+    /// E2E 调试导出：最近一帧全部命中框（x/y/w/h + label/testid/kind）+ 窗口
+    /// 逻辑尺寸。label 取 props["label"] > 自身 text > 首个子孙 text（与旧
+    /// skia 装配层 nodeLabel 同语义）；kind 取节点 kind。JSON 一次性序列化，
+    /// 供 gx_window_debug_info C ABI 直接透传。
+    pub fn debug_boxes_json(&self) -> String {
+        #[derive(serde::Serialize)]
+        struct BoxJson {
+            label: String,
+            testid: String,
+            kind: String,
+            class: String,
+            #[serde(rename = "data-line")]
+            data_line: String,
+            x: f32,
+            y: f32,
+            w: f32,
+            h: f32,
+        }
+        #[derive(serde::Serialize)]
+        struct DebugInfo {
+            win_w: f32,
+            win_h: f32,
+            boxes: Vec<BoxJson>,
+        }
+        fn label_of(n: &crate::scene::SceneNode) -> String {
+            if let Some(v) = n.props.get("label") {
+                if !v.is_empty() {
+                    return v.clone();
+                }
+            }
+            if !n.text.is_empty() {
+                return n.text.clone();
+            }
+            for c in &n.children {
+                let s = label_of(c);
+                if !s.is_empty() {
+                    return s;
+                }
+            }
+            String::new()
+        }
+        fn find<'a>(
+            root: &'a crate::scene::SceneNode,
+            nid: u64,
+        ) -> Option<&'a crate::scene::SceneNode> {
+            fn walk<'a>(
+                n: &'a crate::scene::SceneNode,
+                nid: u64,
+            ) -> Option<&'a crate::scene::SceneNode> {
+                if n.nid == nid {
+                    return Some(n);
+                }
+                for c in &n.children {
+                    if let Some(f) = walk(c, nid) {
+                        return Some(f);
+                    }
+                }
+                None
+            }
+            walk(root, nid)
+        }
+        let (win_w, win_h) = self.provider_logical();
+        let scene = self.scene.as_ref();
+        let boxes: Vec<BoxJson> = self
+            .display
+            .hitboxes
+            .iter()
+            .filter_map(|h| {
+                let node = scene.and_then(|sc| find(sc, h.4));
+                node.map(|n| BoxJson {
+                    label: label_of(n),
+                    testid: n.props.get("testid").cloned().unwrap_or_default(),
+                    kind: if n.kind.is_empty() {
+                        format!("{:?}", n.typ)
+                    } else {
+                        n.kind.clone()
+                    },
+                    class: n.props.get("class").cloned().unwrap_or_default(),
+                    data_line: n.props.get("data-line").cloned().unwrap_or_default(),
+                    x: h.0,
+                    y: h.1,
+                    w: h.2,
+                    h: h.3,
+                })
+            })
+            .collect();
+        serde_json::to_string(&DebugInfo {
+            win_w,
+            win_h,
+            boxes,
+        })
+        .unwrap_or_default()
+    }
+
+    /// 查节点 CSS cursor 属性（hover 悬停切系统光标形状）。
+    /// 命中节点自身未声明时向上层找——cursor 是 CSS 继承属性，容器声明
+    /// "pointer" 其子文本也应是手型。找不到返回 None（默认箭头）。
+    pub fn node_cursor(&self, id: &str) -> Option<String> {
+        if let Some(scene) = &self.scene {
+            // 命中节点 → 根的祖先链；沿链找第一个声明 cursor 的（CSS 继承语义）。
+            for node in scene.find_ancestors(id) {
+                if let Some(c) = node.props.get("cursor") {
+                    if !c.is_empty() {
+                        return Some(c.clone());
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// 滚轮路由（渲染端自治，同 web 端浏览器职责）：把 dy*lineH 像素滚进
+    /// 光标下最近的 overflow:auto/scroll 容器（镜像树祖先链查找，scroll-top
+    /// 夹紧写回 + request_redraw）。返回 true 表示已处理（不回传 Go）；
+    /// 光标在编辑器区（class gx-editor，编辑逻辑层信号驱动）或无可滚动容器
+    /// 时返回 false，由 lib.rs 决定是否回传 wheel 事件。
+    pub fn scroll_container_at(&mut self, x: f32, y: f32, delta_px: f32) -> bool {
+        use crate::scene::SceneNode;
+        let hit = match self.display.hit(x, y) {
+            Some(h) => h,
+            None => return false,
+        };
+        let scene = match self.scene.as_ref() {
+            Some(s) => s,
+            None => return false,
+        };
+        // 光标下命中节点的祖先链（含自身，内→外）。
+        let chain = scene.find_ancestors(&hit.4.to_string());
+        // 沿祖先链找最近可滚动容器；编辑器（class 含 gx-editor）不在此处理。
+        let mut container: Option<&SceneNode> = None;
+        for node in &chain {
+            let ov = node
+                .props
+                .get("overflow")
+                .map(|s| s.trim().to_ascii_lowercase());
+            if ov.as_deref() != Some("auto") && ov.as_deref() != Some("scroll") {
+                continue;
+            }
+            if node
+                .props
+                .get("class")
+                .map(|c| c.contains("gx-editor"))
+                .unwrap_or(false)
+            {
+                return false; // 编辑器滚动走 Go 翻译层（EditorScrollLines 信号）
+            }
+            container = Some(node);
+            break;
+        }
+        let Some(container) = container else {
+            return false;
+        };
+        // 命中框（容器自身盒子，坐标含当前滚动偏移）。
+        let cbox = self
+            .display
+            .hitboxes
+            .iter()
+            .find(|h| h.4 == container.nid)
+            .cloned();
+        let Some(box_rect) = cbox else {
+            return false;
+        };
+        // 内容总高：容器子树内全部命中框的最大底边（含滚动偏移，加回当前值得内容高）。
+        let cur = container
+            .props
+            .get("scroll-top")
+            .and_then(|v| v.trim().parse::<f32>().ok())
+            .unwrap_or(0.0);
+        let sub_of = |nid: u64| -> bool {
+            scene
+                .find_ancestors(&nid.to_string())
+                .iter()
+                .any(|n| n.nid == container.nid)
+        };
+        let mut max_bottom = box_rect.1 + box_rect.3;
+        for h in &self.display.hitboxes {
+            if sub_of(h.4) && h.1 + h.3 > max_bottom {
+                max_bottom = h.1 + h.3;
+            }
+        }
+        let max_scroll = (max_bottom - box_rect.1 + cur - box_rect.3).max(0.0);
+        let next = (cur + delta_px).clamp(0.0, max_scroll);
+        if next == cur {
+            return true; // 已到边界：吃掉事件，不回传
+        }
+        // 镜像树打补丁（渲染端表现层状态，Go 树未变即不被 Host 帧覆盖）。
+        // container 的只读借用（chain/scene）至此已全部结束，可安全可变打补丁。
+        let container_nid = container.nid;
+        drop(chain);
+        drop(scene);
+        if let Some(scene_mut) = self.scene.as_mut() {
+            find_by_nid_mut(scene_mut, container_nid, &mut |n: &mut SceneNode| {
+                n.props.insert("scroll-top".into(), format!("{next}"));
+            });
+        }
+        self.frame_dirty = true;
+        self.request_redraw();
+        true
     }
 
     /// 点击是否落在输入框 → 生成 focus 事件
@@ -892,6 +1108,7 @@ impl Renderer {
                 text: String::new(),
                 x,
                 y,
+                mods: String::new(),
             })
     }
 
@@ -899,6 +1116,7 @@ impl Renderer {
         // 简化：仅更新 surface 配置（种子 demo 固定尺寸）。
         self.config.width = w.max(1);
         self.config.height = h.max(1);
+        self.logical = self.provider_logical();
         self.surface.configure(&self.device, &self.config);
         // 尺寸相关缓存失效：下一帧必须重算布局与文本。
         self.frame_dirty = true;
@@ -1490,4 +1708,22 @@ mod threeway_tests {
             fails.join("\n")
         );
     }
+}
+
+/// 按 nid 在镜像树找节点并执行补丁（滚动偏移写回用）。
+fn find_by_nid_mut(
+    root: &mut crate::scene::SceneNode,
+    nid: u64,
+    patch: &mut dyn FnMut(&mut crate::scene::SceneNode),
+) -> bool {
+    if root.nid == nid {
+        patch(root);
+        return true;
+    }
+    for c in &mut root.children {
+        if find_by_nid_mut(c, nid, patch) {
+            return true;
+        }
+    }
+    false
 }

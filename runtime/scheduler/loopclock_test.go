@@ -1,11 +1,10 @@
-package main
+package scheduler
 
 import (
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/robertpanvip/gox/runtime/scheduler"
 )
 
 // ---- 阶段 4：Desktop 迁移验证（无头）----
@@ -33,21 +32,18 @@ func (f *fakeClock) advance(d time.Duration) {
 	f.mu.Unlock()
 }
 
-// newTestClock 构造注入可控时钟与唤醒计数的 loopClock。
-func newTestClock() (*loopClock, *fakeClock, *int) {
+// newTestClock 构造注入可控时钟与唤醒计数的 LoopClock。
+func newTestClock() (*LoopClock, *fakeClock, *int) {
 	fc := &fakeClock{}
 	wakes := 0
-	c := &loopClock{
-		wake: func() { wakes++ },
-		now:  fc.now,
-	}
+	c := NewLoopClock(func() { wakes++ }, fc.now)
 	return c, fc, &wakes
 }
 
 // runMainLoopRounds 模拟 GLFW 主循环：每轮 = 一拍（1/Hz 秒）→ emit。
 // 返回派发（=绘制）次数与累计 Delta 列表。
-func runMainLoopRounds(c *loopClock, fc *fakeClock, hz int, rounds int) (paints int, deltas []time.Duration) {
-	c.OnFrame(func(ft scheduler.FrameTime) {
+func runMainLoopRounds(c *LoopClock, fc *fakeClock, hz int, rounds int) (paints int, deltas []time.Duration) {
+	c.OnFrame(func(ft FrameTime) {
 		paints++
 		deltas = append(deltas, ft.Delta)
 	})
@@ -55,7 +51,7 @@ func runMainLoopRounds(c *loopClock, fc *fakeClock, hz int, rounds int) (paints 
 	for i := 0; i < rounds; i++ {
 		c.RequestFrame() // 每帧都有请求（稳态绘制）
 		fc.advance(period)
-		if c.emit() {
+		if c.Poll() {
 			// emit 返回 true 表示本帧有绘制（真实主循环里随后调 paintNow）。
 		}
 	}
@@ -68,7 +64,7 @@ func TestLoopClockMergesRequestsInSameCycle(t *testing.T) {
 	for _, hz := range []int{60, 120, 144} {
 		c, fc, wakes := newTestClock()
 		var paints int
-		c.OnFrame(func(scheduler.FrameTime) { paints++ })
+		c.OnFrame(func(FrameTime) { paints++ })
 
 		// 同周期内狂发 100 次请求。
 		for i := 0; i < 100; i++ {
@@ -78,7 +74,7 @@ func TestLoopClockMergesRequestsInSameCycle(t *testing.T) {
 			t.Errorf("%dHz: 同周期 %d 次请求应只唤醒 1 次，实际 %d 次", hz, 100, w)
 		}
 		fc.advance(time.Second / time.Duration(hz))
-		if !c.emit() {
+		if !c.Poll() {
 			t.Fatalf("%dHz: 有 pending 的轮次 emit 应返回 true", hz)
 		}
 		if paints != 1 {
@@ -87,7 +83,7 @@ func TestLoopClockMergesRequestsInSameCycle(t *testing.T) {
 		// 消费后再空转若干轮：pending 已清，零绘制零唤醒。
 		fc.advance(time.Second / time.Duration(hz))
 		for i := 0; i < 5; i++ {
-			if c.emit() {
+			if c.Poll() {
 				t.Errorf("%dHz: 空闲轮 emit 不应返回 true", hz)
 			}
 		}
@@ -129,21 +125,21 @@ func TestLoopClockDeltaAcrossRefreshRates(t *testing.T) {
 func TestLoopClockFrameIDMonotonic(t *testing.T) {
 	c, fc, _ := newTestClock()
 	var ids []uint64
-	c.OnFrame(func(ft scheduler.FrameTime) { ids = append(ids, ft.FrameID) })
+	c.OnFrame(func(ft FrameTime) { ids = append(ids, ft.FrameID) })
 
 	c.RequestFrame()
 	fc.advance(8333 * time.Microsecond)
-	c.emit() // 帧 1
+	c.Poll() // 帧 1
 	c.RequestFrame()
 	fc.advance(8333 * time.Microsecond)
-	c.emit() // 帧 2
+	c.Poll() // 帧 2
 	// 连续两个 pending 轮（两轮各一次请求）。
 	c.RequestFrame()
 	fc.advance(8333 * time.Microsecond)
-	c.emit() // 帧 3
+	c.Poll() // 帧 3
 	c.RequestFrame()
 	fc.advance(8333 * time.Microsecond)
-	c.emit() // 帧 4
+	c.Poll() // 帧 4
 
 	if len(ids) != 4 {
 		t.Fatalf("应派发 4 帧，实际 %d", len(ids))
@@ -159,11 +155,11 @@ func TestLoopClockFrameIDMonotonic(t *testing.T) {
 func TestLoopClockCancelFrameDropsPending(t *testing.T) {
 	c, fc, _ := newTestClock()
 	var paints int
-	c.OnFrame(func(scheduler.FrameTime) { paints++ })
+	c.OnFrame(func(FrameTime) { paints++ })
 	c.RequestFrame()
 	c.CancelFrame()
 	fc.advance(16666 * time.Microsecond)
-	if c.emit() {
+	if c.Poll() {
 		t.Fatal("Cancel 后 emit 不应派发")
 	}
 	if paints != 0 {
@@ -176,9 +172,9 @@ func TestLoopClockCancelFrameDropsPending(t *testing.T) {
 func TestSchedulerDesktopClockLowRate(t *testing.T) {
 	for _, hz := range []int{60, 120, 144} {
 		c, fc, _ := newTestClock()
-		s := scheduler.New(c)
+		s := New(c)
 		var paints int
-		s.SetOnFrame(func(scheduler.FrameTime) { paints++ })
+		s.SetOnFrame(func(FrameTime) { paints++ })
 
 		rounds := 90
 		period := time.Second / time.Duration(hz)
@@ -188,7 +184,7 @@ func TestSchedulerDesktopClockLowRate(t *testing.T) {
 				s.RequestFrame()
 			}
 			fc.advance(period)
-			c.emit()
+			c.Poll()
 		}
 		if paints != requests {
 			t.Errorf("%dHz: 低速率请求 %d 次应绘制 %d 帧，实际 %d（不得丢帧）", hz, requests, requests, paints)
@@ -202,9 +198,9 @@ func TestSchedulerDesktopClockLowRate(t *testing.T) {
 func TestSchedulerDesktopClockHighRate(t *testing.T) {
 	for _, tc := range []struct{ hz, mult int }{{60, 2}, {60, 10}, {120, 2}, {144, 2}, {144, 10}} {
 		c, fc, _ := newTestClock()
-		s := scheduler.New(c)
+		s := New(c)
 		var paints int
-		s.SetOnFrame(func(scheduler.FrameTime) { paints++ })
+		s.SetOnFrame(func(FrameTime) { paints++ })
 
 		rounds := 120
 		period := time.Second / time.Duration(tc.hz)
@@ -213,7 +209,7 @@ func TestSchedulerDesktopClockHighRate(t *testing.T) {
 				s.RequestFrame() // 每轮 mult 次请求
 			}
 			fc.advance(period)
-			c.emit()
+			c.Poll()
 		}
 		// 每轮至多 1 次绘制（合并上限 = 刷新率）。
 		if paints > rounds {
@@ -231,11 +227,11 @@ func TestSchedulerDesktopClockHighRate(t *testing.T) {
 func TestSchedulerDesktopAnimationLoop(t *testing.T) {
 	for _, hz := range []int{60, 144} {
 		c, fc, _ := newTestClock()
-		s := scheduler.New(c)
+		s := New(c)
 		var paints int
 		period := time.Second / time.Duration(hz)
 
-		s.SetOnFrame(func(scheduler.FrameTime) {
+		s.SetOnFrame(func(FrameTime) {
 			paints++
 			if paints < 10 {
 				s.RequestFrame() // 动画续帧
@@ -246,7 +242,7 @@ func TestSchedulerDesktopAnimationLoop(t *testing.T) {
 		s.RequestFrame() // 启动动画
 		for i := 0; i < 200 && paints < 10; i++ {
 			fc.advance(period)
-			c.emit()
+			c.Poll()
 		}
 		if paints != 10 {
 			t.Fatalf("%dHz: 动画应恰好绘制 10 帧后停止，实际 %d", hz, paints)
@@ -255,7 +251,7 @@ func TestSchedulerDesktopAnimationLoop(t *testing.T) {
 		stop := paints
 		for i := 0; i < 30; i++ {
 			fc.advance(period)
-			c.emit()
+			c.Poll()
 		}
 		if paints != stop {
 			t.Errorf("%dHz: 停止续帧后不应继续绘制（+%d 帧空转）", hz, paints-stop)
@@ -268,30 +264,30 @@ func TestSchedulerDesktopAnimationLoop(t *testing.T) {
 // 一帧（不多不少）。
 func TestSchedulerDesktopPauseResume(t *testing.T) {
 	c, fc, _ := newTestClock()
-	s := scheduler.New(c)
+	s := New(c)
 	var paints int
 	period := 16666 * time.Microsecond
-	s.SetOnFrame(func(scheduler.FrameTime) { paints++ })
+	s.SetOnFrame(func(FrameTime) { paints++ })
 
 	s.Pause()
 	for i := 0; i < 5; i++ {
 		s.RequestFrame() // 暂停期间多次请求
 		fc.advance(period)
-		c.emit()
+		c.Poll()
 	}
 	if paints != 0 {
 		t.Fatalf("暂停期间不应绘制，实际 %d", paints)
 	}
 	s.Resume() // 补一帧
 	fc.advance(period)
-	c.emit()
+	c.Poll()
 	if paints != 1 {
 		t.Fatalf("恢复后应补恰好 1 帧，实际 %d", paints)
 	}
 	// 再空转若干轮不再绘制。
 	for i := 0; i < 10; i++ {
 		fc.advance(period)
-		c.emit()
+		c.Poll()
 	}
 	if paints != 1 {
 		t.Fatalf("补帧后不应继续绘制，实际 %d", paints)
