@@ -10,6 +10,7 @@ import (
 	"os"
 	"time"
 
+	skia "github.com/robertpanvip/gox-backend-skia"
 	"github.com/robertpanvip/gox-playground/ui"
 	"github.com/robertpanvip/gox-playground/ui/interp"
 	gxapp "github.com/robertpanvip/gox/runtime/app"
