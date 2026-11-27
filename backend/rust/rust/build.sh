@@ -35,7 +35,7 @@ for lib in "${LIBS[@]}"; do
   # 先存 objdump 结果再 grep：避免 pipefail 下 grep -q 提前退出触发 objdump SIGPIPE，
   # 导致条件恒假、剥离被静默跳过（曾踩过这个坑）。
   sections="$(objdump -h "$lib" 2>/dev/null || true)"
-  if printf '%s' "$sections" | grep -qE '\.llvmbc|\.llvmcmd'; then
+  if printf '%s' "$sections" | grep -E '\.llvmbc|\.llvmcmd' > /dev/null; then
     echo "[rust-backend] strip LTO sections from $(basename "$lib")"
     objcopy --remove-section=.llvmbc --remove-section=.llvmcmd "$lib"
   fi
@@ -48,11 +48,20 @@ done
 for lib in target/release/deps/libgxbackend_rust-*.a target/release/deps/libgx_gpu-*.a; do
   [ -f "$lib" ] || continue
   sections="$(objdump -h "$lib" 2>/dev/null || true)"
-  if printf '%s' "$sections" | grep -qE '\.llvmbc|\.llvmcmd'; then
+  if printf '%s' "$sections" | grep -E '\.llvmbc|\.llvmcmd' > /dev/null; then
     echo "[rust-backend] remove orphan archive with LTO sections: $(basename "$lib")"
     rm -f "$lib"
   fi
 done
+
+# 主库重同步（硬链接陷阱）：objcopy 走「临时文件+改名」语义，剥离 deps 归档时
+# 会切断它与 target/release/libgxbackend_rust.a 的硬链接——主库残留在带 LTO 段
+# 的旧 inode 上，Go 链接期照样炸。这里以 deps 下最新的主产物为准重新落盘主库。
+main="$(ls -t target/release/deps/libgxbackend_rust-*.a 2>/dev/null | head -1)"
+if [ -n "$main" ]; then
+  rm -f target/release/libgxbackend_rust.a
+  cp "$main" target/release/libgxbackend_rust.a
+fi
 
 # 收尾校验（防静默漏剥）：递归扫描 target/release 下全部 gx 归档，任何残留
 # LTO 段都视为失败——cgo 的 -L 安全检查会递归扫描目录内全部 .a，漏掉一个
@@ -60,7 +69,7 @@ done
 fail=0
 while IFS= read -r -d '' lib; do
   sections="$(objdump -h "$lib" 2>/dev/null || true)"
-  if printf '%s' "$sections" | grep -qE '\.llvmbc|\.llvmcmd'; then
+  if printf '%s' "$sections" | grep -E '\.llvmbc|\.llvmcmd' > /dev/null; then
     echo "[rust-backend] ERROR: 仍带 LTO 段的归档: $lib" >&2
     fail=1
   fi

@@ -91,3 +91,19 @@ func TestRegisterKeyAssigned(t *testing.T) {
 
 // App.Close 错误传递（评审 P2）的测试在 runtime/app 包内（需访问未导出的 App 字段），
 // 见 close_concurrency_test.go 同目录的 TestClosePropagatesWindowError。
+
+// ---- VSyncControl（P4.5 高刷专项）——纯逻辑验证，不触发 cgo ----
+
+// 未开窗/未知模式：SetVSync 拒绝（不静默）；VSync 兜底 Fifo。
+func TestVSyncGuards(t *testing.T) {
+	w := NewWindow()
+	if err := w.SetVSync(VSyncFifo); err == nil {
+		t.Fatal("未开窗时应拒绝 SetVSync（先经 Host.Render/OpenWindow）")
+	}
+	if err := w.SetVSync(VSyncMode(9)); err == nil {
+		t.Fatal("未知模式应报错")
+	}
+	if w.VSync() != VSyncFifo {
+		t.Fatal("未开窗 VSync 应回退 Fifo")
+	}
+}

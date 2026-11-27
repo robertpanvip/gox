@@ -115,7 +115,7 @@ func main() {
 		}
 	})
 
-	app.Run()
+	handle.Run() // Host 唯一主循环（P4 目标态）：app.Run 退化为 no-op，必须走 Handle.Run
 }
 
 // findNode 在当前帧场景树里按 NodeID 找节点（焦点事件定位用）。

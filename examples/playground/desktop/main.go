@@ -118,7 +118,8 @@ func main() {
 	ui.LoadSample(0)
 
 	// 同一份 GX 场景树：桌面与网页唯一的差别只在后端装配。
-	if err := app.Run(); err != nil {
+	// P4 目标态：app.Run 退化为 no-op，主循环统一走 Handle.Run（Host 轮询）。
+	if err := handle.Run(); err != nil {
 		panic(err)
 	}
 }

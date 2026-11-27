@@ -16,6 +16,8 @@ extern void        gx_window_set_event_cb(void* handle, gx_event_cb cb, void* ct
 extern int         gx_window_pump(void* handle);
 extern void        gx_window_close(void* handle);
 extern void        gx_window_destroy(void* handle);
+extern int         gx_window_set_vsync(void* handle, int mode);
+extern int         gx_window_get_vsync(void* handle);
 extern const char* gx_window_version();
 extern char* gx_window_debug_info();
 extern void gx_window_debug_free(char* ptr);
@@ -145,6 +147,17 @@ func cWindowSetEventCb(handle unsafe.Pointer, ctx uintptr) {
 // 返回 1=继续；0=事件循环已退出（应走关闭流程）；2=参数错/内部 panic。
 func cWindowPoll(handle unsafe.Pointer) int {
 	return int(C.gx_window_pump(handle))
+}
+
+// cWindowSetVSync 切换 Rust 侧 present 模式（VSyncControl，P4.5）。
+// 返回 0=成功；1=surface 不支持（保持原值）；2=参数/句柄无效。
+func cWindowSetVSync(handle unsafe.Pointer, mode int) int {
+	return int(C.gx_window_set_vsync(handle, C.int(mode)))
+}
+
+// cWindowGetVSync 读取当前请求的 vsync 模式码（0/1/2；句柄无效 -1）。
+func cWindowGetVSync(handle unsafe.Pointer) int {
+	return int(C.gx_window_get_vsync(handle))
 }
 
 // cWindowClose 只请求 Rust 事件循环退出，不释放 handle 内存（评审 P0 生命周期）。

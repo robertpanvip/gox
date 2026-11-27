@@ -186,5 +186,5 @@ func main() {
 			win.RequestClose()
 		}()
 	}
-	app.Run()
+	handle.Run() // Host 唯一主循环（P4 目标态）：app.Run 退化为 no-op，必须走 Handle.Run
 }

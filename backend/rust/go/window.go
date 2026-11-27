@@ -595,6 +595,56 @@ func (w *Window) RequestClose() {
 	cWindowClose(handle)
 }
 
+// VSyncMode 是 present/vsync 模式（P4.5 VSyncControl，高刷专项）。
+type VSyncMode int
+
+const (
+	// VSyncFifo 默认：帧节奏由 swapchain 背压对齐屏幕刷新率（144Hz 屏 → 144fps），
+	// 不撕裂、不空转烧 CPU。
+	VSyncFifo VSyncMode = 0
+	// VSyncMailbox 三缓冲替换：低延迟且不撕裂；多数 X11 驱动不支持（SetVSync 报错）。
+	VSyncMailbox VSyncMode = 1
+	// VSyncImmediate 关 vsync 立即上屏：可能撕裂，240fps 压测 / 极限低延迟专用。
+	VSyncImmediate VSyncMode = 2
+)
+
+// SetVSync 运行时切换 present 模式（VSyncControl）。窗口已开（渲染器已创建）
+// 立即 reconfigure 生效；未开窗则记录请求，首窗 resumed 时应用。
+// surface 不支持该模式返回错误（保持原值）——144Hz 目标态常用：
+// Fifo 跑满刷新率；压测/低延迟切 Immediate 观察 GPU 上限。
+func (w *Window) SetVSync(mode VSyncMode) error {
+	if mode < VSyncFifo || mode > VSyncImmediate {
+		return fmt.Errorf("rustbackend: 未知的 VSyncMode %d", mode)
+	}
+	w.mu.Lock()
+	handle := w.handle
+	closed := w.closed
+	w.mu.Unlock()
+	if closed {
+		return fmt.Errorf("rustbackend: 窗口已关闭")
+	}
+	if handle == nil {
+		// 未开窗：Rust 侧 Backend 已存在（handle 在 Open 才有）——这里只能先拒绝，
+		// 开窗后再设置（与 RequestClose 同语义：句柄未就绪不静默）。
+		return fmt.Errorf("rustbackend: 窗口未打开（先经 Host.Render/OpenWindow）")
+	}
+	if rc := cWindowSetVSync(handle, int(mode)); rc != 0 {
+		return fmt.Errorf("rustbackend: surface 不支持 VSyncMode %d（rc=%d）", mode, rc)
+	}
+	return nil
+}
+
+// VSync 返回当前请求的 vsync 模式（诊断用）。
+func (w *Window) VSync() VSyncMode {
+	w.mu.Lock()
+	handle := w.handle
+	w.mu.Unlock()
+	if handle == nil {
+		return VSyncFifo
+	}
+	return VSyncMode(cWindowGetVSync(handle))
+}
+
 // Close 实现 gxapp.Window。
 //
 // 优雅关闭顺序（P4 目标态生命周期）：

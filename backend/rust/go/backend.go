@@ -68,12 +68,14 @@ func (Backend) Describe() gxapp.BackendInfo {
 // Capabilities 实现可选能力声明。MultiWindow=false：当前每窗独立 winit
 // EventLoop（macOS 主线程约束待 P4 目标态改造）；Incremental=true：GRX3
 // 全量帧 + delta 动作流；Transparent=true：winit with_transparent；
-// MousePassthrough=false：XShape 命中形状未接线；VSyncControl=false：
-// 帧时钟软件节拍，硬件 vsync 待真机验证。
+// VSyncControl=true：gx_window_set_vsync 运行时切换 Fifo/Mailbox/Immediate
+// （P4.5 高刷专项；Fifo 默认对齐屏幕刷新率，Mailbox 视驱动支持）；
+// MousePassthrough=false：XShape 命中形状未接线。
 func (Backend) Capabilities() gxapp.Capabilities {
 	return gxapp.Capabilities{
-		Incremental: true,
-		Transparent: true,
+		Incremental:  true,
+		Transparent:  true,
+		VSyncControl: true,
 	}
 }
 

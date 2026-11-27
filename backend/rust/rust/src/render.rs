@@ -60,6 +60,8 @@ pub struct Renderer {
     queue: wgpu::Queue,
     surface: wgpu::Surface<'static>,
     config: SurfaceConfiguration,
+    /// 本 surface 支持的 present 模式集合（创建期查询缓存；set_present_mode 依据）。
+    present_modes: Vec<PresentMode>,
     /// GPU quad 管线（gx_gpu crate：三端统一 WGSL，GPU 优先）。
     gpu: gx_gpu::QuadGpu,
     /// 纹理一级缓存：内容 key → 条目。
@@ -165,6 +167,9 @@ impl Renderer {
             desired_maximum_frame_latency: 2,
         };
         surface.configure(&device, &config);
+        // VSyncControl（P4.5 高刷专项）：创建期缓存本 surface 的可切换 present
+        // 模式集合，运行时经 gx_window_set_vsync 切换（Fifo/Mailbox/Immediate）。
+        let present_modes = surface.get_capabilities(&adapter).present_modes;
 
         let mut font_system = FontSystem::new();
         for path in [
@@ -193,6 +198,7 @@ impl Renderer {
             queue,
             surface,
             config,
+            present_modes,
             gpu,
             tex_cache: std::collections::HashMap::new(),
             tex_ids: std::collections::HashMap::new(),
@@ -1127,6 +1133,26 @@ impl Renderer {
     /// 请求平台重绘一帧（转发 SurfaceProvider，内核不感知窗口机制）。
     pub fn request_redraw(&self) {
         self.provider.request_redraw();
+    }
+
+    /// 运行时切换 present 模式（VSyncControl，P4.5 高刷专项）。
+    /// 支持则重 configure 立即生效并返回 true；本 surface 不支持该模式返回 false
+    /// （调用方保留原模式，不产生半配置状态）。与当前一致时也返回 true（幂等）。
+    pub fn set_present_mode(&mut self, mode: PresentMode) -> bool {
+        if !self.present_modes.contains(&mode) {
+            return false;
+        }
+        if self.config.present_mode == mode {
+            return true;
+        }
+        self.config.present_mode = mode;
+        self.surface.configure(&self.device, &self.config);
+        true
+    }
+
+    /// 当前生效的 present 模式（诊断/E2E 断言用）。
+    pub fn present_mode(&self) -> PresentMode {
+        self.config.present_mode
     }
 }
 

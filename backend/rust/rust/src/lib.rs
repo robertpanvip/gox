@@ -260,6 +260,9 @@ struct Backend {
     /// 渲染器共享句柄：首次 pump 的 resumed 创建后填充；debug 导出 /
     /// 帧时钟等 C ABI 在泵运行期间经它访问（pump Exit 后置 None）。
     renderer: Arc<Mutex<Option<Renderer>>>,
+    /// VSync/present 模式请求（0=Fifo 1=Mailbox 2=Immediate；P4.5 VSyncControl）。
+    /// gx_window_set_vsync 写入：渲染器已创建则立即 reconfigure，否则首窗 resumed 应用。
+    vsync: Arc<std::sync::atomic::AtomicU8>,
     /// 事件循环实例（gx_window_new 创建；pump 返回 Exit 后丢弃）。
     el: Mutex<Option<EventLoop<GxEvent>>>,
     /// 跨 pump 持久的 winit 应用状态（窗口句柄 / 修饰键 / 首帧探针等）。
@@ -300,6 +303,7 @@ pub extern "C" fn gx_window_new_ex(
     let proxy = el.create_proxy();
     let backend = Backend {
         renderer: Arc::new(Mutex::new(None)),
+        vsync: Arc::new(std::sync::atomic::AtomicU8::new(0)),
         queue: Arc::new(Mutex::new(FrameQueue::new())),
         cb: Arc::new(Mutex::new(None)),
         cb_ctx: Arc::new(Mutex::new(std::ptr::null_mut())),
@@ -415,6 +419,7 @@ fn winit_app_for(backend: &Backend) -> WinitApp {
         window: None,
         modifiers: winit::keyboard::ModifiersState::empty(),
         hover_cursor: String::new(),
+        vsync: backend.vsync.clone(),
     }
 }
 
@@ -507,6 +512,8 @@ struct WinitApp {
     window: Option<Arc<Window>>,
     modifiers: winit::keyboard::ModifiersState,
     hover_cursor: String,
+    /// VSync 请求模式（P4.5 VSyncControl）：resumed 创建渲染器后据此应用。
+    vsync: Arc<std::sync::atomic::AtomicU8>,
 }
 
 impl winit::application::ApplicationHandler<GxEvent> for WinitApp {
@@ -543,6 +550,17 @@ impl winit::application::ApplicationHandler<GxEvent> for WinitApp {
             window: window.clone(),
         });
         *self.state.lock().unwrap() = Some(pollster::block_on(Renderer::new(provider)));
+        // VSyncControl：创建期把请求的 present 模式应用到渲染器（gx_window_set_vsync
+        // 在首窗前调用的场景在这补上）。不支持的模式保持 Fifo 并记日志。
+        {
+            let mut slot = self.state.lock().unwrap();
+            if let Some(r) = slot.as_mut() {
+                let m = vsync_mode(self.vsync.load(std::sync::atomic::Ordering::Relaxed));
+                if !r.set_present_mode(m) {
+                    eprintln!("[rust-backend] vsync mode {:?} unsupported, keep {:?}", m, r.present_mode());
+                }
+            }
+        }
         // 首帧主动请求一次重绘：绘制首帧/应用 run 前已提交的帧。之后靠事件驱动。
         self.state
             .lock()
@@ -994,6 +1012,53 @@ pub extern "C" fn gx_window_destroy(handle: *mut c_void) {
     }
 }
 
+/// VSync 模式码 ↔ wgpu PresentMode（P4.5 VSyncControl）：
+/// 0=Fifo（默认，帧节奏对齐屏幕刷新率——真高刷路径）
+/// 1=Mailbox（三缓冲替换，低延迟不撕裂；X11 多数驱动不支持）
+/// 2=Immediate（关 vsync 立即上屏，可能撕裂——240fps 压测/极限低延迟专用）。
+fn vsync_mode(code: u8) -> wgpu::PresentMode {
+    match code {
+        1 => wgpu::PresentMode::Mailbox,
+        2 => wgpu::PresentMode::Immediate,
+        _ => wgpu::PresentMode::Fifo,
+    }
+}
+
+/// 运行时切换 vsync/present 模式。渲染器已创建则立即 reconfigure 生效；
+/// 未创建（首窗前）仅记录请求，由 resumed 应用。
+/// 返回 0=成功；1=surface 不支持该模式（保持原值，请求仍记录）；2=参数/句柄无效。
+#[no_mangle]
+pub extern "C" fn gx_window_set_vsync(handle: *mut c_void, mode: c_int) -> c_int {
+    if handle.is_null() || !(0..=2).contains(&mode) {
+        return 2;
+    }
+    let backend = unsafe { &*(handle as *const Backend) };
+    backend
+        .vsync
+        .store(mode as u8, std::sync::atomic::Ordering::Relaxed);
+    let mut slot = backend.renderer.lock().unwrap();
+    match slot.as_mut() {
+        Some(r) => {
+            if r.set_present_mode(vsync_mode(mode as u8)) {
+                0
+            } else {
+                1
+            }
+        }
+        None => 0,
+    }
+}
+
+/// 读取当前请求的 vsync 模式码（0/1/2；句柄无效返回 -1）。诊断用。
+#[no_mangle]
+pub extern "C" fn gx_window_get_vsync(handle: *mut c_void) -> c_int {
+    if handle.is_null() {
+        return -1;
+    }
+    let backend = unsafe { &*(handle as *const Backend) };
+    backend.vsync.load(std::sync::atomic::Ordering::Relaxed) as c_int
+}
+
 /// E2E 调试导出：{"win_w":..,"win_h":..,"boxes":[{label,testid,kind,x,y,w,h},...]}。
 /// 返回堆上 C 字符串，调用方用 gx_window_debug_free 释放；空场景返回 "boxes":[]。
 #[no_mangle]
@@ -1410,5 +1475,16 @@ mod input_tests {
         unsafe { gx_clipboard_free(ptr) };
         let text = CString::new("gx-clipboard-test").unwrap();
         let _ = gx_clipboard_set(text.as_ptr()); // 成功 0 / 无显示环境 -1，均不 panic
+    }
+
+    /// VSyncControl（P4.5）：模式码映射正确（0=Fifo 1=Mailbox 2=Immediate，
+    /// 越界回退 Fifo）；gx_window_get_vsync 对空句柄返回 -1。
+    #[test]
+    fn vsync_mode_mapping() {
+        assert!(matches!(vsync_mode(0), wgpu::PresentMode::Fifo));
+        assert!(matches!(vsync_mode(1), wgpu::PresentMode::Mailbox));
+        assert!(matches!(vsync_mode(2), wgpu::PresentMode::Immediate));
+        assert!(matches!(vsync_mode(9), wgpu::PresentMode::Fifo));
+        assert_eq!(gx_window_get_vsync(std::ptr::null_mut()), -1);
     }
 }

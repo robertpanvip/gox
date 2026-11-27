@@ -539,6 +539,13 @@ canvas-ops。
    把 IME 提交/预编辑、键盘、点击、焦点等归为可靠事件——通道满时进 mutex 保护的
    `overflow` 无界队列（不丢、有序），`pump` 信号唤醒 Run 去 drain；光标/hover 等高频
    状态事件用 `mergeSlot` 只保留最新。全程非阻塞，不卡 Rust 事件线程。
+5. **VSyncControl（P4.5 高刷专项）**：`gx_window_set_vsync(handle, mode)` 运行时切换
+   present 模式（0=Fifo 默认帧节奏对齐屏幕刷新率 / 1=Mailbox 低延迟三缓冲 / 2=Immediate
+   关 vsync 压测用），渲染器已创建则立即 reconfigure、未创建则首窗 resumed 应用；
+   surface 不支持该模式返回 1（保持原值，如 llvmpipe 仅支持 Fifo），创建期缓存
+   `get_capabilities().present_modes` 作为判据；`gx_window_get_vsync` 读回模式码。
+   Go 侧 `Capabilities().VSyncControl=true`，`rb.Window.SetVSync/VSync`。实测工具：
+   `examples/fpsbench`（RAF 连帧 + 帧时间直方图 + V 键切模式 + GX_AUTOCLOSE_MS 关窗汇总）。
 
 此外：**Wire 版本协商**（P2）——`Open` 时解析 `gx_window_version()` 的 major，与
 `expectedProtocolMajor` 不一致直接拒绝启动，防止 core 更新协议而用户仍用旧后端；
