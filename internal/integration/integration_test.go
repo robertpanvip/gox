@@ -13,6 +13,7 @@ import (
 
 	"github.com/robertpanvip/gox/internal/buildcheck"
 	"github.com/robertpanvip/gox/pkg/compiler"
+	"github.com/robertpanvip/gox/widgets"
 )
 
 const modulePath = "github.com/robertpanvip/gox"
@@ -1308,13 +1309,13 @@ func main() {
 		t.Errorf("初始渲染应含分数 2, got:\n%s", out)
 	}
 	// 子树隔离：ThemeProvider 内 accent 必须是 DarkTheme.DarkBlue，而非全局
-	// 浅色 LightBlue #007aff。DarkBlue 随主题实拍调整（现为 Material Oceanic
-	// 青色 #26a69a，见 widgets/apple_theme.go），换色时同步更新此字面量。
-	if !strings.Contains(out, "#26a69a") {
-		t.Errorf("ThemeProvider 子树应读到 DarkTheme accent #26a69a, got:\n%s", out)
+	// 浅色 LightBlue。断言引用 widgets 常量——主题换色（如曾短暂切到
+	// Material Oceanic 青色）不会打破本用例。
+	if !strings.Contains(out, widgets.DarkBlue) {
+		t.Errorf("ThemeProvider 子树应读到 DarkTheme accent %s, got:\n%s", widgets.DarkBlue, out)
 	}
-	if strings.Contains(out, "\"#007aff\"") {
-		t.Errorf("ThemeProvider 子树不应回落到全局浅色 #007aff, got:\n%s", out)
+	if strings.Contains(out, widgets.LightBlue) {
+		t.Errorf("ThemeProvider 子树不应回落到全局浅色 %s, got:\n%s", widgets.LightBlue, out)
 	}
 	// 响应式：bonus=7 后 Score 应更新为 7（产物里出现两次分数，CHANGED 段为 7）
 	if !strings.Contains(out, "CHANGED") || !strings.Contains(out, "7") {
