@@ -65,6 +65,10 @@ type BackendFactory func(cfg WindowConfig) (Window, error)
 // OpenBackend）是窗口级装配的遗留便利层，与接入层无关。
 
 // Backend 是后端接入接口：接入层只依赖这个形状。
+//
+// 必需段只有 Name / NewWindow；其余的进程级能力按**可选能力接口**分段，
+// 后端按需实现、Host 装配时探测（与 Window 的 UIExecutor / WindowBinder
+// 同一模式）。这样接口不会做肥：没有某能力的后端不必返回假实现。
 type Backend interface {
 	// Name 返回后端标识（故障归因 Fault.Backend / 调试输出用）。
 	Name() string
@@ -72,6 +76,45 @@ type Backend interface {
 	// 后端可据此为每窗分配独立资源（事件循环 / 渲染上下文）。
 	// 返回的 Window 生命周期：Host 依次 Open → Draw → Run → Close。
 	NewWindow(cfg WindowConfig) (Window, error)
+}
+
+// ---- Backend 可选能力段（按需实现 + Host 探测）----
+
+// BackendInitializer 进程级生命周期钩子：首个窗口创建前 Init（每个 Backend
+// 实例幂等一次），Host / Handle 全部关闭后 Shutdown。字体库预热、协议握手、
+// 全局资源分配放这里；不需要的后端不实现即可。
+type BackendInitializer interface {
+	InitBackend() error
+	ShutdownBackend()
+}
+
+// BackendInfo 是后端的静态描述（诊断输出 / 能力协商依据）。
+type BackendInfo struct {
+	Name     string // 后端名（同 Backend.Name()）
+	Version  string // 后端版本串（如 "gxbackend-rust 0.3.0"）
+	Protocol string // 渲染协议（如 "GRX3" / "GRX2" / "frame-callback"）
+	Renderer string // 渲染器标识（如 "wgpu+glyphon" / "skia-cpu"）
+}
+
+// BackendDescriptor 能力接口：返回后端静态描述。Host 不解析内容，仅供
+// 装配层诊断打印 / 上层按协议版本分支。
+type BackendDescriptor interface {
+	Describe() BackendInfo
+}
+
+// Capabilities 是后端运行期能力声明：装配层据此决定是否降级 / 告警。
+// 声明 false 不代表功能禁用——后端仍可在 Open 时静默忽略不支持的配置。
+type Capabilities struct {
+	MultiWindow      bool // 单事件循环管理多窗口（P4 目标态）
+	Transparent      bool // 透明 framebuffer（配合无边框做悬浮面板）
+	MousePassthrough bool // 透明区鼠标穿透（XShape / 命中形状）
+	Incremental      bool // 增量帧提交（FramePresenter / delta 协议）
+	VSyncControl     bool // 可编程 vsync（帧时钟硬件同步）
+}
+
+// BackendCapabilities 能力接口：返回能力声明。
+type BackendCapabilities interface {
+	Capabilities() Capabilities
 }
 
 // registryBackend 是 Backend 的包内适配器：把注册表工厂包装成接口值，

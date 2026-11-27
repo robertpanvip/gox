@@ -88,6 +88,22 @@ type Backend interface {
 
 后端侧实现（rustbackend/backend.go 为参考）：`type Backend struct{}` + `Name() string` +
 `NewWindow(cfg) (Window, error)`。
+
+**Backend 可选能力段**（按需实现 + Host 探测，与 Window 的 UIExecutor / WindowBinder 同一模式；
+没有某能力的后端不实现即可，接口不做肥）：
+
+| 可选接口 | 方法 | 语义 |
+|---|---|---|
+| `BackendInitializer` | `InitBackend() error` / `ShutdownBackend()` | 进程级生命周期：首个窗口创建前幂等 Init（失败阻断开窗）；Host/Handle 全关后 Shutdown |
+| `BackendDescriptor` | `Describe() BackendInfo` | 静态描述：版本 / 协议（GRX3…）/ 渲染器，供诊断与协议分支 |
+| `BackendCapabilities` | `Capabilities() Capabilities` | 能力声明：MultiWindow / Transparent / MousePassthrough / Incremental / VSyncControl |
+
+**窗口实例访问**：装配层需要调后端专属扩展（rustbackend 的 `SetDispatcher` / `BindApp` /
+`RequestClose`）时，经 `handle.WindowOf(app)`（Host.WindowOf 同名代理）取回 Window 再自行断言
+类型——接入层接口本身保持后端无关。
+
+demo 接入现状：examples/desktop-demo、examples/widget-showcase、rustbackend cmd（demo /
+gradcheck / overlaydemo / startupbench）均已切 `Use(接口值)` 路径。
 Window 的可选扩展（UIExecutor / WindowBinder）由 Host 装配时按能力探测注入，后端无需转发。
 
 首版语义：每次 `Render` = 一扇独立窗口 + 独立 App（独立场景树 / signal Runtime）；

@@ -33,16 +33,13 @@ func main() {
 	}()
 
 	// V2 后端装配（阶段 4 切换）：Rust 渲染 + winit 窗口，替代原 GLFW+Skia glwindow。
-	win := rb.NewWindow()
-	app, err := gxapp.OpenWith(gxapp.WindowConfig{Title: "PULSE Dashboard", Width: 760, Height: 640}, win)
-	if err != nil {
-		panic(err)
-	}
-	defer app.Close()
+	// V2 接入层装配：gx.use(Backend) → Use(接口值) + 逐窗 Render；后端按
+	// gxapp.Backend 接口形状注入，核心零依赖具体后端。
+	handle := gxapp.Use(rb.NewBackend())
 
 	// 紧凑单行规避 GX 编译器跨行缩进边界；signal 写用 () 显式读。
 	// 所有按钮/卡片/徽章/进度条/输入框均来自后端预制 widgets 库——JSX 只描述语义。
-	app.Render(func() any {
+	build := func() any {
 		return gxscene.Render(gxscene.Template{Ops: []gxscene.Op{gxscene.Op{Code: gxscene.OpElem, Arg: "div"}, gxscene.Op{Code: gxscene.OpAttr, Arg: "#0b1020", Key: "bg"}, gxscene.Op{Code: gxscene.OpAttr, Arg: "640", Key: "height"}, gxscene.Op{Code: gxscene.OpAttr, Arg: "28", Key: "padding"}, gxscene.Op{Code: gxscene.OpAttr, Arg: "column", Key: "flex-direction"}, gxscene.Op{Code: gxscene.OpAttr, Arg: "18", Key: "gap"}, gxscene.Op{Code: gxscene.OpComp, Arg: "widgets.row", Slot: 0}, gxscene.Op{Code: gxscene.OpComp, Arg: "widgets.row", Slot: 1}, gxscene.Op{Code: gxscene.OpComp, Arg: "widgets.card", Slot: 2}, gxscene.Op{Code: gxscene.OpComp, Arg: "widgets.card", Slot: 3}, gxscene.Op{Code: gxscene.OpComp, Arg: "widgets.row", Slot: 4}, gxscene.Op{Code: gxscene.OpClose}}, N: 5}, func() any {
 			return widgets.Row(gxscene.Props{"gap": "12", "align": "center", "justify": "space-between", "children": func() any {
 				return gxscene.Render(gxscene.Template{Ops: []gxscene.Op{gxscene.Op{Code: gxscene.OpElem, Arg: "#frag"}, gxscene.Op{Code: gxscene.OpComp, Arg: "Brand", Slot: 0}, gxscene.Op{Code: gxscene.OpComp, Arg: "widgets.badge", Slot: 1}, gxscene.Op{Code: gxscene.OpClose}}, N: 2}, func() any { return Brand(gxscene.Props{}) }, func() any { return widgets.Badge(gxscene.Props{"label": "LIVE", "tone": "green", "dot": true}) })
@@ -86,7 +83,17 @@ func main() {
 				})
 			}})
 		})
-	})
+	}
+
+	app, err := handle.Render(build, gxapp.WindowConfig{Title: "PULSE Dashboard", Width: 760, Height: 640})
+	if err != nil {
+		panic(err)
+	}
+	defer handle.Close() // Handle.Close 级联：窗口 Close + 后端 Shutdown
+
+	// rustbackend 专属扩展（BindApp 增量流 / SetDispatcher 输入映射）按能力
+	// 经 WindowOf 取回窗口实例后调用——接入层接口保持后端无关。
+	win := handle.WindowOf(app).(*rb.Window)
 
 	// 增量动作流接线：Render 后建立基线，之后 signal 更新走 GRX3 delta。
 	win.BindApp(app)

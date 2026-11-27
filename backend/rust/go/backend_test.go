@@ -18,3 +18,38 @@ func TestBackendImplementsGxappBackend(t *testing.T) {
 		t.Fatalf("NewWindow: err=%v win=%v", err, w)
 	}
 }
+
+// 可选能力段：Describe / Capabilities / InitBackend 按 gxapp 可选接口实现，
+// Host 装配时探测注入。
+func TestBackendOptionalCapabilities(t *testing.T) {
+	var b gxapp.Backend = Backend{}
+	ini, ok := b.(gxapp.BackendInitializer)
+	if !ok {
+		t.Fatal("应实现 BackendInitializer")
+	}
+	if err := ini.InitBackend(); err != nil {
+		t.Fatalf("InitBackend（C ABI 预探测）: %v", err)
+	}
+	ini.ShutdownBackend() // 幂等空实现
+
+	desc, ok := b.(gxapp.BackendDescriptor)
+	if !ok {
+		t.Fatal("应实现 BackendDescriptor")
+	}
+	info := desc.Describe()
+	if info.Name != "rust" || info.Version == "" || info.Protocol != "GRX3" {
+		t.Fatalf("Describe 内容不完整: %+v", info)
+	}
+
+	caps, ok := b.(gxapp.BackendCapabilities)
+	if !ok {
+		t.Fatal("应实现 BackendCapabilities")
+	}
+	c := caps.Capabilities()
+	if !c.Incremental || !c.Transparent {
+		t.Fatalf("Incremental/Transparent 应为 true: %+v", c)
+	}
+	if c.MultiWindow {
+		t.Fatal("当前每窗独立 EventLoop，MultiWindow 应为 false（P4 目标态）")
+	}
+}

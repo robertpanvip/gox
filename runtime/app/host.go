@@ -63,6 +63,8 @@ type Host struct {
 	windows []*hostWindow
 	fault   func(Fault)
 	closed  bool
+	inited  map[Backend]bool // 已 Init 的 BackendInitializer（幂等去重）
+	shut    map[Backend]bool // 已 Shutdown 的后端（幂等去重）
 }
 
 // HostOption 配置 Host。
@@ -136,6 +138,11 @@ func (h *Host) openEntry(cfg WindowConfig, backend Backend, win Window) (*hostWi
 	id := h.seq
 	h.mu.Unlock()
 
+	if backend != nil {
+		if err := h.initBackend(backend); err != nil {
+			return nil, err
+		}
+	}
 	if win == nil {
 		if backend == nil {
 			win = &HeadlessWindow{}
@@ -249,6 +256,54 @@ func (h *Host) Run() error {
 	return first
 }
 
+// initBackend 探测后端是否实现 BackendInitializer，是则幂等 Init 一次
+// （首个窗口创建前的进程级钩子：字体库预热 / 协议握手 / 全局资源）。
+func (h *Host) initBackend(b Backend) error {
+	ini, ok := b.(BackendInitializer)
+	if !ok {
+		return nil
+	}
+	h.mu.Lock()
+	need := !h.inited[b]
+	if need {
+		if h.inited == nil {
+			h.inited = map[Backend]bool{}
+		}
+		h.inited[b] = true
+	}
+	h.mu.Unlock()
+	if !need {
+		return nil
+	}
+	return ini.InitBackend()
+}
+
+// shutdownBackends 对已 Init 的后端逐个 Shutdown（幂等，错误收集为日志级忽略）。
+func (h *Host) shutdownBackends() {
+	h.mu.Lock()
+	inited := h.inited
+	h.inited = nil
+	h.mu.Unlock()
+	for b := range inited {
+		if ini, ok := b.(BackendInitializer); ok {
+			ini.ShutdownBackend()
+		}
+	}
+}
+
+// WindowOf 返回某窗口的 Window 实例（未知 App 返回 nil）。装配层需要调用
+// 后端专属扩展（如 rustbackend 的 SetDispatcher）时用它取回并自行断言类型。
+func (h *Host) WindowOf(app *App) Window {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, w := range h.windows {
+		if w.app == app {
+			return w.win
+		}
+	}
+	return nil
+}
+
 // Close 关闭全部窗口并拒绝后续新窗口。幂等。
 func (h *Host) Close() error {
 	h.mu.Lock()
@@ -269,6 +324,7 @@ func (h *Host) Close() error {
 			}
 		}
 	}
+	h.shutdownBackends()
 	return first
 }
 
@@ -329,6 +385,9 @@ func (hd *Handle) Render(build func() any, cfg WindowConfig) (*App, error) {
 	}
 	return entry.app, nil
 }
+
+// WindowOf 返回某窗口的 Window 实例（代理到 Host.WindowOf）。
+func (hd *Handle) WindowOf(app *App) Window { return hd.h.WindowOf(app) }
 
 // Run 启动全部窗口并阻塞，直到所有窗口退出（代理到 Host.Run）。
 func (hd *Handle) Run() error { return hd.h.Run() }

@@ -1,6 +1,7 @@
 package gxapp
 
 import (
+	"errors"
 	"fmt"
 	"sync"
 	"testing"
@@ -299,6 +300,72 @@ func TestUseBackendInterface(t *testing.T) {
 	}
 	_ = a1
 	_ = a2
+}
+
+// lifecycleBackend：实现可选 BackendInitializer（记录调用次序）。
+type lifecycleBackend struct {
+	fakeBackend
+	inits, shutdowns int
+	failed           error
+}
+
+func (b *lifecycleBackend) InitBackend() error {
+	b.inits++
+	return b.failed
+}
+
+func (b *lifecycleBackend) ShutdownBackend() { b.shutdowns++ }
+
+// BackendInitializer 生命周期：首个窗口创建前 Init 幂等一次（多窗不重复），
+// Host.Close 后 Shutdown 幂等一次；Init 失败阻断开窗且不残留。
+func TestBackendLifecycleHooks(t *testing.T) {
+	b := &lifecycleBackend{}
+	h := Use(b)
+	if _, err := h.Render(func() any { return stubText("A") }, WindowConfig{Title: "A"}); err != nil {
+		t.Fatalf("render A: %v", err)
+	}
+	if _, err := h.Render(func() any { return stubText("B") }, WindowConfig{Title: "B"}); err != nil {
+		t.Fatalf("render B: %v", err)
+	}
+	if b.inits != 1 {
+		t.Fatalf("两窗应只 Init 一次, got %d", b.inits)
+	}
+	if err := h.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	if b.shutdowns != 1 {
+		t.Fatalf("Close 应 Shutdown 一次, got %d", b.shutdowns)
+	}
+	// 已 Shutdown 的 Host 拒绝新窗（closed），Init 不会再次触发。
+	_ = h
+}
+
+func TestBackendInitFailureBlocksWindow(t *testing.T) {
+	b := &lifecycleBackend{failed: errors.New("init boom")}
+	h := Use(b)
+	if _, err := h.Render(func() any { return stubText("x") }, WindowConfig{Title: "x"}); err == nil {
+		t.Fatal("Init 失败的 Render 应报错")
+	}
+	if len(h.Host().Windows()) != 0 {
+		t.Fatal("失败的 Render 不应残留窗口")
+	}
+}
+
+// Host.WindowOf 返回窗口实例（装配层调后端专属扩展的通道）；未知 App 返回 nil。
+func TestHostWindowOf(t *testing.T) {
+	w := &stubWindow{}
+	h := Use(titleBackend{byTitle: map[string]Window{"A": w}})
+	app, err := h.Render(func() any { return stubText("A") }, WindowConfig{Title: "A"})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	if h.WindowOf(app) != Window(w) {
+		t.Fatal("WindowOf 应返回装配时的 Window 实例")
+	}
+	if h.WindowOf(nil) != nil {
+		t.Fatal("未知 App 的 WindowOf 应返回 nil")
+	}
+	_ = h.Close()
 }
 
 // 故障归因走 Backend.Name()（复用 close_concurrency_test.go 的 closeErrWindow 桩）：注册表后端名包装为 Backend 接口注入 Host。

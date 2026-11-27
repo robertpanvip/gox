@@ -33,19 +33,9 @@ func gradientText(text, grad string) *gxscene.Instance {
 }
 
 func main() {
-	win := rb.NewWindow()
-	gxapp.MustRegister("rust", func(cfg gxapp.WindowConfig) (gxapp.Window, error) {
-		return win, nil
-	})
-	app, err := gxapp.OpenBackend(gxapp.WindowConfig{
-		Title: "GradCheck", Width: 620, Height: 260, Backend: "rust",
-	})
-	if err != nil {
-		panic(err)
-	}
-	defer app.Close()
-
-	app.Render(func() any {
+	// 接入层装配：gx.use(Backend) → Use(接口值) + 逐窗 Render。
+	handle := gxapp.Use(rb.NewBackend())
+	build := func() any {
 		return gxscene.Render(gxscene.Template{
 			Ops: []gxscene.Op{
 				{Code: gxscene.OpElem, Arg: "div"},
@@ -72,7 +62,13 @@ func main() {
 			return gradientText("ABCDEF",
 				"linear-gradient(90deg, #ff0000 0ch 2ch, #00ff00 2ch 4ch, #0000ff 4ch 6ch)")
 		})
-	})
+	}
+
+	app, err := handle.Render(build, gxapp.WindowConfig{Title: "GradCheck", Width: 620, Height: 260})
+	if err != nil {
+		panic(err)
+	}
+	defer handle.Close()
 
 	// 渲染稳定后自动退出，便于 xvfb 下截图。
 	go func() {
