@@ -286,7 +286,7 @@ app.close()   // 级联执行 Counter 的 onCleanup
 
 > **接入真实 GUI**：实现 `Window` 接口的 `Open/Draw/Run/Close/Config`，用 `OpenWith` 注入即可——Skia / wgpu / GLFW 后端无需改动 `gxapp` 或编译器。当前 Headless 后端让整条链路在无 GUI 环境端到端可验证。最小示例见 [`examples/jsxapp.gx`](examples/jsxapp.gx)；**复合组件 + sig 响应式**见 [`examples/jsxapp-full.gx`](examples/jsxapp-full.gx)；**SolidJS 风格有状态组件**（组件内局部状态 + 定时器自增 + onMount/onCleanup 生命周期）见 [`examples/jsxapp-solid.gx`](examples/jsxapp-solid.gx)，运行时见 [`runtime/app/`](runtime/app/)。
 >
-> **后端预制控件库**：`backend/skia/widgets` 提供 `widgets.button` / `input` / `card` /
+> **后端预制控件库**：gox-backend 仓的 `backend/skia/widgets` 提供 `widgets.button` / `input` / `card` /
 > `badge` / `progress` / `row` / `col` 等预制组件，外观全部沉淀在后端，业务 JSX 只写语义；
 > 其中 `input` 支持真实键盘输入（sig 双向绑定 + 焦点 + 光标闪烁）。完整可运行示例见
 > [`examples/desktop-demo`](examples/desktop-demo)（GX → Skia 真实窗口 → 可输入看板）。
@@ -564,7 +564,10 @@ GX 源码 ─lex→ token ─Analyze→ side table（符号 / 联合 / 收窄，
 
 ## 目录结构
 
-> **核心语言库已拆仓**：编译器（`pkg/compiler`）、LSP（`cmd/gox-lsp`、`internal/lsp`）、C-ABI（`bindings/cabi`）、运行时（`runtime/*`）、组件库（`widgets/*`）与语言层 `.gx` 示例现均在 [gox-core](https://github.com/robertpanvip/gox-core) 仓。本仓只保留后端实现、命令行工具与平台示例。两仓需相邻放置（`replace ... => ../gox-core`）。
+> **已拆为三仓，需相邻放置**（`replace ... => ../gox-core`、`../gox-backend/...`）：
+> - [gox-core](https://github.com/robertpanvip/gox-core)：编译器、LSP、C-ABI、运行时、组件库与纯语言 `.gx` 示例。
+> - [gox-backend](https://github.com/gox-projects/gox-backend)：Rust / Skia / Web / GPU 后端实现与 Skia 绑定。
+> - 本仓（gox）：命令行工具与依赖后端的平台示例。
 
 ```
 gox/
@@ -572,15 +575,8 @@ gox/
 │   ├── gox-tui/        TUI（module gox-tui）
 │   ├── gox-idea/       IDEA 配套 UI（module gox-idea）
 │   └── gox-term/       终端（module gox-term）
-├── backend/            可独立拆分的后端实现（统一契约 Contract + Adapter）
-│   ├── rust/           Rust Backend（Go Adapter + Rust Runtime + Wire 协议）
-│   ├── skia/           Skia Backend（module gox-backend-skia）
-│   ├── web/            Web/wasm Backend（module gox-backend-web）
-│   └── gpu/            GPU 抽象层
-├── third_party/skia/   Skia 绑定（module gox-skia）
-├── examples/           平台示例（依赖后端；纯语言 .gx 示例在 gox-core）
-├── scripts/            构建与一致性校验脚本
-└── testdata/           threeway 三端一致性用例（golden / LSP 脚本在 gox-core）
+├── examples/           平台示例（依赖 gox-backend；纯语言 .gx 示例在 gox-core）
+└── scripts/            构建与 E2E 校验脚本
 ```
 
 后端均只依赖 `gox-core` 的 `gxapp.Backend` 契约，`go list -deps` 确认 core 对后端零编译依赖。
@@ -591,7 +587,7 @@ gox/
 
 ```bash
 make build          # gox-tui、gox-idea、gox-term（需 Go 1.27+）
-make test           # 逐个后端/工具模块运行 go test ./...
+make test           # 逐个工具模块运行 go test ./...（后端测试在 gox-backend 仓）
 
 gox build demo.gx -o out.go                       # 转译（CLI 在 gox-core 仓）
 gox build demo.gx -check -module example.com/app \

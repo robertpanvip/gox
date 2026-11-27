@@ -2,11 +2,12 @@ go 1.27.2
 
 use (
 	.
-	./backend/rust/go
-	./backend/rust/android
-	./backend/skia
-	./backend/web
-	./third_party/skia
+	../gox-core
+	../gox-backend/backend/rust/go
+	../gox-backend/backend/rust/android
+	../gox-backend/backend/skia
+	../gox-backend/backend/web
+	../gox-backend/third_party/skia
 	./examples/desktop-demo
 	./examples/fpsbench
 	./examples/fetch-demo

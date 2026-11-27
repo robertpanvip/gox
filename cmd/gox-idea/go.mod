@@ -9,9 +9,9 @@ require (
 
 replace github.com/robertpanvip/gox-core => ../../../gox-core
 
-replace github.com/robertpanvip/gox-backend-rust => ../../backend/rust/go
+replace github.com/robertpanvip/gox-backend-rust => ../../../gox-backend/backend/rust/go
 
-replace github.com/robertpanvip/gox-backend-web => ../../backend/web
+replace github.com/robertpanvip/gox-backend-web => ../../../gox-backend/backend/web
 
 // yoga-go-binding 默认用上游自带的 libyogacore.a（Linux ELF），Linux/macOS 构建
 // 直接可用。Windows 交叉编译需用 COFF 版静态库，通过 scripts/build-windows-msys2.sh

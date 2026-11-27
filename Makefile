@@ -1,12 +1,12 @@
-# GoX 后端 / 命令行工具构建与测试入口（需 Go 1.27+）
-# 核心语言库（编译器、LSP、widgets、runtime）已拆至 gox-core 仓，
-# 本 Makefile 只负责本仓保留的后端模块与命令行工具。
+# GoX 命令行工具与平台示例构建入口（需 Go 1.27+）
+# 核心语言库已拆至 gox-core 仓；各后端实现已拆至 gox-backend 仓；
+# 本仓只保留命令行工具与依赖后端的示例（经 go.work 引用相邻两仓）。
 GO := go
 TOOLCHAIN := GOTOOLCHAIN=go1.27.4
 CGO := CGO_ENABLED=1
 
 # 本仓含 Go 源码的模块（顶层 module 仅作 go.work 容器，无包）。
-MODULES := backend/rust/go backend/skia backend/web cmd/gox-tui cmd/gox-idea cmd/gox-term
+MODULES := cmd/gox-tui cmd/gox-idea cmd/gox-term
 
 .PHONY: build test clean all
 

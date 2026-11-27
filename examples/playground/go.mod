@@ -23,13 +23,13 @@ require (
 
 replace github.com/robertpanvip/gox-core => ../../../gox-core
 
-replace github.com/robertpanvip/gox-backend-rust => ../../backend/rust/go
+replace github.com/robertpanvip/gox-backend-rust => ../../../gox-backend/backend/rust/go
 
-replace github.com/robertpanvip/gox-backend-android => ../../backend/rust/android
+replace github.com/robertpanvip/gox-backend-android => ../../../gox-backend/backend/rust/android
 
-replace github.com/robertpanvip/gox-backend-skia => ../../backend/skia
+replace github.com/robertpanvip/gox-backend-skia => ../../../gox-backend/backend/skia
 
-replace github.com/robertpanvip/gox-backend-web => ../../backend/web
+replace github.com/robertpanvip/gox-backend-web => ../../../gox-backend/backend/web
 
-replace github.com/robertpanvip/gox-skia => ../../third_party/skia
+replace github.com/robertpanvip/gox-skia => ../../../gox-backend/third_party/skia
 

@@ -9,4 +9,4 @@ require (
 
 replace github.com/robertpanvip/gox-core => ../../../gox-core
 
-replace github.com/robertpanvip/gox-backend-web => ../../backend/web
+replace github.com/robertpanvip/gox-backend-web => ../../../gox-backend/backend/web
