@@ -74,6 +74,8 @@ pub struct Renderer {
 
     /// 常驻镜像场景树（Zed 式）：首帧快照建立，后续增量动作打补丁
     scene: Option<crate::scene::SceneNode>,
+    /// 跨帧布局缓存（layout.rs）：纯绘制属性变化只重跑 emit，不重建布局。
+    layout_cache: crate::layout::LayoutCache,
     /// 窗口背景色
     bg: (u8, u8, u8),
     /// 最近一次 DisplayList（供命中测试）
@@ -183,6 +185,7 @@ impl Renderer {
             width: w, height: h,
             font_system, swash_cache, viewport, atlas, text_renderer,
             scene: None,
+            layout_cache: crate::layout::LayoutCache::new(),
             bg: (11, 16, 32),
             display: DisplayList::new(),
             pending_measured: vec![],
@@ -523,7 +526,7 @@ impl Renderer {
                 self.active_id.as_deref(),
                 self.focused_id.as_deref(),
             );
-            let dl = DisplayList::from_scene(&styled, self.width as f32, self.height as f32);
+            let dl = DisplayList::from_scene(&styled, self.width as f32, self.height as f32, &mut self.layout_cache);
 
             // 滚动条淡入淡出：以首个滚动条的 thumb_y 作为滚动位置信号。
             // 位置变化（或首次出现）视为活动 → alpha 拉满并刷新时间戳。
@@ -744,11 +747,35 @@ pub fn bench_frame(buf: &[u8], width: f32, height: f32, iters: u32) -> Option<u6
     for _ in 0..iters {
         // 每次克隆镜像树模拟"增量打补丁后的树"，再布局。克隆纳入计时以对齐真实帧成本。
         let tree = root.clone();
-        let dl = DisplayList::from_scene(&tree, width, height);
+        let mut cache = crate::layout::LayoutCache::new();
+        let dl = DisplayList::from_scene(&tree, width, height, &mut cache);
         sink = sink.wrapping_add(dl.shapes.len() + dl.texts.len());
     }
     let ns = start.elapsed().as_nanos() as u64;
     // 防止编译器优化掉结果。
+    std::hint::black_box(sink);
+    Some(ns)
+}
+
+/// 缓存命中路径基准：同一棵树重复 from_scene，验证布局复用（签名命中 →
+/// 跳过 build+compute_layout，只跑 emit）的实际收益。与 bench_frame 的
+/// 比值即「绘制属性变化帧相对全量帧的加速比」。
+pub fn bench_frame_cached(buf: &[u8], width: f32, height: f32, iters: u32) -> Option<u64> {
+    use crate::binprotocol::FrameView;
+    use crate::scene::SceneNode;
+    let view = FrameView::parse(buf)?;
+    let root = SceneNode::from_frame(&view)?;
+    let start = std::time::Instant::now();
+    let mut sink = 0usize;
+    let mut cache = crate::layout::LayoutCache::new();
+    for _ in 0..iters {
+        // 同一棵树（克隆模拟宿主每帧重建 styled 树，签名不变）→ 布局复用。
+        let tree = root.clone();
+        let dl = DisplayList::from_scene(&tree, width, height, &mut cache);
+        sink = sink.wrapping_add(dl.shapes.len() + dl.texts.len());
+    }
+    assert!(cache.reuses > 0, "基准必须走到复用路径");
+    let ns = start.elapsed().as_nanos() as u64;
     std::hint::black_box(sink);
     Some(ns)
 }
@@ -784,7 +811,7 @@ mod parity_tests {
         let mut pe = div("pe", &[("width", "50"), ("height", "20"), ("pointer-events", "none")], vec![]);
         pe.events = vec!["on-click".into()];
         let root = div("root", &[("width", "200"), ("height", "60"), ("flex-direction", "row")], vec![btn, pe]);
-        let dl = DisplayList::from_scene(&root, 400.0, 200.0);
+        let dl = DisplayList::from_scene(&root, 400.0, 200.0, &mut crate::layout::LayoutCache::new());
         assert_eq!(dl.hitboxes.len(), 1, "pointer-events:none 不登记命中框");
         let hb = &dl.hitboxes[0];
         assert_eq!(hb.4, "btn");
@@ -796,7 +823,7 @@ mod parity_tests {
         let root = div("root", &[("width", "100"), ("text-align", "center"),
                                 ("white-space", "normal"), ("font-weight", "700")],
             vec![text("t", "a   b", &[])]);
-        let dl = DisplayList::from_scene(&root, 200.0, 100.0);
+        let dl = DisplayList::from_scene(&root, 200.0, 100.0, &mut crate::layout::LayoutCache::new());
         assert_eq!(dl.texts.len(), 1);
         let t = &dl.texts[0];
         assert_eq!(t.text, "a b", "white-space:normal 折叠空白");
@@ -811,7 +838,7 @@ mod parity_tests {
     fn line_height_overrides_text_draw() {
         let root = div("root", &[("width", "100"), ("line-height", "2")],
             vec![text("t", "hi", &[])]);
-        let dl = DisplayList::from_scene(&root, 200.0, 100.0);
+        let dl = DisplayList::from_scene(&root, 200.0, 100.0, &mut crate::layout::LayoutCache::new());
         let t = &dl.texts[0];
         assert!((t.line_height - 32.0).abs() < 0.1, "line-height:2 × 16px = 32, got {}", t.line_height);
     }
@@ -821,7 +848,7 @@ mod parity_tests {
         // text 子节点自身无 line-height，应继承父容器的 1.5。
         let root = div("root", &[("width", "100"), ("line-height", "1.5")],
             vec![div("wrap", &[], vec![text("t", "hi", &[])])]);
-        let dl = DisplayList::from_scene(&root, 200.0, 100.0);
+        let dl = DisplayList::from_scene(&root, 200.0, 100.0, &mut crate::layout::LayoutCache::new());
         let t = &dl.texts[0];
         assert!((t.line_height - 24.0).abs() < 0.1, "继承 1.5×16=24, got {}", t.line_height);
     }
@@ -839,7 +866,7 @@ mod parity_tests {
             mk("b", "#020202", None),
             mk("c", "#030303", Some("-1")),
         ]);
-        let dl = DisplayList::from_scene(&root, 100.0, 100.0);
+        let dl = DisplayList::from_scene(&root, 100.0, 100.0, &mut crate::layout::LayoutCache::new());
         // 绘制顺序：c(-1) → b(0) → a(5)，同值保持文档序。
         let bgs: Vec<(u8, u8, u8)> = dl.shapes.iter().filter(|s| s.bg_present).map(|s| s.bg).collect();
         assert_eq!(bgs, vec![(0x03, 0x03, 0x03), (0x02, 0x02, 0x02), (0x01, 0x01, 0x01)],
@@ -969,7 +996,7 @@ mod threeway_tests {
                 for c in &n.children { collect(c, m); }
             }
             collect(&root, &mut bg_by_id);
-            let dl = DisplayList::from_scene(&root, vw, vh);
+            let dl = DisplayList::from_scene(&root, vw, vh, &mut crate::layout::LayoutCache::new());
             let (rects, texts) = tw_observe(&dl, &bg_by_id);
             let mut case_fails: Vec<String> = vec![];
             let first_rect = |bg: &str| rects.iter().find(|r| r.bg == bg).cloned();

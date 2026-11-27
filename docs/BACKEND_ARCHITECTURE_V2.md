@@ -185,8 +185,16 @@ cargo test 88 项全过（含测试搬迁后的 5 个 paint 指令域测试组�
 拆分过程中顺带修正了阶段 2 遗留的 FrameQueue 旧断言（原「过载不丢帧」
 与新背压语义矛盾），并新增持续过载二次背压用例。
 
-**后续（待做）**：DisplayList 增量生成（改颜色不重建布局树的依赖追踪）；
-GPU 资源管理器独立化（tex_cache 已具雏形）；GRX3 协议 NodeID uint64 化。
+**布局缓存已落地（阶段 3 增强）**：新增 `layout.rs`（LayoutCache + 布局签名）——
+布局相关属性白名单参与值哈希，其余 props（color/transform/opacity/scroll-top
+等纯绘制域）仅 key 存在性哈希。签名命中 → 跳过 build+compute_layout，只重跑
+emit。验收测试 4 项（改颜色复用 / 布局属性重建 / 滚动复用 / 命中与全量路径
+布局结果逐项一致）+ CPU 基准 `gx_bench_frame_cached`：155 节点下命中路径
+684μs → 346μs（**2.0× 加速**），颜色过渡 / opacity 动画 / 滚动帧全部免布局。
+
+**后续（待做）**：DisplayList 指令级增量（字形整形占命中路径大头，可缓存
+per-节点指令）；GPU 资源管理器独立化（tex_cache 已具雏形）；GRX3 协议
+NodeID uint64 化。
 
 内部模块：scene（retained mirror）→ layout（Taffy + 缓存）→ style → text
 （cosmic-text/glyphon）→ paint（Display List + 缓存）→ gpu（wgpu + 资源管理）。
@@ -200,7 +208,7 @@ GPU 资源管理器独立化（tex_cache 已具雏形）；GRX3 协议 NodeID ui
 | ---- | ---- | ---- |
 | 1 | 统一帧调度（FrameClock/FrameScheduler + 三平台时钟接入） | ✅ 已完成 |
 | 2 | Wire 背压 + FullSync 自动恢复 | ✅ 已完成（NodeID uint64 留待协议 v3） |
-| 3 | Rust Renderer 从 winit 解耦，Surface 注入 | ✅ 核心完成：SurfaceProvider 注入 + 契约测试 + paint/util 模块拆分；DisplayList 增量生成与 GRX3 协议为后续增强 |
+| 3 | Rust Renderer 从 winit 解耦，Surface 注入 | ✅ 核心完成：SurfaceProvider 注入 + 契约测试 + paint/util 模块拆分 + 布局缓存（2.0× 命中加速）；DisplayList 指令级增量与 GRX3 协议为后续增强 |
 | 4 | Desktop 正式迁移（Windows 优先；验证 60/120/144Hz；对比 Skia） | 待做 |
 | 5 | Android 原生 Surface + iOS 首次技术验证（Go Framework 集成 + C ABI 链接） | 待做 |
 | 6 | WebGPU（Rust→WASM，保留 DOM Driver） | 待做 |

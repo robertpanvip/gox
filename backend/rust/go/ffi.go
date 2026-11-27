@@ -18,6 +18,7 @@ extern void        gx_window_close(void* handle);
 extern void        gx_window_destroy(void* handle);
 extern const char* gx_window_version();
 extern uint64_t    gx_bench_frame(const uint8_t* buf, int len, float width, float height, int iters);
+extern uint64_t    gx_bench_frame_cached(const uint8_t* buf, int len, float width, float height, int iters);
 
 // 镜像一致性探针（纯 CPU，不依赖窗口/GPU）。
 extern void        gx_mirror_reset();
@@ -154,6 +155,17 @@ func cVersion() string {
 }
 
 // cBenchFrame 调 Rust 纯 CPU 管线基准，返回 iters 次累计纳秒。
+// cBenchFrameCached 调 Rust 缓存命中基准（同一棵树 → 布局复用只跑 emit），
+// 与 cBenchFrame 的比值即纯绘制属性变化帧的加速比。
+func cBenchFrameCached(buf []byte, width, height float32, iters int) uint64 {
+	if len(buf) == 0 {
+		return 0
+	}
+	return uint64(C.gx_bench_frame_cached(
+		(*C.uint8_t)(unsafe.Pointer(&buf[0])), C.int(len(buf)),
+		C.float(width), C.float(height), C.int(iters)))
+}
+
 func cBenchFrame(buf []byte, width, height float32, iters int) uint64 {
 	if len(buf) == 0 {
 		return 0

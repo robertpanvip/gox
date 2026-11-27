@@ -420,7 +420,12 @@ impl DisplayList {
     /// 支持完整的 justify-content / align-items / gap / flex-wrap，
     /// 组件包装层（Fragment）摊平为透明节点，文本节点用 measure 回调测宽。
     /// 根节点的 size 设为窗口尺寸，因此 align-items:center 有确定参照。
-    pub(crate) fn from_scene(root: &crate::scene::SceneNode, avail_w: f32, avail_h: f32) -> Self {
+    pub(crate) fn from_scene(
+        root: &crate::scene::SceneNode,
+        avail_w: f32,
+        avail_h: f32,
+        cache: &mut crate::layout::LayoutCache,
+    ) -> Self {
         use taffy::prelude::*;
 
         let mut dl = DisplayList::new();
@@ -449,7 +454,11 @@ impl DisplayList {
         collect_videos(root, &mut vspecs);
         crate::video::sync(&vspecs);
 
-        let taffy: TaffyTree<TextMeasure> = TaffyTree::new();
+        // ---- 布局缓存（layout.rs）：签名命中复用上帧 Taffy 树，跳过 build+compute ----
+        let sig = crate::layout::layout_signature(root, avail_w, avail_h);
+        if cache.sig == sig && cache.tree.is_some() {
+            cache.reuses += 1;
+        }
 
         fn dir_of(s: &str) -> FlexDirection {
             match s {
@@ -501,8 +510,9 @@ impl DisplayList {
 
         // 把可见子节点摊平（Fragment 透明），记录 (Taffy 节点, 原 SceneNode 引用)。
         // 同时收集节点的绘制属性，布局算完后统一生成 DisplayList。
-        struct BuildCtx {
-            taffy: TaffyTree<TextMeasure>,
+        // scan/emit 阶段只读布局；build 阶段直接传 &mut TaffyTree。
+        struct BuildCtx<'a> {
+            taffy: &'a TaffyTree<TextMeasure>,
         }
 
         /// 文本相关继承链（CSS 继承语义）：字重 / text-align / line-height(px) /
@@ -534,7 +544,7 @@ impl DisplayList {
         }
 
         fn build(
-            ctx: &mut BuildCtx,
+            taffy: &mut TaffyTree<TextMeasure>,
             node: &crate::scene::SceneNode,
             is_root: bool,
             parent_scrollable: bool,
@@ -559,7 +569,7 @@ impl DisplayList {
                 } else {
                     node.text.clone()
                 };
-                return ctx.taffy.new_leaf_with_context(
+                return taffy.new_leaf_with_context(
                     ts,
                     TextMeasure { text, size, line_height: my_tinh.line_h },
                 ).expect("taffy text leaf");
@@ -652,19 +662,27 @@ impl DisplayList {
             flatten(node, &mut kids);
             let child_scrollable = st.overflow != crate::style::Overflow::Visible;
             let child_nodes: Vec<taffy::NodeId> = kids.iter()
-                .map(|c| build(ctx, c, false, child_scrollable, color, size, avail_w, avail_h, my_tinh))
+                .map(|c| build(taffy, c, false, child_scrollable, color, size, avail_w, avail_h, my_tinh))
                 .collect();
 
-            ctx.taffy.new_with_children(style, &child_nodes).expect("taffy container")
+            taffy.new_with_children(style, &child_nodes).expect("taffy container")
         }
 
-        let mut ctx = BuildCtx { taffy };
-        let root_node = build(&mut ctx, root, true, false, (226, 232, 240), 16.0, avail_w, avail_h, TextInherit::default());
-        ctx.taffy.compute_layout_with_measure(
-            root_node,
-            Size { width: AvailableSpace::Definite(avail_w), height: AvailableSpace::Definite(avail_h) },
-            |known, avail, _id, mctx, _style| measure_text(known, avail, mctx),
-        ).expect("taffy compute_layout");
+        let hit = cache.sig == sig && cache.tree.is_some();
+        if !hit {
+            cache.rebuilds += 1;
+            let mut fresh = TaffyTree::new();
+            let root_node = build(&mut fresh, root, true, false, (226, 232, 240), 16.0, avail_w, avail_h, TextInherit::default());
+            fresh.compute_layout_with_measure(
+                root_node,
+                Size { width: AvailableSpace::Definite(avail_w), height: AvailableSpace::Definite(avail_h) },
+                |known, avail, _id, mctx, _style| measure_text(known, avail, mctx),
+            ).expect("taffy compute_layout");
+            cache.tree = Some((fresh, root_node));
+            cache.sig = sig;
+        }
+        let (tree, root_node) = cache.tree.as_ref().expect("layout cache populated");
+        let ctx = BuildCtx { taffy: tree };
 
         // ---- 浮层第二遍布局 ----
         // 预遍历收集锚点矩形与浮层信息（坐标累加方式与 build/emit 完全一致）。
@@ -699,7 +717,7 @@ impl DisplayList {
         }
         let mut anchors = std::collections::HashMap::new();
         let mut overlays: Vec<OverlayInfo> = Vec::new();
-        scan(root, root_node, &ctx, 0.0, 0.0, &mut anchors, &mut overlays);
+        scan(root, *root_node, &ctx, 0.0, 0.0, &mut anchors, &mut overlays);
 
         // 计算每个浮层的目标绝对左上角，按 node.id 索引（emit 时套用）。
         let mut overrides: std::collections::HashMap<String, (f32, f32)> = std::collections::HashMap::new();
@@ -954,7 +972,7 @@ impl DisplayList {
         }
 
         // 第一遍：主树，跳过浮层子树。
-        emit(root, root_node, &ctx, &mut dl, (226, 232, 240), 16.0, 0.0, 0.0,
+        emit(root, *root_node, &ctx, &mut dl, (226, 232, 240), 16.0, 0.0, 0.0,
             &overrides, avail_w, avail_h, true, None, None, None, None, TextInherit::default());
         // 第二遍：遮罩（拦截外部点击）。
         for ov in overlays.iter().filter(|o| is_scrim(o.node)) {
@@ -1075,7 +1093,7 @@ mod scrollbar_tests {
 
     #[test]
     pub(crate) fn from_scene_collects_measured() {
-        let dl = DisplayList::from_scene(&overflow_scene(0.0), 800.0, 600.0);
+        let dl = DisplayList::from_scene(&overflow_scene(0.0), 800.0, 600.0, &mut crate::layout::LayoutCache::new());
         // 回流应覆盖容器 + 5 个 item（非空 id 的节点）。
         assert_eq!(dl.measured.len(), 6, "应为 vp + 5 items 收集实测尺寸: {:?}", dl.measured);
         let item0 = dl.measured.iter().find(|(id, _, _)| id == "item0").expect("item0 应在回流里");
@@ -1084,7 +1102,7 @@ mod scrollbar_tests {
 
     #[test]
     pub(crate) fn from_scene_emits_scrollbar_for_overflow() {
-        let dl = DisplayList::from_scene(&overflow_scene(0.0), 800.0, 600.0);
+        let dl = DisplayList::from_scene(&overflow_scene(0.0), 800.0, 600.0, &mut crate::layout::LayoutCache::new());
         assert_eq!(dl.scrollbars.len(), 1, "溢出容器应生成一个滚动条");
         let sb = &dl.scrollbars[0];
         // 容器 100 高，内容 500 高 → thumb_h = 100*100/500 = 20 → 被最小高度 32 兜底。
@@ -1109,14 +1127,14 @@ mod scrollbar_tests {
                 events: vec![], children: vec![],
             }],
         };
-        let dl = DisplayList::from_scene(&vp, 800.0, 600.0);
+        let dl = DisplayList::from_scene(&vp, 800.0, 600.0, &mut crate::layout::LayoutCache::new());
         assert!(dl.scrollbars.is_empty(), "未溢出不应有滚动条");
     }
 
     #[test]
     pub(crate) fn scrollbar_moves_with_scroll() {
-        let top = DisplayList::from_scene(&overflow_scene(0.0), 800.0, 600.0);
-        let mid = DisplayList::from_scene(&overflow_scene(200.0), 800.0, 600.0);
+        let top = DisplayList::from_scene(&overflow_scene(0.0), 800.0, 600.0, &mut crate::layout::LayoutCache::new());
+        let mid = DisplayList::from_scene(&overflow_scene(200.0), 800.0, 600.0, &mut crate::layout::LayoutCache::new());
         assert_eq!(top.scrollbars.len(), 1);
         assert_eq!(mid.scrollbars.len(), 1);
         assert!(mid.scrollbars[0].thumb_y > top.scrollbars[0].thumb_y,
@@ -1274,7 +1292,7 @@ mod text_sig_tests {
             typ: NodeType::Div, kind: "span".into(), id: "code-line".into(),
             text: String::new(), props, events: vec![], children: vec![text],
         };
-        let dl = DisplayList::from_scene(&span, 800.0, 600.0);
+        let dl = DisplayList::from_scene(&span, 800.0, 600.0, &mut crate::layout::LayoutCache::new());
         let td = dl.texts.iter().find(|t| t.id == "code-text")
             .expect("文本节点应进入 DisplayList");
         assert_eq!(td.spans.len(), 2, "应按 ch 边界切成两段: {:?}", td.spans);

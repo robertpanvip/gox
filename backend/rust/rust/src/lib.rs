@@ -24,6 +24,7 @@ mod binprotocol;
 mod canvas;
 mod image;
 mod protocol;
+mod layout;
 mod paint;
 mod render;
 mod util;
@@ -729,6 +730,20 @@ pub extern "C" fn gx_bench_frame(
     }
     let slice = unsafe { std::slice::from_raw_parts(buf, len as usize) };
     render::bench_frame(slice, width, height, iters as u32).unwrap_or(0)
+}
+
+/// 缓存命中路径基准：同一棵树重复提交（签名不变 → 布局复用，只跑 emit）。
+/// 与 gx_bench_frame 的比值 = 纯绘制属性变化帧相对全量帧的加速比
+/// （BACKEND_ARCHITECTURE_V2 阶段 3 布局缓存验收）。
+#[no_mangle]
+pub extern "C" fn gx_bench_frame_cached(
+    buf: *const c_uchar, len: c_int, width: f32, height: f32, iters: c_int,
+) -> u64 {
+    if buf.is_null() || len <= 0 || iters <= 0 {
+        return 0;
+    }
+    let slice = unsafe { std::slice::from_raw_parts(buf, len as usize) };
+    render::bench_frame_cached(slice, width, height, iters as u32).unwrap_or(0)
 }
 
 // ---- 镜像一致性探针（纯 CPU，不依赖窗口/GPU）----
