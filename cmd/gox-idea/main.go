@@ -16,9 +16,9 @@ import (
 	"strings"
 	"time"
 
+	rb "github.com/robertpanvip/gox-backend-rust"
 	"github.com/robertpanvip/gox-idea/ui"
 	"github.com/robertpanvip/gox-idea/ui/interp"
-	rb "github.com/robertpanvip/gox-backend-rust"
 	gxapp "github.com/robertpanvip/gox/runtime/app"
 	"github.com/robertpanvip/gox/widgets"
 )
@@ -86,13 +86,13 @@ func main() {
 							if cls := h["class"]; cls == "gx-splitter-v" || cls == "gx-splitter-h" {
 								splitters = append(splitters, map[string]any{
 									"axis": strings.TrimPrefix(cls.(string), "gx-splitter-"),
-									"x": h["x"], "y": h["y"], "w": h["w"], "h": h["h"],
+									"x":    h["x"], "y": h["y"], "w": h["w"], "h": h["h"],
 								})
 							}
 							if tid, _ := h["testid"].(string); tid != "" {
 								testids = append(testids, map[string]any{
 									"testid": tid,
-									"x": h["x"], "y": h["y"], "w": h["w"], "h": h["h"],
+									"x":      h["x"], "y": h["y"], "w": h["w"], "h": h["h"],
 								})
 							}
 						}
