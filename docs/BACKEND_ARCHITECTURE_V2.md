@@ -152,14 +152,34 @@ type Scheduler struct{...}
 恢复不变量：连续更新、丢帧、队列过载、恢复全流程不出现 Scene 永久失步
 （Go 侧 Version 跳号检查 + Rust needs_fullsync 双通道，见 frame_recovery_test.go）。
 
-## 五、Renderer Runtime（阶段 3，路线图）
+## 五、Renderer Runtime（阶段 3）
 
-目标：Rust 渲染内核从 winit 解耦——`renderer/rust` 只暴露：
+**已落地（第一步：Surface 注入解耦）**：`render.rs` 渲染内核不再 import
+任何窗口库（契约测试 `render_kernel_has_no_window_library_dependency`
+守护，重新引入即编译失败）。内核侧唯一平台接口：
 
 ```rust
-trait Renderer { fn attach(&mut self, surface: &dyn Surface); fn submit(&mut self, frame: &Frame); fn render(&mut self, t: FrameTime); }
-trait Surface { /* 平台注入：Android Surface / CAMetalLayer / winit window / Canvas */ }
+pub trait SurfaceProvider: Send + Sync {
+    fn pixel_size(&self) -> (u32, u32);          // 物理像素
+    fn raw_display_handle(&self) -> RawDisplayHandle;
+    fn raw_window_handle(&self) -> RawWindowHandle;
+    fn request_redraw(&self);                     // 平台事件循环唤醒
+}
 ```
+
+`Renderer::new(Arc<dyn SurfaceProvider>)` 经 wgpu `create_surface_unsafe`
+挂载平台原生 Surface；`request_redraw()` 转发 provider（内核不感知
+winit/Choreographer/CADisplayLink）。winit 侧由 `lib.rs::WinitSurface`
+适配器实现——未来 Android NDK / iOS CAMetalLayer 宿主各写一个同款适配器，
+Renderer 一行不改。
+
+安全契约：Renderer 同时持有 provider 本体；surface 字段先于 provider 字段
+声明（Rust 按声明顺序 drop：surface 先销毁，句柄来源最后销毁）。
+
+**后续（阶段 3 第二步，待做）**：scene/layout/paint 模块物理拆分（当前
+render.rs 单文件含布局+绘制指令生成，拆分为 scene.rs（已有 retained
+mirror）+ layout.rs + paint.rs）；DisplayList 增量生成；GPU 资源管理器
+（tex_cache 已具雏形）。
 
 内部模块：scene（retained mirror）→ layout（Taffy + 缓存）→ style → text
 （cosmic-text/glyphon）→ paint（Display List + 缓存）→ gpu（wgpu + 资源管理）。
@@ -173,13 +193,13 @@ trait Surface { /* 平台注入：Android Surface / CAMetalLayer / winit window 
 | ---- | ---- | ---- |
 | 1 | 统一帧调度（FrameClock/FrameScheduler + 三平台时钟接入） | ✅ 已完成 |
 | 2 | Wire 背压 + FullSync 自动恢复 | ✅ 已完成（NodeID uint64 留待协议 v3） |
-| 3 | Rust Renderer 从 winit 解耦，Surface 注入 | 待做（核心） |
+| 3 | Rust Renderer 从 winit 解耦，Surface 注入 | 🟡 第一步已完成（SurfaceProvider + 契约测试）；第二步（scene/layout/paint 物理拆分）待做 |
 | 4 | Desktop 正式迁移（Windows 优先；验证 60/120/144Hz；对比 Skia） | 待做 |
 | 5 | Android 原生 Surface + iOS 首次技术验证（Go Framework 集成 + C ABI 链接） | 待做 |
 | 6 | WebGPU（Rust→WASM，保留 DOM Driver） | 待做 |
 
 NodeID 二进制协议 uint64 化（评审 §六.3）需要协议版本升级（GRX3）：牵动 GRX1/GRX2
-格式与 Rust binprotocol 解析，随阶段 3 一起做，避免两度破坏 wire 兼容。
+格式与 Rust binprotocol 解析，随阶段 3 第二步一起做，避免两度破坏 wire 兼容。
 
 ## 七、性能指标（阶段 4 起建立监控）
 

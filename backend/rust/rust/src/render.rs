@@ -3,6 +3,7 @@
 
 use crate::binprotocol::NodeType;
 use crate::protocol::InputEvent;
+use raw_window_handle::{RawDisplayHandle, RawWindowHandle};
 use glyphon::{
     Attrs, Buffer, Cache, Color, Family, FontSystem, Metrics, Resolution, Shaping, SwashCache,
     TextArea, TextAtlas, TextBounds, TextRenderer, Viewport, Weight,
@@ -13,7 +14,26 @@ use wgpu::{
     RenderPassColorAttachment, RenderPassDescriptor, RequestAdapterOptions,
     SurfaceConfiguration, TextureFormat, TextureUsages, TextureViewDescriptor,
 };
-use winit::window::Window;
+
+/// 平台无关 Surface 提供者（BACKEND_ARCHITECTURE_V2 §七）：
+/// "Renderer 可以跨平台，Surface 必须平台原生化"。渲染内核不 import 任何
+/// 窗口库——winit / Android NDK / iOS CAMetalLayer / 嵌入式宿主各自实现本
+/// trait，把原始句柄与像素尺寸注入 Renderer。
+///
+/// 安全契约：返回的句柄在 Renderer 存活期间必须保持有效。Renderer 同时持有
+/// provider 本体（Arc<dyn SurfaceProvider>），且 surface 字段先于 provider
+/// 字段声明（Rust 按声明顺序 drop：surface 先销毁，句柄来源最后销毁）。
+pub trait SurfaceProvider: Send + Sync {
+    /// 当前像素尺寸（物理像素；0 会被渲染内核钳到 1）。
+    fn pixel_size(&self) -> (u32, u32);
+    /// 平台 display 原始句柄（wgpu SurfaceTargetUnsafe::RawHandle 用）。
+    fn raw_display_handle(&self) -> RawDisplayHandle;
+    /// 平台 window/surface 原始句柄。
+    fn raw_window_handle(&self) -> RawWindowHandle;
+    /// 请求一次重绘（winit request_redraw / Choreographer / CADisplayLink）。
+    /// 渲染内核不关心具体机制，只负责"脏了就喊一声"。
+    fn request_redraw(&self);
+}
 
 // 文本测量上下文：继承后的字号 + 行高（像素，0=默认 1.35×size）+ 文本内容。
 // Taffy 在布局期回调测宽。行高与折叠语义必须与 emit/绘制端同口径，否则
@@ -1175,14 +1195,17 @@ pub struct Renderer {
     hovered_id: Option<String>,
     active_id: Option<String>,
     focused_id: Option<String>,
-    window: std::sync::Arc<Window>,
+    /// 平台 Surface 提供者（见 SurfaceProvider）。必须声明在 surface 之后：
+    /// drop 时 surface 先销毁，raw handle 来源最后销毁（安全契约）。
+    provider: std::sync::Arc<dyn SurfaceProvider>,
 }
 
 impl Renderer {
-    pub async fn new(window: std::sync::Arc<Window>) -> Self {
-        let size = window.inner_size();
-        let w = size.width.max(1);
-        let h = size.height.max(1);
+    /// 从平台注入的 SurfaceProvider 构建渲染器（不依赖任何窗口库）。
+    pub async fn new(provider: std::sync::Arc<dyn SurfaceProvider>) -> Self {
+        let (raw_w, raw_h) = provider.pixel_size();
+        let w = raw_w.max(1);
+        let h = raw_h.max(1);
         let instance = Instance::new(&InstanceDescriptor::default());
         let adapter = instance
             .request_adapter(&RequestAdapterOptions::default())
@@ -1193,7 +1216,16 @@ impl Renderer {
             .request_device(&DeviceDescriptor::default())
             .await
             .expect("request_device");
-        let surface = instance.create_surface(window.clone()).expect("create_surface");
+        // 平台原生化注入：raw handle 建 surface（§七）。句柄在 Renderer 存活期
+        // 保持有效由 provider 的安全契约保证（Renderer 持有 provider 本体）。
+        let surface = unsafe {
+            instance
+                .create_surface_unsafe(wgpu::SurfaceTargetUnsafe::RawHandle {
+                    raw_display_handle: provider.raw_display_handle(),
+                    raw_window_handle: provider.raw_window_handle(),
+                })
+        }
+        .expect("create_surface");
         // Bgra8Unorm（非 sRGB target）：写入即显示，gamma 空间混合——与
         // tiny-skia/Skia raster 旧管线同口径，也避免 glyphon 文本双次提亮。
         let fmt = TextureFormat::Bgra8Unorm;
@@ -1256,7 +1288,7 @@ impl Renderer {
             hovered_id: None,
             active_id: None,
             focused_id: None,
-            window,
+            provider,
         }
     }
 
@@ -1779,8 +1811,9 @@ impl Renderer {
         self.glyph_cache.clear(); // 字号不变，但清空避免与旧尺寸残留帧误命中
     }
 
-    pub fn window(&self) -> &Window {
-        &self.window
+    /// 请求平台重绘一帧（转发 SurfaceProvider，内核不感知窗口机制）。
+    pub fn request_redraw(&self) {
+        self.provider.request_redraw();
     }
 }
 

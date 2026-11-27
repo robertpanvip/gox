@@ -30,11 +30,15 @@ mod style;
 mod text_effects;
 mod video;
 
+#[cfg(test)]
+mod tests_surface;
+
 use render::Renderer;
 use std::collections::VecDeque;
 use std::ffi::CString;
 use std::os::raw::{c_char, c_int, c_uchar, c_void};
 use std::sync::{Arc, Mutex};
+use raw_window_handle::{HasRawDisplayHandle as _, HasRawWindowHandle as _};
 use winit::{
     dpi::LogicalSize,
     event::{ElementState, Ime, MouseButton, WindowEvent},
@@ -42,6 +46,29 @@ use winit::{
     keyboard::{Key, NamedKey},
     window::Window,
 };
+
+/// winit 平台适配层（BACKEND_ARCHITECTURE_V2 §七）：把 winit Window 适配成
+/// 渲染内核的平台无关 SurfaceProvider。渲染内核（render.rs）不再 import
+/// winit——未来 Android NDK / iOS CAMetalLayer 宿主各写一个同款适配器，
+/// Renderer 一行不改。
+struct WinitSurface {
+    window: Arc<Window>,
+}
+impl crate::render::SurfaceProvider for WinitSurface {
+    fn pixel_size(&self) -> (u32, u32) {
+        let s = self.window.inner_size();
+        (s.width, s.height)
+    }
+    fn raw_display_handle(&self) -> raw_window_handle::RawDisplayHandle {
+        self.window.raw_display_handle().expect("display handle")
+    }
+    fn raw_window_handle(&self) -> raw_window_handle::RawWindowHandle {
+        self.window.raw_window_handle().expect("window handle")
+    }
+    fn request_redraw(&self) {
+        self.window.request_redraw();
+    }
+}
 
 /// 从任意线程投递给事件循环的用户事件（评审 P0/P1）。
 /// Wake：有新帧或需要重绘；Close：请求事件循环退出。
@@ -438,9 +465,11 @@ impl winit::application::ApplicationHandler<GxEvent> for WinitApp<'_> {
         // opacity: winit 0.30 无跨平台窗口级 opacity API（各平台扩展不一），
         // 透明效果请用 with_transparent + 场景节点的半透明 bg；此处不设置。
         let _ = self.style.opacity;
-        *self.state = Some(pollster::block_on(Renderer::new(window)));
+        let provider: Arc<dyn crate::render::SurfaceProvider> =
+            Arc::new(WinitSurface { window: window.clone() });
+        *self.state = Some(pollster::block_on(Renderer::new(provider)));
         // 首帧主动请求一次重绘：绘制首帧/应用 run 前已提交的帧。之后靠事件驱动。
-        self.state.as_ref().unwrap().window().request_redraw();
+        self.state.as_ref().unwrap().request_redraw();
         if self.probe {
             self.t_resumed_done = Some(std::time::Instant::now());
         }
@@ -457,7 +486,7 @@ impl winit::application::ApplicationHandler<GxEvent> for WinitApp<'_> {
                     q.wake_in_flight = false;
                 }
                 if let Some(renderer) = self.state.as_mut() {
-                    renderer.window().request_redraw();
+                    renderer.request_redraw();
                 }
             }
         }
@@ -473,7 +502,7 @@ impl winit::application::ApplicationHandler<GxEvent> for WinitApp<'_> {
         match event {
             WindowEvent::Resized(size) => {
                 renderer.resize(size.width.max(1), size.height.max(1));
-                renderer.window().request_redraw();
+                renderer.request_redraw();
             }
             WindowEvent::RedrawRequested => {
                 // 排空 FIFO 队列，按顺序 apply 每一帧（评审 P0：增量不丢）。
@@ -544,7 +573,7 @@ impl winit::application::ApplicationHandler<GxEvent> for WinitApp<'_> {
                 // 静止场景停止 request_redraw，避免空转占用 CPU/GPU。新帧到达时由
                 // gx_window_draw 经 proxy 发 Wake 重新驱动一次重绘。
                 if renderer.needs_continuous_redraw() {
-                    renderer.window().request_redraw();
+                    renderer.request_redraw();
                 }
             }
             WindowEvent::CloseRequested => el.exit(),
@@ -554,7 +583,7 @@ impl winit::application::ApplicationHandler<GxEvent> for WinitApp<'_> {
                 // 伪状态 hover：命中节点变化时才 request_redraw（边沿检测，避免每帧重绘）。
                 let hit = renderer.hit_node_id(x, y);
                 if renderer.set_hover(hit) {
-                    renderer.window().request_redraw();
+                    renderer.request_redraw();
                 }
             }
             WindowEvent::MouseInput {
@@ -566,7 +595,7 @@ impl winit::application::ApplicationHandler<GxEvent> for WinitApp<'_> {
                 // active 伪状态：按下命中的节点进入 active（active 优先于 hover）。
                 let hit = renderer.hit_node_id(x, y);
                 if renderer.set_active(hit) {
-                    renderer.window().request_redraw();
+                    renderer.request_redraw();
                 }
                 // focus 伪状态：点击输入框 → 该节点聚焦；点击其他区域 → 失焦（同浏览器）。
                 // 这与 host 侧 Input 的 focusToken signal 互补：后者驱动 IME/光标，
@@ -575,7 +604,7 @@ impl winit::application::ApplicationHandler<GxEvent> for WinitApp<'_> {
                 let input_ev = renderer.hit_input(x, y);
                 let focus_id = input_ev.as_ref().map(|e| e.node_id.clone());
                 if renderer.set_focused(focus_id) {
-                    renderer.window().request_redraw();
+                    renderer.request_redraw();
                 }
                 if let Some(ev) = renderer.hit_click(x, y) {
                     fire(&self.cb, &self.cb_ctx, &ev.to_json());
@@ -590,13 +619,13 @@ impl winit::application::ApplicationHandler<GxEvent> for WinitApp<'_> {
             } => {
                 // 松开：退出 active，回到仅 hover 状态。
                 if renderer.set_active(None) {
-                    renderer.window().request_redraw();
+                    renderer.request_redraw();
                 }
             }
             WindowEvent::CursorLeft { .. } => {
                 // 光标离开窗口：退出 hover（否则会停在最后的 hover 态）。
                 if renderer.set_hover(None) {
-                    renderer.window().request_redraw();
+                    renderer.request_redraw();
                 }
             }
             WindowEvent::Ime(ime) => match ime {
