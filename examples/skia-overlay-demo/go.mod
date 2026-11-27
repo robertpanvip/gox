@@ -16,4 +16,4 @@ require (
 
 replace github.com/robertpanvip/gox-core => ../../../gox-core
 
-replace github.com/robertpanvip/gox-backend-rust => ../../../gox-backend/backend/rust/go
+replace github.com/robertpanvip/gox-backend-rust => ../../../gox-backend/rust/go

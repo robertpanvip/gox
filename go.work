@@ -3,10 +3,10 @@ go 1.27.2
 use (
 	.
 	../gox-core
-	../gox-backend/backend/rust/go
-	../gox-backend/backend/rust/android
-	../gox-backend/backend/skia
-	../gox-backend/backend/web
+	../gox-backend/rust/go
+	../gox-backend/rust/android
+	../gox-backend/skia
+	../gox-backend/web
 	../gox-backend/third_party/skia
 	./examples/desktop-demo
 	./examples/fpsbench
