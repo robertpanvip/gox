@@ -138,8 +138,11 @@ jobs:
           # GUI dev 头文件：gox-idea/playground 的 cgo 依赖（go-gl/glfw 要
           # X11 头、go-gl/gl 要 pkg-config gl、x/mobile 要 GLES3 头），缺了
           # 连编译期都过不去；fonts-noto-cjk 供 CJK 字体相关用例真实执行。
+          # GLFW 的 X11 全套 dev 依赖：除 libx11 外还需要 xcursor/xrandr/
+          # xinerama/xi 头文件（缺 Xcursor.h 时 go-gl/glfw 编译失败）。
           sudo apt-get install -y xvfb xdotool xclip imagemagick \
-            libx11-dev libgles2-mesa-dev libgl-dev pkg-config fonts-noto-cjk
+            libx11-dev libxcursor-dev libxrandr-dev libxinerama-dev libxi-dev \
+            libgles2-mesa-dev libgl-dev pkg-config fonts-noto-cjk
           pip install pillow
 
       - name: 安装 GUI E2E 依赖（Windows）

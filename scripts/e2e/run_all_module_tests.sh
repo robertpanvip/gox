@@ -42,6 +42,11 @@ for m in $MODULES; do
   if [ "$m" = "examples/playground" ] || [ "$m" = "cmd/gox-idea" ]; then
     missing=""
     [ -f /usr/include/X11/Xlib.h ] || missing="$missing libx11-dev"
+    # GLFW 还依赖 X11 扩展头文件（Xcursor/Xrandr/Xinerama/Xi），
+    # 只装 libx11-dev 会在编译 glfw 时报 Xcursor.h 缺失。
+    [ -f /usr/include/X11/Xcursor/Xcursor.h ] || missing="$missing libxcursor-dev"
+    [ -f /usr/include/X11/extensions/Xrandr.h ] || missing="$missing libxrandr-dev"
+    [ -f /usr/include/X11/extensions/XInput2.h ] || missing="$missing libxi-dev"
     [ -f /usr/include/GLES3/gl3.h ] || missing="$missing libgles2-mesa-dev"
     pkg-config --exists gl 2>/dev/null || missing="$missing libgl-dev/pkg-config"
     if [ -n "$missing" ]; then
