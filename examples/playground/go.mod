@@ -30,3 +30,5 @@ replace github.com/robertpanvip/gox-backend-skia => ../../backend/skia
 replace github.com/robertpanvip/gox-backend-web => ../../backend/web
 
 replace github.com/robertpanvip/gox-skia => ../../third_party/skia
+
+replace github.com/ahati/yoga-go-binding => /tmp/yoga-android-binding-amd64
