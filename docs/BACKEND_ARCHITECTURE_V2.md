@@ -176,10 +176,17 @@ Renderer 一行不改。
 安全契约：Renderer 同时持有 provider 本体；surface 字段先于 provider 字段
 声明（Rust 按声明顺序 drop：surface 先销毁，句柄来源最后销毁）。
 
-**后续（阶段 3 第二步，待做）**：scene/layout/paint 模块物理拆分（当前
-render.rs 单文件含布局+绘制指令生成，拆分为 scene.rs（已有 retained
-mirror）+ layout.rs + paint.rs）；DisplayList 增量生成；GPU 资源管理器
-（tex_cache 已具雏形）。
+**第二步已落地（模块物理拆分）**：render.rs 由 2635 行拆为三个职责模块——
+`paint.rs`（1450 行：DisplayList::from_scene = Taffy 布局 + 绘制指令编译，
+含浮层/滚动条/裁剪/文本绘制计划及其测试）、`util.rs`（106 行：文本测量
+Taffy 回调 + 颜色/尺寸/字体解析，paint/render 共用）、`render.rs`（保留
+Renderer GPU 执行 + SurfaceProvider）。模块可见性经 pub(crate) 精确控制；
+cargo test 88 项全过（含测试搬迁后的 5 个 paint 指令域测试组）。
+拆分过程中顺带修正了阶段 2 遗留的 FrameQueue 旧断言（原「过载不丢帧」
+与新背压语义矛盾），并新增持续过载二次背压用例。
+
+**后续（待做）**：DisplayList 增量生成（改颜色不重建布局树的依赖追踪）；
+GPU 资源管理器独立化（tex_cache 已具雏形）；GRX3 协议 NodeID uint64 化。
 
 内部模块：scene（retained mirror）→ layout（Taffy + 缓存）→ style → text
 （cosmic-text/glyphon）→ paint（Display List + 缓存）→ gpu（wgpu + 资源管理）。
@@ -193,13 +200,13 @@ mirror）+ layout.rs + paint.rs）；DisplayList 增量生成；GPU 资源管理
 | ---- | ---- | ---- |
 | 1 | 统一帧调度（FrameClock/FrameScheduler + 三平台时钟接入） | ✅ 已完成 |
 | 2 | Wire 背压 + FullSync 自动恢复 | ✅ 已完成（NodeID uint64 留待协议 v3） |
-| 3 | Rust Renderer 从 winit 解耦，Surface 注入 | 🟡 第一步已完成（SurfaceProvider + 契约测试）；第二步（scene/layout/paint 物理拆分）待做 |
+| 3 | Rust Renderer 从 winit 解耦，Surface 注入 | ✅ 核心完成：SurfaceProvider 注入 + 契约测试 + paint/util 模块拆分；DisplayList 增量生成与 GRX3 协议为后续增强 |
 | 4 | Desktop 正式迁移（Windows 优先；验证 60/120/144Hz；对比 Skia） | 待做 |
 | 5 | Android 原生 Surface + iOS 首次技术验证（Go Framework 集成 + C ABI 链接） | 待做 |
 | 6 | WebGPU（Rust→WASM，保留 DOM Driver） | 待做 |
 
 NodeID 二进制协议 uint64 化（评审 §六.3）需要协议版本升级（GRX3）：牵动 GRX1/GRX2
-格式与 Rust binprotocol 解析，随阶段 3 第二步一起做，避免两度破坏 wire 兼容。
+格式与 Rust binprotocol 解析，作为后续独立变更，避免与模块拆分耦合。
 
 ## 七、性能指标（阶段 4 起建立监控）
 

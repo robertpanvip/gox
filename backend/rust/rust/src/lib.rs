@@ -24,7 +24,9 @@ mod binprotocol;
 mod canvas;
 mod image;
 mod protocol;
+mod paint;
 mod render;
+mod util;
 mod scene;
 mod style;
 mod text_effects;
@@ -54,6 +56,10 @@ use winit::{
 struct WinitSurface {
     window: Arc<Window>,
 }
+// #[allow(deprecated)]：SurfaceProvider 的契约就是 raw handle（wgpu
+// SurfaceTargetUnsafe::RawHandle 的输入），rwh 0.6 标记 deprecated 的
+// HasRawDisplayHandle/HasRawWindowHandle 正是完成此转换的官方路径。
+#[allow(deprecated)]
 impl crate::render::SurfaceProvider for WinitSurface {
     fn pixel_size(&self) -> (u32, u32) {
         let s = self.window.inner_size();
@@ -840,24 +846,41 @@ mod frame_queue_tests {
     use super::*;
 
     #[test]
-    fn queue_records_peak_and_overload_without_dropping_frames() {
+    fn queue_backpressure_drops_stale_and_requests_fullsync() {
+        // 背压语义（BACKEND_ARCHITECTURE_V2 §六.2）：pending 达阈值后有界回压——
+        // 丢弃全部未消费增量帧 + needs_fullsync，Go Host 下一帧全量重建镜像。
+        // 高刷目标 = 及时显示最新的正确状态，不是把中间画面排队播完。
         let mut q = FrameQueue::new();
         let total = MAX_PENDING_FRAMES + 7;
         for i in 0..total {
             q.enqueue(vec![i as u8]);
         }
-        // 过载只计数，不丢帧（增量帧丢弃会永久失步）。
         assert_eq!(q.submitted, total as u64);
-        assert_eq!(q.pending.len(), total);
-        assert_eq!(q.peak_pending, total);
-        assert_eq!(q.overload_events, 7);
-        assert_eq!(q.stats()[0], total as u64);
-        assert_eq!(q.stats()[3], 7);
+        // 过载触发一次背压：丢弃 120 帧积压，之后 121..127 逐帧入队 → 7 帧。
+        assert_eq!(q.pending.len(), 7);
+        assert_eq!(q.peak_pending, MAX_PENDING_FRAMES);
+        assert_eq!(q.overload_events, 1);
+        // FullSync 请求置位且读后清零。
+        assert!(q.take_fullsync());
+        assert!(!q.take_fullsync(), "FullSync 请求应读后清零");
 
         let batch = q.drain_all();
-        assert_eq!(batch.len(), total);
+        assert_eq!(batch.len(), 7);
         assert!(q.pending.is_empty());
         assert!(q.first_enqueue.is_none());
+        assert!(q.stats()[3] >= 1, "过载事件应上报");
+    }
+
+    #[test]
+    fn queue_backpressure_repeats_on_sustained_overload() {
+        // 持续过载（Go 侧迟迟不消费）：每次越过阈值都再次背压，不无限堆积。
+        let mut q = FrameQueue::new();
+        for _ in 0..(MAX_PENDING_FRAMES * 2 + 5) {
+            q.enqueue(vec![0]);
+        }
+        assert_eq!(q.overload_events, 2);
+        assert!(q.pending.len() <= MAX_PENDING_FRAMES);
+        assert!(q.take_fullsync());
     }
 
     #[test]
