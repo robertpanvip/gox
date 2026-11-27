@@ -192,9 +192,33 @@ emit。验收测试 4 项（改颜色复用 / 布局属性重建 / 滚动复用 
 布局结果逐项一致）+ CPU 基准 `gx_bench_frame_cached`：155 节点下命中路径
 684μs → 346μs（**2.0× 加速**），颜色过渡 / opacity 动画 / 滚动帧全部免布局。
 
-**后续（待做）**：DisplayList 指令级增量（字形整形占命中路径大头，可缓存
-per-节点指令）；GPU 资源管理器独立化（tex_cache 已具雏形）；GRX3 协议
-NodeID uint64 化。
+**emit 指令缓存已落地（阶段 3 收尾）**：`EmitCache`（layout.rs）+ `NodeCmds` /
+`append_cmds` / 子树渲染签名（paint.rs）——布局命中帧的 emit 按「子树渲染签名」
+复用上帧指令段，跳过 parse_style / collapse_whitespace / 渐变切分 / 递归编译，
+只做段拷贝。正确性构造：
+
+- 签名 = 继承链滚动哈希（EMIT_INHERIT_PROPS 白名单：color/font-size/字重/
+  行高/对齐/空白折叠/渐变/selection/font-family/overflow）⊕ 本节点结构身份 +
+  全 props 值（顺序无关求和哈希）+ events + Taffy 绝对坐标 + 收到的裁剪矩形 ⊕
+  孩子签名。归纳保证：签名相等 ⇔ emit 全部输入相等 ⇔ 输出指令段等价；
+- 裁剪传播与 emit 共用单一来源（child_clip_of），防止两处逻辑漂移；
+- key = Taffy NodeId（布局复用帧间稳定）；rebuild 帧签名表为空 → 查询自然
+  miss、帧末旧槽全淘汰，语义自动退化为"不缓存"；
+- 淘汰与 glyph_cache 同模式（每帧 live 集，帧末 retain）；
+- 含 video 的子树禁缓存（video 当前帧每帧变化，签名无法覆盖解码产物）；
+- 浮层三遍遍历（scrim/popover/modal/portal）不参与缓存（节点数少，
+  overrides 定位不进签名，规避第二遍布局的输入耦合）。
+
+验收测试 4 项：静态场景命中且输出与全量路径逐项一致（shapes/texts/
+hitboxes/inputs/scrollbars/measured 六通道）/ 继承 color 变化失效且文字
+颜色更新 / 滚动帧失效且子项整体平移 + thumb 下移 / 文本变化 rebuild 后
+无旧内容残留。CPU 基准（release，155 节点）：全量 from_scene 670μs →
+布局缓存 346μs → emit 指令缓存 **243μs**（累计 **2.76×**，本步 1.42×）；
+cgo 基准 `gx_bench_frame_cached` 306μs（含场景树 clone 47μs）。
+
+**后续（待做）**：GPU 资源管理器独立化（tex_cache 已具雏形）；GRX3 协议
+NodeID uint64 化；DisplayList 段零拷贝复用（dl 改段列表结构，消除 append
+时的 String clone——需与 GRX3 一并评估）。
 
 内部模块：scene（retained mirror）→ layout（Taffy + 缓存）→ style → text
 （cosmic-text/glyphon）→ paint（Display List + 缓存）→ gpu（wgpu + 资源管理）。
@@ -208,7 +232,7 @@ NodeID uint64 化。
 | ---- | ---- | ---- |
 | 1 | 统一帧调度（FrameClock/FrameScheduler + 三平台时钟接入） | ✅ 已完成 |
 | 2 | Wire 背压 + FullSync 自动恢复 | ✅ 已完成（NodeID uint64 留待协议 v3） |
-| 3 | Rust Renderer 从 winit 解耦，Surface 注入 | ✅ 核心完成：SurfaceProvider 注入 + 契约测试 + paint/util 模块拆分 + 布局缓存（2.0× 命中加速）；DisplayList 指令级增量与 GRX3 协议为后续增强 |
+| 3 | Rust Renderer 从 winit 解耦，Surface 注入 | ✅ 完成：SurfaceProvider 注入 + 契约测试 + paint/util 模块拆分 + 布局缓存（2.0×）+ emit 指令缓存（累计 2.76×）；GRX3 协议为后续独立变更 |
 | 4 | Desktop 正式迁移（Windows 优先；验证 60/120/144Hz；对比 Skia） | 待做 |
 | 5 | Android 原生 Surface + iOS 首次技术验证（Go Framework 集成 + C ABI 链接） | 待做 |
 | 6 | WebGPU（Rust→WASM，保留 DOM Driver） | 待做 |

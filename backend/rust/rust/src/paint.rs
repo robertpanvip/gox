@@ -6,6 +6,7 @@
 use crate::binprotocol::NodeType;
 use crate::util::*;
 use glyphon::Buffer;
+use std::hash::{Hash, Hasher};
 #[cfg(test)]
 use glyphon::{FontSystem, Metrics};
 
@@ -395,6 +396,73 @@ pub(crate) fn scrollbar_geometry(
     })
 }
 
+/// 单个子树 emit 产出的指令段（DisplayList 各通道的区间快照）。
+/// emit 缓存（layout::EmitCache）的存储单元；签名相等 ⇔ 段等价。
+#[derive(Clone)]
+pub(crate) struct NodeCmds {
+    pub(crate) shapes: Vec<ShapeDraw>,
+    pub(crate) texts: Vec<TextDraw>,
+    pub(crate) hitboxes: Vec<(f32, f32, f32, f32, String, String, bool, ClipRect, String)>,
+    pub(crate) inputs: Vec<(f32, f32, f32, f32, String)>,
+    pub(crate) scrollbars: Vec<ScrollBar>,
+    pub(crate) measured: Vec<(String, f32, f32)>,
+}
+
+/// 把缓存的指令段按原通道顺序追加进 DisplayList（段复用路径的全部工作）。
+pub(crate) fn append_cmds(dl: &mut DisplayList, c: &NodeCmds) {
+    dl.shapes.extend(c.shapes.iter().cloned());
+    dl.texts.extend(c.texts.iter().cloned());
+    dl.hitboxes.extend(c.hitboxes.iter().cloned());
+    dl.inputs.extend(c.inputs.iter().cloned());
+    dl.scrollbars.extend(c.scrollbars.iter().cloned());
+    dl.measured.extend(c.measured.iter().cloned());
+}
+
+/// emit 继承推导会读取的 props 键（emit 缓存签名的「继承滚动哈希」白名单）。
+/// 覆盖：颜色/字号链（color/font-size）、TextInherit::derive 输入
+/// （font-weight/weight/text-align/line-height/white-space，与
+/// style::font_weight_from_props 的 font-weight/weight 双键一致）、文本渐变
+/// 解析（gradient-text/background-clip/-webkit-background-clip/bg/background/
+/// background-image，与 text_effects::TextEffects::from_props 一致）、
+/// selection 协议（&::selection/selection-range）、font-family，以及影响
+/// 子树裁剪基准与滚动偏移语义的 overflow。任何新增继承语义键必须同步维护。
+const EMIT_INHERIT_PROPS: &[&str] = &[
+    "color", "font-size",
+    "font-weight", "weight", "text-align", "line-height", "white-space",
+    "gradient-text", "background-clip", "-webkit-background-clip",
+    "bg", "background", "background-image",
+    "&::selection", "selection-range", "font-family",
+    "overflow",
+];
+
+/// 裁剪矩形的哈希摘要（emit 缓存签名用：裁剪变化必须使子树缓存失效）。
+pub(crate) fn clip_hash(c: ClipRect) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hh = std::collections::hash_map::DefaultHasher::new();
+    match c {
+        None => 0u8.hash(&mut hh),
+        Some((x, y, w, h)) => {
+            1u8.hash(&mut hh);
+            x.to_bits().hash(&mut hh);
+            y.to_bits().hash(&mut hh);
+            w.to_bits().hash(&mut hh);
+            h.to_bits().hash(&mut hh);
+        }
+    }
+    hh.finish()
+}
+
+/// 节点对外传播给子树的裁剪矩形（overflow 容器求交，其余继承）。
+/// emit 与 emit 缓存签名遍历共用的单一来源，防止两处逻辑漂移。
+pub(crate) fn child_clip_of(node: &crate::scene::SceneNode, parent_clip: ClipRect, x: f32, y: f32, w: f32, h: f32) -> ClipRect {
+    let st = crate::style::parse_style(node);
+    if node.typ == NodeType::Div && st.overflow != crate::style::Overflow::Visible {
+        clip_intersect(parent_clip, Some((x, y, w, h)))
+    } else {
+        parent_clip
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct DisplayList {
     pub(crate) shapes: Vec<ShapeDraw>,
@@ -684,6 +752,114 @@ impl DisplayList {
         let (tree, root_node) = cache.tree.as_ref().expect("layout cache populated");
         let ctx = BuildCtx { taffy: tree };
 
+        // ---- emit 缓存签名预计算（仅布局命中帧启用） ----
+        // rebuild 帧 Taffy NodeId 漂移且已走全量路径：签名表置空 → emit 查询
+        // 自然 miss、帧末旧槽全淘汰，语义自动退化为"不缓存"。
+        // 签名遍历与 emit 同构（flat_children + 相同坐标/裁剪/继承传播），
+        // 归纳保证：签名相等 ⇔ emit 全部输入相等 ⇔ 输出指令段等价。
+        let emit_sig_map = if hit {
+            let mut sigs: std::collections::HashMap<taffy::NodeId, (u64, bool)> = std::collections::HashMap::new();
+            // 递归闭包展开为局部 fn：需要 BuildCtx（嵌套类型）。
+            fn render_sig(
+                node: &crate::scene::SceneNode,
+                tnode: taffy::NodeId,
+                ctx: &BuildCtx,
+                inh: u64,
+                parent_clip: ClipRect,
+                ox: f32, oy: f32,
+                sigs: &mut std::collections::HashMap<taffy::NodeId, (u64, bool)>,
+            ) -> (u64, bool) {
+                use std::hash::Hasher;
+                // 主树遍不进入浮层子树（emit 同口径 skip）——浮层子树不入签名表。
+                if is_overlay(node) {
+                    return (0, false);
+                }
+                let lay = ctx.taffy.layout(tnode).expect("taffy layout");
+                // 热路径优化：无 overflow/scroll props 的节点（绝大多数）跳过
+                // parse_style 的字符串解析——默认语义（Visible/0.0）与之一致。
+                let needs_style = node.props.contains_key("overflow")
+                    || node.props.contains_key("scroll-left")
+                    || node.props.contains_key("scroll-top");
+                let (st_cl, st_sl) = if needs_style {
+                    let st = crate::style::parse_style(node);
+                    (st.overflow, (st.scroll_left, st.scroll_top))
+                } else {
+                    (crate::style::Overflow::Visible, (0.0, 0.0))
+                };
+                let x = ox + lay.location.x;
+                let y = oy + lay.location.y;
+                let w = lay.size.width;
+                let h = lay.size.height;
+                let my_clip = if node.typ == NodeType::Div && st_cl != crate::style::Overflow::Visible {
+                    clip_intersect(parent_clip, Some((x, y, w, h)))
+                } else {
+                    parent_clip
+                };
+                // 继承滚动哈希：本节点的继承语义键值滚入，传给孩子（不含裁剪——
+                // 裁剪由每节点显式编码 clip_hash(parent_clip)，见下）。
+                let inh_child = {
+                    let mut hh = std::collections::hash_map::DefaultHasher::new();
+                    inh.hash(&mut hh);
+                    for k in EMIT_INHERIT_PROPS {
+                        if let Some(v) = node.props.get(*k) {
+                            k.hash(&mut hh);
+                            v.hash(&mut hh);
+                        }
+                    }
+                    hh.finish()
+                };
+                let mut has_video = node.kind.eq_ignore_ascii_case("video");
+                let mut kids: Vec<&crate::scene::SceneNode> = Vec::new();
+                flat_children(node, &mut kids);
+                let child_ox = x - st_sl.0;
+                let child_oy = y - st_sl.1;
+                // 孩子签名先算（组合需要），返回值聚合成孩子列表哈希。
+                let mut kid_h = std::collections::hash_map::DefaultHasher::new();
+                for (i, c) in kids.iter().enumerate() {
+                    let ct = ctx.taffy.child_at_index(tnode, i).expect("taffy child");
+                    let (cs, cv) = render_sig(c, ct, ctx, inh_child, my_clip, child_ox, child_oy, sigs);
+                    cs.hash(&mut kid_h);
+                    has_video |= cv;
+                }
+                // 本节点签名：结构身份 + 全 props 值（保守：任何值变化都失效）+
+                // events + Taffy 布局结果（绝对坐标）+ 继承链 + 收到的裁剪。
+                let mut hh = std::collections::hash_map::DefaultHasher::new();
+                inh.hash(&mut hh);
+                clip_hash(parent_clip).hash(&mut hh);
+                (node.typ as u8).hash(&mut hh);
+                node.kind.hash(&mut hh);
+                node.id.hash(&mut hh);
+                node.text.hash(&mut hh);
+                // 全 props 值参与（保守：任何值变化都失效）。顺序无关求和组合，
+                // 免去排序分配（HashMap 迭代序不定 → 逐对独立哈希后 wrapping_add）。
+                let mut props_sum: u64 = 0;
+                for (k, v) in node.props.iter() {
+                    let mut ph = std::collections::hash_map::DefaultHasher::new();
+                    k.hash(&mut ph);
+                    v.hash(&mut ph);
+                    props_sum = props_sum.wrapping_add(ph.finish());
+                }
+                props_sum.hash(&mut hh);
+                for e in &node.events {
+                    e.hash(&mut hh);
+                }
+                x.to_bits().hash(&mut hh);
+                y.to_bits().hash(&mut hh);
+                w.to_bits().hash(&mut hh);
+                h.to_bits().hash(&mut hh);
+                kid_h.finish().hash(&mut hh);
+                let sig = hh.finish();
+                sigs.insert(tnode, (sig, has_video));
+                (sig, has_video)
+            }
+            let (sig, has_video) = render_sig(root, *root_node, &ctx, 0, None, 0.0, 0.0, &mut sigs);
+            debug_assert!(sigs.contains_key(root_node) && sigs.len() >= 1);
+            let _ = (sig, has_video);
+            sigs
+        } else {
+            std::collections::HashMap::new()
+        };
+
         // ---- 浮层第二遍布局 ----
         // 预遍历收集锚点矩形与浮层信息（坐标累加方式与 build/emit 完全一致）。
         struct OverlayInfo<'a> {
@@ -770,11 +946,32 @@ impl DisplayList {
             inherited_selection: Option<SelectionDraw>,
             inherited_family: Option<String>,
             tinh: TextInherit,
+            emit_sigs: &std::collections::HashMap<taffy::NodeId, (u64, bool)>,
+            ecache: &mut crate::layout::EmitCache,
         ) -> f32 {
             // 主树遍历时跳过浮层子树（它们由后续的遮罩/浮层遍单独绘制，保证层级）。
             if skip_overlays && is_overlay(node) {
                 return oy;
             }
+            // ---- emit 缓存查询（仅主树遍；签名表在布局命中帧预计算）----
+            // 签名相等 ⇒ 输出段等价（继承链/裁剪/坐标/子树内容全部编码在签名里）。
+            // 含 video 的子树禁缓存：video 当前帧每帧变化，签名无法覆盖解码产物。
+            if skip_overlays {
+                if let Some(&(sig, false)) = emit_sigs.get(&tnode) {
+                    if let Some(slot) = ecache.lookup(tnode, sig) {
+                        append_cmds(dl, &slot.cmds);
+                        return slot.bottom;
+                    }
+                }
+            }
+            // 缓存未命中：全量 emit。记录本子树在各通道的起始下标，
+            // 递归结束后按区间快照存槽（子树 push 一定落在区间内）。
+            let m0 = dl.shapes.len();
+            let m1 = dl.texts.len();
+            let m2 = dl.hitboxes.len();
+            let m3 = dl.inputs.len();
+            let m4 = dl.scrollbars.len();
+            let m5 = dl.measured.len();
             let p = |k: &str| node.props.get(k).map(|s| s.as_str());
             let color = p("color").map(parse_color).unwrap_or(inherited_color);
             let size = p("font-size").and_then(parse_px).unwrap_or(inherited_size);
@@ -809,11 +1006,7 @@ impl DisplayList {
 
             // overflow 容器：本节点矩形成为子树的新裁剪边界；子树坐标减 scroll 偏移。
             let st = crate::style::parse_style(node);
-            let my_clip = if node.typ == NodeType::Div && st.overflow != crate::style::Overflow::Visible {
-                clip_intersect(parent_clip, Some((x, y, w, h)))
-            } else {
-                parent_clip
-            };
+            let my_clip = child_clip_of(node, parent_clip, x, y, w, h);
             let child_ox = x - st.scroll_left;
             let child_oy = y - st.scroll_top;
 
@@ -947,7 +1140,7 @@ impl DisplayList {
             };
             for &(orig_i, c) in ordered.iter() {
                 let child_tnode = ctx.taffy.child_at_index(tnode, orig_i).expect("taffy child");
-                let cb = emit(c, child_tnode, ctx, dl, color, size, child_ox, child_oy, overrides, avail_w, avail_h, skip_overlays, my_clip, my_gradient.clone(), my_selection.clone(), my_family.clone(), my_tinh);
+                let cb = emit(c, child_tnode, ctx, dl, color, size, child_ox, child_oy, overrides, avail_w, avail_h, skip_overlays, my_clip, my_gradient.clone(), my_selection.clone(), my_family.clone(), my_tinh, emit_sigs, &mut *ecache);
                 if cb > subtree_bottom {
                     subtree_bottom = cb;
                 }
@@ -964,28 +1157,49 @@ impl DisplayList {
 
             // 返回给父的"未施加本节点 scroll 前"的内容底边：
             // 本节点子树坐标是 child_oy = y - scroll_top，加回 scroll_top 得到父坐标系下的位置。
-            if node.typ == NodeType::Div && st.overflow != crate::style::Overflow::Visible {
+            let bottom = if node.typ == NodeType::Div && st.overflow != crate::style::Overflow::Visible {
                 subtree_bottom + st.scroll_top
             } else {
                 subtree_bottom
+            };
+            // emit 缓存存槽（仅主树遍；按区间快照本子树产出的指令段）。
+            if skip_overlays {
+                if let Some(&(sig, false)) = emit_sigs.get(&tnode) {
+                    ecache.store(tnode, sig, NodeCmds {
+                        shapes: dl.shapes[m0..].to_vec(),
+                        texts: dl.texts[m1..].to_vec(),
+                        hitboxes: dl.hitboxes[m2..].to_vec(),
+                        inputs: dl.inputs[m3..].to_vec(),
+                        scrollbars: dl.scrollbars[m4..].to_vec(),
+                        measured: dl.measured[m5..].to_vec(),
+                    }, bottom);
+                }
             }
+            bottom
         }
 
+        // 帧开始：清空指令缓存 live 集（帧末 retain 淘汰滚出视口的子树）。
+        cache.emit.begin_frame();
         // 第一遍：主树，跳过浮层子树。
         emit(root, *root_node, &ctx, &mut dl, (226, 232, 240), 16.0, 0.0, 0.0,
-            &overrides, avail_w, avail_h, true, None, None, None, None, TextInherit::default());
+            &overrides, avail_w, avail_h, true, None, None, None, None, TextInherit::default(),
+            &emit_sig_map, &mut cache.emit);
         // 第二遍：遮罩（拦截外部点击）。
         for ov in overlays.iter().filter(|o| is_scrim(o.node)) {
             emit(ov.node, ov.tnode, &ctx, &mut dl, (226, 232, 240), 16.0, 0.0, 0.0,
-                &overrides, avail_w, avail_h, false, None, None, None, None, TextInherit::default());
+                &overrides, avail_w, avail_h, false, None, None, None, None, TextInherit::default(),
+                &emit_sig_map, &mut cache.emit);
         }
         // 第三遍：内容浮层 popover → modal → portal（最上层），按角色分层保证层级稳定。
         for role in ["popover", "modal", "portal"] {
             for ov in overlays.iter().filter(|o| gx_role(o.node) == role) {
                 emit(ov.node, ov.tnode, &ctx, &mut dl, (226, 232, 240), 16.0, 0.0, 0.0,
-                    &overrides, avail_w, avail_h, false, None, None, None, None, TextInherit::default());
+                    &overrides, avail_w, avail_h, false, None, None, None, None, TextInherit::default(),
+                    &emit_sig_map, &mut cache.emit);
             }
         }
+        // 帧结束：淘汰本帧未出现的槽（滚出视口 / 删除的子树）。
+        cache.emit.end_frame();
         dl
     }
 
