@@ -1,0 +1,294 @@
+package gxapp
+
+import (
+	"fmt"
+	"sync"
+	"testing"
+
+	gxscene "github.com/robertpanvip/gox/runtime/scene"
+	"github.com/robertpanvip/gox/runtime/signal"
+)
+
+// stubWindow 是多窗口装配验收桩：记录生命周期调用，可选 panic / 错误注入。
+// Post 内联执行（UIExecutor 接线验证用——headless 场景无独立事件泵）。
+type stubWindow struct {
+	mu        sync.Mutex
+	cfg       WindowConfig
+	opened    bool
+	closed    bool
+	drawn     int
+	bindCalls int
+	runErr    error
+	runPanic  any
+}
+
+func (w *stubWindow) Open(cfg WindowConfig) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.cfg = cfg
+	w.opened = true
+	return nil
+}
+
+func (w *stubWindow) Draw(root *gxscene.Node) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.drawn++
+	return nil
+}
+
+func (w *stubWindow) Run() error {
+	if w.runPanic != nil {
+		panic(w.runPanic)
+	}
+	return w.runErr
+}
+
+func (w *stubWindow) Close() error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.closed = true
+	return nil
+}
+
+func (w *stubWindow) Config() WindowConfig {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.cfg
+}
+
+func (w *stubWindow) BindApp(app *App) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.bindCalls++
+	app.EnableChanges()
+}
+
+func (w *stubWindow) Post(fn func()) error {
+	fn()
+	return nil
+}
+
+func stubText(title string) *gxscene.Instance {
+	return gxscene.Render(gxscene.Template{
+		Ops: []gxscene.Op{
+			{Code: gxscene.OpElem, Arg: "span"},
+			{Code: gxscene.OpChildText, Arg: title},
+			{Code: gxscene.OpClose},
+		},
+	})
+}
+
+// gx.use(Backend) → 逐窗 render：两扇窗各自独立 App/场景树/signal Runtime，
+// 互不串扰；每窗 Render 后自动 BindApp（WindowBinder）。
+func TestHandleRenderMultipleWindowsIndependent(t *testing.T) {
+	w1, w2 := &stubWindow{}, &stubWindow{}
+	factory := func(cfg WindowConfig) (Window, error) {
+		if cfg.Title == "Main Window" {
+			return w1, nil
+		}
+		return w2, nil
+	}
+	app := UseFactory(factory)
+
+	a1, err := app.Render(func() any { return stubText("main") }, WindowConfig{Title: "Main Window", Width: 1200, Height: 800})
+	if err != nil {
+		t.Fatalf("render 窗口 1 失败: %v", err)
+	}
+	a2, err := app.Render(func() any { return stubText("settings") }, WindowConfig{Title: "Settings", Width: 600, Height: 400})
+	if err != nil {
+		t.Fatalf("render 窗口 2 失败: %v", err)
+	}
+
+	if got := len(app.Host().Windows()); got != 2 {
+		t.Fatalf("Host 应管理 2 个窗口, got %d", got)
+	}
+	if w1.bindCalls != 1 || w2.bindCalls != 1 {
+		t.Fatalf("每窗 Render 后应各收到一次 BindApp, got %d/%d", w1.bindCalls, w2.bindCalls)
+	}
+	if a1 == a2 {
+		t.Fatal("两扇窗应是独立 App")
+	}
+	if a1.Runtime() == a2.Runtime() {
+		t.Fatal("两扇窗应是独立 signal Runtime（多 App 隔离）")
+	}
+	// 场景树内容独立：各自的标题只在自己的树里。
+	if s1, _ := RenderText(a1.Instance()); !contains(s1, "main") {
+		t.Fatalf("窗口 1 场景树应含 main: %q", s1)
+	}
+	if s2, _ := RenderText(a2.Instance()); !contains(s2, "settings") {
+		t.Fatalf("窗口 2 场景树应含 settings: %q", s2)
+	}
+
+	if err := app.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if !w1.closed || !w2.closed {
+		t.Fatal("Handle.Close 应关闭全部窗口")
+	}
+}
+
+func contains(s, sub string) bool {
+	return len(s) >= len(sub) && (func() bool {
+		for i := 0; i+len(sub) <= len(s); i++ {
+			if s[i:i+len(sub)] == sub {
+				return true
+			}
+		}
+		return false
+	})()
+}
+
+// signal 串扰隔离：窗口 A 写 signal 只重绘 A，B 的绘制次数不变。
+func TestHandleSignalIsolationBetweenWindows(t *testing.T) {
+	w1, w2 := &stubWindow{}, &stubWindow{}
+	app := UseFactory(func(cfg WindowConfig) (Window, error) {
+		if cfg.Title == "A" {
+			return w1, nil
+		}
+		return w2, nil
+	})
+	count := signal.New(0)
+	var a2 *App
+	// 动态子节点（getter）才是响应式通道：静态 OpChildText 只在构建期求值一次。
+	_, err := app.Render(func() any {
+		return gxscene.Render(gxscene.Template{
+			Ops: []gxscene.Op{
+				{Code: gxscene.OpElem, Arg: "b"},
+				{Code: gxscene.OpDynChild, Slot: 0},
+				{Code: gxscene.OpClose},
+			},
+			N: 1,
+		}, func() any { return fmt.Sprint(count()) })
+	}, WindowConfig{Title: "A"})
+	if err != nil {
+		t.Fatalf("render A: %v", err)
+	}
+	a2, err = app.Render(func() any { return stubText("B") }, WindowConfig{Title: "B"})
+	if err != nil {
+		t.Fatalf("render B: %v", err)
+	}
+
+	w1.mu.Lock()
+	d1 := w1.drawn
+	w1.mu.Unlock()
+	w2.mu.Lock()
+	_ = w2.drawn
+	w2.mu.Unlock()
+
+	count(count() + 1) // 只应更新窗口 A 的树内容（A 的树订阅了 count）
+
+	// Post 内联执行：signal 写入同步走 A 的派发器重绘。
+	w1.mu.Lock()
+	d1b := w1.drawn
+	w1.mu.Unlock()
+
+	if d1b <= d1 {
+		t.Fatalf("窗口 A 写 signal 后应重绘, drawn %d -> %d", d1, d1b)
+	}
+	// 响应式帧边界是进程级全局（P4 评审决议：单线程唯一，多 App 串行 drain），
+	// 跨窗 flush 会唤醒 B 的帧边界——但 B 的树内容不变，增量后端（rustbackend
+	// Present）对无变化帧短路，不产生真实绘制/传输。隔离保证落在「树内容与
+	// 生命周期」，故这里断言 B 的场景树仍是旧值，而非 Draw 调用计数。
+	s2, _ := RenderText(a2.Instance())
+	if contains(s2, "1") || !contains(s2, "B") {
+		t.Fatalf("窗口 B 的树不应被 A 的 signal 改写: %q", s2)
+	}
+	_ = app.Close()
+}
+
+// 故障隔离：任一窗口 Run panic 被 recover 归因上报，不传播、不拖垮其它窗口。
+func TestHostRunFaultIsolation(t *testing.T) {
+	wBad, wGood := &stubWindow{runPanic: "boom"}, &stubWindow{}
+	var faults []Fault
+	host := NewHost(WithFaultHandler(func(f Fault) { faults = append(faults, f) }))
+	if _, err := host.OpenWindow(WindowConfig{Title: "bad", Backend: "stub"}, wBad); err != nil {
+		t.Fatalf("open bad: %v", err)
+	}
+	if _, err := host.OpenWindow(WindowConfig{Title: "good", Backend: "stub"}, wGood); err != nil {
+		t.Fatalf("open good: %v", err)
+	}
+	err := host.Run()
+	if err == nil {
+		t.Fatal("Run 应返回 panic 窗口的错误")
+	}
+	if len(faults) != 1 || faults[0].Phase != "run" || faults[0].Panic != "boom" {
+		t.Fatalf("故障应归因上报一次, got %+v", faults)
+	}
+	if !faults[0].Recovered {
+		t.Fatal("Fault.Recovered 应为 true")
+	}
+	if err := host.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+}
+
+// 空宿主 Run 直接返回；零窗口快照。
+func TestHostRunNoWindows(t *testing.T) {
+	host := NewHost()
+	if err := host.Run(); err != nil {
+		t.Fatalf("空宿主 Run 应返回 nil, got %v", err)
+	}
+	if len(host.Windows()) != 0 {
+		t.Fatal("空宿主不应有窗口")
+	}
+}
+
+// CloseWindow 只关一扇窗：另一扇仍存活可绘制；重复 CloseWindow 幂等返回 nil。
+func TestHostCloseWindowIsolation(t *testing.T) {
+	w1, w2 := &stubWindow{}, &stubWindow{}
+	host := NewHost()
+	a1, _ := host.OpenWindow(WindowConfig{Title: "one", Backend: "stub"}, w1)
+	if _, err := host.OpenWindow(WindowConfig{Title: "two", Backend: "stub"}, w2); err != nil {
+		t.Fatalf("open two: %v", err)
+	}
+	if err := host.CloseWindow(a1); err != nil {
+		t.Fatalf("CloseWindow: %v", err)
+	}
+	if !w1.closed {
+		t.Fatal("被关窗口应收到 Close")
+	}
+	if !w2.opened || w2.closed {
+		t.Fatal("另一窗口不应受影响")
+	}
+	if len(host.Windows()) != 1 {
+		t.Fatalf("Host 应剩 1 个窗口, got %d", len(host.Windows()))
+	}
+	if err := host.CloseWindow(a1); err != nil {
+		t.Fatalf("重复 CloseWindow 应幂等返回 nil, got %v", err)
+	}
+}
+
+// Use 引用未注册后端：Render 明确报错，不产生半开窗口。
+func TestUseUnknownBackendErrors(t *testing.T) {
+	h := Use("no-such-backend-xyz")
+	if _, err := h.Render(func() any { return stubText("x") }, WindowConfig{Title: "x"}); err == nil {
+		t.Fatal("未注册后端的 Render 应报错")
+	}
+	if len(h.Host().Windows()) != 0 {
+		t.Fatal("失败的 Render 不应残留窗口")
+	}
+}
+
+// Host 关闭后拒绝新窗口。
+func TestHostClosedRejectsNewWindow(t *testing.T) {
+	host := NewHost()
+	if _, err := host.OpenWindow(WindowConfig{Title: "a", Backend: "stub"}, &stubWindow{}); err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	_ = host.Close()
+	if _, err := host.OpenWindow(WindowConfig{Title: "b", Backend: "stub"}, &stubWindow{}); err == nil {
+		t.Fatal("关闭后的 Host 应拒绝新窗口")
+	}
+}
+
+// Run 错误透传：非 panic 的 Run 错误返回给调用方（第一个）。
+func TestHostRunPropagatesError(t *testing.T) {
+	wErr, wOk := &stubWindow{runErr: fmt.Errorf("protocol dead")}, &stubWindow{}
+	host := NewHost()
+	_, _ = host.OpenWindow(WindowConfig{Title: "err", Backend: "stub"}, wErr)
+	_, _ = host.OpenWindow(WindowConfig{Title: "ok", Backend: "stub"}, wOk)
+	if err := host.Run(); err == nil || err.Error() != "protocol dead" {
+		t.Fatalf("Run 应透传窗口错误, got %v", err)
+	}
+}

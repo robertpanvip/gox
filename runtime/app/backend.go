@@ -110,6 +110,14 @@ func Backends() []string {
 	return out
 }
 
+// lookupBackend 按名查注册表工厂（Host 多窗口装配用，不打开窗口）。
+func lookupBackend(name string) (BackendFactory, bool) {
+	registry.mu.RLock()
+	f, ok := registry.fact[name]
+	registry.mu.RUnlock()
+	return f, ok
+}
+
 // OpenBackend 按 cfg.Backend 从注册表选择后端并打开应用。
 //
 // "headless" 或空串走内置 HeadlessWindow（无需注册）；其余名字必须已 Register。

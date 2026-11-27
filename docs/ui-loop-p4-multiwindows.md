@@ -61,6 +61,27 @@
 
 ## 4. API 设计
 
+### 4.0 接入层已落地：gx.use(Backend) → gxapp.Use / Handle.Render
+
+GX 接入形态与 Go 落点的对应关系（首版已实现）：
+
+```
+const app = gx.use(Backend)              →  app := gxapp.Use("rust")          // 或 UseFactory(工厂)
+app.render(() => <App />, {              →  app.Render(func() any { return ui.App() },
+    title: "Main Window",                    gxapp.WindowConfig{Title: "Main Window", Width: 1200, Height: 800})
+    width: 1200, height: 800,
+})
+app.render(() => <Settings />, {...})    →  app.Render(func() any { return ui.Settings() }, gxapp.WindowConfig{...})
+app.run()                                →  app.Run()   // 全部窗口退出才返回
+```
+
+首版语义：每次 `Render` = 一扇独立窗口 + 独立 App（独立场景树 / signal Runtime）；
+后端实现 `UIExecutor` 时自动注入（Dispatch/RAF 进窗口事件泵）；实现 `WindowBinder`
+（rustbackend.BindApp）时 Render 后自动启用增量流。窗口 Run panic 由 Host recover
+归因上报 `FaultHandler`，只熔断该窗口。已知边界：响应式帧边界（signal.AfterEffects）
+是进程级全局，跨窗 flush 会唤醒其它窗口的帧边界——但树内容不变，增量后端对无变化
+帧短路，不产生真实绘制/传输；GLFW 主线程亲和后端的多窗口待目标态改造。
+
 ### 4.1 Host（新增，`runtime/app/host.go`）
 
 ```go
