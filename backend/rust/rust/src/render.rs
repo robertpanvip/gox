@@ -10,10 +10,8 @@ use glyphon::{
 };
 use raw_window_handle::{RawDisplayHandle, RawWindowHandle};
 use wgpu::{
-    CommandEncoderDescriptor, CompositeAlphaMode, DeviceDescriptor, Instance, InstanceDescriptor,
-    LoadOp, MultisampleState, Operations, PresentMode, RenderPassColorAttachment,
-    RenderPassDescriptor, RequestAdapterOptions, SurfaceConfiguration, TextureFormat,
-    TextureUsages, TextureViewDescriptor,
+    CompositeAlphaMode, DeviceDescriptor, Instance, InstanceDescriptor, MultisampleState,
+    PresentMode, RequestAdapterOptions, SurfaceConfiguration, TextureFormat, TextureUsages,
 };
 
 /// 平台无关 Surface 提供者（BACKEND_ARCHITECTURE_V2 §七）：
@@ -56,14 +54,17 @@ struct TexEntry {
 }
 
 pub struct Renderer {
-    device: wgpu::Device,
-    queue: wgpu::Queue,
-    surface: wgpu::Surface<'static>,
+    pub(crate) device: wgpu::Device,
+    pub(crate) queue: wgpu::Queue,
     config: SurfaceConfiguration,
-    /// 本 surface 支持的 present 模式集合（创建期查询缓存；set_present_mode 依据）。
+    /// 本 surface 支持的 present 模式集合（创建期查询缓存）。present 线程化后
+    /// 由 take_surface_parts 随 surface 一并移交 PresentHub（VSyncControl 依据）。
     present_modes: Vec<PresentMode>,
+    /// wgpu surface（P4.6 present 线程化：创建后由 take_surface_parts 移交
+    /// 专用渲染线程，本端 prepare 不再触碰）。
+    surface: Option<wgpu::Surface<'static>>,
     /// GPU quad 管线（gx_gpu crate：三端统一 WGSL，GPU 优先）。
-    gpu: gx_gpu::QuadGpu,
+    pub(crate) gpu: gx_gpu::QuadGpu,
     /// 纹理一级缓存：内容 key → 条目。
     tex_cache: std::collections::HashMap<u64, TexEntry>,
     /// 逻辑键（图片源指针 / 视频节点 id 哈希 / canvas 内容哈希）→ 纹理 id。
@@ -78,9 +79,9 @@ pub struct Renderer {
 
     font_system: FontSystem,
     swash_cache: SwashCache,
-    viewport: Viewport,
-    atlas: TextAtlas,
-    text_renderer: TextRenderer,
+    pub(crate) viewport: Viewport,
+    pub(crate) atlas: TextAtlas,
+    pub(crate) text_renderer: TextRenderer,
 
     /// 常驻镜像场景树（Zed 式）：首帧快照建立，后续增量动作打补丁
     scene: Option<crate::scene::SceneNode>,
@@ -199,9 +200,9 @@ impl Renderer {
             logical,
             device,
             queue,
-            surface,
             config,
             present_modes,
+            surface: Some(surface),
             gpu,
             tex_cache: std::collections::HashMap::new(),
             tex_ids: std::collections::HashMap::new(),
@@ -629,9 +630,13 @@ impl Renderer {
         false
     }
 
-    pub fn render(&mut self) {
+    /// 帧准备（P4.6 present 线程化）：布局/文本整形/GpuFrame 构建等 CPU 与
+    /// 纹理上传工作，**不触碰 surface**——acquire/encode/present 由专用渲染
+    /// 线程执行（lib.rs present_loop），Fifo 背压的阻塞只落在渲染线程。
+    /// 返回 None 表示无可提交内容（未建镜像树）。
+    pub fn prepare(&mut self) -> Option<gx_gpu::GpuFrame> {
         let Some(scene) = self.scene.as_ref() else {
-            return;
+            return None;
         };
         // transition：按当前时间推进动画。动画进行中必须逐帧重算（插值值在变）。
         let now_ms = self.anim_origin.elapsed().as_millis();
@@ -787,12 +792,34 @@ impl Renderer {
         let frame = self.build_gpu_frame(&src);
 
         // 从当前 DisplayList + 按 ID 缓存的 buffers 组装 areas（有无变化都要做，因为 prepare 每帧消费 areas）。
-        let areas: Vec<TextArea> = self
-            .display
-            .texts
+        let areas = Self::build_text_areas(&self.glyph_cache, &self.display.texts, self.height as i32);
+        self.text_renderer
+            .prepare(
+                &self.device,
+                &self.queue,
+                &mut self.font_system,
+                &mut self.atlas,
+                &self.viewport,
+                areas,
+                &mut self.swash_cache,
+            )
+            .unwrap();
+        self.atlas.trim();
+        Some(frame)
+    }
+
+    /// 从当前 DisplayList + 按 ID 缓存的 buffers 组装 areas（有无变化都要做，因为 prepare 每帧消费 areas）。
+    /// 独立参数形式：TextArea 借用 glyph_cache 的 Buffer，若经 &self 方法借用
+    /// 会与后续 text_renderer.prepare 的 &mut 字段借用冲突（字段级不相交才可行）。
+    fn build_text_areas<'a>(
+        glyphs: &'a std::collections::HashMap<u64, GlyphEntry>,
+        texts: &'a [crate::paint::TextDraw],
+        win_h: i32,
+    ) -> Vec<TextArea<'a>> {
+        texts
             .iter()
             .filter_map(|t| {
-                let b = match self.glyph_cache.get(&t.id) {
+                let b = match glyphs.get(&t.id) {
                     Some(e) => &e.buffer,
                     None => return None, // 理论上不会发生；防御性跳过缺字形的项
                 };
@@ -807,7 +834,7 @@ impl Renderer {
                         left: -20,
                         top: -20,
                         right: 720,
-                        bottom: self.height as i32,
+                        bottom: win_h,
                     },
                 };
                 Some(TextArea {
@@ -830,54 +857,7 @@ impl Renderer {
                     custom_glyphs: &[],
                 })
             })
-            .collect();
-        self.text_renderer
-            .prepare(
-                &self.device,
-                &self.queue,
-                &mut self.font_system,
-                &mut self.atlas,
-                &self.viewport,
-                areas,
-                &mut self.swash_cache,
-            )
-            .unwrap();
-
-        let f = self.surface.get_current_texture().unwrap();
-        let view = f.texture.create_view(&TextureViewDescriptor::default());
-        let mut enc = self
-            .device
-            .create_command_encoder(&CommandEncoderDescriptor { label: None });
-        {
-            let mut pass = enc.begin_render_pass(&RenderPassDescriptor {
-                label: None,
-                color_attachments: &[Some(RenderPassColorAttachment {
-                    view: &view,
-                    resolve_target: None,
-                    ops: Operations {
-                        load: LoadOp::Clear(wgpu::Color {
-                            r: (frame.clear[0] / 255.0) as f64,
-                            g: (frame.clear[1] / 255.0) as f64,
-                            b: (frame.clear[2] / 255.0) as f64,
-                            a: (frame.clear[3] / 255.0) as f64,
-                        }),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-            });
-            // GPU quad 管线画图形（gx_gpu crate，三端统一 WGSL），
-            // 随后在同一 pass 叠加 glyphon 文本。
-            self.gpu.draw(&mut pass, &frame);
-            self.text_renderer
-                .render(&self.atlas, &self.viewport, &mut pass)
-                .unwrap();
-        }
-        self.queue.submit(Some(enc.finish()));
-        f.present();
-        self.atlas.trim();
+            .collect()
     }
 
     /// 点击命中 → 生成 click 事件 JSON
@@ -1123,11 +1103,10 @@ impl Renderer {
     }
 
     pub fn resize(&mut self, w: u32, h: u32) {
-        // 简化：仅更新 surface 配置（种子 demo 固定尺寸）。
+        // 仅更新本端尺寸/缓存（P4.6：surface 重配置由渲染线程经 PresentHub 执行）。
         self.config.width = w.max(1);
         self.config.height = h.max(1);
         self.logical = self.provider_logical();
-        self.surface.configure(&self.device, &self.config);
         // 尺寸相关缓存失效：下一帧必须重算布局与文本。
         self.frame_dirty = true;
         self.cached_areas_dirty = true;
@@ -1163,24 +1142,15 @@ impl Renderer {
         self.last_region = None;
     }
 
-    /// 运行时切换 present 模式（VSyncControl，P4.5 高刷专项）。
-    /// 支持则重 configure 立即生效并返回 true；本 surface 不支持该模式返回 false
-    /// （调用方保留原模式，不产生半配置状态）。与当前一致时也返回 true（幂等）。
-    pub fn set_present_mode(&mut self, mode: PresentMode) -> bool {
-        if !self.present_modes.contains(&mode) {
-            return false;
-        }
-        if self.config.present_mode == mode {
-            return true;
-        }
-        self.config.present_mode = mode;
-        self.surface.configure(&self.device, &self.config);
-        true
-    }
-
-    /// 当前生效的 present 模式（诊断/E2E 断言用）。
-    pub fn present_mode(&self) -> PresentMode {
-        self.config.present_mode
+    /// 移交 surface 与 present 模式集合（P4.6 present 线程化）：resumed 创建
+    /// 渲染器后由宿主调用，surface 从此由专用渲染线程独占（acquire/present
+    /// 不再占用事件循环线程）。config 克隆给渲染线程，本端保留尺寸字段供
+    /// viewport/布局使用。
+    pub fn take_surface_parts(
+        &mut self,
+    ) -> (wgpu::Surface<'static>, SurfaceConfiguration, Vec<PresentMode>) {
+        let surface = self.surface.take().expect("surface taken twice");
+        (surface, self.config.clone(), std::mem::take(&mut self.present_modes))
     }
 }
 

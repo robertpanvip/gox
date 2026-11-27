@@ -51,6 +51,7 @@ use std::collections::VecDeque;
 use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_int, c_uchar, c_void};
 use std::sync::{Arc, Mutex};
+use wgpu::SurfaceConfiguration;
 use winit::{
     dpi::LogicalSize,
     event::{ElementState, Ime, MouseButton, WindowEvent},
@@ -227,6 +228,250 @@ impl FrameQueue {
 
 pub type EventCallback = Option<extern "C" fn(*const c_char, *mut c_void)>;
 
+// ---- P4.6 present 线程化：surface 独占的专用渲染线程 ----
+//
+// Fifo 的 get_current_texture 在背压时会阻塞到下一 vblank——这是帧节奏对齐
+// 屏幕刷新率的物理机制，但若发生在事件循环线程（pump 的 RedrawRequested 内），
+// 就会卡死整个 UI 线程：输入不泵、其它窗口不被轮询、Close 处理不了。
+// PresentHub 把 surface 从 Renderer 移交给专用渲染线程：
+//
+//   prepare（事件循环线程，CPU）：apply → 布局/文本 → GpuFrame → tx
+//   present（渲染线程，GPU）：get_current_texture（阻塞，不持锁）→
+//                            持锁 encode（快）→ submit → present
+//
+// busy 标志 + Condvar 构成节流门：gx_window_draw 在上一帧未上屏前短暂等待
+// （100ms 超时兜底），UI 线程节奏与屏幕刷新率对齐；事件循环在帧间自由泵事件，
+// 多窗口各自轮询互不拖累。锁序约定：renderer → surface → config（无环）。
+
+/// 渲染线程消息：帧数据 / surface 尺寸重配置 / present 模式切换 / 关闭。
+/// Resize 携带新尺寸（真相源由消息载荷带入，避免跨线程写 hub.config 的竞态）。
+enum PresentMsg {
+    Frame(gx_gpu::GpuFrame),
+    Resize { width: u32, height: u32 },
+    PresentMode(wgpu::PresentMode),
+    Shutdown,
+}
+
+struct PresentHub {
+    /// surface 独占槽：start_present_thread 填充，仅渲染线程访问。
+    surface: std::sync::Mutex<Option<wgpu::Surface<'static>>>,
+    /// surface 配置真相源（尺寸 / present 模式）；Renderer 端 config 仅存尺寸。
+    config: std::sync::Mutex<SurfaceConfiguration>,
+    /// 本 surface 支持的 present 模式集合（创建期查询；gx_window_set_vsync 校验）。
+    present_modes: std::sync::Mutex<Vec<wgpu::PresentMode>>,
+    /// 渲染线程是否持有未完成帧（Frame recv 后、present 前为 true）。
+    busy: std::sync::atomic::AtomicBool,
+    /// busy false 边沿通知（draw 节流门等待点）。
+    idle_mu: std::sync::Mutex<()>,
+    idle: std::sync::Condvar,
+    /// 渲染线程命令通道（gate 限流下深度 ≤1；无界避免丢帧丢纹理上传）。
+    tx: std::sync::Mutex<Option<std::sync::mpsc::Sender<PresentMsg>>>,
+    handle: std::sync::Mutex<Option<std::thread::JoinHandle<()>>>,
+}
+
+impl PresentHub {
+    fn new() -> std::sync::Arc<PresentHub> {
+        std::sync::Arc::new(PresentHub {
+            surface: std::sync::Mutex::new(None),
+            config: std::sync::Mutex::new(SurfaceConfiguration {
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                format: wgpu::TextureFormat::Bgra8Unorm,
+                width: 1,
+                height: 1,
+                present_mode: wgpu::PresentMode::Fifo,
+                alpha_mode: wgpu::CompositeAlphaMode::Opaque,
+                view_formats: vec![],
+                desired_maximum_frame_latency: 2,
+            }),
+            present_modes: std::sync::Mutex::new(vec![]),
+            busy: std::sync::atomic::AtomicBool::new(false),
+            idle_mu: std::sync::Mutex::new(()),
+            idle: std::sync::Condvar::new(),
+            tx: std::sync::Mutex::new(None),
+            handle: std::sync::Mutex::new(None),
+        })
+    }
+
+    /// 节流门：渲染线程仍有未完成帧时等待其上屏（最多 100ms，异常兜底）。
+    fn wait_present_idle(&self) {
+        if !self.busy.load(std::sync::atomic::Ordering::Relaxed) {
+            return;
+        }
+        let g = self.idle_mu.lock().unwrap();
+        let _ = self.idle.wait_timeout_while(
+            g,
+            std::time::Duration::from_millis(100),
+            |_| self.busy.load(std::sync::atomic::Ordering::Relaxed),
+        );
+    }
+
+    /// 提交一帧给渲染线程（prepare 完成后调用）。
+    fn submit(&self, frame: gx_gpu::GpuFrame) {
+        if let Some(tx) = self.tx.lock().unwrap().as_ref() {
+            let _ = tx.send(PresentMsg::Frame(frame));
+        }
+    }
+
+    /// 请求渲染线程按新尺寸重配置 surface（窗口 resize 后）。
+    /// 尺寸经消息载荷带入，渲染线程收到后更新 hub.config 真相源再 configure。
+    fn request_reconfigure(&self, width: u32, height: u32) {
+        if let Some(tx) = self.tx.lock().unwrap().as_ref() {
+            let _ = tx.send(PresentMsg::Resize { width, height });
+        }
+    }
+
+    /// 切换 present 模式：写入配置真相源并通知渲染线程重配置。
+    fn apply_present_mode(&self, mode: wgpu::PresentMode) {
+        self.config.lock().unwrap().present_mode = mode;
+        if let Some(tx) = self.tx.lock().unwrap().as_ref() {
+            let _ = tx.send(PresentMsg::PresentMode(mode));
+        }
+    }
+
+    /// 通知渲染线程退出并等待结束（幂等；pump Exit 与 destroy 都调用）。
+    fn shutdown(&self) {
+        if let Some(tx) = self.tx.lock().unwrap().take() {
+            let _ = tx.send(PresentMsg::Shutdown);
+        }
+        if let Some(h) = self.handle.lock().unwrap().take() {
+            let _ = h.join();
+        }
+    }
+}
+
+/// 渲染线程主循环：独占 surface 的 acquire/present，短暂持锁 encode。
+fn start_present_thread(
+    hub: std::sync::Arc<PresentHub>,
+    renderer: std::sync::Arc<std::sync::Mutex<Option<Renderer>>>,
+    surface: wgpu::Surface<'static>,
+    config: SurfaceConfiguration,
+    present_modes: Vec<wgpu::PresentMode>,
+) {
+    *hub.surface.lock().unwrap() = Some(surface);
+    *hub.config.lock().unwrap() = config;
+    *hub.present_modes.lock().unwrap() = present_modes;
+    let (tx, rx) = std::sync::mpsc::channel::<PresentMsg>();
+    *hub.tx.lock().unwrap() = Some(tx);
+    let hub_for_loop = hub.clone();
+    let handle = std::thread::Builder::new()
+        .name("gx-present".into())
+        .spawn(move || present_loop(hub_for_loop, renderer, rx))
+        .expect("spawn gx-present thread");
+    *hub.handle.lock().unwrap() = Some(handle);
+}
+
+fn present_loop(
+    hub: std::sync::Arc<PresentHub>,
+    renderer: std::sync::Arc<std::sync::Mutex<Option<Renderer>>>,
+    rx: std::sync::mpsc::Receiver<PresentMsg>,
+) {
+    for msg in rx {
+        match msg {
+            PresentMsg::Shutdown => break,
+            PresentMsg::Resize { width, height } => {
+                // 尺寸真相源由消息载荷带入（pump 线程不跨线程写 config）：
+                // 更新 hub.config 后按新尺寸重配置 surface。
+                {
+                    let mut cfg = hub.config.lock().unwrap();
+                    cfg.width = width.max(1);
+                    cfg.height = height.max(1);
+                }
+                let cfg = hub.config.lock().unwrap().clone();
+                if let Some(g) = renderer.lock().unwrap().as_ref() {
+                    if let Some(s) = hub.surface.lock().unwrap().as_ref() {
+                        s.configure(&g.device, &cfg);
+                    }
+                }
+            }
+            PresentMsg::PresentMode(_) => {
+                // present 模式已由 apply_present_mode 写入 hub.config，
+                // 这里按真相源重配置（消息载荷仅作 wake 触发）。
+                let cfg = hub.config.lock().unwrap().clone();
+                if let Some(g) = renderer.lock().unwrap().as_ref() {
+                    if let Some(s) = hub.surface.lock().unwrap().as_ref() {
+                        s.configure(&g.device, &cfg);
+                    }
+                }
+            }
+            PresentMsg::Frame(frame) => {
+                hub.busy
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
+                // acquire：Fifo 背压阻塞点。不持任何渲染器锁——UI 线程在等待
+                // 期间自由泵事件、prepare 下一帧。
+                let cfg = hub.config.lock().unwrap().clone();
+                let tex = {
+                    let guard = hub.surface.lock().unwrap();
+                    match guard.as_ref() {
+                        Some(s) => match s.get_current_texture() {
+                            Ok(t) => Some(t),
+                            Err(e) => {
+                                eprintln!("[rust-backend] get_current_texture: {e}");
+                                None
+                            }
+                        },
+                        None => None,
+                    }
+                };
+                let Some(tex) = tex else {
+                    // surface 缺失/出错：按当前配置重建（Outdated 自愈），跳过本帧。
+                    if let Some(g) = renderer.lock().unwrap().as_ref() {
+                        if let Some(s) = hub.surface.lock().unwrap().as_ref() {
+                            s.configure(&g.device, &cfg);
+                        }
+                    }
+                    hub.busy
+                        .store(false, std::sync::atomic::Ordering::Relaxed);
+                    hub.idle.notify_all();
+                    continue;
+                };
+                let view = tex.texture.create_view(&Default::default());
+                {
+                    // 短暂持锁 encode：gpu.draw 需要 &mut（纹理上传在 draw 内完成）。
+                    // 持锁时长 = CPU 编码时长（亚毫秒级），与 acquire/present 隔离。
+                    let mut slot = renderer.lock().unwrap();
+                    if let Some(r) = slot.as_mut() {
+                        let mut enc = r
+                            .device
+                            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                                label: None,
+                            });
+                        {
+                            let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                                label: None,
+                                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                    view: &view,
+                                    resolve_target: None,
+                                    ops: wgpu::Operations {
+                                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                                            r: (frame.clear[0] / 255.0) as f64,
+                                            g: (frame.clear[1] / 255.0) as f64,
+                                            b: (frame.clear[2] / 255.0) as f64,
+                                            a: (frame.clear[3] / 255.0) as f64,
+                                        }),
+                                        store: wgpu::StoreOp::Store,
+                                    },
+                                })],
+                                depth_stencil_attachment: None,
+                                timestamp_writes: None,
+                                occlusion_query_set: None,
+                            });
+                            r.gpu.draw(&mut pass, &frame);
+                            r.text_renderer
+                                .render(&r.atlas, &r.viewport, &mut pass)
+                                .unwrap();
+                        }
+                        r.queue.submit(Some(enc.finish()));
+                    }
+                }
+                tex.present();
+                hub.busy
+                    .store(false, std::sync::atomic::Ordering::Relaxed);
+                hub.idle.notify_all();
+            }
+        }
+    }
+}
+
 /// 窗口外观配置（经 C ABI 由 Go 侧 WindowConfig 翻译而来）。
 /// decorated 用 i32 三态：-1=未设置(用默认 true)，0=无边框，1=有边框，
 /// 以兼容"未设置"与"明确 false"的区分（Go 侧 Decorated *bool）。
@@ -261,6 +506,9 @@ struct Backend {
     /// 渲染器共享句柄：首次 pump 的 resumed 创建后填充；debug 导出 /
     /// 帧时钟等 C ABI 在泵运行期间经它访问（pump Exit 后置 None）。
     renderer: Arc<Mutex<Option<Renderer>>>,
+    /// present 独占槽（P4.6 present 线程化）：surface 移交专用渲染线程，
+    /// get_current_texture 的 Fifo 背压阻塞只发生在渲染线程。
+    hub: Arc<PresentHub>,
     /// VSync/present 模式请求（0=Fifo 1=Mailbox 2=Immediate；P4.5 VSyncControl）。
     /// gx_window_set_vsync 写入：渲染器已创建则立即 reconfigure，否则首窗 resumed 应用。
     vsync: Arc<std::sync::atomic::AtomicU8>,
@@ -309,6 +557,7 @@ pub extern "C" fn gx_window_new_ex(
     let proxy = el.create_proxy();
     let backend = Backend {
         renderer: Arc::new(Mutex::new(None)),
+        hub: PresentHub::new(),
         vsync: Arc::new(std::sync::atomic::AtomicU8::new(0)),
         passthrough: Arc::new(std::sync::atomic::AtomicU8::new(0)),
         window: Arc::new(Mutex::new(None)),
@@ -353,6 +602,11 @@ pub extern "C" fn gx_window_draw(handle: *mut c_void, buf: *const c_uchar, len: 
     let slice = unsafe { std::slice::from_raw_parts(buf, len as usize) };
     let owned = slice.to_vec(); // 唯一一次拷贝
     let backend = unsafe { &*(handle as *const Backend) };
+    // 节流门（P4.6 present 线程化）：渲染线程仍有未上屏帧时等待其 present
+    // 完成——UI 线程节奏与屏幕刷新率对齐（真机 Fifo 下即 vsync），而等待期间
+    // 事件循环与其它窗口的 pump 均已在本轮 Host 迭代中完成，互不拖累。
+    // 100ms 超时兜底：渲染线程异常时绝不永久阻塞宿主主循环。
+    backend.hub.wait_present_idle();
     let mut q = backend.queue.lock().unwrap();
     if q.shutdown {
         return 2;
@@ -413,6 +667,7 @@ pub extern "C" fn gx_window_set_event_cb(handle: *mut c_void, cb: EventCallback,
 fn winit_app_for(backend: &Backend) -> WinitApp {
     WinitApp {
         state: backend.renderer.clone(),
+        hub: backend.hub.clone(),
         width: backend.width,
         height: backend.height,
         title: backend.title.clone(),
@@ -461,8 +716,10 @@ pub extern "C" fn gx_window_pump(handle: *mut c_void) -> c_int {
                 1
             }
             winit::platform::pump_events::PumpStatus::Exit(_) => {
-                // pump 退出即清空渲染器槽：Renderer 的 surface/设备与事件循环同
-                // 生命周期，事件循环外不得再经 debug/时钟 ABI 访问（评审 P0 契约）。
+                // pump 退出即停渲染线程并清空渲染器槽：Renderer 的设备与事件
+                // 循环同生命周期，事件循环外不得再经 debug/时钟 ABI 访问
+                // （评审 P0 契约）；渲染线程随 Shutdown 消息有序退出。
+                backend.hub.shutdown();
                 *app.state.lock().unwrap() = None;
                 // 窗口槽同契约清空：穿透等 C ABI 在泵外不得再访问 winit 窗口。
                 *app.win_slot.lock().unwrap() = None;
@@ -507,6 +764,8 @@ struct WinitApp {
     /// 共享渲染器槽：pump 期间经 Mutex 访问；Backend 的 debug/时钟 ABI
     /// 在泵运行期间经同一 Arc 读取（评审 P0 生命周期：pump Exit 后随槽释放）。
     state: Arc<Mutex<Option<Renderer>>>,
+    /// present 独占槽（P4.6）：surface/present 归渲染线程，prepare 后经此提交。
+    hub: Arc<PresentHub>,
     width: u32,
     height: u32,
     title: String,
@@ -566,17 +825,29 @@ impl winit::application::ApplicationHandler<GxEvent> for WinitApp {
             window: window.clone(),
         });
         *self.state.lock().unwrap() = Some(pollster::block_on(Renderer::new(provider)));
-        // VSyncControl：创建期把请求的 present 模式应用到渲染器（gx_window_set_vsync
-        // 在首窗前调用的场景在这补上）。不支持的模式保持 Fifo 并记日志。
-        {
+        // P4.6 present 线程化：surface 从 Renderer 移交给 PresentHub 并启动
+        // 渲染线程——get_current_texture 的 Fifo 背压阻塞从此只发生在渲染线程。
+        let (surface, mut hub_cfg, modes) = {
             let mut slot = self.state.lock().unwrap();
-            if let Some(r) = slot.as_mut() {
-                let m = vsync_mode(self.vsync.load(std::sync::atomic::Ordering::Relaxed));
-                if !r.set_present_mode(m) {
-                    eprintln!("[rust-backend] vsync mode {:?} unsupported, keep {:?}", m, r.present_mode());
-                }
+            slot.as_mut()
+                .expect("renderer just created")
+                .take_surface_parts()
+        };
+        // VSyncControl：创建期把请求的 present 模式应用到 surface 配置
+        // （gx_window_set_vsync 在首窗前调用的场景在这补上）。
+        // 不支持的模式保持 Fifo 并记日志。
+        {
+            let m = vsync_mode(self.vsync.load(std::sync::atomic::Ordering::Relaxed));
+            if m != wgpu::PresentMode::Fifo && !modes.contains(&m) {
+                eprintln!(
+                    "[rust-backend] vsync mode {:?} unsupported, keep Fifo",
+                    m
+                );
+            } else {
+                hub_cfg.present_mode = m;
             }
         }
+        start_present_thread(self.hub.clone(), self.state.clone(), surface, hub_cfg, modes);
         // MousePassthrough：整窗级在创建期应用（gx_window_set_mouse_passthrough
         // 先于首窗 pump 调用的场景）；区域级等首帧 RedrawRequested 用内容矩形应用。
         // 失败只记日志，不阻断窗口创建。
@@ -628,7 +899,11 @@ impl winit::application::ApplicationHandler<GxEvent> for WinitApp {
         };
         match event {
             WindowEvent::Resized(size) => {
-                renderer.resize(size.width.max(1), size.height.max(1));
+                let (w, h) = (size.width.max(1), size.height.max(1));
+                renderer.resize(w, h);
+                // P4.6：surface 重配置在渲染线程执行（Renderer 不再持有 surface）。
+                // 新尺寸经消息载荷带入 hub.config 真相源，避免跨线程写竞态。
+                self.hub.request_reconfigure(w, h);
                 renderer.request_redraw();
             }
             WindowEvent::RedrawRequested => {
@@ -673,7 +948,12 @@ impl winit::application::ApplicationHandler<GxEvent> for WinitApp {
                 } else {
                     None
                 };
-                renderer.render();
+                // P4.6 present 线程化：prepare（CPU 布局/文本/GpuFrame）在事件
+                // 循环线程完成，present（acquire/encode/submit/present）交给
+                // 渲染线程——Fifo 背压阻塞不再占用 pump。
+                if let Some(frame) = renderer.prepare() {
+                    self.hub.submit(frame);
+                }
                 // 回流实测尺寸：把本帧布局结果经事件回调送回 Host，供虚拟列表按
                 // node_id 订阅并修正 offsets/锚定。text 承载紧凑 JSON 数组。
                 let measured = renderer.take_measured();
@@ -1048,6 +1328,7 @@ pub extern "C" fn gx_window_destroy(handle: *mut c_void) {
     if !handle.is_null() {
         unsafe {
             let backend = Arc::from_raw(handle as *const Backend);
+            backend.hub.shutdown(); // 渲染线程有序退出（幂等；未泵即 destroy 也覆盖）
             if let Ok(mut slot) = backend.app.lock() {
                 *slot = None; // 先 drop WinitApp（持窗口 Arc）
             }
@@ -1086,17 +1367,18 @@ pub extern "C" fn gx_window_set_vsync(handle: *mut c_void, mode: c_int) -> c_int
     backend
         .vsync
         .store(mode as u8, std::sync::atomic::Ordering::Relaxed);
-    let mut slot = backend.renderer.lock().unwrap();
-    match slot.as_mut() {
-        Some(r) => {
-            if r.set_present_mode(vsync_mode(mode as u8)) {
-                0
-            } else {
-                1
-            }
-        }
-        None => 0,
+    let m = vsync_mode(mode as u8);
+    // P4.6：surface/present 模式归渲染线程。已创建则校验支持集合并通知重配置；
+    // 未创建（首窗前）仅记录请求，resumed 启动渲染线程时应用。
+    let supported = {
+        let modes = backend.hub.present_modes.lock().unwrap();
+        modes.is_empty() || modes.contains(&m) // 空 = 未初始化（首窗前）
+    };
+    if !supported {
+        return 1;
     }
+    backend.hub.apply_present_mode(m);
+    0
 }
 
 /// 读取当前请求的 vsync 模式码（0/1/2；句柄无效返回 -1）。诊断用。
@@ -1595,5 +1877,39 @@ mod input_tests {
         assert!(matches!(vsync_mode(2), wgpu::PresentMode::Immediate));
         assert!(matches!(vsync_mode(9), wgpu::PresentMode::Fifo));
         assert_eq!(gx_window_get_vsync(std::ptr::null_mut()), -1);
+    }
+
+    /// P4.6 present 线程化契约：Resize 消息携带新尺寸（pump 线程不跨线程写
+    /// hub.config），apply_present_mode 写真相源并发 PresentMode 消息。
+    /// 无渲染线程时用注入的 channel 捕获消息验证载荷——这是 resize 后画面
+    /// 不再拉伸/裁剪的关键（旧实现发空 Resize，渲染线程按旧尺寸配置 surface）。
+    #[test]
+    fn present_hub_message_contract() {
+        let hub = PresentHub::new();
+        let (tx, rx) = std::sync::mpsc::channel::<PresentMsg>();
+        *hub.tx.lock().unwrap() = Some(tx);
+
+        hub.request_reconfigure(1280, 720);
+        match rx.try_recv().expect("Resize 消息应已发出") {
+            PresentMsg::Resize { width, height } => {
+                assert_eq!((width, height), (1280, 720));
+            }
+            _ => panic!("request_reconfigure 应发 Resize"),
+        }
+
+        hub.apply_present_mode(wgpu::PresentMode::Mailbox);
+        assert_eq!(
+            hub.config.lock().unwrap().present_mode,
+            wgpu::PresentMode::Mailbox
+        );
+        match rx.try_recv().expect("PresentMode 消息应已发出") {
+            PresentMsg::PresentMode(m) => assert_eq!(m, wgpu::PresentMode::Mailbox),
+            _ => panic!("apply_present_mode 应发 PresentMode"),
+        }
+
+        // 空闲时节流门不阻塞（busy=false 快速返回）。
+        let t = std::time::Instant::now();
+        hub.wait_present_idle();
+        assert!(t.elapsed() < std::time::Duration::from_millis(50));
     }
 }
