@@ -34,6 +34,15 @@ assert_ne() { if [ "$2" != "$3" ]; then pass "$1"; else fail "$1 (不应等于 $
 assert_contains() { if printf '%s' "$2" | grep -qF "$3"; then pass "$1"; else echo "         got: $2"; fail "$1 (缺少「$3」)"; fi; }
 sleep_s() { sleep "${1:-0.35}"; }
 click() { xdotool mousemove "$1" "$2" click 1 >/dev/null 2>&1; sleep_s; }
+# 工具栏按钮中心从 testid_boxes 动态取值（写死坐标会随布局变化失准）。
+testid_center() {
+  python3 -c "
+import json
+d=json.load(open('$STATE'))
+b=[x for x in d['testid_boxes'] if x['testid']=='$1'][0]
+print(int(b['x']+b['w']/2), int(b['y']+b['h']/2))
+"
+}
 
 echo "== 启动 Xvfb $DISPLAY_NO =="
 Xvfb "$DISPLAY_NO" -screen 0 1600x1000x24 -nolisten tcp >/tmp/gox-idea-v-xvfb.log 2>&1 &
@@ -72,12 +81,13 @@ python3 "$(dirname "$0")/icon_check.py" "$STATE" "$SHOT_DARK" --min 8
 
 # A3. 浅色主题像素采样：换肤后图标仍可见（主题色正确跟随）。
 echo "== A3. 浅色主题图标像素 =="
-click 1362 48   # moon 切浅色
+read MX MY <<< "$(testid_center btn-moon)"
+click "$MX" "$MY"   # moon 切浅色
 assert_eq "切换到浅色主题" "$(j light_theme)" "True"
 import -window root "$SHOT_LIGHT" 2>/dev/null
 python3 "$(dirname "$0")/icon_check.py" "$STATE" "$SHOT_LIGHT" --min 8
 [ $? -eq 0 ] && pass "浅色主题 13 图标渲染正确" || fail "浅色主题有图标渲染异常"
-click 1362 48   # 切回深色
+click "$MX" "$MY"   # 切回深色
 assert_eq "切回深色主题" "$(j light_theme)" "False"
 
 echo ""
@@ -105,7 +115,8 @@ assert_contains "输入字符进入源码" "$AFTER" "Q"
 
 # B4. Run：运行状态推进 + 终端输出解释成功 + 无指针乱码。
 echo "== B4. Run 解释执行 =="
-click 226 48
+read RX RY <<< "$(testid_center btn-run)"
+click "$RX" "$RY"
 sleep_s 1
 assert_eq "Run 后运行状态更新" "$(j run_info)" "已运行 · 解释执行当前源码"
 TERM=$(j terminal_text)
@@ -119,7 +130,8 @@ fi
 
 # B5. 再次 Run：终端追加第二条 Run 记录（可重复执行）。
 echo "== B5. 再次 Run =="
-click 226 48
+read RX RY <<< "$(testid_center btn-run)"
+click "$RX" "$RY"
 sleep_s 1
 RUN_MARKS=$(python3 -c "import json;print(json.load(open('$STATE'))['terminal_text'].count('── Run ──'))")
 assert_eq "终端累计两次 Run 记录" "$RUN_MARKS" "2"

@@ -274,6 +274,20 @@ func (b *ideBridge) onKey(ev rb.InputEvent) {
 	key := strings.ToLower(ev.Text)
 	inputLogf("key text=%q mods=%q ctrl=%v", ev.Text, ev.Mods, ctrl)
 
+	// winit 0.30 的 Named 方向键是 ArrowRight/ArrowLeft/ArrowUp/ArrowDown，
+	// 而翻译层（与旧 GLFW 装配层对齐）用 Right/Left/Up/Down。归一后再匹配，
+	// 否则方向键事件到达但 switch 落空——光标完全不动。
+	switch ev.Text {
+	case "ArrowRight":
+		key = "right"
+	case "ArrowLeft":
+		key = "left"
+	case "ArrowUp":
+		key = "up"
+	case "ArrowDown":
+		key = "down"
+	}
+
 	if ctrl {
 		switch key {
 		case "enter":
@@ -311,34 +325,36 @@ func (b *ideBridge) onKey(ev rb.InputEvent) {
 		}
 	}
 
-	switch ev.Text {
-	case "Up":
+	// Backspace/Delete/Tab 在 winit 里是 Named 变体名（首字母大写），
+	// strings.ToLower 后统一为小写，与上面的方向键归一化共用 key。
+	switch key {
+	case "up":
 		ui.EditorMoveEx(-1, 0, shift)
-	case "Down":
+	case "down":
 		ui.EditorMoveEx(1, 0, shift)
-	case "Left":
+	case "left":
 		if ctrl {
 			ui.EditorMoveWord(-1, shift)
 		} else {
 			ui.EditorMoveEx(0, -1, shift)
 		}
-	case "Right":
+	case "right":
 		if ctrl {
 			ui.EditorMoveWord(1, shift)
 		} else {
 			ui.EditorMoveEx(0, 1, shift)
 		}
-	case "Home":
+	case "home":
 		ui.EditorKeyHome(shift)
-	case "End":
+	case "end":
 		ui.EditorKeyEnd(shift)
-	case "Enter":
+	case "enter":
 		ui.EditorNewline()
-	case "Backspace":
+	case "backspace":
 		ui.EditorBackspace()
-	case "Delete":
+	case "delete":
 		ui.EditorDeleteForward()
-	case "Tab":
+	case "tab":
 		ui.EditorInsert("\t")
 	}
 }

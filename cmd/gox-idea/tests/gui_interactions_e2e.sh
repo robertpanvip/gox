@@ -122,6 +122,16 @@ s=[x for x in d['splitters'] if x['axis']=='$1'][0]
 print(int(s['x']+s['w']/2), int(s['y']+s['h']/2))
 "
 }
+# 工具栏按钮中心从 testid_boxes 动态取值：写死坐标会随布局/内容行数变化失准
+# （btn-moon 曾在 1374 现为 1342，btn-run 曾在 226 现为 1182）。
+testid_center() {
+  python3 -c "
+import json
+d=json.load(open('$STATE'))
+b=[x for x in d['testid_boxes'] if x['testid']=='$1'][0]
+print(int(b['x']+b['w']/2), int(b['y']+b['h']/2))
+"
+}
 # 底部工具窗标签的 y 从水平分隔条动态推算（分隔条底 + 标签头半高）。
 # 写死绝对 y 会在布局/内容行数变化后失准，故按当前分隔条位置计算。
 bottom_tab_y() {
@@ -248,9 +258,10 @@ assert_eq "再次点击恢复项目面板" "$(j project_panel_visible)" "True"
 
 # --- 11. 主题切换 ---
 echo "== 11. 主题切换 =="
-click 1374 48
+read MX MY <<< "$(testid_center btn-moon)"
+click "$MX" "$MY"
 assert_eq "点击月亮切到浅色主题" "$(j light_theme)" "True"
-click 1374 48
+click "$MX" "$MY"
 assert_eq "再次点击切回深色主题" "$(j light_theme)" "False"
 
 # --- 12. 菜单开合 ---
@@ -262,7 +273,8 @@ assert_eq "点击空白关闭菜单" "$(j menu)" ""
 
 # --- 13. Run 按钮 ---
 echo "== 13. Run 按钮 =="
-click 226 48
+read RX RY <<< "$(testid_center btn-run)"
+click "$RX" "$RY"
 sleep 1
 RUN_INFO=$(j run_info)
 assert_ne "Run 后有运行结果" "$RUN_INFO" "预览模式 · 点击 Run 解释当前源码"
