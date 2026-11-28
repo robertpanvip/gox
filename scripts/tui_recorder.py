@@ -111,8 +111,27 @@ def rgb(color):
     return NAMED.get(color)
 
 FONT_PATH = "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"
-font = ImageFont.truetype(FONT_PATH, CH - 4)
-emoji_font = ImageFont.truetype("/usr/share/fonts/opentype/noto/NotoColorEmoji.ttf", 109)
+# 字号必须让字体总高(ascent+descent)适配单元格高 CH：Noto Sans CJK 的
+# ascent≈1.17×em、descent≈0.33×em，18px 时总高 27px > CH=22，字符底部会
+# 溢出单元格侵入下一行；中英混排时中文(18px 高)与英文(14px 高)的绘制基线
+# 又不同，造成同一行内字忽高忽低、上下错乱。16px 配合 lm 垂直居中锚点
+# 即可让每个字符按视觉中线对齐，中英文落在同一水平线上。
+FONT_SIZE = CH - 6
+font = ImageFont.truetype(FONT_PATH, FONT_SIZE)
+# Emoji 字体在不同系统位于 truetype/ 或 opentype/，fallback 查找避免写死路径。
+import glob as _glob
+_emoji_candidates = [
+    "/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf",
+    "/usr/share/fonts/opentype/noto/NotoColorEmoji.ttf",
+] + _glob.glob("/usr/share/fonts/**/NotoColorEmoji.ttf", recursive=True)
+emoji_font = None
+for _p in _emoji_candidates:
+    if os.path.exists(_p):
+        try:
+            emoji_font = ImageFont.truetype(_p, 109)
+            break
+        except OSError:
+            pass
 
 def is_emoji(ch):
     if not ch:
@@ -173,7 +192,11 @@ def render(sc):
                 img.paste(tile, (ox, y*CH + (CH - tile.height)//2), tile)
                 continue
             fg = rgb(ch.fg) or (230, 230, 232)
-            d.text((x*CW, y*CH + 1), data, fill=fg, font=font)
+            # 用 lm（left-middle）锚点：水平仍是单元格左边缘（保持 pyte
+            # 单元格模型，CJK 占 2 格的定位不变），垂直按字形视觉中线对齐
+            # 到单元格中心——避免默认 la 锚点下中英字形 ascent 差异导致的
+            # "上下错乱"（中文比英文高、行间基线参差）。
+            d.text((x*CW, y*CH + CH/2), data, fill=fg, font=font, anchor="lm")
     return img
 
 # ---- 录制脚本 ----
