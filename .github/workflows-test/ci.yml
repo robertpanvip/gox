@@ -87,6 +87,24 @@ jobs:
           cargo test --manifest-path ../gox-backend/rust/rust/Cargo.toml
           cargo build --release --manifest-path ../gox-backend/rust/rust/Cargo.toml
 
+      # Windows 侧不再本地 cargo build（wgpu/windows-gnu 编译成本高）：
+      # 直接下载 gox-backend 仓 rust-prebuilt Release 的预编译静态库，
+      # 按 rust/rust/target/release/libgxbackend_rust.a 原路径落位，
+      # #cgo 的 -L${SRCDIR}/../rust/target/release 原样命中，零配置改动。
+      - name: 下载预编译 Rust 静态库（Windows）
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          mkdir -p ../gox-backend/rust/rust/target/release
+          for i in 1 2 3; do
+            curl -fsSL -o /tmp/rustlib.tar.gz \
+              "https://github.com/gox-projects/gox-backend/releases/download/rust-prebuilt/gxbackend-rust-windows-x86_64.tar.gz" \
+              && break
+            sleep 5
+          done
+          tar xzf /tmp/rustlib.tar.gz -C ../gox-backend/rust/rust/target/release
+          ls -la ../gox-backend/rust/rust/target/release/libgxbackend_rust.a
+
       # 拆仓后主 module（根目录）不再承载 Go 代码，`./...` 会匹配不到包。
       # 有包才跑，没包直接 SKIP，避免 exit 1 假红；真正的测试在
       # run_all_module_tests.sh（覆盖所有嵌套 module）里。
@@ -189,13 +207,11 @@ jobs:
         if: runner.os == 'Linux'
         run: cd cmd/gox-idea && go build -o /tmp/gox-idea-lg .
 
-      # gox-idea 直接 import Rust 后端（libgxbackend_rust），链接期需要
-      # Windows 版静态库。Rust crate 依赖 wgpu，windows-gnu 目标编译成本
-      # 极高，CI 侧暂不编译——该步骤与 Windows GUI E2E 一样先观察，
-      # 稳定方案（如 msvc 工具链出库）落地后再转硬门禁。
-      - name: 构建 gox-idea.exe（Windows 观察）
+      # gox-idea 直接 import Rust 后端（libgxbackend_rust），Windows 侧
+      # 静态库已由上一步从 gox-backend 的 rust-prebuilt Release 下载落位
+      # （windows-gnu 目标编译产物，与 cgo/mingw 链接兼容）。
+      - name: 构建 gox-idea.exe（Windows）
         if: runner.os == 'Windows'
-        continue-on-error: true
         shell: msys2 {0}
         run: bash cmd/gox-idea/build-windows.sh
 
@@ -222,10 +238,9 @@ jobs:
         run: cd examples/playground && go build -o /tmp/pg-desktop-e2e ./desktop
 
       # GX-Playground.exe 链接 Rust 后端静态库（同 gox-idea.exe，见上），
-      # Windows CI 侧暂无法提供，转观察；Linux 侧构建为硬门禁。
-      - name: 构建 Desktop Playground（Windows 观察）
+      # Windows 侧用预编译库完成链接，恢复硬门禁。
+      - name: 构建 Desktop Playground（Windows）
         if: runner.os == 'Windows'
-        continue-on-error: true
         shell: msys2 {0}
         run: bash scripts/build-windows-msys2.sh
 
@@ -260,13 +275,8 @@ jobs:
             /tmp/gox-idea-visual-light.png
           if-no-files-found: ignore
 
-  # 暂时禁用：GX-Playground.exe 链接 libgxbackend_rust（Rust crate 依赖
-  # wgpu，windows-gnu 目标编译成本极高且不稳定），Windows CI 侧无法提供
-  # 该静态库。待 Rust 后端支持 Windows 工具链（msvc 出库 / wgpu gnu 修复）
-  # 后恢复启用；本地 Windows 构建路径见 scripts/build-windows-msys2.sh。
   build-windows:
     name: Windows exe 构建
-    if: false
     runs-on: windows-latest
     needs: test
     steps:
@@ -276,12 +286,35 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: 检出兄弟仓 gox-core / gox-backend
+        shell: bash
+        run: |
+          git clone --depth 1 "https://x-access-token:${{ github.token }}@github.com/robertpanvip/gox-core.git" "$GITHUB_WORKSPACE/../gox-core"
+          git clone --depth 1 "https://x-access-token:${{ github.token }}@github.com/gox-projects/gox-backend.git" "$GITHUB_WORKSPACE/../gox-backend"
+
+      # 与 test job 同款：下载 rust-prebuilt Release 的 Windows 静态库，
+      # 落位到 #cgo 期待的 rust/rust/target/release/ 路径。
+      - name: 下载预编译 Rust 静态库
+        shell: bash
+        run: |
+          mkdir -p ../gox-backend/rust/rust/target/release
+          for i in 1 2 3; do
+            curl -fsSL -o /tmp/rustlib.tar.gz \
+              "https://github.com/gox-projects/gox-backend/releases/download/rust-prebuilt/gxbackend-rust-windows-x86_64.tar.gz" \
+              && break
+            sleep 5
+          done
+          tar xzf /tmp/rustlib.tar.gz -C ../gox-backend/rust/rust/target/release
+          ls -la ../gox-backend/rust/rust/target/release/libgxbackend_rust.a
+
       - name: 安装 MSYS2 / mingw-w64 工具链
         uses: msys2/setup-msys2@v2
         with:
           msystem: MINGW64
           update: false
           install: git mingw-w64-x86_64-gcc mingw-w64-x86_64-binutils
+          # 继承宿主 PATH：setup-go 注入的 go.exe 必须在 msys2 shell 里可用。
+          path-type: inherit
 
       - name: 构建 GX-Playground.exe
         shell: msys2 {0}
