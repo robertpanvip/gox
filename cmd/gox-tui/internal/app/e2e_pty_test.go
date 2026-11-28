@@ -11,7 +11,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -23,11 +22,7 @@ import (
 // e2eBinary 在 TestMain 里编译一次（跳过则跳过全部 e2e）。
 var e2eBinary string
 
-var ansiRe = regexp.MustCompile(`\x1b(?:\[[0-9;?<>=]*[a-zA-Z]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[@-Z\\-_])`)
-
-func stripANSI(s string) string {
-	return ansiRe.ReplaceAllString(s, "")
-}
+// ansiRe / stripANSI 定义在 ansi_test.go（无平台标签，Windows 也要用）。
 
 func TestMain(m *testing.M) {
 	// 沙箱等环境 /tmp 常挂 noexec，二进制编进源码树内保证可执行。
