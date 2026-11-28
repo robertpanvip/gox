@@ -31,6 +31,7 @@ type Palette struct {
 	TitleBar lipgloss.Color // 标题栏背景
 	Surface  lipgloss.Color // 悬浮层（标签选中、搜索框）
 	Border   lipgloss.Color // 分隔线（低对比）
+	Frame    lipgloss.Color // 外层窗口边框：比分隔线更亮，让 RoundedBorder 的 ╭╮╰╯ 可见
 	Text     lipgloss.Color // 主文字
 	Muted    lipgloss.Color // 次要文字（行号、状态栏）
 	Accent   lipgloss.Color // 强调色（选中、光标、品牌蓝）
@@ -72,6 +73,7 @@ func paletteFor(m Mode) Palette {
 		return Palette{
 			BG: "#1c1c1e", Panel: "#1e1e20", Sidebar: "#232325",
 			TitleBar: "#2b2b2e", Surface: "#323235", Border: "#3a3a3d",
+			Frame: "#6e6e75", // 明显亮于背景 #1c1c1e 与分隔线 #3a3a3d，圆角清晰可见又不刺眼
 			Text: "#e6e6e8", Muted: "#8e8e93", Accent: "#0a84ff", AccentFG: "#ffffff",
 			Close: "#ff5f57", Minimize: "#febc2e", Zoom: "#28c840",
 			SynKeyword: "#ff7ab2", SynFn: "#82aaff", SynType: "#c3e88d",
@@ -86,6 +88,7 @@ func paletteFor(m Mode) Palette {
 	return Palette{
 		BG: "#f2f2f7", Panel: "#ffffff", Sidebar: "#ececf1",
 		TitleBar: "#e8e8ed", Surface: "#ffffff", Border: "#d1d1d6",
+		Frame: "#9a9aa2", // 浅色主题下用中灰，与白底和 #d1d1d6 分隔线拉开层次
 		Text: "#1d1d1f", Muted: "#86868b", Accent: "#007aff", AccentFG: "#ffffff",
 		Close: "#ff5f57", Minimize: "#febc2e", Zoom: "#28c840",
 		SynKeyword: "#ad3da4", SynFn: "#1b6fc4", SynType: "#2f8f46",
@@ -155,7 +158,7 @@ func New(m Mode) *Theme {
 
 	t.App = lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(p.Border).
+		BorderForeground(p.Frame).
 		Background(p.BG).
 		Padding(0)
 
