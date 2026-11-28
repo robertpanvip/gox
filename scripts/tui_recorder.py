@@ -37,9 +37,8 @@ ARGS = parse_args()
 BIN = ARGS.bin
 DEMO = ARGS.demo
 COLS, ROWS = 110, 30
-# 单元格尺寸必须与字体严格匹配：22px 等宽 CJK 的 ASCII advance=11px(CW)、
-# 中文=22px(2*CW)，总高(ascent26+descent7)=33px <= CH，墨迹不会侵入上下行。
-CW, CH = 11, 34
+# CW/CH 不写死：由 pick_font() 实测所选字体后计算，见下方字体自适应逻辑。
+# 目标：ASCII advance == CW、CJK advance == 2*CW、行高容纳字形总高。
 
 screen = pyte.Screen(COLS, ROWS)
 stream = pyte.ByteStream(screen)
@@ -112,16 +111,105 @@ def rgb(color):
              "blue":(36,114,200),"magenta":(188,63,188),"cyan":(17,168,205),"white":(229,229,229)}
     return NAMED.get(color)
 
-FONT_PATH = "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"
-# 关键：必须用 TTC 中的等宽 face（index=7 = Noto Sans Mono CJK SC），
-# 而非默认 face。默认 face 是比例字体：实测 'm' 宽 14.8px > 单元格 11px，
-# 'i' 仅 4px，逐格定位时宽字溢出、窄字留白 → 字间忽宽忽窄、行间上下重叠。
-# 等宽 face 下 ASCII 恒为 size/2=11px、CJK 恒为 size=22px(=2格)，与 pyte 网格严格对齐。
-FONT_INDEX = 7
-FONT_SIZE = 2 * CW  # 22
-font = ImageFont.truetype(FONT_PATH, FONT_SIZE, index=FONT_INDEX)
-# Emoji 字体在不同系统位于 truetype/ 或 opentype/，fallback 查找避免写死路径。
 import glob as _glob
+
+
+def _font_candidates():
+    """按优先级产出 (path, index, name) 等宽 CJK 字体候选。
+
+    不写死 TTC 的 face 下标：不同版本 Noto 的 face 顺序会变，靠 getname()
+    识别 "Mono CJK" face，避免换机器后悄悄退化成比例字体（老 bug 重现）。
+    """
+    out = []
+    patterns = [
+        "/usr/share/fonts/**/NotoSansCJK-*.ttc",
+        "/usr/share/fonts/**/SourceHanMono*.ttc",
+        "/usr/share/fonts/**/SourceHanSans*.ttc",
+        "/usr/share/fonts/**/NotoSerifCJK-*.ttc",
+    ]
+    for pat in patterns:
+        for p in sorted(_glob.glob(pat, recursive=True)):
+            for idx in range(16):
+                try:
+                    f = ImageFont.truetype(p, 16, index=idx)
+                except OSError:
+                    break
+                name = " ".join(f.getname())
+                if "Mono" in name and ("CJK" in name or "SC" in name):
+                    out.append((p, idx, name))
+    for p in sorted(_glob.glob("/usr/share/fonts/**/*Mono*.*tf", recursive=True)):
+        try:
+            name = " ".join(ImageFont.truetype(p, 16).getname())
+        except OSError:
+            continue
+        if any(k in name for k in ("CJK", "SC", "Sarasa", "WenQuanYi")):
+            out.append((p, 0, name))
+
+    def rank(name):
+        # 字重：Regular 优先于 Bold；地区：SC 优先，其余 CJK 变体靠后。
+        weight = 1 if "Bold" in name else 0
+        if "SC" in name:
+            region = 0
+        elif "TC" in name:
+            region = 1
+        elif "JP" in name:
+            region = 2
+        elif "HK" in name:
+            region = 3
+        elif "KR" in name:
+            region = 4
+        else:
+            region = 0
+        return (weight, region)
+
+    out.sort(key=lambda t: (rank(t[2]), t[0]))
+    return out
+
+
+def _is_mono_cjk(f):
+    """实测等宽性：ASCII 各字等宽、CJK 各字等宽且恰为 ASCII 的两倍。"""
+    ascii_w = [f.getlength(c) for c in "AamiW01"]
+    cjk_w = [f.getlength(c) for c in "中文字"]
+    if not ascii_w or not cjk_w:
+        return False
+    if max(ascii_w) - min(ascii_w) > 0.5:
+        return False
+    if max(cjk_w) - min(cjk_w) > 0.5:
+        return False
+    ratio = (sum(cjk_w) / len(cjk_w)) / (sum(ascii_w) / len(ascii_w))
+    return abs(ratio - 2.0) < 0.1
+
+
+def pick_font(target_cw=11):
+    """自动发现等宽 CJK 字体，选 ASCII advance 最接近 target_cw 的字号，
+    据此计算匹配的单元格宽高。返回 (font, CW, CH, size, name, path, index)。
+    """
+    for path, idx, name in _font_candidates():
+        best = None
+        for size in range(8, 40):
+            try:
+                f = ImageFont.truetype(path, size, index=idx)
+            except OSError:
+                continue
+            if not _is_mono_cjk(f):
+                continue
+            adv = f.getlength("A")
+            err = abs(adv - target_cw)
+            if best is None or err < best[0]:
+                best = (err, size, f, adv)
+            if err < 0.3:
+                break
+        if best and best[0] < 1.0:
+            _, size, f, adv = best
+            asc, desc = f.getmetrics()
+            return f, round(adv), int(asc + desc + 2), size, name, path, idx
+    raise RuntimeError(
+        "未找到等宽 CJK 字体；请安装 Noto Sans Mono CJK / Sarasa Mono SC / Source Han Mono。"
+    )
+
+
+font, CW, CH, FONT_SIZE, FONT_NAME, FONT_PATH, FONT_INDEX = pick_font(11)
+# Emoji 字体在不同系统位于 truetype/ 或 opentype/，fallback 查找避免写死路径。
 _emoji_candidates = [
     "/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf",
     "/usr/share/fonts/opentype/noto/NotoColorEmoji.ttf",
@@ -188,7 +276,7 @@ def render(sc):
             if not data or data == " ":
                 continue
             if is_emoji(data) and emoji_font:
-                tile = emoji_tile(data, max_w=2*CW - 2, max_h=CH - 10)
+                tile = emoji_tile(data, max_w=2*CW - 2, max_h=int(FONT_SIZE * 1.1))
                 # 宽 emoji 占 2 格：在 2 格区域内居中贴放
                 ox = x*CW + (2*CW - tile.width)//2
                 img.paste(tile, (ox, y*CH + (CH - tile.height)//2), tile)
@@ -231,7 +319,7 @@ frames[0][0].save(ARGS.gif, save_all=True,
                   duration=durations, loop=0)
 
 # ---- 长图：帧间加分隔条与标注 ----
-label_font = ImageFont.truetype(FONT_PATH, 20)
+label_font = ImageFont.truetype(FONT_PATH, 20, index=FONT_INDEX)
 pad, bar = 12, 34
 total_h = sum(f[0].height + bar + pad for f in frames) + pad
 W = frames[0][0].width
@@ -246,6 +334,7 @@ for img, label in frames:
     y += img.height + pad
 long.save(ARGS.png)
 
+print(f"font={FONT_NAME} (index={FONT_INDEX}, size={FONT_SIZE}) grid={CW}x{CH}")
 print(f"frames={len(frames)} gif={ARGS.gif} png={ARGS.png} size={long.size}")
 try:
     os.kill(proc_pid, 9)
