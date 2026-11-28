@@ -51,7 +51,7 @@ jobs:
         shell: bash
         run: |
           git clone --depth 1 "https://x-access-token:${{ github.token }}@github.com/robertpanvip/gox-core.git" "$GITHUB_WORKSPACE/../gox-core"
-          git clone --depth 1 "https://x-access-token:${{ github.token }}@github.com/robertpanvip/gox-backend.git" "$GITHUB_WORKSPACE/../gox-backend"
+          git clone --depth 1 "https://x-access-token:${{ github.token }}@github.com/gox-projects/gox-backend.git" "$GITHUB_WORKSPACE/../gox-backend"
 
       - uses: actions/setup-go@v5
         with:
