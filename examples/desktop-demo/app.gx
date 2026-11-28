@@ -4,10 +4,10 @@
 package main
 
 import (
-    gxscene "github.com/robertpanvip/gox-sample/runtime/scene"
-    gxapp "github.com/robertpanvip/gox-sample/runtime/app"
-    "github.com/robertpanvip/gox-sample/runtime/signal"
-    widgets "github.com/robertpanvip/gox-sample/widgets"
+    gxscene "github.com/robertpanvip/gox-core/runtime/scene"
+    gxapp "github.com/robertpanvip/gox-core/runtime/app"
+    "github.com/robertpanvip/gox-core/runtime/signal"
+    widgets "github.com/robertpanvip/gox-core/widgets"
     "fmt"
     "time"
 )

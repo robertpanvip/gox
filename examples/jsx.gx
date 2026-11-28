@@ -2,7 +2,7 @@ package main
 
 import (
     "fmt"
-    gxscene "github.com/robertpanvip/gox-sample/runtime/scene"
+    gxscene "github.com/robertpanvip/gox-core/runtime/scene"
 )
 
 // card 把标题与列表渲染成常驻场景树；JSX 被编译成 gxscene opcode 模板 + getter。

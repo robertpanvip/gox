@@ -10,8 +10,8 @@ package main
 
 import (
     "example.com/crossfilectx/theme"
-    gxscene "github.com/robertpanvip/gox-sample/runtime/scene"
-    "github.com/robertpanvip/gox-sample/runtime/signal"
+    gxscene "github.com/robertpanvip/gox-core/runtime/scene"
+    "github.com/robertpanvip/gox-core/runtime/signal"
     "fmt"
 )
 

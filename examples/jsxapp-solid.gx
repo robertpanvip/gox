@@ -9,8 +9,8 @@
 package main
 
 import (
-    gxscene "github.com/robertpanvip/gox-sample/runtime/scene"
-    gxapp "github.com/robertpanvip/gox-sample/runtime/app"
+    gxscene "github.com/robertpanvip/gox-core/runtime/scene"
+    gxapp "github.com/robertpanvip/gox-core/runtime/app"
     "time"
     "fmt"
 )

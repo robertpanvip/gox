@@ -15,9 +15,9 @@
 package main
 
 import (
-    gxscene "github.com/robertpanvip/gox-sample/runtime/scene"
-    "github.com/robertpanvip/gox-sample/runtime/signal"
-    "github.com/robertpanvip/gox-sample/widgets"
+    gxscene "github.com/robertpanvip/gox-core/runtime/scene"
+    "github.com/robertpanvip/gox-core/runtime/signal"
+    "github.com/robertpanvip/gox-core/widgets"
     "fmt"
 )
 
