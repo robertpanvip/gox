@@ -57,6 +57,15 @@ for m in $MODULES; do
     fi
   fi
 
+  # 拆仓后根 module（.）不再承载 Go 包，go list ./... 为空时 go test ./...
+  # 会报 matched no packages 并 exit 1；任何无包 module 都按 SKIP 处理。
+  if [ -z "$(cd "$m" && go list ./... 2>/dev/null)" ]; then
+    echo ""
+    echo "================ module: $m —— SKIP（module 内无 Go 包，拆仓后常见） ================"
+    SKIP=$((SKIP+1))
+    continue
+  fi
+
   echo ""
   echo "================ module: $m （$n 个测试文件） ================"
   if (cd "$m" && go test ./... -count=1); then
