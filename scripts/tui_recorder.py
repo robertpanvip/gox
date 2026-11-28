@@ -37,7 +37,9 @@ ARGS = parse_args()
 BIN = ARGS.bin
 DEMO = ARGS.demo
 COLS, ROWS = 110, 30
-CW, CH = 11, 22  # 单元格像素
+# 单元格尺寸必须与字体严格匹配：22px 等宽 CJK 的 ASCII advance=11px(CW)、
+# 中文=22px(2*CW)，总高(ascent26+descent7)=33px <= CH，墨迹不会侵入上下行。
+CW, CH = 11, 34
 
 screen = pyte.Screen(COLS, ROWS)
 stream = pyte.ByteStream(screen)
@@ -111,13 +113,13 @@ def rgb(color):
     return NAMED.get(color)
 
 FONT_PATH = "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"
-# 字号必须让字体总高(ascent+descent)适配单元格高 CH：Noto Sans CJK 的
-# ascent≈1.17×em、descent≈0.33×em，18px 时总高 27px > CH=22，字符底部会
-# 溢出单元格侵入下一行；中英混排时中文(18px 高)与英文(14px 高)的绘制基线
-# 又不同，造成同一行内字忽高忽低、上下错乱。16px 配合 lm 垂直居中锚点
-# 即可让每个字符按视觉中线对齐，中英文落在同一水平线上。
-FONT_SIZE = CH - 6
-font = ImageFont.truetype(FONT_PATH, FONT_SIZE)
+# 关键：必须用 TTC 中的等宽 face（index=7 = Noto Sans Mono CJK SC），
+# 而非默认 face。默认 face 是比例字体：实测 'm' 宽 14.8px > 单元格 11px，
+# 'i' 仅 4px，逐格定位时宽字溢出、窄字留白 → 字间忽宽忽窄、行间上下重叠。
+# 等宽 face 下 ASCII 恒为 size/2=11px、CJK 恒为 size=22px(=2格)，与 pyte 网格严格对齐。
+FONT_INDEX = 7
+FONT_SIZE = 2 * CW  # 22
+font = ImageFont.truetype(FONT_PATH, FONT_SIZE, index=FONT_INDEX)
 # Emoji 字体在不同系统位于 truetype/ 或 opentype/，fallback 查找避免写死路径。
 import glob as _glob
 _emoji_candidates = [
@@ -186,7 +188,7 @@ def render(sc):
             if not data or data == " ":
                 continue
             if is_emoji(data) and emoji_font:
-                tile = emoji_tile(data, max_w=2*CW - 2, max_h=CH - 2)
+                tile = emoji_tile(data, max_w=2*CW - 2, max_h=CH - 10)
                 # 宽 emoji 占 2 格：在 2 格区域内居中贴放
                 ox = x*CW + (2*CW - tile.width)//2
                 img.paste(tile, (ox, y*CH + (CH - tile.height)//2), tile)
