@@ -17,12 +17,32 @@ from collections import Counter
 from PIL import Image
 
 
+def is_icon(testid):
+    """只校验真正的图标按钮；文本标签/装饰条不做图标像素断言。
+
+    - btn-*            ：工具栏图标按钮
+    - stripe-*         ：竖栏图标（stripe-indicator 是 3px 装饰指示条，排除）
+    chip-*（文本标签）、st-*（状态栏文本）、tabs-split（分隔条）、
+    tb-bottom-close（文本关闭标签）均非图标，不在本校验范围。
+    """
+    if testid.startswith("btn-"):
+        return True
+    if testid.startswith("stripe-") and testid != "stripe-indicator":
+        return True
+    return False
+
+
 def sample_icon(im, box):
     """返回 (异色像素数, 采样总数, 区域主色)。"""
     x, y, w, h = (int(box[k]) for k in ("x", "y", "w", "h"))
     # 图标主体居中，取内缩后的中心区，避开 hover 边框/圆角。
     pad_x, pad_y = max(2, w // 5), max(2, h // 5)
-    crop = im.crop((x + pad_x, y + pad_y, x + w - pad_x, y + h - pad_y)).convert("RGB")
+    # 小尺寸框内缩后可能翻转（right<left）——健壮回退，不抛异常中断整套 E2E。
+    left, top = x + pad_x, y + pad_y
+    right, bottom = x + w - pad_x, y + h - pad_y
+    if right <= left or bottom <= top:
+        return 0, 0, (0, 0, 0)
+    crop = im.crop((left, top, right, bottom)).convert("RGB")
     px = list(crop.get_flattened_data()) if hasattr(crop, "get_flattened_data") else list(crop.getdata())
     if not px:
         return 0, 0, (0, 0, 0)
@@ -49,7 +69,11 @@ def main():
 
     im = Image.open(shot_path)
     failed = 0
-    for b in sorted(boxes, key=lambda v: v["testid"]):
+    icons = [b for b in boxes if is_icon(b["testid"])]
+    if not icons:
+        print("[FAIL] 快照里没有图标按钮 testid，图标观测钩子失效")
+        return 1
+    for b in sorted(icons, key=lambda v: v["testid"]):
         diff, total, base = sample_icon(im, b)
         ratio = diff / total if total else 0
         # 异色像素至少 min_diff 个才认为图标画出来了；占比超过 0.85 视为色块填充。
@@ -59,7 +83,7 @@ def main():
         if not ok:
             failed += 1
 
-    print(f"-- 图标像素校验: {len(boxes) - failed}/{len(boxes)} 通过")
+    print(f"-- 图标像素校验: {len(icons) - failed}/{len(icons)} 通过")
     return 1 if failed else 0
 
 

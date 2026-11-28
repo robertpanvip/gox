@@ -63,7 +63,8 @@ import json
 d=json.load(open('$STATE')); b=d.get('testid_boxes',[])
 tool=[x for x in b if x['testid'].startswith('btn-')]
 stripe=[x for x in b if x['testid'].startswith('stripe-')]
-bad=[x for x in b if x['w']<10 or x['h']<10]
+# stripe-indicator 是 3px 装饰指示条，不是图标按钮，排除出尺寸检查。
+bad=[x for x in b if (x['w']<10 or x['h']<10) and x['testid']!='stripe-indicator']
 print(len(b), len(tool), len(stripe), len(bad))
 ")
 read NBT NTOOL NSTRIPE NBAD <<< "$BOX_SUMMARY"
