@@ -22,12 +22,12 @@ type editorFontWidths struct {
 }
 
 // measureEditorFontWidths 用 V2 渲染端实测编辑器等宽字体的单格宽度。
-// fontSize 必须与 widgets/editor.gx 里代码行的 font-size=13 一致。
+// fontSize 必须与 widgets/editor.gx 里代码行的 font-size=14 一致。
 // 测量走 glyphon 真实 shaping（与绘制端字形同源），语义与旧 Skia 路径对齐：
 // 窄字符取样本均值抵消测量舍入误差，宽字符（CJK）单独实测——
 // 很多 monospace 字体里 CJK 并非恰好 2×ASCII（与 Web 端 injectCharWidth 同口径）。
 func measureEditorFontWidths() editorFontWidths {
-	const fontSize = 13
+	const fontSize = 14
 	narrow, wide := rb.MeasureEditorAdvances(editorCodeFontStack, fontSize)
 	return editorFontWidths{Narrow: float64(narrow), Wide: float64(wide)}
 }

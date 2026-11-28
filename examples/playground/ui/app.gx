@@ -11,7 +11,7 @@ import (
     demos "github.com/robertpanvip/gox-playground/ui/demos"
     Signal "github.com/robertpanvip/gox-core/runtime/signal"
     gxscene "github.com/robertpanvip/gox-core/runtime/scene"
-    widgets "github.com/robertpanvip/gox-sample/widgets"
+    widgets "github.com/robertpanvip/gox-core/widgets"
 )
 
 // ---- 编辑器实例（widgets.Editor 公共组件）----
@@ -130,6 +130,13 @@ pub func SetViewport(w int, h int) {
 }
 pub func ViewportW() int { return vpW }
 pub func ViewportH() int { return vpH }
+
+// ---- 渲染诊断角标（Android 真机排查用，桌面/Web 默认空不显示）----
+// 装配层注入当前渲染路径（v2-wgpu / gles-blit）、DPR、物理/逻辑尺寸。
+// 只在文本非空时显示，桌面/Web 不注入即零视觉影响。
+var diagText = ""
+pub func SetDiagText(s string) { diagText = s }
+pub func DiagText() string      { return diagText }
 
 // ---- 虚拟键盘（触屏端）----
 // Android 等无物理键盘的平台由装配层置 true，紧凑布局底部渲染 KeyboardBar。
@@ -486,6 +493,7 @@ pub func playgroundCompact() *gxscene.Instance {
         </div>
         <div style={{ flexDirection: "column", gap: 4, padding: "6 12" }}>
             <div style={{ color: RunInfoColor(), fontSize: widgets.FontFootnote }}>{RunInfo()}</div>
+            <div style={{ color: widgets.ThemeFaint, fontSize: "11", fontFamily: "monospace" }}>{DiagText()}</div>
             {widgets.Terminal(gxscene.Props{"state": consoleState, "height": "64", "title": "Console"})}
         </div>
         {KeyboardBar()}

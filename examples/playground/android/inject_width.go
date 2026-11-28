@@ -24,11 +24,11 @@ type editorFontWidths struct {
 }
 
 // measureEditorFontWidths 用 Skia 实测编辑器等宽字体的单格宽度。
-// fontSize 必须与 widgets/editor.gx 里代码行的 font-size=13 一致。
+// fontSize 必须与 widgets/editor.gx 里代码行的 font-size=14 一致。
 // 窄字符取多个平均值抵消测量舍入误差，宽字符（CJK）单独实测——
 // 很多 monospace 字体里 CJK 并非恰好 2×ASCII（与 Web 端 injectCharWidth 同口径）。
 func measureEditorFontWidths() editorFontWidths {
-	const fontSize = 13
+	const fontSize = 14
 	narrow := skia.MeasureTextWidth("0000000000", fontSize, false, editorCodeFontStack) / 10
 	wide := skia.MeasureTextWidth("中中中", fontSize, false, editorCodeFontStack) / 3
 	return editorFontWidths{Narrow: float64(narrow), Wide: float64(wide)}

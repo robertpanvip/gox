@@ -51,6 +51,8 @@ var (
 )
 
 func main() {
+	diagInit()
+	defer diagRecover("main")
 	log.Printf("MAIN: 进入 app.Main（能力层接入）")
 	go func() {
 		for i := 1; ; i++ {
@@ -59,6 +61,7 @@ func main() {
 		}
 	}()
 	app.Main(func(a app.App) {
+		defer diagRecover("app.Main")
 		sendPaint = func() { a.Send(paint.Event{}) }
 		for e := range a.Events() {
 			switch e := a.Filter(e).(type) {
@@ -109,8 +112,14 @@ func main() {
 					setUp = true
 					log.Printf("PAINT 首帧：开始 setupGX")
 					if err := setupGX(); err != nil {
-						log.Fatalf("GX 装配失败: %v", err)
+						log.Printf("!!! GX 装配失败: %v", err)
+						diagFlush()
+						// 诊断版：不 log.Fatalf 直接杀进程，留时间写盘并退出事件循环
+						time.Sleep(500 * time.Millisecond)
+						return
 					}
+					log.Printf("setupGX 完成，进入正常帧循环")
+					diagFlush()
 				}
 				if gxWin == nil {
 					break
@@ -139,6 +148,7 @@ func main() {
 
 // setupGX 用统一 Backend 契约装配整条链，与桌面 main.go 同构。
 func setupGX() error {
+	log.Printf("setup: step1 NewBackend")
 	handle := gxapp.Use(rbandroid.NewBackend())
 	host = handle
 	lw, lh := 1080, 720
@@ -150,12 +160,14 @@ func setupGX() error {
 		lw, lh = int(float32(lastSize.WidthPx)/dpr), int(float32(lastSize.HeightPx)/dpr)
 	}
 
+	log.Printf("setup: step2 Render (lw=%d lh=%d)", lw, lh)
 	gxa, err := handle.Render(func() any { return ui.Playground() }, gxapp.WindowConfig{
 		Title: "GX Playground (Android)", Width: lw, Height: lh,
 	})
 	if err != nil {
 		return fmt.Errorf("Render: %w", err)
 	}
+	log.Printf("setup: step3 Render OK, WindowOf")
 	gxApp = gxa
 	win := handle.WindowOf(gxa).(*rbandroid.Window)
 	gxWin = win
@@ -165,6 +177,7 @@ func setupGX() error {
 	gxa.SetFrameClock(win.FrameClock())
 	win.SetTouchSink(&playgroundTouch{})
 	if glReady && glctx != nil {
+		log.Printf("setup: step4 OnSurfaceReady")
 		if err := win.OnSurfaceReady(glctx); err != nil {
 			log.Printf("OnSurfaceReady（setup 补做）: %v", err)
 		}
@@ -205,15 +218,19 @@ func setupGX() error {
 		}
 	})
 
+	log.Printf("setup: step5 injectEditorCharWidth + LoadSample")
 	injectEditorCharWidth()
 	ui.LoadSample(0)
 	// Render 已建立首帧；viewport/尺寸变化后再 Render 一次确保紧凑布局生效。
+	log.Printf("setup: step6 最终 Render")
 	if rerr := gxa.Render(func() any { return ui.Playground() }); rerr != nil {
 		return fmt.Errorf("初始重渲染: %w", rerr)
 	}
+	log.Printf("setup: step7 全部完成")
 
-	// E2E 测试桥：周期输出 UI 状态与可点元素坐标。
+	// E2E 测试桥：周期输出 UI 状态与可点元素坐标，并刷新屏幕诊断角标。
 	go func() {
+		lastDiag := ""
 		for {
 			time.Sleep(1500 * time.Millisecond)
 			if gxApp == nil || gxWin == nil {
@@ -222,6 +239,19 @@ func setupGX() error {
 			log.Printf("GXTEST state %s", ui.TestSnapshot())
 			log.Printf("GXTEST dpr %v", gxWin.Dpr())
 			log.Printf("GXTEST elems %s", gxWin.TestElements())
+			// 屏幕诊断角标：渲染路径 / DPR / 物理→逻辑尺寸。
+			// 变化时才重渲染，避免每帧重建整树。
+			lw, lh := gxWin.LogicalSize()
+			pw, ph := gxWin.PhysSize()
+			diag := fmt.Sprintf("%s dpr=%.2f %dx%d>%dx%d",
+				gxWin.RenderPath(), gxWin.Dpr(), pw, ph, lw, lh)
+			if diag != lastDiag {
+				lastDiag = diag
+				ui.SetDiagText(diag)
+				if rerr := gxApp.Render(func() any { return ui.Playground() }); rerr != nil {
+					log.Printf("diagnostic 重渲染失败: %v", rerr)
+				}
+			}
 		}
 	}()
 	return nil
