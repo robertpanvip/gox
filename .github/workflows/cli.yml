@@ -87,9 +87,18 @@ jobs:
           cargo test --manifest-path ../gox-backend/rust/rust/Cargo.toml
           cargo build --release --manifest-path ../gox-backend/rust/rust/Cargo.toml
 
+      # 拆仓后主 module（根目录）不再承载 Go 代码，`./...` 会匹配不到包。
+      # 有包才跑，没包直接 SKIP，避免 exit 1 假红；真正的测试在
+      # run_all_module_tests.sh（覆盖所有嵌套 module）里。
       - name: 全量 Go 测试
         if: runner.os == 'Linux'
-        run: go test ./... -count=1
+        run: |
+          PKGS=$(go list ./... 2>/dev/null || true)
+          if [ -n "$PKGS" ]; then
+            go test $PKGS -count=1
+          else
+            echo "SKIP: 主 module 无包（拆仓后根目录不再承载 Go 代码），全量测试走 run_all_module_tests.sh"
+          fi
 
       # Windows 全量测试先观察（cgo 包需要 yoga 等预编译库，见
       # build-windows job 的脚本），稳定后再转硬门禁。
@@ -97,7 +106,13 @@ jobs:
         if: runner.os == 'Windows'
         continue-on-error: true
         shell: msys2 {0}
-        run: go test ./... -count=1
+        run: |
+          PKGS=$(go list ./... 2>/dev/null || true)
+          if [ -n "$PKGS" ]; then
+            go test $PKGS -count=1
+          else
+            echo "SKIP: 主 module 无包（拆仓后根目录不再承载 Go 代码）"
+          fi
 
       # 根 `go test ./...` 只覆盖主 module；go.work 里的嵌套 module
       # （playground / gox-tui / gox-term / gox-idea / backend/*）不在 ./... 内。
@@ -174,8 +189,13 @@ jobs:
         if: runner.os == 'Linux'
         run: cd cmd/gox-idea && go build -o /tmp/gox-idea-lg .
 
-      - name: 构建 gox-idea.exe（Windows）
+      # gox-idea 直接 import Rust 后端（libgxbackend_rust），链接期需要
+      # Windows 版静态库。Rust crate 依赖 wgpu，windows-gnu 目标编译成本
+      # 极高，CI 侧暂不编译——该步骤与 Windows GUI E2E 一样先观察，
+      # 稳定方案（如 msvc 工具链出库）落地后再转硬门禁。
+      - name: 构建 gox-idea.exe（Windows 观察）
         if: runner.os == 'Windows'
+        continue-on-error: true
         shell: msys2 {0}
         run: bash cmd/gox-idea/build-windows.sh
 
@@ -201,8 +221,11 @@ jobs:
         if: runner.os == 'Linux'
         run: cd examples/playground && go build -o /tmp/pg-desktop-e2e ./desktop
 
-      - name: 构建 Desktop Playground（Windows）
+      # GX-Playground.exe 链接 Rust 后端静态库（同 gox-idea.exe，见上），
+      # Windows CI 侧暂无法提供，转观察；Linux 侧构建为硬门禁。
+      - name: 构建 Desktop Playground（Windows 观察）
         if: runner.os == 'Windows'
+        continue-on-error: true
         shell: msys2 {0}
         run: bash scripts/build-windows-msys2.sh
 
@@ -237,8 +260,13 @@ jobs:
             /tmp/gox-idea-visual-light.png
           if-no-files-found: ignore
 
+  # 暂时禁用：GX-Playground.exe 链接 libgxbackend_rust（Rust crate 依赖
+  # wgpu，windows-gnu 目标编译成本极高且不稳定），Windows CI 侧无法提供
+  # 该静态库。待 Rust 后端支持 Windows 工具链（msvc 出库 / wgpu gnu 修复）
+  # 后恢复启用；本地 Windows 构建路径见 scripts/build-windows-msys2.sh。
   build-windows:
     name: Windows exe 构建
+    if: false
     runs-on: windows-latest
     needs: test
     steps:
