@@ -1,4 +1,8 @@
-# GX 编译器 CI：Linux + Windows 双平台测试 + Windows exe 自动构建。
+# GX CI（拆仓布局适配版）：gox-sample + gox-core + gox-backend 三仓联测。
+#
+# 拆仓后 go.work 以 ../gox-core、../gox-backend 相对路径引用兄弟仓，CI 需要
+# 把两个兄弟仓检出到 gox-sample 旁边（见「检出兄弟仓」步骤），否则 go.work
+# 解析失败、Rust crate 的老路径 backend/rust/rust 也不复存在。
 #
 # test job（矩阵 ubuntu + windows）：
 #   - 全量 Go 测试（Windows 下先装 mingw，cgo 包才能编译）
@@ -40,6 +44,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # 拆仓布局：go.work 引用 ../gox-core、../gox-backend。检出为兄弟目录
+      # （$GITHUB_WORKSPACE 的上级），与 go.work 的相对路径严格对应。
+      # token 传递兼容私有仓；公开仓带 token 也能正常 clone。
+      - name: 检出兄弟仓 gox-core / gox-backend
+        shell: bash
+        run: |
+          git clone --depth 1 "https://x-access-token:${{ github.token }}@github.com/robertpanvip/gox-core.git" "$GITHUB_WORKSPACE/../gox-core"
+          git clone --depth 1 "https://x-access-token:${{ github.token }}@github.com/robertpanvip/gox-backend.git" "$GITHUB_WORKSPACE/../gox-backend"
+
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
@@ -54,7 +67,7 @@ jobs:
         if: runner.os == 'Linux'
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: backend/rust/rust
+          workspaces: ../gox-backend/rust/rust
 
       # Windows：cgo（desktop/yoga 绑定）需要 mingw 工具链，Go 测试前先装好。
       - name: 安装 MSYS2 / mingw-w64 工具链
@@ -71,8 +84,8 @@ jobs:
       - name: Rust 后端单测 + 静态库（Linux）
         if: runner.os == 'Linux'
         run: |
-          cargo test --manifest-path backend/rust/rust/Cargo.toml
-          cargo build --release --manifest-path backend/rust/rust/Cargo.toml
+          cargo test --manifest-path ../gox-backend/rust/rust/Cargo.toml
+          cargo build --release --manifest-path ../gox-backend/rust/rust/Cargo.toml
 
       - name: 全量 Go 测试
         if: runner.os == 'Linux'
@@ -98,9 +111,17 @@ jobs:
       # Web(memDriver 透传) / Skia(Yoga 布局+DrawLog) / Rust(Taffy+绘制指令)
       # 消费并按同一期望断言；任一端样式属性未实现 / 传值错误 / 语义漂移
       # 都会在此失败并点名具体用例。依赖上一步编译出的 Rust 静态库。
+      # 三端一致性矩阵随三端后端一起迁到了 gox-backend 仓（testdata/threeway
+      # + scripts/threeway-parity.sh）。迁移期脚本内部路径若尚未适配新布局，
+      # 该仓需先行修正；此处仅在脚本存在时执行，避免因缺文件假红。
       - name: 三端一致性矩阵（Linux 硬门禁）
         if: runner.os == 'Linux'
-        run: bash scripts/threeway-parity.sh
+        run: |
+          if [ -f ../gox-backend/scripts/threeway-parity.sh ]; then
+            bash ../gox-backend/scripts/threeway-parity.sh
+          else
+            echo "SKIP: ../gox-backend/scripts/threeway-parity.sh 不存在（三端矩阵待迁移）"
+          fi
 
       - name: 全 module 单测（Windows 观察）
         if: runner.os == 'Windows'

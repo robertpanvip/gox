@@ -28,8 +28,8 @@ for m in $MODULES; do
 
   # 可选后端：Rust 静态库未编译时跳过（需 cargo 预编译 libgxbackend_rust，
   # 否则链接期报 cannot find -lgxbackend_rust）。CI 没装 cargo 时不应卡住全链路。
-  if [ "$m" = "backend/rust/go" ] && \
-     ! ls backend/rust/rust/target/release/libgxbackend_rust.* >/dev/null 2>&1; then
+  if [ "$m" = "../gox-backend/rust/go" ] && \
+     ! ls ../gox-backend/rust/rust/target/release/libgxbackend_rust.* >/dev/null 2>&1; then
     echo ""
     echo "================ module: $m —— SKIP（Rust 静态库未编译） ================"
     SKIP=$((SKIP+1))
